@@ -1,0 +1,169 @@
+# Meta Brain — Decision Log
+
+Append-only. Baseline chi tiết: [đặc tả](../../docs/META-BRAIN.md), [yêu cầu và change control](../../docs/REQUIREMENTS.md), [PLAN](../../docs/PLAN.md). Đây là quyết định thiết kế, không phải evidence runtime đã pass.
+
+## [2026-09-28] D001 — Giữ vai trò bộ nhớ trợ giúp
+
+**Decision:** Meta Brain hỗ trợ lưu, tìm và kết nối; các tác vụ thay đổi ý nghĩa hoặc synthesis chạy theo yêu cầu/policy opt-in, không tự chọn agenda hay biến phỏng đoán AI thành belief của user.
+
+**Alternatives considered:** Autonomous research/knowledge agent thường trực; extraction mọi session; tự cập nhật user profile từ hành vi.
+
+**Reason:** Owner cần bộ nhớ thứ hai nhanh/gọn, không hệ thống dẫn dắt suy nghĩ; giảm noise, cost và việc lưu sai ý định.
+
+**Consequences:** Question, hypothesis, authorship và evidence là metadata hạng nhất; những automation có ý nghĩa phải có UI control và explicit provenance. R01, R12, R20–R22 không được hạ để tiết kiệm task.
+
+## [2026-09-28] D002 — Tách owner toàn quyền khỏi agent runtime
+
+**Decision:** Owner toàn quyền mặc định; agent dùng OS-isolated runtime và session grants qua memory service, không trực tiếp đọc vault.
+
+**Alternatives considered:** Chỉ filter zone trong MCP; chạy mọi process dưới owner token; mở ACL folder theo agent_name.
+
+**Reason:** Shell/process/credential access có thể đi vòng MCP nếu agent thừa hưởng quyền owner. Agent khác grant cũng phải cách ly credential.
+
+**Consequences:** Sprint 1 phải chứng minh cả Codex và OMP thật, không fallback toàn quyền. Cơ chế Windows cụ thể chưa chốt; chọn bằng probe/compatibility evidence. Không chống owner/admin cố tình phá isolation hoặc thu hồi dữ liệu đã đọc.
+
+## [2026-09-28] D003 — Tách core, application và connections
+
+**Decision:** Dùng modular architecture với một core domain/policy, owner application/UI và connections như MCP/source adapters; chỉ tách process theo security/lifecycle thực tế.
+
+**Alternatives considered:** MCP server làm toàn bộ sản phẩm; UI ghi trực tiếp vault; microservices cho từng concern.
+
+**Reason:** UI và nhiều runtime phải dùng chung quyền/provenance/lifecycle, nhưng thay transport không cần viết lại nghiệp vụ; microservices chưa có nhu cầu chứng minh.
+
+**Consequences:** Không UI/MCP SDK trong core; adapters không ghi canonical trực tiếp; stack/IPC/UI host được Sprint 1 lựa chọn theo toàn lộ trình, chưa ấn định thư viện trong baseline.
+
+## [2026-09-28] D004 — File-first canonical và reference-only sessions
+
+**Decision:** Tri thức canonical có thể đọc/export bằng local files, SQLite index có thể dựng lại; session .codex/.omp giữ nguyên tại chỗ, import mặc định chỉ đọc và tham chiếu.
+
+**Alternatives considered:** Migrate/rewrite toàn bộ logs; chỉ lưu vector DB; copy toàn bộ profile mặc định; dùng file và DB như hai nguồn sự thật độc lập.
+
+**Reason:** Bảo toàn lịch sử runtime, tính di động và nguồn kiểm chứng; không thu thập dữ liệu riêng tư quá nhu cầu. Index cần hiệu quả nhưng không giữ dữ liệu duy nhất.
+
+**Consequences:** Cần crash/revision/reconciliation protocol, source availability và snapshot opt-in. Reference-only không bảo đảm nguồn tồn tại mãi; cache/chunk vẫn nằm trong privacy/retention scope. Format serialization cụ thể chọn ở Sprint 2, phải giải quyết xung đột shared rules nếu có.
+
+## [2026-09-28] D005 — Tách zone, collection và tầng trừu tượng
+
+**Decision:** Zone là quyền; collection là tổ chức; abstraction level là mức khái quát; item có stable ID/revision và typed relations có provenance.
+
+**Alternatives considered:** Một cây folder đồng thời làm ACL/topic/hierarchy; mọi câu là fact; graph database/ontology đầy đủ ngay từ đầu.
+
+**Reason:** Research và project có nhiều liên hệ nhưng không thể cấp quyền theo topic hoặc coi tầng cao là chân lý. Explicit links qua chat cần ngữ nghĩa và nguồn tác giả rõ.
+
+**Consequences:** Relation về logic là graph nhẹ, không bắt buộc graph infrastructure; derived_from có cycle guard, source revisions giữ lineage; link không share dữ liệu. Multi-source synthesis mặc định restrictive, owner declassification là thao tác riêng.
+
+## [2026-09-28] D006 — Khóa outcome theo chặng, không gọi demo là sản phẩm
+
+**Decision:** Tám sprint có requirement IDs, acceptance gates và change control; sản phẩm daily production chỉ hoàn thành sau toàn bộ R01–R40 cùng owner acceptance.
+
+**Alternatives considered:** MVP trước rồi để security/backup/provenance làm lại sau; khóa cứng mọi thư viện trước thực nghiệm; thay mục tiêu khi một check thất bại.
+
+**Reason:** Owner yêu cầu cân nhắc downstream ngay từ đầu nhưng tránh over-engineering. Outcome cần cứng; implementation cần được điều chỉnh theo evidence tốt hơn.
+
+**Consequences:** Security kiểm chứng sớm, durability từ core; packaging/restore/release vẫn là scope bắt buộc. Thay requirement cần evidence, impact map, owner approval và cập nhật đồng bộ docs/gates. Planning không phải implementation evidence.
+
+## [2026-09-28] D007 — Chọn stack Windows và candidate isolation
+
+**Decision:** Dùng C#/.NET 10 LTS cho Core/application, Windows Service không chạy administrator, WPF owner client, named pipes versioned cho owner/agent, self-contained win-x64 packaging; thử AppContainer theo grant ở S1-T3 nhưng không coi là đã cách ly.
+
+**Alternatives considered:** Rust có compiler 1.91.1 và đã build/chạy một PE probe 133,632 byte; Bun/Node 22 và OMP đều hiện diện; Python 3.13.3/uv 0.9.7 cũng sẵn. HTTP localhost thuận tiện cho nhiều ngôn ngữ nhưng không tự xác thực caller; Windows PowerShell 5.1/.NET Framework đã round-trip named pipe giữa hai process cùng user, chưa thử ACL/token. WPF/WebView2, Windows Service/task chạy lúc login, AppContainer/VM/identity riêng và framework-dependent/self-contained package là các phương án được cân nhắc; WebView2 runtime có nhưng SDK .NET không có.
+
+**Reason:** Windows là deployment đầu tiên; .NET 10 và Windows Desktop runtime đã cài, pipe probe xác nhận API Windows có thể trao đổi liên tiến trình cùng user, và một stack C# có thể dùng chung contract cho service, owner UI/CLI và adapters thay vì thêm service wrapper cho Node/Bun hay Python. Rust build được nhưng service/UI/pipe API sẽ cần platform crates hoặc native glue; chọn được compiler không chứng minh toàn bộ boundary. Self-contained giảm phụ thuộc runtime trên máy đích. Tuy nhiên không có .NET SDK nên chưa build/publish stack đã chọn; đó là prerequisite chưa được giải quyết, không phải bằng chứng pass.
+
+**Consequences:** Service virtual identity `NT SERVICE\MetaBrain` chỉ được cấp ACL cần thiết; owner control và agent data dùng named-pipe endpoints riêng, auth lấy từ OS token chứ không từ body. Core không phụ thuộc UI/MCP SDK; owner app không đọc vault trực tiếp; MCP adapters chỉ map DTOs. AppContainer SID riêng là thử nghiệm S1-T3; nếu Codex hoặc OMP không tương thích thì dừng và tìm lựa chọn mới theo evidence, không fallback toàn quyền. Cần owner-approved build/OS setup trước khi cài service, tạo identity hoặc thử ACL; chưa cài gì trong S1-T1.
+
+## [2026-09-28] D008 — Khóa operational envelope trước tuning
+
+**Decision:** Khóa bộ synthetic 1,000/10,000/100,000 records và các ngưỡng p95, indexing, idle CPU/RAM, disk và provider spend ở Sprint 1; S8 đo lại nguyên ngưỡng, không đổi để che fail.
+
+**Alternatives considered:** Chờ corpus thật rồi mới đặt budget; chỉ benchmark một kích thước; dùng leaderboard/corpus công khai; hoặc để provider/model tự quyết định spend.
+
+**Reason:** R38 đòi target đo được trước tuning. Thiết bị khảo sát có 4 core/8 logical, 16 GiB RAM và F: còn 48.7 GiB trống, nên fixture growth 100,000 records và giới hạn 512 MiB idle RAM/1.5 GiB data đặt phạm vi có thể bác bỏ trên máy đích; không có approved corpus hay model price card để tuyên bố số đo. Provider mặc định $0 và hard caps chỉ áp dụng sau opt-in; unknown cost phải deny.
+
+**Consequences:** Synthetic fixture chỉ kiểm tra hành vi kỹ thuật, không đại diện distribution owner; S8 cần corpus owner-selected có allowlist/consent và giữ riêng truy vấn chất lượng. Target p95 recall/UI, 100 records/second, 20-minute rebuild, 1% CPU, 256/512 MiB RAM, 2.5 GiB combined data+installed cap (1.5 GiB data + 1 GiB binaries), $0.25/job, $5/30 days and 10k/2k token caps remain frozen pending change control. S1-T1 không chạy indexing, product UI hoặc provider measurement.
+
+## [2026-09-28] D009 — Bounded S1-T1 source sample
+
+**Decision:** After the owner's read-only testing authorization for `F:/ai-ml`, use the fixed six-document sample recorded in `artifacts/sprint-1/task-1.md`: two Meta Brain documents, three ecommerce-agent-databricks documents and one Bridge Research kickoff note.
+
+**Rationale:** This bounded, purposive sample spans two project work areas and a research note, with bilingual planning/decision/contract content and a Python source file suitable for later recall and UI/indexing scenarios without copying source data.
+
+**Consequences:** Count the six selected files as source-document records only, not indexed memory items; the decision log had eight prior entries (D001–D008) when sampled. This correction adds D009 as a worker-authored evidence note, not owner-authored corpus content or a quality-evaluation target. The sample does not establish statistical representativeness, a 500-record holdout or 200 owner-approved prompts/relevance labels. Synthetic 1,000/10,000/100,000-record stress fixtures and all frozen R38 targets remain separate and unchanged; no product indexing or performance measurement was run.
+
+## [2026-09-29] D010 — Keep the Codex compatibility build fixture-only
+
+**Decision:** Build official Codex `rust-v0.46.0` with the narrow `find_codex_home` canonicalize-to-absolute fallback and use the hash-pinned executable only in the reversible S1-T3 fixture.
+
+**Alternatives considered:** Widen AppContainer filesystem access, keep using installed unpatched Codex, replace the installed Codex package, or treat a source patch without a built client as evidence.
+
+**Reason:** Native fixture evidence isolated the denial to DOS final-path resolution although direct reads and NT final-path resolution succeeded; weakening ACLs or silently substituting the installed client would invalidate the R04/R05 boundary test. The owner authorized only an official-source build staged inside a new, temporary fixture.
+
+**Consequences:** The fixture runner must fail closed on an absent or mismatched SHA256, must not change the installed Codex, and must record source/dependency provenance. This compatibility binary is test evidence, not a product release or installer.
+
+## [2026-09-30] D011 — Separate owner-control and AppContainer-agent channels
+
+**Decision:** Use two versioned local Windows named pipes. The control channel derives owner context from the impersonated client token's user SID and non-AppContainer status; the server sends its authenticated ready response before reading an owner request. The agent channel admits only configured AppContainer SIDs, verifies the server-observed user/container SIDs and credential ID, then checks a fresh HMAC-SHA-256 challenge proof. Core owns the immutable authenticated context and policy, Application consumes it, and Connections owns the Windows boundary. Request-body identity claims are ignored. There is no owner bearer credential.
+
+**Alternatives considered:** A shared endpoint with caller-supplied roles; a bearer credential for owner authority; localhost HTTP or request-body identity; one transport implementation per client.
+
+**Reason:** Windows token inspection and separate pipe ACLs bind the channel to OS identity instead of process claims. A per-session AppContainer SID plus a protected credential proof distinguishes agent sessions; the challenge binds the proof to the protocol and data endpoint without transmitting the raw secret.
+
+**Consequences:** The current settings contain preprovisioned principal/session bindings and credential verifiers; the smoke fixture uses two synthetic AppContainers and verifies real named-pipe requests, spoofing, peer credential denial, and channel separation. This does not implement grant lifecycle, resource reads, production credential provisioning/service installation, or product Codex/OMP integration. Those remain downstream work; no fallback to owner credentials is allowed.
+
+## [2026-09-30] D012 — Persist grants as a protected generation-checked snapshot
+
+**Decision:** Store the complete service grant policy in one versioned `grant-policy.json` beside protected service settings, serializing mutations in-process and replacing the snapshot through a protected same-directory temporary file with a durable flush and monotonically increasing generation.
+
+**Alternatives considered:** A SQLite policy database coupled to the rebuildable index; an append-only journal requiring replay and compaction.
+
+**Reason:** The service is the single policy authority and grants are a small bounded control-plane state; a single snapshot keeps startup, backup behavior, and restart semantics explicit without introducing a second database or recovery subsystem. An expected-generation check makes out-of-process changes fail closed, while the service/System/Administrators ACL matches the existing owner/admin-outside-threat-model boundary.
+
+**Consequences:** Policy evolution requires explicit snapshot schema migration; policy and derived/index data remain separate sources of truth. A missing snapshot starts with no grants, while corrupt or inaccessible state prevents policy service from starting. The single-writer file contract depends on the service instance owning the named-pipe endpoints.
+
+## [2026-09-30] D013 — Route OMP resource reads through the authenticated service
+
+**Decision:** OMP's per-session stdio MCP bridge maps `metabrain://resource/<id>` reads to `resource.read` on that session's authenticated agent pipe, using the existing service grant policy.
+
+**Alternatives considered:** Let OMP read protected files directly; add a parallel MCP-only authorization path; use ACP or a client-side helper instead of the service resource API.
+
+**Reason:** The installed OMP client can invoke its real `read mcp://` command without a model/provider turn. Reusing the authenticated agent pipe and `resource.read` keeps principal/session identity, grant scope, and revocation enforcement in the service; a helper-generated read would not prove the consumer path.
+
+**Consequences:** OMP resource reads require a live resource grant and never carry the raw credential in the URI or process arguments. Revocation denies the next read. The pinned Codex 0.46.0 `mcp list` path does not provide a no-model resource read, so OMP evidence does not establish Codex integration.
+
+## [2026-09-30] D014 — Upgrade official Codex without bypassing proof gates
+
+**Decision:** Use the latest official stable `@openai/codex` 0.159.2 package for the authorized global CLI upgrade and generate a separate session-local Codex MCP configuration. Do not replace Codex with a patched build, inspect or migrate owner auth/session state, widen host ACLs, or send a `gpt-6-luna` request until fixture-specific authentication and enforceable provider egress/cost controls are available.
+
+**Alternatives considered:** Keep the installed 0.46.0 client; stage only the previous pinned compatibility fixture; patch/replace the new binary; reuse owner OAuth/API credentials; widen AppContainer access to solve `CODEX_HOME`; or issue a provider request without a trusted, budget-enforcing route.
+
+**Reason:** The owner explicitly approved upgrading the official installed CLI, but preserved owner sessions/configuration and restricted host changes. The official 0.159.2 package provenance and model pricing were verified. The latest Codex AppContainer probe can run `--version` but `mcp list` fails while canonicalizing `CODEX_HOME` with access denied; no Codex read/revoke or model turn was proved. The official app-server documents a direct resource-read API, but that API did not reach the configured service in this fixture. The API price card does not enforce the per-job and rolling budget.
+
+**Consequences:** Keep the installation pinned to the official 0.159.2 release/hash, preserve D010 as historical evidence, and keep S1-T7 `[~]`. A fixture-only API credential plus a trusted per-job/rolling egress and budget controller are still required for the authorized model-backed pair; an AppContainer-compatible `CODEX_HOME` path is also unresolved. No owner auth/session data was accessed or changed, and no model request was sent.
+
+## [2026-09-30] D015 — Keep latest Codex compatibility and provider proof fixture-bound
+
+**Decision:** For S1-T7, build the official Codex `rust-v0.159.2` source at `ff6aec96948b70d94983af2641a6b67c94faeff5` with only the authorized `CODEX_HOME` canonicalize-to-absolute fallback in a temporary fixture; keep the installed 0.159.2 binary untouched and use `deepseek-flash` only for a bounded synthetic-context proof if its configured provider, exact pricing, protocol, and enforceable budgets are verified.
+
+**Alternatives considered:** Widen AppContainer access, patch/replace the installed client, use another model or provider alias, or send a request without verified provider pricing and trusted egress/budget enforcement.
+
+**Reason:** The known startup failure is the upstream home-directory canonicalization path, while widening access would weaken the actual protected-runtime boundary. The owner explicitly approved a fixture-only fallback and temporarily selected `deepseek-flash` using only `OPENAI_BASE_URL` and `OPENAI_API_KEY` from the repository `.env`; other settings and profile data remain out of scope.
+
+**Consequences:** Preserve source revision, exact patch, lockfile and executable hash provenance; do not change the installed binary. A model request remains fail-closed unless the exact configured provider/model pricing and a trusted controller enforce at most two jobs, $0.25/job, $5/rolling 30 days, 10k input and 2k output tokens per job. Credentials must stay outside the protected agent and all output.
+
+
+## [2026-10-01] D016 — CR01: encrypted personal vault và scoped access tokens, không sandbox agents
+
+**Decision:** Owner phê duyệt thay baseline sang vault mã hóa do user kiểm soát key, catalog công bố có chọn lọc và token ngẫu nhiên đổi một lần lấy phiên truy cập có phạm vi; Meta Brain không còn phụ trách cách ly OS của Codex/OMP hoặc bảo mật lại session nguồn mà agent đã thấy.
+
+**Alternatives considered:** Giữ AppContainer/per-agent OS isolation; đưa key giải mã vault/zone cho agent; tạo gói chia sẻ mã hóa với key riêng. Chọn giải mã trong ứng dụng và trả nội dung đã duyệt, vì key của gói tải xuống không thể hết hạn/thu hồi và OS sandbox vượt threat model cá nhân owner cần.
+
+**Reason:** Owner xác nhận bảo mật ở mức encrypted storage và kiểm soát chia sẻ là đủ. Probe thực tế cho thấy AppContainer cần fixture-only Codex compatibility build và supplemental native turn còn lỗi request-builder trước broker; đây là evidence về chi phí tương thích, không chứng minh provider/key lỗi hoặc mọi OS isolation bất khả thi. Thay đổi là scope/security tradeoff được owner chấp thuận, không phải làm pass một check cũ.
+
+**Consequences:** CR01 thay R03–R06, R16, R18, R24, R31, R33–R36 và hợp đồng Sprint 1–8; R02, R07–R09, R11 và R29 giữ outcome nhưng làm rõ lock/catalog/consent/copies. Supersede yêu cầu isolation của D002, phần AppContainer/service-identity dependency của D007/D011 và đường protected-launch/provider proof D010/D014/D015; giữ C#/.NET 10, WPF, versioned named pipes, modular boundaries và frozen budgets D008. Key vault không vào agent argv/env/config/context/logs; token không là key giải mã. Scope là tập resource IDs/revisions được preview lúc duyệt, không quyền folder/descendant/future membership. Catalog riêng với private index; chỉ metadata owner công bố được agent thấy. Session/token scopes được enforce tại mọi API/cache; read-only mặc định, mutation chỉ khi owner cấp riêng; expiry/revoke chặn lần đọc tiếp, không làm agent quên.
+
+**Threat-model limit:** Bảo vệ ciphertext/backup khi không có key và đường chia sẻ qua Meta Brain; không chống agent/malware cùng quyền OS owner lấy key/plaintext trong lúc mở khóa, đọc nguồn gốc hoặc điều khiển owner UI. Bearer token bị sao chép có thể dùng trong scope của nó; không claim OS-bound agent identity. Không lưu key plaintext cạnh vault; wrong/missing key, tampering và locked access fail closed. Key mất không có recovery thì dữ liệu không đọc được.
+
+**Data and migration impact:** Canonical vẫn file-first nhưng encrypted at rest; readable/export chỉ qua owner unlock và explicit export. Private metadata, index/embeddings, journal/temp/cache, snapshots, policy/audit chứa nội dung nhạy cảm cũng phải được bảo vệ; công khai duy nhất catalog opt-in và envelope vận hành tối thiểu không nhạy cảm. Không migrate/xóa nguồn .codex/.omp hoặc reset dữ liệu để cutover. Product cutover phải migrate mọi caller và bỏ AppContainer binding/launcher/shims đã obsolete, nhưng giữ artifacts và gate record lịch sử.
+
+**Status and verification impact:** Sprint 1 old-baseline fixture PASS được giữ làm lịch sử, không chứng minh CR01. M1/Sprint 1 reopen; S1-T1 operational targets/stack evidence giữ nguyên, các replacement security tasks Pending, Sprint 2–8 Not started. Supplemental protected deepseek-flash proof dừng/superseded, không pass; giữ unknown prior $0.0054 reservation, không reset budget hoặc suy diễn charge. Provider integration thật thuộc S6-T1 với consent/budgets mới được xác minh khi thực thi. Đây là documentation-only approval/change; không code, crypto/runtime/production proof hoặc owner daily-use acceptance mới.
+
