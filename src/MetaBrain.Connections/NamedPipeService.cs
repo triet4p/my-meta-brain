@@ -22,7 +22,7 @@ internal sealed class NamedPipeService
         var store = new EncryptedVaultStore(settings.VaultDirectoryPath, settings.OwnerSid);
         _vault = new VaultLifecycle(store);
         var authority = new GrantAuthority(new InMemoryGrantStore());
-        _handler = new ServiceRequestHandler(authority, _vault);
+        _handler = new ServiceRequestHandler(authority, _vault, new OwnerScopeGrantAuthority());
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -112,8 +112,14 @@ internal sealed class NamedPipeService
                     return;
                 }
 
-                var needsVaultOperation = string.Equals(request.Operation, ServiceRequestHandler.ResourceReadOperation, StringComparison.Ordinal) ||
-                    string.Equals(request.Operation, ServiceRequestHandler.ResourceWriteOperation, StringComparison.Ordinal);
+                var needsVaultOperation =
+                    string.Equals(request.Operation, ServiceRequestHandler.ResourceReadOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.ResourceWriteOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerScopePreviewOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerScopeIssueOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerScopeListOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerScopeCollectionSetOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerScopeCollectionListOperation, StringComparison.Ordinal);
                 using var operation = needsVaultOperation ? _vault.TryBeginOperation() : null;
                 var reply = await _handler.HandleAsync(AuthenticatedContext.ForOwner(), request, operation).ConfigureAwait(false);
                 await writer.WriteLineAsync(JsonSerializer.Serialize(reply, OutputOptions).AsMemory(), timeout.Token).ConfigureAwait(false);

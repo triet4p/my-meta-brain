@@ -26,8 +26,11 @@ internal sealed class EncryptedVaultStore
     private const int CurrentFormatVersion = 1;
     private const int CurrentManifestSchemaVersion = 1;
     private const int CurrentResourceSchemaVersion = 1;
+    private const int CurrentScopeGrantSchemaVersion = OwnerScopeGrantState.CurrentSchemaVersion;
     private const int KdfIterations = 600_000;
     private const int MaximumEnvelopeBytes = 4 * 1024 * 1024;
+    private const int MaximumScopeGrantBytes = 4 * 1024 * 1024;
+    private const int MaximumScopeGrantEnvelopeBytes = 6 * 1024 * 1024;
     private const int MaximumResourceBytes = 1024 * 1024;
     private const int KeyBytes = 32;
     private const int SaltBytes = 16;
@@ -47,6 +50,7 @@ internal sealed class EncryptedVaultStore
     private readonly string _headerPath;
     private readonly string _manifestPath;
     private readonly string _resourcesPath;
+    private readonly string _scopeGrantsPath;
 
     private sealed record KeyWrapper(int KdfIterations, string Salt, string Nonce, string Ciphertext, string Tag);
     private sealed record VaultHeader(int FormatVersion, string VaultId, KeyWrapper PassphraseKey, KeyWrapper RecoveryKey);
@@ -64,6 +68,7 @@ internal sealed class EncryptedVaultStore
         _headerPath = Path.Combine(_root, "vault-header.json");
         _manifestPath = Path.Combine(_root, "manifest.enc");
         _resourcesPath = Path.Combine(_root, "resources");
+        _scopeGrantsPath = Path.Combine(_root, "scope-grants.enc");
     }
 
     public bool Exists => File.Exists(_headerPath) || Directory.Exists(_root);
@@ -185,6 +190,98 @@ internal sealed class EncryptedVaultStore
             !resource.InternalOnly && string.Equals(resource.ResourceId, resourceId, StringComparison.Ordinal));
         zoneId = descriptor?.ZoneId;
         return descriptor is not null;
+    }
+    public IReadOnlyList<ScopeResourceRevision> ListResources(VaultManifest manifest) =>
+        Array.AsReadOnly(manifest.Resources
+            .Where(resource => !resource.InternalOnly)
+            .Select(resource => new ScopeResourceRevision(resource.ResourceId, resource.ZoneId, resource.Revision))
+            .OrderBy(resource => resource.ResourceId, StringComparer.Ordinal)
+            .ToArray());
+
+    public OwnerScopeGrantState LoadScopeGrantState(VaultManifest manifest, ReadOnlySpan<byte> dataKey)
+    {
+        FileAttributes attributes;
+        try
+        {
+            attributes = File.GetAttributes(_scopeGrantsPath);
+        }
+        catch (FileNotFoundException)
+        {
+            return OwnerScopeGrantState.Empty;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return OwnerScopeGrantState.Empty;
+        }
+
+        if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+        {
+            throw new InvalidDataException("The encrypted owner scope state must be a regular file.");
+        }
+
+        byte[]? associatedData = null;
+        byte[]? plaintext = null;
+        try
+        {
+            var json = ProtectedFile.ReadPrivateFile(_scopeGrantsPath, _ownerSid, MaximumScopeGrantEnvelopeBytes).Text;
+            var envelope = JsonSerializer.Deserialize<EncryptedPayload>(json, JsonOptions)
+                ?? throw new InvalidDataException("Invalid encrypted owner scope envelope.");
+            associatedData = ResourceAssociatedData(
+                manifest.VaultId, "scope-grants", CurrentScopeGrantSchemaVersion, 1);
+            plaintext = DecryptPayload(
+                envelope, dataKey, associatedData, CurrentScopeGrantSchemaVersion, 1, MaximumScopeGrantBytes);
+            return JsonSerializer.Deserialize<OwnerScopeGrantState>(plaintext, JsonOptions)
+                ?? throw new InvalidDataException("Invalid encrypted owner scope state.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or
+                                   CryptographicException or ArgumentException or FormatException or OverflowException)
+        {
+            throw new InvalidDataException("The encrypted owner scope state is unavailable.", ex);
+        }
+        finally
+        {
+            if (associatedData is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(associatedData);
+            }
+
+            if (plaintext is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(plaintext);
+            }
+        }
+    }
+
+    public void SaveScopeGrantState(
+        VaultManifest manifest,
+        ReadOnlySpan<byte> dataKey,
+        OwnerScopeGrantState state)
+    {
+        var plaintext = JsonSerializer.SerializeToUtf8Bytes(state, JsonOptions);
+        if (plaintext.Length is <= 0 or > MaximumScopeGrantBytes)
+        {
+            CryptographicOperations.ZeroMemory(plaintext);
+            throw new InvalidDataException("The owner scope grant state exceeds its storage limit.");
+        }
+
+        var associatedData = ResourceAssociatedData(
+            manifest.VaultId, "scope-grants", CurrentScopeGrantSchemaVersion, 1);
+        byte[]? envelopeBytes = null;
+        try
+        {
+            var envelope = EncryptPayload(plaintext, dataKey, associatedData);
+            envelopeBytes = JsonSerializer.SerializeToUtf8Bytes(envelope, JsonOptions);
+            AtomicWrite(_scopeGrantsPath, envelopeBytes);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(plaintext);
+            CryptographicOperations.ZeroMemory(associatedData);
+            if (envelopeBytes is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(envelopeBytes);
+            }
+        }
     }
 
     public void ValidateRegistration(VaultManifest manifest, string resourceId)

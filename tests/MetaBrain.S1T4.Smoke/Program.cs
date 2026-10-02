@@ -4,15 +4,26 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
-        if (args.Length != 1 || !File.Exists(args[0]))
+        var scopeGrantRun = args.Length == 2 && string.Equals(args[0], "scope-issue", StringComparison.Ordinal);
+        var executable = scopeGrantRun ? args[1] : args.Length == 1 ? args[0] : null;
+        if (executable is null || !File.Exists(executable))
         {
-            Console.Error.WriteLine("Usage: MetaBrain.S1T4.Smoke <MetaBrain.Connections.exe>");
+            Console.Error.WriteLine("Usage: MetaBrain.S1T4.Smoke <MetaBrain.Connections.exe> | scope-issue <MetaBrain.Connections.exe>");
             return 2;
         }
 
         try
         {
-            await OwnerServiceSmoke.RunAsync(Path.GetFullPath(args[0])).ConfigureAwait(false);
+            var fullPath = Path.GetFullPath(executable);
+            if (scopeGrantRun)
+            {
+                await OwnerServiceSmoke.RunScopeIssueAsync(fullPath).ConfigureAwait(false);
+            }
+            else
+            {
+                await OwnerServiceSmoke.RunAsync(fullPath).ConfigureAwait(false);
+            }
+
             return 0;
         }
         catch (Exception ex)

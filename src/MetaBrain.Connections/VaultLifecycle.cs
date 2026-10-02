@@ -134,6 +134,45 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
         }
     }
 
+    private IReadOnlyList<ScopeResourceRevision> ListResources()
+    {
+        lock (_contentGate)
+        {
+            if (_manifest is null)
+            {
+                throw new ManagedResourceUnavailableException();
+            }
+
+            return _store.ListResources(_manifest);
+        }
+    }
+
+    private OwnerScopeGrantState LoadScopeGrantState()
+    {
+        lock (_contentGate)
+        {
+            if (_manifest is null || _dataKey is null)
+            {
+                throw new ManagedResourceUnavailableException();
+            }
+
+            return _store.LoadScopeGrantState(_manifest, _dataKey);
+        }
+    }
+
+    private void SaveScopeGrantState(OwnerScopeGrantState state)
+    {
+        lock (_contentGate)
+        {
+            if (_manifest is null || _dataKey is null)
+            {
+                throw new ManagedResourceUnavailableException();
+            }
+
+            _store.SaveScopeGrantState(_manifest, _dataKey, state);
+        }
+    }
+
     private byte[] ReadContent(string resourceId)
     {
         lock (_contentGate)
@@ -213,6 +252,9 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
 
         public Operation(VaultLifecycle owner) => _owner = owner;
 
+        public IReadOnlyList<ScopeResourceRevision> ListResources() => GetOwner().ListResources();
+        public OwnerScopeGrantState LoadScopeGrantState() => GetOwner().LoadScopeGrantState();
+        public void SaveScopeGrantState(OwnerScopeGrantState state) => GetOwner().SaveScopeGrantState(state);
         public bool TryGetZone(string resourceId, out string? zoneId) => GetOwner().TryGetZone(resourceId, out zoneId);
         public byte[] ReadContent(string resourceId) => GetOwner().ReadContent(resourceId);
         public void ValidateRegistration(string resourceId) => GetOwner().ValidateRegistration(resourceId);

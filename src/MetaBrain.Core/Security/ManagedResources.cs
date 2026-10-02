@@ -87,6 +87,7 @@ public interface IManagedResourceReader
 /// </summary>
 public interface IManagedResourceStore : IManagedResourceReader
 {
+    IReadOnlyList<ScopeResourceRevision> ListResources();
     bool TryGetZone(string resourceId, out string? zoneId);
     long WriteContent(string resourceId, string zoneId, byte[] content);
 }
@@ -109,7 +110,7 @@ public interface IVaultLifecycle
 /// Scoped unlocked access to private resource metadata and content. The
 /// application disposes this lease only after the operation response is sent.
 /// </summary>
-public interface IVaultOperation : IManagedResourceStore, IDisposable
+public interface IVaultOperation : IManagedResourceStore, IScopeGrantPersistence, IDisposable
 {
 }
 

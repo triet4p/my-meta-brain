@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Diagnostics;
 using System.IO.Pipes;
 using System.Runtime.ExceptionServices;
@@ -60,9 +61,10 @@ internal static class OwnerServiceSmoke
             var status = await RunOwnerCommandAsync(connectionsExecutable,
                 "owner", "status", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
             Require(status.ExitCode == 0 && status.StandardOutput.Contains("vault=locked", StringComparison.Ordinal) &&
-                    status.StandardOutput.Contains("no token or approval support", StringComparison.Ordinal),
-                "A restarted owner service did not report a locked vault and unavailable sharing support.");
-            Console.WriteLine("PASS actual service startup locked; status disclaims token/approval support");
+                    status.StandardOutput.Contains("token issuance is owner-only", StringComparison.Ordinal) &&
+                    status.StandardOutput.Contains("redemption/session support is unavailable", StringComparison.Ordinal),
+                "A restarted owner service did not report a locked vault and unavailable redemption/session support.");
+            Console.WriteLine("PASS actual service startup locked; status disclaims redemption/session support");
 
             var missing = await RunOwnerCommandAsync(connectionsExecutable,
                 "owner", "unlock", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
@@ -176,6 +178,540 @@ internal static class OwnerServiceSmoke
 
         Console.WriteLine("LIMIT synthetic Windows owner-service fixture only; same-owner OS compromise can read plaintext/key while unlocked, .NET/OS memory and deleted-media erasure are not guaranteed; no S3 ingestion, S6 jobs, tokens, approvals, provider, or installed-service integration was exercised.");
     }
+
+    public static async Task RunScopeIssueAsync(string connectionsExecutable)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException("The owner scope grant smoke is Windows-only.");
+        }
+
+        var fixture = SmokeFixture.Create();
+        RunningService? service = null;
+        byte[]? tokenA = null;
+        byte[]? tokenB = null;
+        Exception? failure = null;
+        try
+        {
+            var passphraseBytes = RandomNumberGenerator.GetBytes(24);
+            var passphrase = Convert.ToBase64String(passphraseBytes);
+            CryptographicOperations.ZeroMemory(passphraseBytes);
+            var migration = await RunOwnerCommandWithInputAsync(connectionsExecutable,
+                passphrase + Environment.NewLine + passphrase + Environment.NewLine,
+                "owner", "migrate", "--config", fixture.SettingsPath).ConfigureAwait(false);
+            Require(migration.ExitCode == 0 && migration.StandardOutput.Contains("MIGRATION encrypted resources=2", StringComparison.Ordinal),
+                "The scope fixture did not create its two synthetic encrypted resources.");
+
+            service = await StartServiceAsync(connectionsExecutable, fixture.SettingsPath).ConfigureAwait(false);
+            var initialStatus = await ReadStatusAsync(connectionsExecutable, fixture.ControlPipe).ConfigureAwait(false);
+            Require(initialStatus.Contains("vault=locked", StringComparison.Ordinal) &&
+                    initialStatus.Contains("redemption/session support is unavailable", StringComparison.Ordinal),
+                "The token-issuance service did not restart locked or accurately disclose that no redemption/session surface exists.");
+            var expiry = DateTimeOffset.UtcNow.AddHours(3).ToString("O", CultureInfo.InvariantCulture);
+            var lockedHandoff = Path.Combine(fixture.OutputDirectory, "locked-grant.handoff");
+            var lockedIssue = await RunOwnerCommandAsync(connectionsExecutable,
+                "owner", "grant", "--control-pipe", fixture.ControlPipe, "--zone-id", SmokeFixture.Zone,
+                "--expires-at-utc", expiry, "--handoff-file", lockedHandoff).ConfigureAwait(false);
+            Require(lockedIssue.ExitCode == 3 && lockedIssue.StandardError.Contains("vault_locked", StringComparison.Ordinal) &&
+                    !File.Exists(lockedHandoff),
+                "A locked vault issued an owner scope token or created a handoff file.");
+
+            var wrongUnlock = await RunOwnerCommandWithInputAsync(connectionsExecutable,
+                "not the synthetic passphrase\n", "owner", "unlock", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
+            Require(wrongUnlock.ExitCode == 3 && wrongUnlock.StandardError.Contains("unlock_denied", StringComparison.Ordinal),
+                "A wrong vault key opened the grant state.");
+            Console.WriteLine("PASS locked and wrong-key owner grant requests fail closed");
+
+            var unlocked = await RunOwnerCommandWithInputAsync(connectionsExecutable,
+                passphrase + Environment.NewLine, "owner", "unlock", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
+            Require(unlocked.ExitCode == 0, "The scope fixture vault did not unlock with its owner passphrase.");
+            var emptyGrantState = await RunOwnerCommandAsync(connectionsExecutable,
+                "owner", "grants", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
+            Require(emptyGrantState.ExitCode == 0 && emptyGrantState.StandardOutput.Contains("GRANTS count=0", StringComparison.Ordinal),
+                "A missing encrypted grant state did not fail closed to an empty owner grant list.");
+
+            var forgedIssue = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
+            {
+                protocolVersion = 1,
+                operation = "owner.scope.issue",
+                previewId = new string('0', 32),
+                isOwner = true,
+                resourceIds = new[] { SmokeFixture.ResourceA },
+                operations = new[] { "publish" },
+                expiresAtUtc = expiry
+            }).ConfigureAwait(false);
+            Require(forgedIssue.TryGetProperty("error", out var forgedError) &&
+                    forgedError.GetString() == "scope_preview_unavailable" &&
+                    forgedIssue.TryGetProperty("token", out var forgedToken) && forgedToken.ValueKind == JsonValueKind.Null,
+                "An issue request with self-supplied scope and expiry received no capability without a server-created preview.");
+
+            var handoffA = Path.Combine(fixture.OutputDirectory, "owner-grant-zone.handoff");
+            var grantA = await RunOwnerCommandWithInputAsync(connectionsExecutable, "ISSUE\n",
+                "owner", "grant", "--control-pipe", fixture.ControlPipe, "--zone-id", SmokeFixture.Zone,
+                "--expires-at-utc", expiry, "--handoff-file", handoffA).ConfigureAwait(false);
+            Require(grantA.ExitCode == 0 && grantA.StandardOutput.Contains("SCOPE PREVIEW", StringComparison.Ordinal) &&
+                    grantA.StandardOutput.Contains($"resource={SmokeFixture.ResourceA}", StringComparison.Ordinal) &&
+                    grantA.StandardOutput.Contains($"resource={SmokeFixture.ResourceB}", StringComparison.Ordinal) &&
+                    grantA.StandardOutput.Contains("operations=resource.read", StringComparison.Ordinal) &&
+                    !grantA.StandardOutput.Contains("publish", StringComparison.Ordinal),
+                "The actual owner CLI did not preview and issue a read-only concrete zone snapshot.");
+            var grantAId = ParseIssuedGrantId(grantA.StandardOutput);
+            tokenA = ReadProtectedHandoffToken(handoffA);
+            Require(IsOpaqueScopeToken(tokenA!) && !ContainsBytes(Encoding.UTF8.GetBytes(grantA.StandardOutput), tokenA!) &&
+                    !ContainsBytes(Encoding.UTF8.GetBytes(grantA.StandardError), tokenA!),
+                "The owner CLI exposed the first raw token in its output or error stream.");
+            VerifyOwnerHandoffAcl(handoffA);
+
+            await WriteFixtureResourceAsync(connectionsExecutable, fixture, SmokeFixture.ResourceA,
+                "synthetic resource A revision two", expectedRevision: 2).ConfigureAwait(false);
+
+            var initialCollection = await RunOwnerCommandWithInputAsync(connectionsExecutable, "SET\n",
+                "owner", "collection-set", "--control-pipe", fixture.ControlPipe,
+                "--collection-id", SmokeFixture.CollectionId, "--resource-ids", SmokeFixture.ResourceA).ConfigureAwait(false);
+            Require(initialCollection.ExitCode == 0 &&
+                    initialCollection.StandardOutput.Contains($"COLLECTION set id={SmokeFixture.CollectionId} resourceIds={SmokeFixture.ResourceA}", StringComparison.Ordinal),
+                "The owner could not persist a concrete synthetic resource collection.");
+
+            var collectionPreviewReply = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
+            {
+                protocolVersion = 1,
+                operation = "owner.scope.preview",
+                collectionId = SmokeFixture.CollectionId,
+                operations = new[] { "resource.read" },
+                expiresAtUtc = expiry
+            }).ConfigureAwait(false);
+            Require(collectionPreviewReply.TryGetProperty("scopePreview", out var collectionPreviewForAssertion) &&
+                    collectionPreviewForAssertion.TryGetProperty("previewId", out var previewIdForAssertion) &&
+                    previewIdForAssertion.ValueKind == JsonValueKind.String &&
+                    collectionPreviewForAssertion.TryGetProperty("resources", out var pendingResources) &&
+                    pendingResources.GetArrayLength() == 1 &&
+                    pendingResources[0].GetProperty("resourceId").GetString() == SmokeFixture.ResourceA &&
+                    pendingResources[0].GetProperty("revision").GetInt64() == 2,
+                "A collection preview did not resolve to its current concrete resource revision.");
+            var pendingPreviewIdText = collectionPreviewReply.GetProperty("scopePreview").GetProperty("previewId").GetString()
+                ?? throw new InvalidOperationException("The actual owner preview did not return a server preview identifier.");
+            var expandedCollection = await RunOwnerCommandWithInputAsync(connectionsExecutable, "SET\n",
+                "owner", "collection-set", "--control-pipe", fixture.ControlPipe,
+                "--collection-id", SmokeFixture.CollectionId,
+                "--resource-ids", $"{SmokeFixture.ResourceA},{SmokeFixture.ResourceB}").ConfigureAwait(false);
+            Require(expandedCollection.ExitCode == 0 &&
+                    expandedCollection.StandardOutput.Contains(
+                        $"COLLECTION set id={SmokeFixture.CollectionId} resourceIds={SmokeFixture.ResourceA},{SmokeFixture.ResourceB}",
+                        StringComparison.Ordinal),
+                "The owner could not add a concrete collection member.");
+            var staleCollectionIssue = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
+            {
+                protocolVersion = 1,
+                operation = "owner.scope.issue",
+                previewId = pendingPreviewIdText,
+                isOwner = true,
+                resourceIds = new[] { SmokeFixture.ResourceA, SmokeFixture.ResourceB },
+                operations = new[] { "publish" },
+                expiresAtUtc = expiry
+            }).ConfigureAwait(false);
+            Require(staleCollectionIssue.TryGetProperty("error", out var staleCollectionError) &&
+                    staleCollectionError.GetString() == "scope_preview_unavailable" &&
+                    staleCollectionIssue.TryGetProperty("token", out var staleCollectionToken) &&
+                    staleCollectionToken.ValueKind == JsonValueKind.Null,
+                "A self-claimed scope/expiry could reuse a collection preview after membership changed.");
+            var restoredCollection = await RunOwnerCommandWithInputAsync(connectionsExecutable, "SET\n",
+                "owner", "collection-set", "--control-pipe", fixture.ControlPipe,
+                "--collection-id", SmokeFixture.CollectionId, "--resource-ids", SmokeFixture.ResourceA).ConfigureAwait(false);
+            Require(restoredCollection.ExitCode == 0, "The owner could not restore the selected source collection after stale-preview denial.");
+            Console.WriteLine("PASS owner-managed collection resolves to concrete revisions; membership changes invalidate pending previews with no token");
+
+            var handoffB = Path.Combine(fixture.OutputDirectory, "owner-grant-proposal-link.handoff");
+            var grantB = await RunOwnerCommandWithInputAsync(connectionsExecutable, "ISSUE\n",
+                "owner", "grant", "--control-pipe", fixture.ControlPipe,
+                "--collection-id", SmokeFixture.CollectionId,
+                "--operations", "proposal.create,link.create,provider.egress",
+                "--destination-resource-ids", SmokeFixture.ResourceB,
+                "--provider", "fixture-provider", "--model", "fixture-model", "--max-cost-usd", "0.25",
+                "--expires-at-utc", expiry, "--handoff-file", handoffB).ConfigureAwait(false);
+            Require(grantB.ExitCode == 0 &&
+                    grantB.StandardOutput.Contains($"collection={SmokeFixture.CollectionId}", StringComparison.Ordinal) &&
+                    grantB.StandardOutput.Contains($"source resource={SmokeFixture.ResourceA}", StringComparison.Ordinal) &&
+                    grantB.StandardOutput.Contains($"destination resource={SmokeFixture.ResourceB}", StringComparison.Ordinal) &&
+                    grantB.StandardOutput.Contains("operations=link.create,proposal.create,provider.egress", StringComparison.Ordinal) &&
+                    grantB.StandardOutput.Contains("egress=fixture-provider/fixture-model maxCostUsd=0.25", StringComparison.Ordinal) &&
+                    !grantB.StandardOutput.Contains("resource.read", StringComparison.Ordinal) &&
+                    !grantB.StandardOutput.Contains("publish", StringComparison.Ordinal),
+                "The owner did not separately approve proposal/link operations with a concrete destination and egress context.");
+            var grantBId = ParseIssuedGrantId(grantB.StandardOutput);
+            tokenB = ReadProtectedHandoffToken(handoffB);
+            Require(grantAId != grantBId && !tokenA!.AsSpan().SequenceEqual(tokenB!) &&
+                    !ContainsBytes(Encoding.UTF8.GetBytes(grantB.StandardOutput), tokenB!) &&
+                    !ContainsBytes(Encoding.UTF8.GetBytes(grantB.StandardError), tokenB!),
+                "The second owner scope did not receive a distinct redacted bearer and grant.");
+            VerifyOwnerHandoffAcl(handoffB);
+            var collectionAfterIssue = await RunOwnerCommandWithInputAsync(connectionsExecutable, "SET\n",
+                "owner", "collection-set", "--control-pipe", fixture.ControlPipe,
+                "--collection-id", SmokeFixture.CollectionId,
+                "--resource-ids", $"{SmokeFixture.ResourceA},{SmokeFixture.ResourceB}").ConfigureAwait(false);
+            Require(collectionAfterIssue.ExitCode == 0,
+                "The owner could not add a member after issuing a collection-scoped grant.");
+            var collectionListing = await RunOwnerCommandAsync(connectionsExecutable,
+                "owner", "collections", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
+            Require(collectionListing.ExitCode == 0 &&
+                    collectionListing.StandardOutput.Contains(
+                        $"COLLECTION id={SmokeFixture.CollectionId} resourceIds={SmokeFixture.ResourceA},{SmokeFixture.ResourceB}",
+                        StringComparison.Ordinal),
+                "The owner collection membership update was not persisted.");
+
+            var rejectedPublishHandoff = Path.Combine(fixture.OutputDirectory, "rejected-publish.handoff");
+            var rejectedPublish = await RunOwnerCommandAsync(connectionsExecutable,
+                "owner", "grant", "--control-pipe", fixture.ControlPipe,
+                "--resource-ids", SmokeFixture.ResourceA, "--operations", "publish",
+                "--expires-at-utc", expiry, "--handoff-file", rejectedPublishHandoff).ConfigureAwait(false);
+            Require(rejectedPublish.ExitCode == 3 &&
+                    rejectedPublish.StandardError.Contains("invalid_grant_request", StringComparison.Ordinal) &&
+                    !File.Exists(rejectedPublishHandoff),
+                "An unapproved publish operation was accepted or received a token handoff.");
+
+            await WriteFixtureResourceAsync(connectionsExecutable, fixture, SmokeFixture.ResourceA,
+                "synthetic resource A revision three after grants", expectedRevision: 3).ConfigureAwait(false);
+            await WriteFixtureResourceAsync(connectionsExecutable, fixture, SmokeFixture.ResourceB,
+                "synthetic resource B revision two after grants", expectedRevision: 2).ConfigureAwait(false);
+            var scopeStatePath = Path.Combine(fixture.VaultDirectoryPath, "scope-grants.enc");
+            VerifyEncryptedScopeState(scopeStatePath, tokenA!, tokenB!);
+            var beforeRestart = await RunOwnerCommandAsync(connectionsExecutable,
+                "owner", "grants", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
+            var grantAEntry = FindGrantEntry(beforeRestart.StandardOutput, grantAId);
+            var grantBEntry = FindGrantEntry(beforeRestart.StandardOutput, grantBId);
+            Require(beforeRestart.ExitCode == 0 && beforeRestart.StandardOutput.Contains("GRANTS count=2", StringComparison.Ordinal) &&
+                    grantAEntry.Contains($"source resource={SmokeFixture.ResourceA} zone={SmokeFixture.Zone} revision=1", StringComparison.Ordinal) &&
+                    grantAEntry.Contains($"source resource={SmokeFixture.ResourceB} zone={SmokeFixture.Zone} revision=1", StringComparison.Ordinal) &&
+                    grantBEntry.Contains($"source resource={SmokeFixture.ResourceA} zone={SmokeFixture.Zone} revision=2", StringComparison.Ordinal) &&
+                    !grantBEntry.Contains($"source resource={SmokeFixture.ResourceB}", StringComparison.Ordinal) &&
+                    grantBEntry.Contains($"destination resource={SmokeFixture.ResourceB} zone={SmokeFixture.Zone} revision=1", StringComparison.Ordinal),
+                "A later resource revision or collection membership change enlarged an already-issued concrete scope.");
+            Console.WriteLine("PASS two owner-issued scopes: read-only zone snapshot and collection-selected proposal/link scope with separate destination/egress");
+            Console.WriteLine("PASS resource revisions changed after issuance without altering either frozen scope snapshot; encrypted verifier state contains no raw bearer");
+            Console.WriteLine("PASS DPAPI-protected owner-only local token handoff; raw tokens absent from captured CLI output");
+
+            await StopServiceAsync(service).ConfigureAwait(false);
+            service = null;
+            service = await StartServiceAsync(connectionsExecutable, fixture.SettingsPath).ConfigureAwait(false);
+            var lockedList = await RunOwnerCommandAsync(connectionsExecutable,
+                "owner", "grants", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
+            Require(lockedList.ExitCode == 3 && lockedList.StandardError.Contains("vault_locked", StringComparison.Ordinal),
+                "A restarted locked service exposed encrypted grant state.");
+            var deniedUnlock = await RunOwnerCommandWithInputAsync(connectionsExecutable,
+                "still not the passphrase\n", "owner", "unlock", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
+            Require(deniedUnlock.ExitCode == 3 && deniedUnlock.StandardError.Contains("unlock_denied", StringComparison.Ordinal),
+                "A wrong key changed the restarted grant state to readable.");
+            var correctUnlock = await RunOwnerCommandWithInputAsync(connectionsExecutable,
+                passphrase + Environment.NewLine, "owner", "unlock", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
+            Require(correctUnlock.ExitCode == 0, "The owner could not unlock the persisted grant state after restart.");
+            var afterRestart = await RunOwnerCommandAsync(connectionsExecutable,
+                "owner", "grants", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
+            Require(afterRestart.ExitCode == 0 && afterRestart.StandardOutput.Contains("GRANTS count=2", StringComparison.Ordinal) &&
+                    afterRestart.StandardOutput.Contains($"GRANT id={grantAId}", StringComparison.Ordinal) &&
+                    afterRestart.StandardOutput.Contains($"GRANT id={grantBId}", StringComparison.Ordinal) &&
+                    afterRestart.StandardOutput.Contains("egress=fixture-provider/fixture-model maxCostUsd=0.25", StringComparison.Ordinal),
+                "The encrypted grant verifier/scope state was not readable after service restart and owner unlock.");
+            var collectionsAfterRestart = await RunOwnerCommandAsync(connectionsExecutable,
+                "owner", "collections", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
+            Require(collectionsAfterRestart.ExitCode == 0 &&
+                    collectionsAfterRestart.StandardOutput.Contains(
+                        $"COLLECTION id={SmokeFixture.CollectionId} resourceIds={SmokeFixture.ResourceA},{SmokeFixture.ResourceB}",
+                        StringComparison.Ordinal),
+                "Encrypted owner collection membership did not survive service restart and unlock.");
+            await VerifyEncryptedScopeTamperDenialAsync(connectionsExecutable, fixture, scopeStatePath).ConfigureAwait(false);
+            Console.WriteLine("PASS locked restart, wrong-key denial, owner unlock, durable grant listing, and authenticated-state tamper denial");
+
+            await StopServiceAsync(service).ConfigureAwait(false);
+            service = null;
+        }
+        catch (Exception ex)
+        {
+            failure = ex;
+        }
+        finally
+        {
+            if (service is not null)
+            {
+                try
+                {
+                    await StopServiceAsync(service).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    failure = failure is null ? ex : new AggregateException(failure, ex);
+                }
+            }
+
+            try
+            {
+                fixture.Dispose();
+            }
+            catch (Exception ex)
+            {
+                failure = failure is null ? ex : new AggregateException(failure, ex);
+            }
+
+            if (tokenA is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(tokenA);
+            }
+
+            if (tokenB is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(tokenB);
+            }
+        }
+
+        if (failure is not null)
+        {
+            ExceptionDispatchInfo.Capture(failure).Throw();
+        }
+
+        Console.WriteLine("LIMIT synthetic Windows owner-service grants only; no agent redemption/session API exists yet, so no T4 no-grant session probe was fabricated; same-owner process compromise remains outside the threat model.");
+    }
+
+    private static async Task<CommandResult> WriteFixtureResourceAsync(
+        string executable,
+        SmokeFixture fixture,
+        string resourceId,
+        string contents,
+        long expectedRevision)
+    {
+        var bytes = Encoding.UTF8.GetBytes(contents);
+        var inputPath = Path.Combine(fixture.OutputDirectory, "scope-write-" + Guid.NewGuid().ToString("N") + ".bin");
+        await File.WriteAllBytesAsync(inputPath, bytes).ConfigureAwait(false);
+        CryptographicOperations.ZeroMemory(bytes);
+        var result = await RunOwnerCommandAsync(executable,
+            "owner", "write", "--control-pipe", fixture.ControlPipe,
+            "--resource-id", resourceId, "--zone-id", SmokeFixture.Zone,
+            "--input-file", inputPath).ConfigureAwait(false);
+        Require(result.ExitCode == 0 &&
+                result.StandardOutput.Contains($"WRITE stored revision={expectedRevision}", StringComparison.Ordinal),
+            "The synthetic resource revision transition did not match the scope snapshot scenario.");
+        return result;
+    }
+
+    private static async Task<JsonElement> InvokeOwnerRequestAsync(string pipeName, object request)
+    {
+        using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous,
+            TokenImpersonationLevel.Impersonation);
+        await client.ConnectAsync(5000).ConfigureAwait(false);
+        using var reader = new StreamReader(client, new UTF8Encoding(false, true), false, 4096, leaveOpen: true);
+        using var writer = new StreamWriter(client, new UTF8Encoding(false, true), 4096, leaveOpen: true) { AutoFlush = true };
+        var authentication = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        Require(authentication is not null && authentication.Contains("\"authenticated\":true", StringComparison.Ordinal),
+            "The real owner control pipe did not authenticate the scope request.");
+        await writer.WriteLineAsync(JsonSerializer.Serialize(request)).ConfigureAwait(false);
+        var response = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false)
+            ?? throw new IOException("The real owner control pipe returned no scope response.");
+        using var document = JsonDocument.Parse(response);
+        return document.RootElement.Clone();
+    }
+
+    private static string ParseIssuedGrantId(string output)
+    {
+        const string prefix = "GRANT issued id=";
+        var start = output.IndexOf(prefix, StringComparison.Ordinal);
+        if (start < 0)
+        {
+            throw new InvalidOperationException("The owner CLI did not report the generated grant identifier.");
+        }
+
+        start += prefix.Length;
+        var end = output.IndexOf(';', start);
+        return end < 0 ? throw new InvalidOperationException("The owner CLI grant identifier was incomplete.") : output[start..end];
+    }
+
+    private static string FindGrantEntry(string output, string grantId)
+    {
+        var lines = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        var start = Array.FindIndex(lines, line =>
+            line.StartsWith("GRANT id=" + grantId + " ", StringComparison.Ordinal));
+        if (start < 0)
+        {
+            throw new InvalidOperationException("The owner grant listing omitted an issued grant.");
+        }
+
+        var end = Array.FindIndex(lines, start + 1, line => line.StartsWith("GRANT id=", StringComparison.Ordinal));
+        return string.Join("\n", lines.Skip(start).Take((end < 0 ? lines.Length : end) - start));
+    }
+
+    private static byte[] ReadProtectedHandoffToken(string path)
+    {
+        var protectedBytes = File.ReadAllBytes(path);
+        var entropy = Encoding.ASCII.GetBytes("MetaBrain|owner-token-handoff|v1");
+        var inputHandle = GCHandle.Alloc(protectedBytes, GCHandleType.Pinned);
+        var entropyHandle = GCHandle.Alloc(entropy, GCHandleType.Pinned);
+        var input = new NativeDataBlob { Length = protectedBytes.Length, Data = inputHandle.AddrOfPinnedObject() };
+        var optionalEntropy = new NativeDataBlob { Length = entropy.Length, Data = entropyHandle.AddrOfPinnedObject() };
+        var output = default(NativeDataBlob);
+        try
+        {
+            if (!CryptUnprotectData(ref input, IntPtr.Zero, ref optionalEntropy, IntPtr.Zero, IntPtr.Zero,
+                    0x1, out output) || output.Length is <= 0 or > 128)
+            {
+                throw new InvalidDataException("The owner-only handoff file did not decrypt as a valid token.");
+            }
+
+            var token = new byte[output.Length];
+            Marshal.Copy(output.Data, token, 0, token.Length);
+            return token;
+        }
+        finally
+        {
+            if (output.Data != IntPtr.Zero)
+            {
+                if (output.Length is > 0 and <= 1024 * 1024)
+                {
+                    for (var index = 0; index < output.Length; index++)
+                    {
+                        Marshal.WriteByte(output.Data, index, 0);
+                    }
+                }
+
+                LocalFree(output.Data);
+            }
+
+            inputHandle.Free();
+            entropyHandle.Free();
+            CryptographicOperations.ZeroMemory(protectedBytes);
+            CryptographicOperations.ZeroMemory(entropy);
+        }
+    }
+
+    private static bool IsOpaqueScopeToken(ReadOnlySpan<byte> token)
+    {
+        if (token.Length != 47 || !token[..4].SequenceEqual("mb1_"u8))
+        {
+            return false;
+        }
+
+        for (var index = 4; index < token.Length; index++)
+        {
+            var value = token[index];
+            if (value is not (>= (byte)'A' and <= (byte)'Z' or >= (byte)'a' and <= (byte)'z' or
+                >= (byte)'0' and <= (byte)'9' or (byte)'_' or (byte)'-'))
+            {
+                return false;
+            }
+        }
+
+        return true;
+
+    }
+
+    private static bool ContainsBytes(ReadOnlySpan<byte> source, ReadOnlySpan<byte> value) =>
+        source.IndexOf(value) >= 0;
+
+    private static void VerifyOwnerHandoffAcl(string path)
+    {
+        var security = FileSystemAclExtensions.GetAccessControl(new FileInfo(path),
+            AccessControlSections.Access | AccessControlSections.Owner);
+        var currentSid = WindowsIdentity.GetCurrent().User
+            ?? throw new InvalidOperationException("The handoff verifier has no owner SID.");
+        var fileOwner = security.GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier;
+        Require(security.AreAccessRulesProtected && fileOwner is not null && fileOwner.Equals(currentSid),
+            "The owner handoff file did not have a protected ACL owned by the current Windows user.");
+
+        var trusted = new HashSet<string>(StringComparer.Ordinal)
+        {
+            currentSid.Value,
+            "S-1-5-18",
+            "S-1-5-32-544"
+        };
+        var rules = security.GetAccessRules(includeExplicit: true, includeInherited: true, targetType: typeof(SecurityIdentifier));
+        Require(rules.Cast<AuthorizationRule>().OfType<FileSystemAccessRule>()
+                .Where(rule => rule.AccessControlType == AccessControlType.Allow)
+                .All(rule => trusted.Contains(((SecurityIdentifier)rule.IdentityReference).Value)),
+            "The owner handoff file ACL granted access outside owner, SYSTEM, or Administrators.");
+        var stored = File.ReadAllBytes(path);
+        try
+        {
+            Require(!Encoding.UTF8.GetString(stored).StartsWith("mb1_", StringComparison.Ordinal),
+                "The owner handoff file persisted a plaintext bearer.");
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(stored);
+        }
+    }
+
+    private static void VerifyEncryptedScopeState(string path, byte[] tokenA, byte[] tokenB)
+    {
+        Require(File.Exists(path), "The owner scope grant state was not persisted.");
+        var persisted = File.ReadAllBytes(path);
+        try
+        {
+            var text = Encoding.UTF8.GetString(persisted);
+            Require(!ContainsBytes(persisted, tokenA) && !ContainsBytes(persisted, tokenB) &&
+                    !text.Contains(SmokeFixture.ResourceA, StringComparison.Ordinal) &&
+                    !text.Contains(SmokeFixture.ResourceB, StringComparison.Ordinal) &&
+                    !text.Contains(SmokeFixture.CollectionId, StringComparison.Ordinal) &&
+                    !text.Contains("fixture-provider", StringComparison.Ordinal) &&
+                    !text.Contains("fixture-model", StringComparison.Ordinal),
+                "The encrypted owner scope state exposed a raw bearer or private scope metadata.");
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(persisted);
+        }
+    }
+
+    private static async Task VerifyEncryptedScopeTamperDenialAsync(
+        string executable,
+        SmokeFixture fixture,
+        string scopeStatePath)
+    {
+        var original = await File.ReadAllBytesAsync(scopeStatePath).ConfigureAwait(false);
+        try
+        {
+            var json = Encoding.UTF8.GetString(original);
+            const string ciphertextMarker = "\"ciphertext\":\"";
+            var valueStart = json.IndexOf(ciphertextMarker, StringComparison.Ordinal) + ciphertextMarker.Length;
+            Require(valueStart >= ciphertextMarker.Length && valueStart < json.Length,
+                "The encrypted owner scope envelope had no ciphertext field.");
+            var changed = json[valueStart] == 'A' ? 'B' : 'A';
+            var tampered = Encoding.UTF8.GetBytes(json[..valueStart] + changed + json[(valueStart + 1)..]);
+            await File.WriteAllBytesAsync(scopeStatePath, tampered).ConfigureAwait(false);
+            CryptographicOperations.ZeroMemory(tampered);
+
+            var denied = await RunOwnerCommandAsync(executable,
+                "owner", "grants", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
+            Require(denied.ExitCode == 3 && denied.StandardError.Contains("scope_state_unavailable", StringComparison.Ordinal),
+                "Tampered encrypted grant state was served or treated as an empty grant list.");
+        }
+        finally
+        {
+            await File.WriteAllBytesAsync(scopeStatePath, original).ConfigureAwait(false);
+            CryptographicOperations.ZeroMemory(original);
+        }
+
+        var restored = await RunOwnerCommandAsync(executable,
+            "owner", "grants", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
+        Require(restored.ExitCode == 0 && restored.StandardOutput.Contains("GRANTS count=2", StringComparison.Ordinal),
+            "Restoring the task-owned synthetic ciphertext did not restore owner grant readability.");
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeDataBlob
+    {
+        public int Length;
+        public IntPtr Data;
+    }
+
+    [DllImport("crypt32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CryptUnprotectData(
+        ref NativeDataBlob dataIn,
+        IntPtr description,
+        ref NativeDataBlob optionalEntropy,
+        IntPtr reserved,
+        IntPtr prompt,
+        uint flags,
+        out NativeDataBlob dataOut);
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr LocalFree(IntPtr memory);
+
 
     private static async Task VerifyFreshProvisionAsync(string executable)
     {
@@ -685,6 +1221,7 @@ internal sealed class SmokeFixture : IDisposable
     public const string ResourceA = "fixture-private-resource-a";
     public const string ResourceB = "fixture-private-resource-b";
     public const string UnknownResource = "fixture-not-present";
+    public const string CollectionId = "fixture-scope-collection";
     public const string Zone = "fixture-secret-zone";
     public const string FileA = "private-title-alpha.txt";
     public const string FileB = "private-title-beta.txt";

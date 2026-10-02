@@ -4,7 +4,7 @@
 
 Meta Brain là bộ nhớ thứ hai local-first cho owner, encrypted personal vault với key user kiểm soát. Agents chạy bình thường, khám phá owner-published catalog, request memory và đổi token một lần lấy scoped session qua MCP; không sandbox hoặc bảo mật lại original agent sessions. Provenance, durability, owner control và selective synthesis giữ nguyên.
 
-- Baseline: 2026-09-28; owner-approved CR01/D016 ngày 2026-10-01 thay security model. S1-CLEAN source cleanup đã qua evidence gate PASS. Owner authorized full replacement Sprint 1 delivery 2026-10-02; S1-T2 active, S1-T3–T9 Pending, no replacement gate passed yet. S1-T1 stack/envelope evidence retained. Sprint 2–8 Not started; old AppContainer fixture PASS historical only.
+- Baseline: 2026-09-28; owner-approved CR01/D016 ngày 2026-10-01 thay security model. S1-CLEAN cleanup PASS; owner authorized full replacement Sprint 1 delivery 2026-10-02. S1-T2 evidence PASS and reviewed-snapshot commit confirmed; S1-T3 active, S1-T4–T9 Pending. S1-T1 stack/envelope evidence retained. Sprint 2–8 Not started; old AppContainer fixture PASS historical only.
 - Đặc tả: [META-BRAIN](META-BRAIN.md).
 - Hợp đồng yêu cầu và change control: [REQUIREMENTS](REQUIREMENTS.md).
 - Hướng dẫn agent: [AGENTS](../AGENTS.md).
@@ -29,11 +29,11 @@ Mỗi chặng có một sprint plan chi tiết. Hoàn thành chặng không đ�
 
 ## Active Sprints
 
-Sprint 1 replacement implementation active theo owner authorization 2026-10-02; S1-T1 evidence retained. S1-CLEAN removed superseded agent/AppContainer/proof sources and passed agent://CR01CleanupEvidenceGate with focused build and real owner CLI/service smoke. S1-T2 key/unlock/lock is active; S1-T3–T9 Pending. Each independent task requires evidence PASS and an exact-snapshot commit before the next task. Historical old PASS is not encrypted-vault proof; downstream starts only after the replacement sprint gate.
+Sprint 1 replacement implementation active theo owner authorization 2026-10-02; S1-T1 evidence retained, S1-CLEAN cleanup PASS. S1-T2 key/unlock/lock evidence PASS with checkpoint `db8747580093ddb9aa709ac578a2fa1ec045cf7b`; S1-T3 scope/token issuance active, S1-T4–T9 Pending. Each independent task requires evidence PASS and an exact-snapshot commit before the next task. Replacement sprint gate Pending; downstream starts only after that gate.
 
 | Sprint | Trạng thái | Task range | Gate |
 | --- | --- | --- | --- |
-| 1 | In progress — CR01 replacement implementation | S1-T1 retained; S1-T2 active; S1-T3…S1-T9 Pending | Replacement gate Pending; old PASS historical only |
+| 1 | In progress — CR01 replacement implementation | S1-T1 retained; S1-T2 committed; S1-T3 active; S1-T4…S1-T9 Pending | Replacement sprint gate Pending |
 | 2 | Not started | S2-T1…S2-T7 | Pending |
 | 3 | Not started | S3-T1…S3-T6 | Pending |
 | 4 | Not started | S4-T1…S4-T7 | Pending |

@@ -10,7 +10,28 @@ public sealed record ServiceRequest(
     string? ZoneId = null,
     string? Passphrase = null,
     string? RecoveryCode = null,
-    string? ContentBase64 = null);
+    string? ContentBase64 = null,
+    string[]? ResourceIds = null,
+    string[]? Operations = null,
+    string[]? DestinationResourceIds = null,
+    DateTimeOffset? ExpiresAtUtc = null,
+    string? Provider = null,
+    string? Model = null,
+    decimal? MaximumCostUsd = null,
+    string? PreviewId = null,
+    string? CollectionId = null);
+
+public sealed record OwnerScopeGrantSummary(
+    string GrantId,
+    ScopeResourceRevision[] Resources,
+    string[] Operations,
+    ScopeResourceRevision[] DestinationResources,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset ExpiresAtUtc,
+    ScopeGrantEgress? Egress,
+    long PolicyGeneration);
+
+public sealed record OwnerScopeCollectionSummary(string CollectionId, string[] ResourceIds);
 
 public sealed record ServiceReply(
     int ProtocolVersion,
@@ -23,20 +44,37 @@ public sealed record ServiceReply(
     string? ContentType = null,
     string? VaultState = null,
     string? RecoveryCode = null,
-    long? ResourceRevision = null);
+    long? ResourceRevision = null,
+    OwnerScopeGrantPreview? ScopePreview = null,
+    OwnerScopeGrantSummary[]? ScopeGrants = null,
+    OwnerScopeCollectionSummary[]? ScopeCollections = null,
+    string? CollectionId = null,
+    string? GrantId = null,
+    string? Token = null);
+
 
 public sealed class ServiceRequestHandler
 {
     public const int CurrentProtocolVersion = 1;
     public const string ResourceReadOperation = "resource.read";
     public const string ResourceWriteOperation = "resource.write";
+    public const string OwnerScopePreviewOperation = "owner.scope.preview";
+    public const string OwnerScopeIssueOperation = "owner.scope.issue";
+    public const string OwnerScopeListOperation = "owner.scope.list";
+    public const string OwnerScopeCollectionSetOperation = "owner.scope.collection.set";
+    public const string OwnerScopeCollectionListOperation = "owner.scope.collection.list";
     private readonly GrantAuthority _grantAuthority;
     private readonly IVaultLifecycle _vault;
+    private readonly OwnerScopeGrantAuthority _ownerScopeGrants;
 
-    public ServiceRequestHandler(GrantAuthority grantAuthority, IVaultLifecycle vault)
+    public ServiceRequestHandler(
+        GrantAuthority grantAuthority,
+        IVaultLifecycle vault,
+        OwnerScopeGrantAuthority ownerScopeGrants)
     {
         _grantAuthority = grantAuthority ?? throw new ArgumentNullException(nameof(grantAuthority));
         _vault = vault ?? throw new ArgumentNullException(nameof(vault));
+        _ownerScopeGrants = ownerScopeGrants ?? throw new ArgumentNullException(nameof(ownerScopeGrants));
     }
 
     public async Task<ServiceReply> HandleAsync(
@@ -99,7 +137,32 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, "vault.lock", StringComparison.Ordinal))
         {
             await _vault.LockAsync().ConfigureAwait(false);
+            _ownerScopeGrants.ClearPreviews();
             return new ServiceReply(CurrentProtocolVersion, "locked", "owner", null, VaultState: _vault.State);
+        }
+
+        if (string.Equals(request.Operation, OwnerScopePreviewOperation, StringComparison.Ordinal))
+        {
+            return HandleScopePreview(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerScopeIssueOperation, StringComparison.Ordinal))
+        {
+            return HandleScopeIssue(context, request.PreviewId, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerScopeListOperation, StringComparison.Ordinal))
+        {
+            return HandleScopeList(context, operation);
+        }
+        if (string.Equals(request.Operation, OwnerScopeCollectionSetOperation, StringComparison.Ordinal))
+        {
+            return HandleScopeCollectionSet(context, request.CollectionId, request.ResourceIds, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerScopeCollectionListOperation, StringComparison.Ordinal))
+        {
+            return HandleScopeCollectionList(context, operation);
         }
 
         if (string.Equals(request.Operation, ResourceReadOperation, StringComparison.Ordinal))
@@ -216,6 +279,237 @@ public sealed class ServiceRequestHandler
                 CryptographicOperations.ZeroMemory(content);
             }
         }
+    }
+
+    private ServiceReply HandleScopePreview(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (request.ExpiresAtUtc is not { } expiresAtUtc)
+        {
+            return Error("invalid_grant_request");
+        }
+
+        try
+        {
+            var available = operation.ListResources();
+            if (request.CollectionId is not null && (request.ZoneId is not null || request.ResourceIds is { Length: > 0 }))
+            {
+                throw new ArgumentException("Select a collection, zone, or exact resources.");
+            }
+
+            var resources = request.CollectionId is null
+                ? ResolveResourceSelection(available, request.ZoneId, request.ResourceIds)
+                : Array.Empty<ScopeResourceRevision>();
+            var destinations = request.DestinationResourceIds is { Length: > 0 } destinationIds
+                ? ResolveResourceIds(available, destinationIds)
+                : Array.Empty<ScopeResourceRevision>();
+            var hasEgress = request.Provider is not null || request.Model is not null || request.MaximumCostUsd is not null;
+            var egress = hasEgress
+                ? request.Provider is not null && request.Model is not null && request.MaximumCostUsd is not null
+                    ? new ScopeGrantEgress(request.Provider, request.Model, request.MaximumCostUsd.Value)
+                    : throw new ArgumentException("Provider egress fields must be supplied together.")
+                : null;
+            var preview = request.CollectionId is null
+                ? _ownerScopeGrants.Preview(context, resources, request.Operations, destinations, expiresAtUtc, egress, operation)
+                : _ownerScopeGrants.PreviewCollection(
+                    context, request.CollectionId, available, request.Operations, destinations, expiresAtUtc, egress, operation);
+            return new ServiceReply(CurrentProtocolVersion, "scope_preview", "owner", null,
+                PolicyGeneration: preview.PolicyGeneration, ScopePreview: preview);
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_grant_request");
+        }
+        catch (InvalidDataException)
+        {
+            return Error("scope_state_unavailable");
+        }
+        catch (IOException)
+        {
+            return Error("scope_state_unavailable");
+        }
+    }
+
+    private ServiceReply HandleScopeIssue(
+        AuthenticatedContext context,
+        string? previewId,
+        IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        try
+        {
+            var issued = _ownerScopeGrants.Issue(context, previewId, operation);
+            return new ServiceReply(CurrentProtocolVersion, "token_issued", "owner", null,
+                PolicyGeneration: issued.Grant.PolicyGeneration, GrantId: issued.Grant.GrantId, Token: issued.Token);
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_grant_request");
+        }
+        catch (InvalidOperationException)
+        {
+            return Error("scope_preview_unavailable");
+        }
+        catch (InvalidDataException)
+        {
+            return Error("scope_state_unavailable");
+        }
+        catch (IOException)
+        {
+            return Error("scope_state_unavailable");
+        }
+    }
+
+    private ServiceReply HandleScopeList(AuthenticatedContext context, IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        try
+        {
+            var grants = _ownerScopeGrants.List(context, operation)
+                .Select(grant => new OwnerScopeGrantSummary(
+                    grant.GrantId, grant.Resources, grant.Operations, grant.DestinationResources,
+                    grant.CreatedAtUtc, grant.ExpiresAtUtc, grant.Egress, grant.PolicyGeneration))
+                .ToArray();
+            return new ServiceReply(CurrentProtocolVersion, "scope_grants", "owner", null,
+                PolicyGeneration: grants.Length == 0 ? 0 : grants.Max(grant => grant.PolicyGeneration),
+                ScopeGrants: grants);
+        }
+        catch (InvalidDataException)
+        {
+            return Error("scope_state_unavailable");
+        }
+        catch (IOException)
+        {
+            return Error("scope_state_unavailable");
+        }
+    }
+
+    private ServiceReply HandleScopeCollectionSet(
+        AuthenticatedContext context,
+        string? collectionId,
+        string[]? resourceIds,
+        IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (resourceIds is not { Length: > 0 })
+        {
+            return Error("invalid_collection_request");
+        }
+
+        try
+        {
+            var resources = ResolveResourceIds(operation.ListResources(), resourceIds);
+            var collection = _ownerScopeGrants.SetCollection(context, collectionId, resources, operation);
+            var summary = new OwnerScopeCollectionSummary(collection.CollectionId, collection.ResourceIds);
+            return new ServiceReply(CurrentProtocolVersion, "collection_set", "owner", null,
+                ScopeCollections: new[] { summary }, CollectionId: collection.CollectionId);
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_collection_request");
+        }
+        catch (InvalidDataException)
+        {
+            return Error("scope_state_unavailable");
+        }
+        catch (IOException)
+        {
+            return Error("scope_state_unavailable");
+        }
+    }
+
+    private ServiceReply HandleScopeCollectionList(AuthenticatedContext context, IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        try
+        {
+            var collections = _ownerScopeGrants.ListCollections(context, operation)
+                .Select(collection => new OwnerScopeCollectionSummary(collection.CollectionId, collection.ResourceIds))
+                .ToArray();
+            return new ServiceReply(CurrentProtocolVersion, "scope_collections", "owner", null,
+                ScopeCollections: collections);
+        }
+        catch (InvalidDataException)
+        {
+            return Error("scope_state_unavailable");
+        }
+        catch (IOException)
+        {
+            return Error("scope_state_unavailable");
+        }
+    }
+
+    private static ScopeResourceRevision[] ResolveResourceSelection(
+        IReadOnlyList<ScopeResourceRevision> available,
+        string? zoneId,
+        string[]? resourceIds)
+    {
+        if (zoneId is not null && resourceIds is { Length: > 0 })
+        {
+            throw new ArgumentException("Select a zone or exact resources, not both.");
+        }
+
+        if (zoneId is not null)
+        {
+            var selected = available.Where(resource => string.Equals(resource.ZoneId, zoneId, StringComparison.Ordinal)).ToArray();
+            if (selected.Length == 0)
+            {
+                throw new ArgumentException("The selected zone has no managed resources.");
+            }
+
+            return selected;
+        }
+
+        if (resourceIds is not { Length: > 0 })
+        {
+            throw new ArgumentException("Select a zone or one or more exact resources.");
+        }
+
+        return ResolveResourceIds(available, resourceIds);
+    }
+
+    private static ScopeResourceRevision[] ResolveResourceIds(
+        IReadOnlyList<ScopeResourceRevision> available,
+        IReadOnlyList<string> resourceIds)
+    {
+        var byId = available.ToDictionary(resource => resource.ResourceId, StringComparer.Ordinal);
+        var selected = new ScopeResourceRevision[resourceIds.Count];
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (var index = 0; index < resourceIds.Count; index++)
+        {
+            var resourceId = resourceIds[index];
+            if (resourceId is null || !seen.Add(resourceId) || !byId.TryGetValue(resourceId, out var resource))
+            {
+                throw new ArgumentException("The scope contains an unknown or duplicate resource.");
+            }
+
+            selected[index] = resource;
+        }
+
+        return selected;
     }
 
     private static ServiceReply ResourceDenied() =>
