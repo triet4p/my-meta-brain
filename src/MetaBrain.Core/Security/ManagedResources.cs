@@ -62,12 +62,11 @@ public sealed class ManagedResourceCatalog
         value is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9';
 }
 
- /// <summary>
-/// Reads managed resource bytes for an already-authorized opaque resource ID.
-/// Implementations must open the backing file per request, never cache content
-/// across policy generations, and fail closed with
-/// <see cref="ManagedResourceUnavailableException"/> on any filesystem anomaly
-/// so callers cannot distinguish missing, forbidden, or tampered resources.
+/// <summary>
+/// Reads bytes for an opaque resource ID through an unlocked private storage
+/// operation. Implementations decrypt per request, bind authenticated
+/// ciphertext to vault/resource identity/schema/revision, and fail closed on
+/// missing or tampered resources.
 /// </summary>
 public interface IManagedResourceReader
 {
@@ -79,6 +78,39 @@ public interface IManagedResourceReader
     /// serving bytes resolved under a stale registration.
     /// </summary>
     void ValidateRegistration(string resourceId);
+}
+
+/// <summary>
+/// Private encrypted resource storage exposed through an unlocked owner
+/// operation. Implementations must bind ciphertext to the vault, resource ID,
+/// schema, and revision; callers hold an operation until its response is sent.
+/// </summary>
+public interface IManagedResourceStore : IManagedResourceReader
+{
+    bool TryGetZone(string resourceId, out string? zoneId);
+    long WriteContent(string resourceId, string zoneId, byte[] content);
+}
+
+/// <summary>
+/// Owner-controlled vault lifecycle. Acquired operations remain valid until
+/// disposed; lock prevents new operations and completes only after all existing
+/// operations have drained.
+/// </summary>
+public interface IVaultLifecycle
+{
+    string State { get; }
+    bool Provision(string passphrase, out string? recoveryCode);
+    bool Unlock(string credential, bool useRecoveryCode);
+    Task LockAsync();
+    IVaultOperation? TryBeginOperation();
+}
+
+/// <summary>
+/// Scoped unlocked access to private resource metadata and content. The
+/// application disposes this lease only after the operation response is sent.
+/// </summary>
+public interface IVaultOperation : IManagedResourceStore, IDisposable
+{
 }
 
 /// <summary>

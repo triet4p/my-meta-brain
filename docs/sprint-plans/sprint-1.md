@@ -6,7 +6,7 @@ Thiết lập key/unlock/lock và encrypted storage thực; agent khám phá cat
 
 ## Status and Dependencies
 
-- Status: Reopened — owner-approved CR01/D016 ngày 2026-10-01. S1-T1 stack/envelope evidence được giữ; S1-T2–T9 replacement tasks Pending, chưa có crypto/catalog/token proof. Lần cập nhật này chỉ sửa tài liệu, không tự bắt đầu implementation.
+- Status: In progress — CR01/D016 replacement implementation owner-authorized 2026-10-02. S1-T1 stack/envelope evidence retained; S1-T2 active, S1-T3–T9 Pending. No replacement crypto/catalog/token gate has passed yet; old gates remain historical.
 - [Global plan](../PLAN.md), [specification](../META-BRAIN.md), [requirements](../REQUIREMENTS.md), [D016](../../.agents/memory/decisions.md).
 - Requirements: R02–R06, R36; đặt nền cho R07, R24, R31–R34, R38, R40.
 - Sprint 2 chỉ bắt đầu sau replacement gate CR01. Bảy task gates và deep PASS cũ giữ dưới Historical Gate Record, không thay nghiệm thu mới. Supplemental protected model proof superseded/stopped, không tiếp tục dùng key hoặc gọi provider.
@@ -21,14 +21,14 @@ S1 dùng synthetic encrypted resource fixtures với crypto/storage contract tá
 
 ## Atomic Tasks
 
-Status legend: [ ] pending / [~] in progress / [x] done. Main chỉ [x] sau evidence gate. Artifacts S1-T<M>: artifacts/sprint-1/task-<M>.md; files cũ phải giữ sections lịch sử và append evidence CR01 khi thực thi, không viết đè PASS cũ hoặc tạo artifact giả trước.
+Status legend: [ ] pending / [~] in progress / [x] done. Theo [OMP execution contract](../PLAN.md#planning-and-execution-contract), Main chỉ [x] cho new implementation/correction sau evidence PASS và successful reviewed-snapshot commit; commit_pending giữ [~], chặn task độc lập tiếp theo. Fresh async worker/reviewer cho từng task; deep review chỉ sau mọi task gate và required checkpoint PASS. Artifacts S1-T<M>: artifacts/sprint-1/task-<M>.md, gồm matching attempt IDs, review reference và Main-owned commit state/SHA/base/snapshot; append evidence CR01 vào files cũ, không viết đè lịch sử hoặc tạo artifact PASS giả. S1-T1 retained và S1-CLEAN/old gates không bị đổi status hoặc coi là retroactive async/checkpoint proof.
 
 - [x] **S1-T1 — Giữ stack/module decisions và frozen operational envelope.** Requirements: R32, R38, R40.
     - Retained evidence: stack C#/.NET 10, WPF, versioned local pipes, modular boundaries, authorized bounded source sample và targets đã qua gate trước CR01; không crypto/isolation acceptance mới.
     - Contract: D016 supersedes protected launcher/AppContainer dependency, không đổi language/UI/IPC hoặc nới dataset/token/cost/latency budgets. Crypto/package/lock decisions còn cần evidence ở T2.
     - Evidence: historical artifacts/sprint-1/task-1.md và agent://Sprint1Task1ReReview; targets bên dưới, không coi tài liệu này là runtime measurement.
 
-- [ ] **S1-T2 — Vault key và unlock/lock lifecycle.** Requirements: R02, R04, R36.
+- [~] **S1-T2 — Vault key và unlock/lock lifecycle.** Requirements: R02, R04, R36.
     - Scope: chọn thư viện chuẩn/AEAD/KDF và versioned encrypted envelope; user key/recovery provisioning, startup locked, key lifetime và lock boundary. Không cây khóa theo zone hoặc sandbox.
     - Acceptance: encrypted fixture round-trip, wrong/missing key, modified/truncated hoặc swapped resource ciphertext deny; envelope bind vault/resource identity/schema/revision để valid ciphertext khác không bị phục vụ dưới allowed ID. Private metadata không plaintext; không persist key cạnh vault/config/env/log. Lock chặn fixture decrypt/read/write tại effective boundary, clear app-held key/cache và restart locked. Mất key không fake recovery; defined lifecycle hooks cho S3 ingestion/S6 jobs, không mock nonexistent features để claim proof.
     - Evidence: actual service/CLI crypto/unlock/lock/tamper, persisted outputs và race lock/fixture read/write; memory-erasure limits explicit. S3/S6 kiểm chứng integrations khi xuất hiện; migrate current key/settings boundary không xóa user data.
@@ -74,7 +74,7 @@ User unlock synthetic vault, publish limited catalog, review hai requests và mi
 
 ## Notes / Blockers
 
-Code hiện có vẫn theo AppContainer baseline; encrypted storage/key/catalog/request/single-use token path chưa có proof. Không tự claim migration hoàn tất hoặc OS permission chặn same-owner agent. Lịch sử credential exposure/unknown reservation và old fixture PASS giữ bên dưới; không mở lại provider proof. Crypto library/index-at-rest implementation phải đáp ứng approved-package rules và frozen budgets, không nới tiêu chí để pass.
+S1-CLEAN removed superseded AppContainer/agent/proof sources; retained owner-only plaintext/ACL paths are not encrypted-vault or approval evidence. S1-T2 replacement implementation is active, with crypto/key proof not yet reviewed; catalog/request/single-use token work remains Pending. Không tự claim migration hoàn tất hoặc OS permission chặn same-owner agent. Lịch sử credential exposure/unknown reservation và old fixture PASS giữ bên dưới; không mở lại provider proof. Crypto library/index-at-rest implementation phải đáp ứng approved-package rules và frozen budgets, không nới tiêu chí để pass.
 
 ## Retained S1-T1 Decisions and Operational Envelope
 
@@ -177,7 +177,11 @@ Các mốc dưới đây giữ nguyên chronology, kể cả trạng thái/block
 
 ## CR01 Replacement Gate Record
 
-Pending. CR01 owner approval and planning completed without implementation during that planning update. Retained T1 evidence does not replace crypto/catalog/token acceptance; M1 remains not [x] until T2–T9 evidence gates and replacement deep review PASS.
+In progress; no replacement gate PASS yet. Owner authorized full Sprint 1 delivery 2026-10-02. Retained T1 evidence does not replace crypto/catalog/token acceptance; M1 remains not [x] until T2–T9 evidence gates, required commit checkpoints and replacement deep review PASS.
+
+- S1-T2 attempt `S1T2-CR01-20261002-A1`: fresh default `task` worker agent/job `S1T2KeyLifecycleA1` launched asynchronously; artifact `artifacts/sprint-1/task-2.md`. Crypto domain alone does not justify `hard-task`; no escalation recorded. User definitions for all four flow roles have `blocking: false`; no project flow override found, dispatch returned a background job. Supervision timer `bg_3`, generation `G1`, 20-minute observation interval; proactive preflight notice received. Evidence gate and commit checkpoint Pending.
+- Assigned repository `F:/ai-ml/my-meta-brain`, ref `refs/heads/main`, origin `triet4p/my-meta-brain`; verified starting HEAD `999831fef4036f8fa3049a70c9b72c5127af2cb6`, real index initially empty. Owner explicitly approved including preexisting workflow-sync content in `AGENTS.md`, `docs/PLAN.md` and this sprint plan in the first reviewed checkpoint. Preexisting Sprint 2–8 plan edits remain outside task ownership and commits. No push authorized.
+
 
 ## CR01 Maintenance — owner-requested obsolete source cleanup
 

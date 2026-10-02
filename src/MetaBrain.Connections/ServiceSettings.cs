@@ -15,9 +15,11 @@ internal sealed record ServiceSettings(
     string ControlPipe,
     ManagedResourceBinding[]? ManagedResources = null)
 {
-    public const int CurrentSchemaVersion = 1;
-    public string PolicyStorePath { get; init; } = string.Empty;
-    public string ResourceRootPath { get; init; } = string.Empty;
+    public const int LegacySchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
+    internal string VaultDirectoryPath { get; init; } = string.Empty;
+    internal string LegacyPolicyStorePath { get; init; } = string.Empty;
+    internal string LegacyResourceRootPath { get; init; } = string.Empty;
 }
 
 internal static partial class ServiceSettingsLoader
@@ -27,6 +29,43 @@ internal static partial class ServiceSettingsLoader
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     public static ServiceSettings Load(string path)
+    {
+        var (settings, ownerSid, directory) = ReadAndValidate(path);
+        if (settings.SchemaVersion == ServiceSettings.LegacySchemaVersion)
+        {
+            throw new InvalidDataException("Legacy plaintext settings require the explicit owner migration command before service startup.");
+        }
+
+        if (settings.SchemaVersion != ServiceSettings.CurrentSchemaVersion ||
+            settings.ManagedResources is { Length: > 0 })
+        {
+            throw new InvalidDataException("Unsupported or invalid encrypted-vault settings schema.");
+        }
+
+        ValidateOwner(settings, ownerSid);
+        ValidatePipeName(settings.ControlPipe);
+        return settings with { VaultDirectoryPath = Path.Combine(directory.FullName, "vault") };
+    }
+
+    public static ServiceSettings LoadLegacyForMigration(string path)
+    {
+        var (settings, ownerSid, directory) = ReadAndValidate(path);
+        if (settings.SchemaVersion != ServiceSettings.LegacySchemaVersion)
+        {
+            throw new InvalidDataException("Only the current ACL-only settings format can be migrated.");
+        }
+
+        ValidateLegacy(settings, ownerSid);
+        return settings with
+        {
+            LegacyPolicyStorePath = Path.Combine(directory.FullName, "grant-policy.json"),
+            LegacyResourceRootPath = Path.Combine(directory.FullName, "resources"),
+        };
+    }
+
+    public static bool IsSafeIdentifier(string? value) => value is not null && SafeIdentifier.IsMatch(value);
+
+    private static (ServiceSettings Settings, string OwnerSid, DirectoryInfo Directory) ReadAndValidate(string path)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -47,30 +86,22 @@ internal static partial class ServiceSettingsLoader
         var privateSettings = ProtectedFile.ReadPrivateFile(fullPath, serviceSid, MaximumSettingsBytes);
         var settings = JsonSerializer.Deserialize<ServiceSettings>(privateSettings.Text, JsonOptions)
             ?? throw new InvalidDataException("Invalid service settings.");
-
-        Validate(settings, privateSettings.OwnerSid);
-        return settings with
-        {
-            PolicyStorePath = Path.Combine(directory.FullName, "grant-policy.json"),
-            ResourceRootPath = Path.Combine(directory.FullName, "resources"),
-        };
+        return (settings, privateSettings.OwnerSid, directory);
     }
 
-    public static bool IsSafeIdentifier(string? value) => value is not null && SafeIdentifier.IsMatch(value);
-
-    private static void Validate(ServiceSettings settings, string fileOwnerSid)
+    private static void ValidateOwner(ServiceSettings settings, string fileOwnerSid)
     {
-        if (settings.SchemaVersion != ServiceSettings.CurrentSchemaVersion || string.IsNullOrWhiteSpace(settings.OwnerSid))
-        {
-            throw new InvalidDataException("Unsupported or invalid owner service settings schema.");
-        }
-
-        var configuredOwnerSid = new SecurityIdentifier(settings.OwnerSid).Value;
-        if (!string.Equals(configuredOwnerSid, new SecurityIdentifier(fileOwnerSid).Value, StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(settings.OwnerSid) ||
+            !string.Equals(new SecurityIdentifier(settings.OwnerSid).Value,
+                new SecurityIdentifier(fileOwnerSid).Value, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException("The configured owner SID must match the settings file owner.");
         }
+    }
 
+    private static void ValidateLegacy(ServiceSettings settings, string fileOwnerSid)
+    {
+        ValidateOwner(settings, fileOwnerSid);
         ValidatePipeName(settings.ControlPipe);
         var resources = settings.ManagedResources ?? Array.Empty<ManagedResourceBinding>();
         var resourceIds = new HashSet<string>(StringComparer.Ordinal);
@@ -84,6 +115,7 @@ internal static partial class ServiceSettingsLoader
             }
         }
     }
+
 
     private static bool IsPlainFileName(string? fileName) =>
         !string.IsNullOrEmpty(fileName) && fileName!.Length <= 128 &&

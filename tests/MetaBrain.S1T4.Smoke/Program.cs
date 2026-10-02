@@ -17,7 +17,7 @@ internal static class Program
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine("FAIL owner service smoke (" + ex.GetType().Name + ")");
+            Console.Error.WriteLine("FAIL owner service smoke (" + ex.GetType().Name + ": " + ex.Message + ")");
             return 1;
         }
     }

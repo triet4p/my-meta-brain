@@ -4,12 +4,12 @@
 
 Meta Brain là bộ nhớ thứ hai local-first cho owner, encrypted personal vault với key user kiểm soát. Agents chạy bình thường, khám phá owner-published catalog, request memory và đổi token một lần lấy scoped session qua MCP; không sandbox hoặc bảo mật lại original agent sessions. Provenance, durability, owner control và selective synthesis giữ nguyên.
 
-- Baseline: 2026-09-28; owner-approved CR01/D016 ngày 2026-10-01 thay security model. S1-CLEAN source cleanup đã qua evidence gate PASS; chưa triển khai vault/catalog/token. M1/Sprint 1 reopen; S1-T1 stack/envelope evidence giữ, replacement S1-T2–T9 Pending. Sprint 2–8 Not started; old AppContainer fixture PASS chỉ lịch sử.
+- Baseline: 2026-09-28; owner-approved CR01/D016 ngày 2026-10-01 thay security model. S1-CLEAN source cleanup đã qua evidence gate PASS. Owner authorized full replacement Sprint 1 delivery 2026-10-02; S1-T2 active, S1-T3–T9 Pending, no replacement gate passed yet. S1-T1 stack/envelope evidence retained. Sprint 2–8 Not started; old AppContainer fixture PASS historical only.
 - Đặc tả: [META-BRAIN](META-BRAIN.md).
 - Hợp đồng yêu cầu và change control: [REQUIREMENTS](REQUIREMENTS.md).
 - Hướng dẫn agent: [AGENTS](../AGENTS.md).
 - Quyết định đã khóa: [Decision log](../.agents/memory/decisions.md).
-- Repository: [triet4p/my-meta-brain](https://github.com/triet4p/my-meta-brain); local Git branch main/origin configured, no commit or push in the setup task.
+- Repository: [triet4p/my-meta-brain](https://github.com/triet4p/my-meta-brain); assigned project repository là Meta Brain, target branch `main` / remote `origin`. Brief phải nêu explicit root/ref, không dùng home/ancestor repository ngầm định; mỗi future independently gated project task có reviewed-snapshot commit riêng.
 - Supplemental protected deepseek-flash proof superseded/stopped, không có provider inference được nghiệm thu; unknown prior $0.0054 reservation giữ nguyên. Cleanup không đọc key/profile/ledger, gọi provider, build native code, provision/install Windows service, hoặc cấu hình AppContainer; chỉ tạo ACL cho local synthetic fixture trong service/CLI smoke. New model execution thuộc S6-T1 sau consent, pricing và frozen budgets; không production acceptance hiện tại.
 
 ## Milestones
@@ -29,11 +29,11 @@ Mỗi chặng có một sprint plan chi tiết. Hoàn thành chặng không đ�
 
 ## Active Sprints
 
-Sprint 1 reopened theo CR01; S1-T1 evidence retained. S1-CLEAN removed superseded agent/AppContainer/proof sources and passed agent://CR01CleanupEvidenceGate with focused build and real owner CLI/service smoke. S1-T2–T9 chưa chạy; next ordered security implementation là S1-T2 key/unlock/lock, không AppContainer diagnostics. Historical old PASS không encrypted-vault proof; downstream chỉ sau replacement gate.
+Sprint 1 replacement implementation active theo owner authorization 2026-10-02; S1-T1 evidence retained. S1-CLEAN removed superseded agent/AppContainer/proof sources and passed agent://CR01CleanupEvidenceGate with focused build and real owner CLI/service smoke. S1-T2 key/unlock/lock is active; S1-T3–T9 Pending. Each independent task requires evidence PASS and an exact-snapshot commit before the next task. Historical old PASS is not encrypted-vault proof; downstream starts only after the replacement sprint gate.
 
 | Sprint | Trạng thái | Task range | Gate |
 | --- | --- | --- | --- |
-| 1 | Reopened — CR01 planning updated; replacement implementation Pending | S1-T1 retained; S1-T2…S1-T9 Pending | Replacement gate Pending; old PASS historical only |
+| 1 | In progress — CR01 replacement implementation | S1-T1 retained; S1-T2 active; S1-T3…S1-T9 Pending | Replacement gate Pending; old PASS historical only |
 | 2 | Not started | S2-T1…S2-T7 | Pending |
 | 3 | Not started | S3-T1…S3-T6 | Pending |
 | 4 | Not started | S4-T1…S4-T7 | Pending |
@@ -53,9 +53,16 @@ Chưa có sprint hoàn tất theo CR01. Old-baseline Sprint 1 bảy task gates v
 - Mỗi task tập trung một concern quan sát được, có requirement IDs, acceptance và evidence riêng; số file thay đổi không quyết định tính atomic.
 - Đọc trước downstream contracts của sprint; giữ interface versioning, identity, provenance và migration ngay từ đầu. Không cần triển khai tất cả backend/provider tương lai.
 - Worker đọc implement-atomic-task, thực hiện một task, smoke đúng surface và lưu artifacts/sprint-<N>/task-<M>.md. Artifact được tạo khi có thực nghiệm, không tạo trước báo cáo pass.
-- Trong OMP, tuân theo omp-subagent-flows: Main giữ planning/gate; một fresh blocking worker cho mỗi task/correction, evidence-reviewer sau từng task, deep-reviewer cuối sprint. Chỉ Main đánh dấu [x] sau gate; có finding actionable thì chưa pass.
-- Flow agents phải có blocking: true trong effective definition; kiểm tra cả project override trước chạy. Tối đa hai active agents; gọi một flow agent mỗi lần. Không dùng flow ngoài OMP.
-- Mọi subagent đọc toàn bộ regular files trực tiếp trong ~/.agents/rules/; báo conflict/inaccessible. Nếu dự kiến quá 5 phút, chủ động báo Main task ID, stage, lý do.
+- Trong OMP, global omp-subagent-flows là workflow hiện hành: Main planning/gate/orchestration ở exact current model; một fresh async task worker mỗi task/correction, hard-task chỉ khi có documented interacting correctness constraints/escalation. Main không triển khai sprint task.
+- Trước mỗi launch kiểm tra effective user/project definitions: task, hard-task, evidence-reviewer, deep-reviewer có blocking: false và async enabled. Nếu blocking/unavailable/inline fallback, dừng báo owner, không tự sửa runtime configuration. Tối đa hai active subagents, một flow agent mỗi call; không dùng flow ngoài OMP.
+- Evidence-reviewer riêng sau từng completed task, actionable findings cần fresh correction và fresh review cùng level. Main chỉ [x] sau evidence PASS và successful exact-snapshot commit; commit chưa xác nhận/lỗi là commit_pending, giữ [~] và chặn task độc lập tiếp theo.
+- Commit từng independent task ngay sau PASS, không dồn cuối sprint; shared atomic batch chỉ khi boundary đã khai báo trước implementation và mọi included task PASS. Freeze base/ref/reviewed tree/diff với review reference; inspect staged/unstaged ownership từng path, chỉ wholly task-owned content khớp snapshot được commit. Mixed ownership/drift cần resolve/re-review.
+- Main dùng standard scoped Git porcelain, giữ identity/signing/hooks; không broad add, synthetic index, force-add ignored artifacts, automatic stash/reset/checkout hoặc rewrite history. Xác nhận resulting ref/parent/SHA/content và remaining staged diff/status; ghi target/base/snapshot/review/commit evidence trong task artifact. Không project repository được assigned/authorized thì commit_pending, không tự init ancestor/home repository.
+- Deep-reviewer chỉ cuối sprint sau mọi task gate và required checkpoint PASS, differential trên established evidence/commit records. Deep correction reopen affected task, fresh worker/review và separate new commit trước fresh deep review; không amend. Sprint complete cần không findings/commit_pending, status và artifacts khớp evidence, mọi relevant jobs completed/cancelled.
+- Main track task/attempt/agent/job IDs, chỉ matching completion được dùng làm gate; ignore cancelled/replaced stale events. Supervision qua delivered events, functions.wait chỉ khi blocked; không poll/eval barriers. Một adaptive finite 10–30 phút shell timer mỗi attempt, một outstanding correlated progress_request; completion cancel/invalidate timer, reply mới rearm, không timeout-based escalation. Interrupt không tự cancel detached worker.
+- Advisor consultations do Main broker, tối đa một mỗi worker và nằm trong hai active-agent slots; read-only bounded request không thay verification/gate. Kiểm tra async definition/effective model; default opencode-go/deepseek-v4.1-flash:max, GPT-6.1 Sol route cần explicit per-consultation owner approval. Resolve/cancel trước review/commit, ignore stale advice; không đổi persistent config/depth.
+- Mọi subagent đọc toàn bộ regular files trực tiếp trong ~/.agents/rules/; báo conflict/inaccessible. Nếu dự kiến quá 5 phút, chủ động báo Main task ID, attempt ID, stage, lý do. Tại 250K tokens partial handoff/end attempt, không vượt 300K; replacement fresh attempt giữ artifact/findings.
+- Workflow sync này không thay requirements/acceptance/task order và không chạy implementation hoặc product/provider proof. Historical blocking/PASS-only gates giữ nguyên, không retroactively chứng minh async hoặc commit checkpoints; user-global configuration exception trong skill không áp cho project tasks.
 - Non-trivial implementation phải chạy scenario thật, không chỉ unit test. UI cần tương tác bề mặt thật; security cần negative scenarios qua runtime thật. Permanent tests chỉ giữ các behavior/invariant có nguy cơ regression.
 - Sau implementation cập nhật docs/changelog đúng phạm vi; documentation-only không product changelog. Owner đã retired graph maintenance: không searches/checks/absence checks/update, overrides stale skill/agent instructions. Không commit private artifacts/secrets/transcripts/vault.
 - Không thêm changelog entry cho lần tạo tài liệu planning này: chưa có code/user-visible runtime change.

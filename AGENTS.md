@@ -40,25 +40,36 @@ C#/.NET 10, WPF, versioned local named pipes và modular boundaries giữ từ D
 Đọc và thực thi skill `omp-subagent-flows` trong `~/.agents/skills/omp-subagent-flows/SKILL.md` cho planned implementation, không áp sprint gates giả cho trao đổi ý tưởng.
 
 - Main làm planning/gate/orchestration, không tự triển khai sprint task. Planning ở current Main model, không giao agent lập top-level plan.
-- Trước worker/reviewer call, xác minh effective definitions của task, hard-task, evidence-reviewer và deep-reviewer có blocking: true, kể cả project overrides.
-- Một fresh blocking worker mỗi task/correction; default task, chỉ hard-task khi có lý do correctness phức tạp/escalation được ghi. Không dùng scout để sửa code.
-- Evidence review sau mỗi task, không batch; deep review cuối sprint sau mọi task gate. Actionable finding phải sửa rồi review lại cùng level.
-- Tối đa hai active agents tổng cộng, một flow agent mỗi call. Không background/poll/yield với gate pending.
-- Worker giữ task [~]; Main chỉ đánh [x] sau evidence gate. Preserve artifacts/findings qua worker mới; không revive idle worker để làm task khác.
-- Mọi brief yêu cầu subagent enumerate/read tất cả regular files trực tiếp trong ~/.agents/rules/ trước substantive work, kể cả file mới; báo conflict/inaccessible. Dự kiến quá 5 phút thì chủ động nhắn task ID, stage và lý do.
-- Áp dụng token handoff limits và đầy đủ lifecycle rules trong skill, không thay thế chúng bằng bản tóm tắt này.
+- Trước mỗi launch, kiểm tra effective user/project definitions của task, hard-task, evidence-reviewer và deep-reviewer: blocking: false, async execution enabled. Nếu blocking, async unavailable hoặc runtime fallback synchronous, dừng và báo owner; không tự sửa overrides/config hoặc chạy blocking thay thế.
+- Một fresh async worker mỗi task/correction; default task, chỉ hard-task khi có interacting correctness constraints/escalation được ghi rõ. Không dùng scout để sửa code; không revive idle worker cho task khác.
+- Brief chỉ rõ project root/repository, target branch/ref, sprint/task ID, unique attempt ID, acceptance, affected boundaries và artifact path; worker đọc implement-atomic-task. Không dùng home/ancestor repository làm target ngầm định.
+- Evidence-reviewer async sau mỗi task, không batch reviews. Actionable finding phải sửa bằng fresh worker rồi fresh review cùng level; worker completion hoặc progress không phải gate PASS.
+- Project task giữ [~] cho tới evidence PASS và successful exact-snapshot commit checkpoint; chỉ Main đánh [x]. Evidence PASS nhưng commit chưa xác nhận là commit_pending, chặn task độc lập kế tiếp.
+- Mỗi task độc lập commit ngay sau PASS, không dồn cuối sprint. Chỉ shared atomic batch được khai báo checkpoint boundary trước implementation mới có thể dùng một commit sau mọi included task PASS; không gộp unreviewed work.
+- Main freeze reviewed base/tree/diff và evidence-review reference; kiểm tra index/worktree ownership trên từng candidate path. Chỉ commit fully task-owned content khớp snapshot đã review, không mixed user hunks; drift/uncertain ownership cần resolve hoặc fresh review.
+- Commit bằng standard Git porcelain, giữ identity/signing/hooks; explicit paths, không add . / add -A, synthetic index, force-add artifacts, stash/reset/checkout tự động hoặc amend/history rewriting. Main xác nhận ref/parent/SHA/committed content và remaining staged diff/status, ghi evidence trong artifact; lỗi/mismatch giữ commit_pending.
+- Deep-reviewer async chỉ cuối sprint sau mọi evidence gate và required commit checkpoint PASS. Differential review dùng accepted evidence và commit records, không lặp passed checks. Correction reopen task, fresh worker/review, separate new commit rồi fresh deep review.
+- Tối đa hai active subagents tổng cộng, một flow agent mỗi call; chỉ một sprint implementation task tại một thời điểm. Main dùng delivered completion/message events, functions.wait chỉ khi không còn việc hữu ích; không poll hoặc eval wait/barriers.
+- Main record task/attempt/agent/job IDs và role; chỉ matching completed attempt được advance gate. Replacement/cancel invalidates old IDs; receipt, progress, partial handoff và stale event không completion/verdict.
+- Mỗi active attempt có một finite background shell timer 10–30 phút, adaptive theo context/progress, không deadline. Completion ưu tiên và cancel/invalidate timer; timer event chỉ tạo một outstanding correlated progress_request. Sau matching reply mới rearm, không hot loop hoặc thay worker chỉ vì thời gian.
+- Main interrupt không tự cancel detached worker; muốn dừng phải explicit job cancellation. Không hứa durability qua process exit hoặc tự resume sau interrupt.
+- Worker chỉ request diagnostic advisor khi có bounded evidence về non-progress. Main broker một fresh async task-advisor consultation, kiểm tra effective definition/model và matching task/attempt/consultation IDs; worker không spawn advisor, đổi routing/depth hoặc dùng advice làm implementation evidence.
+- Advisor default chính xác opencode-go/deepseek-v4.1-flash:max; effective GPT-6.1 Sol route ở bất kỳ provider/effort nào cần owner approval riêng từng consultation trước launch. Không unauthorized fallback/config edits; resolve/cancel consultation trước review/commit và ignore stale advice.
+- Mọi brief yêu cầu subagent enumerate/read tất cả regular files trực tiếp trong ~/.agents/rules/ trước substantive work, kể cả file mới; báo conflict/inaccessible. Dự kiến quá 5 phút thì chủ động nhắn task ID, attempt ID, stage và lý do.
+- Preserve artifacts/findings qua worker mới. Tại 250K tokens phải partial handoff và end attempt, không vượt 300K; áp dụng đầy đủ lifecycle/progress payload/commit rules trong global skill, không thay thế chúng bằng bản tóm tắt này.
+- Global skill là contract workflow hiện hành; các blocking/PASS-only records cũ chỉ lịch sử, không retroactive async/commit proof. Ngoại lệ user-global configuration rollout của skill không áp cho Meta Brain project tasks.
 
 ### Outside OMP
 
-Không dịch tên flow agents, blocking lifecycle hoặc artifact URLs của OMP sang Codex CLI hay runtime khác. Dùng manage-plans và skill `implement-atomic-task` trong `~/.agents/skills/implement-atomic-task/SKILL.md` với verification/review phù hợp runtime. Không claim đã qua OMP gate khi không chạy trong OMP; owner phải biết gate nào đã thực hiện thực tế.
+Không dịch tên flow agents, async lifecycle hoặc artifact URLs của OMP sang Codex CLI hay runtime khác. Dùng manage-plans và skill `implement-atomic-task` trong `~/.agents/skills/implement-atomic-task/SKILL.md` với verification/review phù hợp runtime. Không claim đã qua OMP gate khi không chạy trong OMP; owner phải biết gate nào đã thực hiện thực tế.
 
 ## Verification and Handoff
 
 - Scope một task, đọc downstream contracts rồi triển khai; không tự thêm retries/telemetry/abstractions ngoài nhu cầu.
 - Exercise changed surface thật. CLI/service: launch và observe; UI: actual surface/visual proof; MCP: real Codex/OMP bình thường; security: crypto/lock/catalog/token redemption/scope/revoke negatives. Không dùng AppContainer OS negatives thay new crypto/token proof; test suite không thay runtime smoke.
 - Permanent tests chỉ bảo vệ observable behavior/boundary/state transitions có nguy cơ regression; không kiểm tra wiring, copied defaults, source text hoặc mock echoes.
-- Artifact khi thực hiện: artifacts/sprint-<N>/task-<M>.md ghi requirements/baseline CR01, changed scope, exact scenarios/observations/limits/open findings; append vào artifact cũ nếu task ID tái dùng, không overwrite lịch sử hoặc tạo pass giả. Graph maintenance đã owner retired: không graph searches/checks/absence checks/update, overrides stale skill/agent instructions.
-- Giữ artifacts/, vault, raw sessions, secrets, token, runtime cache và build outputs ngoài Git. Tạo/cập nhật .gitignore trước khi sinh những dữ liệu đó; không tự commit nếu user chưa yêu cầu.
+- Artifact khi thực hiện: artifacts/sprint-<N>/task-<M>.md ghi requirements/baseline CR01, task/attempt/agent/job IDs, changed scope, exact scenarios/observations/limits/open findings, evidence-review reference và Main-owned commit state/SHA/base/reviewed snapshot. Append vào artifact cũ nếu task ID tái dùng, không overwrite lịch sử hoặc tạo pass giả. Graph maintenance đã owner retired: không graph searches/checks/absence checks/update, overrides stale skill/agent instructions.
+- Giữ artifacts/, vault, raw sessions, secrets, token, runtime cache và build outputs ngoài Git. Tạo/cập nhật .gitignore trước khi sinh những dữ liệu đó. Owner-authorized planned implementation theo flow gồm per-task reviewed-snapshot commit checkpoint; ngoài phạm vi đó không tự commit, và không push nếu chưa được yêu cầu. Documentation-only planning không tự launch implementation hoặc tạo checkpoint PASS giả.
 - Cập nhật docs/changelog khi có product change. Documentation-only planning không thêm changelog entry giả về tính năng chưa có.
 - Không đọc private transcripts, gọi model/network provider, đổi ACL, cài service hoặc phá hủy dữ liệu ngoài consent/allowlist đã có. User-visible error là evidence, không rerun chỉ để phủ nhận báo cáo.
 
@@ -69,7 +80,7 @@ Các link tuyệt đối dưới đây trỏ thư viện local của owner (~/.a
 | Skill | Khi dùng |
 | --- | --- |
 | `manage-plans` (`~/.agents/skills/manage-plans/SKILL.md`) | Global/sprint planning và status |
-| `omp-subagent-flows` (`~/.agents/skills/omp-subagent-flows/SKILL.md`) | Planned delivery chỉ trong OMP; blocking gates |
+| `omp-subagent-flows` (`~/.agents/skills/omp-subagent-flows/SKILL.md`) | Planned delivery chỉ trong OMP; async agents, evidence gates và per-task commit checkpoints |
 | `implement-atomic-task` (`~/.agents/skills/implement-atomic-task/SKILL.md`) | Một task, verification và evidence handoff |
 | `log-decision` (`~/.agents/skills/log-decision/SKILL.md`) | Lựa chọn kiến trúc/API/pattern/tradeoff; append decision log |
 | `log-lesson` (`~/.agents/skills/log-lesson/SKILL.md`) | Sau bug/quirk thật, không ghi planned feature như bài học đã xảy ra |

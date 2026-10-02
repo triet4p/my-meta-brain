@@ -61,7 +61,7 @@ internal static class Program
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Commands: serve-console --config <owner-settings>; serve-service --config <owner-settings>; owner {status|read}. Agent launch, agent pipes, MCP bridge, and grant/session commands await the planned token cutover.");
+        Console.Error.WriteLine("Commands: serve-console --config <owner-settings>; serve-service --config <owner-settings>; owner {status|read|write|provision|unlock|recover|lock}; owner migrate --config <legacy-owner-settings>.");
         return 2;
     }
 }

@@ -16,6 +16,17 @@ internal static class ProtectedFile
     public static PrivateFileContent ReadPrivateFile(string path, string serviceSid, long maximumLength)
     {
         var file = new FileInfo(path);
+        if (!file.Exists || (file.Attributes & (FileAttributes.ReparsePoint | FileAttributes.Directory)) != 0)
+        {
+            throw new InvalidDataException("The service settings file must be a regular file.");
+        }
+
+        var directory = file.Directory ?? throw new InvalidDataException("Invalid service settings directory.");
+        if (!directory.Exists || (directory.Attributes & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new InvalidDataException("The service settings directory must not be a reparse point.");
+        }
+
         var fileSecurity = FileSystemAclExtensions.GetAccessControl(file, AccessControlSections.Access | AccessControlSections.Owner);
         var fileOwner = fileSecurity.GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier
             ?? throw new InvalidDataException("The service settings file has no owner.");
@@ -26,7 +37,6 @@ internal static class ProtectedFile
         };
         AssertRestrictedAcl(fileSecurity, trusted);
 
-        var directory = file.Directory ?? throw new InvalidDataException("Invalid service settings directory.");
         var directorySecurity = FileSystemAclExtensions.GetAccessControl(directory, AccessControlSections.Access | AccessControlSections.Owner);
         var directoryOwner = directorySecurity.GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier
             ?? throw new InvalidDataException("The service settings directory has no owner.");

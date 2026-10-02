@@ -24,6 +24,10 @@ internal static class PipeClient
         {
             return Error("transport_denied");
         }
+        catch (TimeoutException)
+        {
+            return Error("transport_unavailable");
+        }
         catch (IOException ex)
         {
             return Error(IsAccessDenied(ex) ? "transport_denied" : "transport_unavailable");

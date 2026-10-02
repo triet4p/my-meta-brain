@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using MetaBrain.Core.Security;
 
 namespace MetaBrain.Application;
@@ -5,7 +6,11 @@ namespace MetaBrain.Application;
 public sealed record ServiceRequest(
     int ProtocolVersion,
     string Operation,
-    string? ResourceId = null);
+    string? ResourceId = null,
+    string? ZoneId = null,
+    string? Passphrase = null,
+    string? RecoveryCode = null,
+    string? ContentBase64 = null);
 
 public sealed record ServiceReply(
     int ProtocolVersion,
@@ -15,27 +20,29 @@ public sealed record ServiceReply(
     AuthorizationDecision? Decision = null,
     long? PolicyGeneration = null,
     string? ContentBase64 = null,
-    string? ContentType = null);
+    string? ContentType = null,
+    string? VaultState = null,
+    string? RecoveryCode = null,
+    long? ResourceRevision = null);
 
 public sealed class ServiceRequestHandler
 {
     public const int CurrentProtocolVersion = 1;
     public const string ResourceReadOperation = "resource.read";
+    public const string ResourceWriteOperation = "resource.write";
     private readonly GrantAuthority _grantAuthority;
-    private readonly ManagedResourceCatalog _resourceCatalog;
-    private readonly IManagedResourceReader? _resourceReader;
+    private readonly IVaultLifecycle _vault;
 
-    public ServiceRequestHandler(
-        GrantAuthority grantAuthority,
-        ManagedResourceCatalog resourceCatalog,
-        IManagedResourceReader? resourceReader)
+    public ServiceRequestHandler(GrantAuthority grantAuthority, IVaultLifecycle vault)
     {
         _grantAuthority = grantAuthority ?? throw new ArgumentNullException(nameof(grantAuthority));
-        _resourceCatalog = resourceCatalog ?? throw new ArgumentNullException(nameof(resourceCatalog));
-        _resourceReader = resourceReader;
+        _vault = vault ?? throw new ArgumentNullException(nameof(vault));
     }
 
-    public ServiceReply Handle(AuthenticatedContext context, ServiceRequest request)
+    public async Task<ServiceReply> HandleAsync(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(request);
@@ -52,41 +59,78 @@ public sealed class ServiceRequestHandler
                 return Error("forbidden");
             }
 
-            return new ServiceReply(CurrentProtocolVersion, "running", "owner", null);
+            return new ServiceReply(CurrentProtocolVersion, "running", "owner", null, VaultState: _vault.State);
         }
 
-        if (string.Equals(request.Operation, "resource.read", StringComparison.Ordinal))
+        if (context.Kind != PrincipalKind.Owner)
         {
-            return HandleResourceRead(context, request.ResourceId);
+            return Error("forbidden");
+        }
+
+        if (string.Equals(request.Operation, "vault.provision", StringComparison.Ordinal))
+        {
+            if (request.Passphrase is not { Length: >= 12 and <= 4096 })
+            {
+                return Error("credential_required");
+            }
+
+            if (!_vault.Provision(request.Passphrase, out var recoveryCode) || recoveryCode is null)
+            {
+                return Error("vault_already_initialized");
+            }
+
+            return new ServiceReply(CurrentProtocolVersion, "provisioned", "owner", null,
+                VaultState: _vault.State, RecoveryCode: recoveryCode);
+        }
+
+        if (string.Equals(request.Operation, "vault.unlock", StringComparison.Ordinal) ||
+            string.Equals(request.Operation, "vault.recover", StringComparison.Ordinal))
+        {
+            var recovery = string.Equals(request.Operation, "vault.recover", StringComparison.Ordinal);
+            var credential = recovery ? request.RecoveryCode : request.Passphrase;
+            if (credential is null || credential.Length is 0 or > 4096 || !_vault.Unlock(credential, recovery))
+            {
+                return Error("unlock_denied");
+            }
+
+            return new ServiceReply(CurrentProtocolVersion, "unlocked", "owner", null, VaultState: _vault.State);
+        }
+
+        if (string.Equals(request.Operation, "vault.lock", StringComparison.Ordinal))
+        {
+            await _vault.LockAsync().ConfigureAwait(false);
+            return new ServiceReply(CurrentProtocolVersion, "locked", "owner", null, VaultState: _vault.State);
+        }
+
+        if (string.Equals(request.Operation, ResourceReadOperation, StringComparison.Ordinal))
+        {
+            return HandleResourceRead(context, request.ResourceId, operation);
+        }
+
+        if (string.Equals(request.Operation, ResourceWriteOperation, StringComparison.Ordinal))
+        {
+            return HandleResourceWrite(context, request, operation);
         }
 
         return Error("unknown_operation");
     }
 
-    private ServiceReply HandleResourceRead(AuthenticatedContext context, string? resourceId)
+    private ServiceReply HandleResourceRead(AuthenticatedContext context, string? resourceId, IVaultOperation? operation)
     {
-        // The opaque ID is validated by the catalog lookup before any grant or
-        // filesystem work: unknown, malformed, and path-like IDs all fail here
-        // with one indistinguishable error, and no request path text ever
-        // reaches the filesystem authority.
-        if (!_resourceCatalog.TryGetZone(resourceId, out var zoneId) || zoneId is null)
+        if (operation is null)
         {
             return ResourceDenied();
         }
 
-        if (_resourceReader is null)
+        if (!operation.TryGetZone(resourceId!, out var zoneId) || zoneId is null)
         {
             return ResourceDenied();
         }
 
-        // Pre-open the managed file through the single service-owned reader so
-        // the file handle exists before the first authorization check. This
-        // closes the check-then-open race where revocation between authorize
-        // and open could otherwise serve a stale grant.
         byte[] snapshot;
         try
         {
-            snapshot = _resourceReader.ReadContent(resourceId!);
+            snapshot = operation.ReadContent(resourceId!);
         }
         catch (ManagedResourceUnavailableException)
         {
@@ -95,57 +139,82 @@ public sealed class ServiceRequestHandler
 
         try
         {
-            // Authorize the opaque ID/zone under the current policy generation.
             var decision = _grantAuthority.Authorize(
                 context, new AccessRequest(resourceId, zoneId, ResourceReadOperation));
             if (!decision.Allowed)
             {
-                CryptographicClear(snapshot);
+                CryptographicOperations.ZeroMemory(snapshot);
                 return ResourceDenied();
             }
 
-            // Re-check under the latest generation after the read: revocation
-            // between the first check and now advances the generation and fails
-            // closed here instead of serving the pre-revocation snapshot.
             var recheck = _grantAuthority.Authorize(
                 context, new AccessRequest(resourceId, zoneId, ResourceReadOperation));
             if (!recheck.Allowed)
             {
-                CryptographicClear(snapshot);
+                CryptographicOperations.ZeroMemory(snapshot);
                 return ResourceDenied();
             }
 
-            // Confirm the registration did not change between the two grant
-            // checks (covers mapping replacement races on the same ID).
             try
             {
-                _resourceReader.ValidateRegistration(resourceId!);
+                operation.ValidateRegistration(resourceId!);
             }
             catch (ManagedResourceUnavailableException)
             {
-                CryptographicClear(snapshot);
+                CryptographicOperations.ZeroMemory(snapshot);
                 return ResourceDenied();
             }
 
-            var reply = new ServiceReply(
+            return new ServiceReply(
                 CurrentProtocolVersion, "content", null, null,
-                Decision: recheck, PolicyGeneration: recheck.PolicyGeneration,
+                Decision: recheck,
+                PolicyGeneration: recheck.PolicyGeneration,
                 ContentBase64: Convert.ToBase64String(snapshot),
                 ContentType: "application/octet-stream");
-            CryptographicClear(snapshot);
-            return reply;
         }
         finally
         {
-            CryptographicClear(snapshot);
+            CryptographicOperations.ZeroMemory(snapshot);
         }
     }
 
-    private static void CryptographicClear(byte[] buffer)
+    private ServiceReply HandleResourceWrite(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
     {
-        if (buffer.Length > 0)
+        if (operation is null || string.IsNullOrEmpty(request.ResourceId) || string.IsNullOrEmpty(request.ZoneId) ||
+            string.IsNullOrEmpty(request.ContentBase64))
         {
-            System.Security.Cryptography.CryptographicOperations.ZeroMemory(buffer);
+            return ResourceDenied();
+        }
+
+        byte[]? content = null;
+        try
+        {
+            content = Convert.FromBase64String(request.ContentBase64);
+            var decision = _grantAuthority.Authorize(
+                context, new AccessRequest(request.ResourceId, request.ZoneId, ResourceWriteOperation));
+            if (!decision.Allowed)
+            {
+                return ResourceDenied();
+            }
+
+            var revision = operation.WriteContent(request.ResourceId, request.ZoneId, content);
+            return new ServiceReply(CurrentProtocolVersion, "written", null, null,
+                Decision: decision, PolicyGeneration: decision.PolicyGeneration, ResourceRevision: revision);
+        }
+        catch (FormatException)
+        {
+            return Error("invalid_request");
+        }
+        catch (ManagedResourceUnavailableException)
+        {
+            return ResourceDenied();
+        }
+        finally
+        {
+            if (content is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(content);
+            }
         }
     }
 

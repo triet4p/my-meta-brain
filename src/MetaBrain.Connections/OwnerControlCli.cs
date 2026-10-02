@@ -22,6 +22,12 @@ internal static class OwnerControlCli
             {
                 "status" => await StatusAsync(options).ConfigureAwait(false),
                 "read" => await ReadAsync(options).ConfigureAwait(false),
+                "write" => await WriteAsync(options).ConfigureAwait(false),
+                "provision" => await ProvisionAsync(options).ConfigureAwait(false),
+                "unlock" => await UnlockAsync(options, useRecoveryCode: false).ConfigureAwait(false),
+                "recover" => await UnlockAsync(options, useRecoveryCode: true).ConfigureAwait(false),
+                "lock" => await LockAsync(options).ConfigureAwait(false),
+                "migrate" => Migrate(options),
                 _ => Usage()
             };
         }
@@ -43,7 +49,8 @@ internal static class OwnerControlCli
             return 3;
         }
 
-        Console.WriteLine("SERVICE running; owner-only channel");
+        var vaultState = result.Reply.TryGetProperty("vaultState", out var state) ? state.GetString() : null;
+        Console.WriteLine($"SERVICE running; vault={vaultState ?? "unknown"}; agent sharing unavailable (no token or approval support)");
         return 0;
     }
 
@@ -100,6 +107,202 @@ internal static class OwnerControlCli
         }
     }
 
+    private static async Task<int> WriteAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--zone-id", "--input-file");
+        var controlPipe = ControlPipe(options);
+        var resourceId = options.Required("--resource-id");
+        var zoneId = options.Required("--zone-id");
+        var inputPath = options.Required("--input-file");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId) || !ServiceSettingsLoader.IsSafeIdentifier(zoneId))
+        {
+            return Usage();
+        }
+
+        var content = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        try
+        {
+            if (content.Length is <= 0 or > 1024 * 1024)
+            {
+                Console.Error.WriteLine("ERROR invalid_resource_size");
+                return 4;
+            }
+
+            var result = await InvokeOwnerAsync(controlPipe,
+                new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.ResourceWriteOperation,
+                    resourceId, zoneId, ContentBase64: Convert.ToBase64String(content))).ConfigureAwait(false);
+            if (!result.Success || !HasStatus(result.Reply, "written"))
+            {
+                WriteServiceError(result);
+                return 4;
+            }
+
+            var revision = result.Reply.TryGetProperty("resourceRevision", out var value) ? value.GetInt64() : 0;
+            Console.WriteLine($"WRITE stored revision={revision}");
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(content);
+        }
+    }
+
+    private static async Task<int> ProvisionAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var controlPipe = ControlPipe(options);
+        var passphrase = ReadSecret("New vault passphrase: ");
+        var confirmation = ReadSecret("Confirm vault passphrase: ");
+        if (passphrase is null || confirmation is null)
+        {
+            Console.Error.WriteLine("ERROR credential_required");
+            return 3;
+        }
+
+        if (passphrase.Length < 12 || !string.Equals(passphrase, confirmation, StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine("ERROR passphrase_mismatch_or_too_short");
+            return 3;
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, "vault.provision", Passphrase: passphrase)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "provisioned") ||
+            !result.Reply.TryGetProperty("recoveryCode", out var recovery) || recovery.ValueKind != JsonValueKind.String)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine("RECOVERY KEY (save outside the vault; shown once): " + recovery.GetString());
+        Console.WriteLine("VAULT provisioned; currently unlocked");
+        return 0;
+    }
+
+    private static async Task<int> UnlockAsync(CommandOptions options, bool useRecoveryCode)
+    {
+        options.RequireOnly("--control-pipe");
+        var controlPipe = ControlPipe(options);
+        var credential = ReadSecret(useRecoveryCode ? "Vault recovery key: " : "Vault passphrase: ");
+        if (string.IsNullOrEmpty(credential))
+        {
+            Console.Error.WriteLine("ERROR credential_required");
+            return 3;
+        }
+
+        var operation = useRecoveryCode ? "vault.recover" : "vault.unlock";
+        var request = useRecoveryCode
+            ? new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, operation, RecoveryCode: credential)
+            : new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, operation, Passphrase: credential);
+        var result = await InvokeOwnerAsync(controlPipe, request).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "unlocked"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine("VAULT unlocked");
+        return 0;
+    }
+
+    private static async Task<int> LockAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, "vault.lock")).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "locked"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine("VAULT locked; in-flight private operations drained");
+        return 0;
+    }
+
+    private static int Migrate(CommandOptions options)
+    {
+        options.RequireOnly("--config");
+        var passphrase = ReadSecret("New vault passphrase: ");
+        var confirmation = ReadSecret("Confirm vault passphrase: ");
+        if (passphrase is null || confirmation is null)
+        {
+            Console.Error.WriteLine("ERROR credential_required");
+            return 3;
+        }
+
+        if (passphrase.Length < 12 || !string.Equals(passphrase, confirmation, StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine("ERROR passphrase_mismatch_or_too_short");
+            return 3;
+        }
+
+        var migrated = LegacyVaultMigration.Migrate(options.Required("--config"), passphrase);
+        Console.WriteLine($"MIGRATION encrypted resources={migrated.ResourceCount}; legacy private policy preserved={migrated.LegacyPolicyPreserved}");
+        Console.WriteLine("RECOVERY KEY (save outside the vault; shown once): " + migrated.RecoveryCode);
+        if (migrated.CleanupWarning is not null)
+        {
+            Console.Error.WriteLine("WARNING " + migrated.CleanupWarning);
+            return 4;
+        }
+
+        return 0;
+    }
+
+    private static string? ReadSecret(string prompt)
+    {
+        Console.Write(prompt);
+        if (Console.IsInputRedirected)
+        {
+            var redirected = Console.ReadLine();
+            return redirected is { Length: <= 4096 } ? redirected : null;
+        }
+
+        var buffer = new char[4096];
+        var length = 0;
+        var overflow = false;
+        try
+        {
+            while (true)
+            {
+                var key = Console.ReadKey(intercept: true);
+                if (key.Key == ConsoleKey.Enter)
+                {
+                    Console.WriteLine();
+                    break;
+                }
+
+                if (key.Key == ConsoleKey.Backspace)
+                {
+                    if (length > 0)
+                    {
+                        buffer[--length] = '\0';
+                    }
+
+                    continue;
+                }
+
+                if (!char.IsControl(key.KeyChar))
+                {
+                    if (length < buffer.Length)
+                    {
+                        buffer[length++] = key.KeyChar;
+                    }
+                    else
+                    {
+                        overflow = true;
+                    }
+                }
+            }
+
+            return overflow || length == 0 ? null : new string(buffer, 0, length);
+        }
+        finally
+        {
+            Array.Clear(buffer);
+        }
+    }
+
     private static string ControlPipe(CommandOptions options)
     {
         var pipe = options.Required("--control-pipe");
@@ -141,7 +344,7 @@ internal static class OwnerControlCli
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Owner commands: owner status --control-pipe <name>; owner read --control-pipe <name> --resource-id <opaque-id> [--output-file <path>]. Agent access, grant approval, launch, and session management are unavailable until the planned token cutover.");
+        Console.Error.WriteLine("Owner commands: owner {status|read|write|provision|unlock|recover|lock} --control-pipe <name>; owner migrate --config <legacy-owner-settings>. Keys are prompted, never accepted as arguments. Agent access, catalog, tokens, and approvals remain unavailable.");
         return 2;
     }
 

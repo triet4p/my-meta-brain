@@ -14,42 +14,37 @@ internal sealed class NamedPipeService
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(10);
     private readonly ServiceSettings _settings;
     private readonly ServiceRequestHandler _handler;
+    private readonly VaultLifecycle _vault;
 
     public NamedPipeService(ServiceSettings settings)
     {
         _settings = settings;
-        using var identity = WindowsIdentity.GetCurrent();
-        var serviceSid = identity.User?.Value ?? throw new InvalidDataException("The service process has no user SID.");
-        var authority = new GrantAuthority(new FileGrantStore(settings.PolicyStorePath, serviceSid));
-        var bindings = settings.ManagedResources ?? Array.Empty<ManagedResourceBinding>();
-        IManagedResourceReader? reader = null;
-        if (bindings.Length > 0)
-        {
-            Directory.CreateDirectory(settings.ResourceRootPath);
-            var fileReader = new ManagedResourceFileReader(settings.ResourceRootPath, serviceSid);
-            foreach (var binding in bindings)
-            {
-                fileReader.Register(binding.ResourceId, binding.ZoneId, binding.FileName);
-            }
-
-            reader = fileReader;
-        }
-
-        var catalog = new ManagedResourceCatalog(bindings.Select(binding => (binding.ResourceId, binding.ZoneId)));
-        _handler = new ServiceRequestHandler(authority, catalog, reader);
+        var store = new EncryptedVaultStore(settings.VaultDirectoryPath, settings.OwnerSid);
+        _vault = new VaultLifecycle(store);
+        var authority = new GrantAuthority(new InMemoryGrantStore());
+        _handler = new ServiceRequestHandler(authority, _vault);
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
         using var listener = WindowsPipeServer.Create(_settings, firstInstance: true);
         Console.WriteLine("READY protocol=1 channel=owner-only");
-        await ListenAsync(listener, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await ListenAsync(listener, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            await _vault.LockAsync().ConfigureAwait(false);
+            _vault.Dispose();
+        }
     }
 
     private async Task ListenAsync(NamedPipeServerStream initialListener, CancellationToken cancellationToken)
     {
         var listener = initialListener;
         var firstInstance = false;
+        var connections = new List<Task>();
         try
         {
             while (!cancellationToken.IsCancellationRequested)
@@ -65,12 +60,21 @@ internal sealed class NamedPipeService
 
                 var connected = listener;
                 listener = WindowsPipeServer.Create(_settings, firstInstance);
-                await HandleConnectionAsync(connected, cancellationToken).ConfigureAwait(false);
+                connections.Add(HandleConnectionAsync(connected, cancellationToken));
+                for (var index = connections.Count - 1; index >= 0; index--)
+                {
+                    if (connections[index].IsCompleted)
+                    {
+                        await connections[index].ConfigureAwait(false);
+                        connections.RemoveAt(index);
+                    }
+                }
             }
         }
         finally
         {
             listener.Dispose();
+            await Task.WhenAll(connections).ConfigureAwait(false);
         }
     }
 
@@ -94,7 +98,7 @@ internal sealed class NamedPipeService
 
                 await writer.WriteLineAsync(JsonSerializer.Serialize(
                     new PipeAuthenticationReply(true, null), OutputOptions).AsMemory(), timeout.Token).ConfigureAwait(false);
-                var requestLine = await ReadBoundedLineAsync(reader, 16 * 1024, timeout.Token).ConfigureAwait(false);
+                var requestLine = await ReadBoundedLineAsync(reader, 2 * 1024 * 1024, timeout.Token).ConfigureAwait(false);
                 if (requestLine is null)
                 {
                     await WriteErrorAsync(writer, "invalid_request", timeout.Token).ConfigureAwait(false);
@@ -108,7 +112,10 @@ internal sealed class NamedPipeService
                     return;
                 }
 
-                var reply = _handler.Handle(AuthenticatedContext.ForOwner(), request);
+                var needsVaultOperation = string.Equals(request.Operation, ServiceRequestHandler.ResourceReadOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.ResourceWriteOperation, StringComparison.Ordinal);
+                using var operation = needsVaultOperation ? _vault.TryBeginOperation() : null;
+                var reply = await _handler.HandleAsync(AuthenticatedContext.ForOwner(), request, operation).ConfigureAwait(false);
                 await writer.WriteLineAsync(JsonSerializer.Serialize(reply, OutputOptions).AsMemory(), timeout.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (timeout.IsCancellationRequested)
