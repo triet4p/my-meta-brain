@@ -27,11 +27,14 @@ internal sealed class NamedPipeService
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
-        using var listener = WindowsPipeServer.Create(_settings, firstInstance: true);
-        Console.WriteLine("READY protocol=1 channel=owner-only");
+        using var ownerListener = WindowsPipeServer.Create(_settings, firstInstance: true);
+        using var agentListener = WindowsPipeServer.CreateAgent(_settings, firstInstance: true);
+        Console.WriteLine("READY protocol=1 channel=owner+agent");
         try
         {
-            await ListenAsync(listener, cancellationToken).ConfigureAwait(false);
+            await Task.WhenAll(
+                ListenAsync(ownerListener, PrincipalKind.Owner, WindowsPipeServer.Create, cancellationToken),
+                ListenAsync(agentListener, PrincipalKind.Agent, WindowsPipeServer.CreateAgent, cancellationToken)).ConfigureAwait(false);
         }
         finally
         {
@@ -40,7 +43,11 @@ internal sealed class NamedPipeService
         }
     }
 
-    private async Task ListenAsync(NamedPipeServerStream initialListener, CancellationToken cancellationToken)
+    private async Task ListenAsync(
+        NamedPipeServerStream initialListener,
+        PrincipalKind channel,
+        Func<ServiceSettings, bool, NamedPipeServerStream> createNext,
+        CancellationToken cancellationToken)
     {
         var listener = initialListener;
         var firstInstance = false;
@@ -59,8 +66,8 @@ internal sealed class NamedPipeService
                 }
 
                 var connected = listener;
-                listener = WindowsPipeServer.Create(_settings, firstInstance);
-                connections.Add(HandleConnectionAsync(connected, cancellationToken));
+                listener = createNext(_settings, firstInstance);
+                connections.Add(HandleConnectionAsync(connected, channel, cancellationToken));
                 for (var index = connections.Count - 1; index >= 0; index--)
                 {
                     if (connections[index].IsCompleted)
@@ -78,7 +85,7 @@ internal sealed class NamedPipeService
         }
     }
 
-    private async Task HandleConnectionAsync(NamedPipeServerStream pipe, CancellationToken stoppingToken)
+    private async Task HandleConnectionAsync(NamedPipeServerStream pipe, PrincipalKind channel, CancellationToken stoppingToken)
     {
         using (pipe)
         using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken))
@@ -96,6 +103,8 @@ internal sealed class NamedPipeService
                     return;
                 }
 
+                // Same-owner transport check only: caller identity never becomes approval,
+                // and agent possession of a bearer never becomes an OS identity claim.
                 await writer.WriteLineAsync(JsonSerializer.Serialize(
                     new PipeAuthenticationReply(true, null), OutputOptions).AsMemory(), timeout.Token).ConfigureAwait(false);
                 var requestLine = await ReadBoundedLineAsync(reader, 2 * 1024 * 1024, timeout.Token).ConfigureAwait(false);
@@ -112,6 +121,12 @@ internal sealed class NamedPipeService
                     return;
                 }
 
+                if (!IsOperationAllowedOnChannel(channel, request.Operation))
+                {
+                    await WriteErrorAsync(writer, "forbidden", timeout.Token).ConfigureAwait(false);
+                    return;
+                }
+
                 var needsVaultOperation =
                     string.Equals(request.Operation, ServiceRequestHandler.ResourceReadOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.ResourceWriteOperation, StringComparison.Ordinal) ||
@@ -119,9 +134,17 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerScopeIssueOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerScopeListOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerScopeCollectionSetOperation, StringComparison.Ordinal) ||
-                    string.Equals(request.Operation, ServiceRequestHandler.OwnerScopeCollectionListOperation, StringComparison.Ordinal);
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerScopeCollectionListOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.AgentRedeemOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.AgentSessionInspectOperation, StringComparison.Ordinal);
                 using var operation = needsVaultOperation ? _vault.TryBeginOperation() : null;
-                var reply = await _handler.HandleAsync(AuthenticatedContext.ForOwner(), request, operation).ConfigureAwait(false);
+                // Application creates the access context: owner channel gets owner authority,
+                // while the agent channel receives a placeholder agent identity that carries
+                // no scope. Session authority comes from the redeemed bearer, never the body.
+                var context = channel == PrincipalKind.Owner
+                    ? AuthenticatedContext.ForOwner()
+                    : AuthenticatedContext.ForAgent("agent", "pending");
+                var reply = await _handler.HandleAsync(context, request, operation).ConfigureAwait(false);
                 await writer.WriteLineAsync(JsonSerializer.Serialize(reply, OutputOptions).AsMemory(), timeout.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (timeout.IsCancellationRequested)
@@ -136,6 +159,18 @@ internal sealed class NamedPipeService
                 await WriteErrorAsync(writer, "unauthorized", CancellationToken.None).ConfigureAwait(false);
             }
         }
+    }
+
+    private static bool IsOperationAllowedOnChannel(PrincipalKind channel, string? operation)
+    {
+        if (channel == PrincipalKind.Owner)
+        {
+            return !string.Equals(operation, ServiceRequestHandler.AgentRedeemOperation, StringComparison.Ordinal) &&
+                !string.Equals(operation, ServiceRequestHandler.AgentSessionInspectOperation, StringComparison.Ordinal);
+        }
+
+        return string.Equals(operation, ServiceRequestHandler.AgentRedeemOperation, StringComparison.Ordinal) ||
+            string.Equals(operation, ServiceRequestHandler.AgentSessionInspectOperation, StringComparison.Ordinal);
     }
 
     private static bool SidEquals(string left, string right)

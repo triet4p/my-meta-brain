@@ -76,7 +76,16 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
 
             _dataKey = key;
             _manifest = manifest;
-            return true;
+            try
+            {
+                BumpUnlockEpochLocked();
+                return true;
+            }
+            catch
+            {
+                ClearUnlockedState();
+                throw;
+            }
         }
     }
 
@@ -156,11 +165,13 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
                 throw new ManagedResourceUnavailableException();
             }
 
-            return _store.LoadScopeGrantState(_manifest, _dataKey);
+            return OwnerScopeGrantAuthority.ValidateAndMigrateState(
+                _store.LoadScopeGrantState(_manifest, _dataKey));
         }
     }
 
-    private void SaveScopeGrantState(OwnerScopeGrantState state)
+    private T UpdateScopeGrantState<T>(
+        Func<OwnerScopeGrantState, (OwnerScopeGrantState State, T Result)> update)
     {
         lock (_contentGate)
         {
@@ -169,7 +180,16 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
                 throw new ManagedResourceUnavailableException();
             }
 
-            _store.SaveScopeGrantState(_manifest, _dataKey, state);
+            var state = OwnerScopeGrantAuthority.ValidateAndMigrateState(
+                _store.LoadScopeGrantState(_manifest, _dataKey));
+            var (nextState, result) = update(state);
+            if (!ReferenceEquals(nextState, state))
+            {
+                nextState = OwnerScopeGrantAuthority.ValidateAndMigrateState(nextState);
+                _store.SaveScopeGrantState(_manifest, _dataKey, nextState);
+            }
+
+            return result;
         }
     }
 
@@ -231,6 +251,37 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
         }
     }
 
+    private void BumpUnlockEpochLocked()
+    {
+        // Caller holds _stateGate; _contentGate serializes migration and epoch changes
+        // with every grant update. Invalid state fails closed instead of resetting grants.
+        lock (_contentGate)
+        {
+            if (_manifest is null || _dataKey is null)
+            {
+                return;
+            }
+
+            var persistedState = _store.LoadScopeGrantState(_manifest, _dataKey);
+            var state = OwnerScopeGrantAuthority.ValidateAndMigrateState(persistedState);
+            if (state.UnlockEpoch == long.MaxValue)
+            {
+                throw new IOException("The owner scope unlock epoch is exhausted.");
+            }
+
+            var nextEpoch = state.UnlockEpoch + 1;
+            var grants = persistedState.SchemaVersion == 2
+                ? state.Grants.Select(grant => grant with
+                {
+                    PolicyGeneration = state.PolicyGeneration,
+                    UnlockEpoch = nextEpoch
+                }).ToArray()
+                : state.Grants;
+            var nextState = state with { UnlockEpoch = nextEpoch, Grants = grants };
+            _store.SaveScopeGrantState(_manifest, _dataKey, nextState);
+        }
+    }
+
     private void ClearUnlockedState()
     {
         if (_dataKey is not null)
@@ -254,7 +305,9 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
 
         public IReadOnlyList<ScopeResourceRevision> ListResources() => GetOwner().ListResources();
         public OwnerScopeGrantState LoadScopeGrantState() => GetOwner().LoadScopeGrantState();
-        public void SaveScopeGrantState(OwnerScopeGrantState state) => GetOwner().SaveScopeGrantState(state);
+        public T UpdateScopeGrantState<T>(
+            Func<OwnerScopeGrantState, (OwnerScopeGrantState State, T Result)> update) =>
+            GetOwner().UpdateScopeGrantState(update);
         public bool TryGetZone(string resourceId, out string? zoneId) => GetOwner().TryGetZone(resourceId, out zoneId);
         public byte[] ReadContent(string resourceId) => GetOwner().ReadContent(resourceId);
         public void ValidateRegistration(string resourceId) => GetOwner().ValidateRegistration(resourceId);

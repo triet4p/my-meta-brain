@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("MetaBrain.Connections")]
+[assembly: InternalsVisibleTo("MetaBrain.Application")]
 
 namespace MetaBrain.Core.Security;
 

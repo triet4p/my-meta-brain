@@ -1,3 +1,5 @@
+using System.Security.AccessControl;
+using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -13,10 +15,11 @@ internal sealed record ServiceSettings(
     int SchemaVersion,
     string OwnerSid,
     string ControlPipe,
+    string AgentPipe,
     ManagedResourceBinding[]? ManagedResources = null)
 {
     public const int LegacySchemaVersion = 1;
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
     internal string VaultDirectoryPath { get; init; } = string.Empty;
     internal string LegacyPolicyStorePath { get; init; } = string.Empty;
     internal string LegacyResourceRootPath { get; init; } = string.Empty;
@@ -30,10 +33,23 @@ internal static partial class ServiceSettingsLoader
 
     public static ServiceSettings Load(string path)
     {
-        var (settings, ownerSid, directory) = ReadAndValidate(path);
+        var fullPath = Path.GetFullPath(path);
+        var (settings, ownerSid, directory) = ReadAndValidate(fullPath);
         if (settings.SchemaVersion == ServiceSettings.LegacySchemaVersion)
         {
             throw new InvalidDataException("Legacy plaintext settings require the explicit owner migration command before service startup.");
+        }
+
+        var migrateSchemaTwo = settings.SchemaVersion == 2;
+        if (migrateSchemaTwo)
+        {
+            settings = settings with
+            {
+                SchemaVersion = ServiceSettings.CurrentSchemaVersion,
+                AgentPipe = string.IsNullOrWhiteSpace(settings.AgentPipe)
+                    ? settings.ControlPipe + ".agent"
+                    : settings.AgentPipe
+            };
         }
 
         if (settings.SchemaVersion != ServiceSettings.CurrentSchemaVersion ||
@@ -44,6 +60,17 @@ internal static partial class ServiceSettingsLoader
 
         ValidateOwner(settings, ownerSid);
         ValidatePipeName(settings.ControlPipe);
+        ValidatePipeName(settings.AgentPipe);
+        if (string.Equals(settings.ControlPipe, settings.AgentPipe, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException("Owner and agent pipe endpoints must differ.");
+        }
+
+        if (migrateSchemaTwo)
+        {
+            WriteCurrentSettingsAtomically(fullPath, settings);
+        }
+
         return settings with { VaultDirectoryPath = Path.Combine(directory.FullName, "vault") };
     }
 
@@ -96,6 +123,43 @@ internal static partial class ServiceSettingsLoader
                 new SecurityIdentifier(fileOwnerSid).Value, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException("The configured owner SID must match the settings file owner.");
+        }
+    }
+    private static void WriteCurrentSettingsAtomically(string settingsPath, ServiceSettings settings)
+    {
+        var file = new FileInfo(settingsPath);
+        var security = FileSystemAclExtensions.GetAccessControl(
+            file, AccessControlSections.Access | AccessControlSections.Owner);
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        var content = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            schemaVersion = ServiceSettings.CurrentSchemaVersion,
+            ownerSid = settings.OwnerSid,
+            controlPipe = settings.ControlPipe,
+            agentPipe = settings.AgentPipe
+        }, JsonOptions);
+        var temporaryPath = Path.Combine(file.DirectoryName
+            ?? throw new InvalidDataException("Invalid service settings path."),
+            ".service-settings." + Guid.NewGuid().ToString("N") + ".tmp");
+        try
+        {
+            using (var stream = new FileStream(
+                temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+            {
+                FileSystemAclExtensions.SetAccessControl(new FileInfo(temporaryPath), security);
+                stream.Write(content);
+                stream.Flush(flushToDisk: true);
+            }
+
+            File.Move(temporaryPath, settingsPath, overwrite: true);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(content);
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
         }
     }
 

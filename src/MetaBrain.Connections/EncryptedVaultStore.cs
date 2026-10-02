@@ -27,6 +27,7 @@ internal sealed class EncryptedVaultStore
     private const int CurrentManifestSchemaVersion = 1;
     private const int CurrentResourceSchemaVersion = 1;
     private const int CurrentScopeGrantSchemaVersion = OwnerScopeGrantState.CurrentSchemaVersion;
+    private const int PreviousScopeGrantSchemaVersion = 2;
     private const int KdfIterations = 600_000;
     private const int MaximumEnvelopeBytes = 4 * 1024 * 1024;
     private const int MaximumScopeGrantBytes = 4 * 1024 * 1024;
@@ -228,8 +229,19 @@ internal sealed class EncryptedVaultStore
                 ?? throw new InvalidDataException("Invalid encrypted owner scope envelope.");
             associatedData = ResourceAssociatedData(
                 manifest.VaultId, "scope-grants", CurrentScopeGrantSchemaVersion, 1);
-            plaintext = DecryptPayload(
-                envelope, dataKey, associatedData, CurrentScopeGrantSchemaVersion, 1, MaximumScopeGrantBytes);
+            try
+            {
+                plaintext = DecryptPayload(
+                    envelope, dataKey, associatedData, CurrentScopeGrantSchemaVersion, 1, MaximumScopeGrantBytes);
+            }
+            catch (CryptographicException)
+            {
+                Clear(associatedData);
+                associatedData = ResourceAssociatedData(
+                    manifest.VaultId, "scope-grants", PreviousScopeGrantSchemaVersion, 1);
+                plaintext = DecryptPayload(
+                    envelope, dataKey, associatedData, PreviousScopeGrantSchemaVersion, 1, MaximumScopeGrantBytes);
+            }
             return JsonSerializer.Deserialize<OwnerScopeGrantState>(plaintext, JsonOptions)
                 ?? throw new InvalidDataException("Invalid encrypted owner scope state.");
         }

@@ -12,14 +12,14 @@ using Microsoft.Win32.SafeHandles;
 
 namespace MetaBrain.S1T4.Smoke;
 
-internal static class OwnerServiceSmoke
+internal static partial class OwnerServiceSmoke
 {
     private static readonly TimeSpan ServiceReadyTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan CleanupTimeout = TimeSpan.FromSeconds(10);
 
     private sealed record CommandResult(int ExitCode, string StandardOutput, string StandardError);
-    private sealed record RunningService(Process Process, Task ReadyDrain, Task<string> StandardErrorDrain);
+    private sealed record RunningService(Process Process, Task<string> StandardOutputDrain, Task<string> StandardErrorDrain);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -60,11 +60,9 @@ internal static class OwnerServiceSmoke
             service = await StartServiceAsync(connectionsExecutable, fixture.SettingsPath).ConfigureAwait(false);
             var status = await RunOwnerCommandAsync(connectionsExecutable,
                 "owner", "status", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
-            Require(status.ExitCode == 0 && status.StandardOutput.Contains("vault=locked", StringComparison.Ordinal) &&
-                    status.StandardOutput.Contains("token issuance is owner-only", StringComparison.Ordinal) &&
-                    status.StandardOutput.Contains("redemption/session support is unavailable", StringComparison.Ordinal),
-                "A restarted owner service did not report a locked vault and unavailable redemption/session support.");
-            Console.WriteLine("PASS actual service startup locked; status disclaims redemption/session support");
+            Require(status.ExitCode == 0 && status.StandardOutput.Contains("vault=locked", StringComparison.Ordinal),
+                "The owner status request did not show the restarted service locked.");
+            Console.WriteLine("PASS actual service startup locked and owner status available");
 
             var missing = await RunOwnerCommandAsync(connectionsExecutable,
                 "owner", "unlock", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
@@ -204,9 +202,8 @@ internal static class OwnerServiceSmoke
 
             service = await StartServiceAsync(connectionsExecutable, fixture.SettingsPath).ConfigureAwait(false);
             var initialStatus = await ReadStatusAsync(connectionsExecutable, fixture.ControlPipe).ConfigureAwait(false);
-            Require(initialStatus.Contains("vault=locked", StringComparison.Ordinal) &&
-                    initialStatus.Contains("redemption/session support is unavailable", StringComparison.Ordinal),
-                "The token-issuance service did not restart locked or accurately disclose that no redemption/session surface exists.");
+            Require(initialStatus.Contains("vault=locked", StringComparison.Ordinal),
+                "The token-issuance service did not restart locked.");
             var expiry = DateTimeOffset.UtcNow.AddHours(3).ToString("O", CultureInfo.InvariantCulture);
             var lockedHandoff = Path.Combine(fixture.OutputDirectory, "locked-grant.handoff");
             var lockedIssue = await RunOwnerCommandAsync(connectionsExecutable,
@@ -466,7 +463,7 @@ internal static class OwnerServiceSmoke
             ExceptionDispatchInfo.Capture(failure).Throw();
         }
 
-        Console.WriteLine("LIMIT synthetic Windows owner-service grants only; no agent redemption/session API exists yet, so no T4 no-grant session probe was fabricated; same-owner process compromise remains outside the threat model.");
+        Console.WriteLine("LIMIT this separate scenario checks owner token issuance and handoff only; T4 agent-channel redemption and session checks are exercised by the agent-session scenario; same-owner process compromise remains outside the threat model.");
     }
 
     private static async Task<CommandResult> WriteFixtureResourceAsync(
@@ -990,15 +987,19 @@ internal static class OwnerServiceSmoke
 
     }
 
-    private static async Task DrainServiceOutputAsync(StreamReader reader, TaskCompletionSource<bool> ready)
+    private static async Task<string> DrainServiceOutputAsync(StreamReader reader, TaskCompletionSource<bool> ready)
     {
+        var output = new StringBuilder();
         while (await reader.ReadLineAsync().ConfigureAwait(false) is { } line)
         {
-            if (line.StartsWith("READY protocol=1 channel=owner-only", StringComparison.Ordinal))
+            output.AppendLine(line);
+            if (line.StartsWith("READY protocol=1 channel=", StringComparison.Ordinal))
             {
                 ready.TrySetResult(true);
             }
         }
+
+        return output.ToString();
     }
 
     private static async Task<CommandResult> RunOwnerCommandAsync(string executable, params string[] arguments) =>
@@ -1073,7 +1074,7 @@ internal static class OwnerServiceSmoke
             }
 
             await process.WaitForExitAsync().WaitAsync(CleanupTimeout).ConfigureAwait(false);
-            await service.ReadyDrain.ConfigureAwait(false);
+            await service.StandardOutputDrain.ConfigureAwait(false);
             _ = await service.StandardErrorDrain.ConfigureAwait(false);
         }
         finally
@@ -1201,12 +1202,13 @@ internal sealed class SmokeFixture : IDisposable
     private static readonly SecurityIdentifier SystemSid = new("S-1-5-18");
     private bool _disposed;
 
-    private SmokeFixture(string root, string settingsPath, string controlPipe, string outputDirectory,
+    private SmokeFixture(string root, string settingsPath, string controlPipe, string agentPipe, string outputDirectory,
         byte[] expectedContentA, byte[] expectedContentB)
     {
         Root = root;
         SettingsPath = settingsPath;
         ControlPipe = controlPipe;
+        AgentPipe = agentPipe;
         OutputDirectory = outputDirectory;
         ExpectedContentA = expectedContentA;
         ExpectedContentB = expectedContentB;
@@ -1230,6 +1232,7 @@ internal sealed class SmokeFixture : IDisposable
     public string Root { get; }
     public string SettingsPath { get; }
     public string ControlPipe { get; }
+    public string AgentPipe { get; }
     public string OutputDirectory { get; }
     public string ServiceDirectoryPath { get; }
     public string VaultDirectoryPath { get; }
@@ -1285,6 +1288,7 @@ internal sealed class SmokeFixture : IDisposable
             }
 
             var controlPipe = "MetaBrainS1T2Vault-" + Guid.NewGuid().ToString("N");
+            var agentPipe = controlPipe + ".agent";
             var settingsPath = Path.Combine(serviceDirectory, "service-settings.json");
             var settings = legacySettings
                 ? JsonSerializer.Serialize(new
@@ -1298,11 +1302,11 @@ internal sealed class SmokeFixture : IDisposable
                         new { resourceId = ResourceB, zoneId = Zone, fileName = FileB }
                     }
                 })
-                : JsonSerializer.Serialize(new { schemaVersion = 2, ownerSid = ownerSid.Value, controlPipe });
+                : JsonSerializer.Serialize(new { schemaVersion = 3, ownerSid = ownerSid.Value, controlPipe, agentPipe });
             File.WriteAllText(settingsPath, settings, new UTF8Encoding(false));
             SetRestrictedFileAcl(settingsPath, ownerSid);
 
-            return new SmokeFixture(root, settingsPath, controlPipe, outputDirectory, expectedContentA, expectedContentB);
+            return new SmokeFixture(root, settingsPath, controlPipe, agentPipe, outputDirectory, expectedContentA, expectedContentB);
         }
         catch
         {

@@ -12,13 +12,19 @@ internal static class PipeClient
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
     private static readonly JsonSerializerOptions OutputOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    public static async Task<ClientResult> InvokeOwnerAsync(string pipeName, string requestJson, CancellationToken cancellationToken)
+    public static Task<ClientResult> InvokeOwnerAsync(string pipeName, string requestJson, CancellationToken cancellationToken) =>
+        InvokeAsync(pipeName, requestJson, cancellationToken);
+
+    public static Task<ClientResult> InvokeAgentAsync(string pipeName, string requestJson, CancellationToken cancellationToken) =>
+        InvokeAsync(pipeName, requestJson, cancellationToken);
+
+    private static async Task<ClientResult> InvokeAsync(string pipeName, string requestJson, CancellationToken cancellationToken)
     {
         try
         {
             using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous, TokenImpersonationLevel.Impersonation);
             await client.ConnectAsync(5000, cancellationToken).ConfigureAwait(false);
-            return await ExchangeOwnerAsync(client, requestJson, cancellationToken).ConfigureAwait(false);
+            return await ExchangeAsync(client, requestJson, cancellationToken).ConfigureAwait(false);
         }
         catch (UnauthorizedAccessException)
         {
@@ -38,7 +44,7 @@ internal static class PipeClient
         }
     }
 
-    private static async Task<ClientResult> ExchangeOwnerAsync(NamedPipeClientStream client, string requestJson, CancellationToken cancellationToken)
+    private static async Task<ClientResult> ExchangeAsync(NamedPipeClientStream client, string requestJson, CancellationToken cancellationToken)
     {
         using var reader = new StreamReader(client, new UTF8Encoding(false, true), detectEncodingFromByteOrderMarks: false, 4096, leaveOpen: true);
         using var writer = new StreamWriter(client, new UTF8Encoding(false, true), 4096, leaveOpen: true) { AutoFlush = true };

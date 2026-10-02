@@ -15,7 +15,8 @@ public sealed record OwnerScopeGrantPreview(
     DateTimeOffset ExpiresAtUtc,
     ScopeGrantEgress? Egress,
     long PolicyGeneration,
-    string? CollectionId = null);
+    string? CollectionId = null,
+    long UnlockEpoch = 0);
 
 public sealed record PersistedScopeGrant(
     string GrantId,
@@ -26,7 +27,8 @@ public sealed record PersistedScopeGrant(
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset ExpiresAtUtc,
     ScopeGrantEgress? Egress,
-    long PolicyGeneration);
+    long PolicyGeneration,
+    long UnlockEpoch = 0);
 
 public sealed record OwnerScopeCollection(string CollectionId, string[] ResourceIds);
 
@@ -34,17 +36,21 @@ public sealed record OwnerScopeGrantState(
     int SchemaVersion,
     long PolicyGeneration,
     PersistedScopeGrant[] Grants,
-    OwnerScopeCollection[] Collections)
+    OwnerScopeCollection[] Collections,
+    long UnlockEpoch = 0,
+    string[] ConsumedTokenVerifiers = null!)
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
     public static OwnerScopeGrantState Empty { get; } = new(
-        CurrentSchemaVersion, 0, Array.Empty<PersistedScopeGrant>(), Array.Empty<OwnerScopeCollection>());
+        CurrentSchemaVersion, 0, Array.Empty<PersistedScopeGrant>(), Array.Empty<OwnerScopeCollection>(),
+        0, Array.Empty<string>());
 }
 
 public interface IScopeGrantPersistence
 {
     OwnerScopeGrantState LoadScopeGrantState();
-    void SaveScopeGrantState(OwnerScopeGrantState state);
+    T UpdateScopeGrantState<T>(
+        Func<OwnerScopeGrantState, (OwnerScopeGrantState State, T Result)> update);
 }
 
 public sealed record OwnerScopeGrantIssue(string Token, PersistedScopeGrant Grant);
@@ -92,7 +98,7 @@ public sealed class OwnerScopeGrantAuthority
 
         lock (_gate)
         {
-            var state = ValidateState(persistence.LoadScopeGrantState());
+            var state = ValidateAndMigrateState(persistence.LoadScopeGrantState());
             return StorePreviewLocked(
                 state, sourceSnapshot, operationSnapshot, destinationSnapshot, expiresAtUtc, egress, collectionId: null);
         }
@@ -126,7 +132,7 @@ public sealed class OwnerScopeGrantAuthority
 
         lock (_gate)
         {
-            var state = ValidateState(persistence.LoadScopeGrantState());
+            var state = ValidateAndMigrateState(persistence.LoadScopeGrantState());
             var collection = state.Collections.FirstOrDefault(value =>
                 string.Equals(value.CollectionId, collectionId, StringComparison.Ordinal))
                 ?? throw new ArgumentException("The selected owner collection does not exist.", nameof(collectionId));
@@ -160,38 +166,39 @@ public sealed class OwnerScopeGrantAuthority
             .ToArray();
         lock (_gate)
         {
-            var state = ValidateState(persistence.LoadScopeGrantState());
-            var existing = Array.FindIndex(state.Collections, collection =>
-                string.Equals(collection.CollectionId, collectionId, StringComparison.Ordinal));
-            if (existing < 0 && state.Collections.Length >= 1000)
+            return persistence.UpdateScopeGrantState(state =>
             {
-                throw new IOException("The owner collection limit is exhausted.");
-            }
+                var existing = Array.FindIndex(state.Collections, collection =>
+                    string.Equals(collection.CollectionId, collectionId, StringComparison.Ordinal));
+                if (existing < 0 && state.Collections.Length >= 1000)
+                {
+                    throw new IOException("The owner collection limit is exhausted.");
+                }
 
-            var nextGeneration = state.PolicyGeneration;
-            if (existing < 0 || !state.Collections[existing].ResourceIds.SequenceEqual(resourceIds, StringComparer.Ordinal))
-            {
-                if (nextGeneration == long.MaxValue)
+                var changed = existing < 0 ||
+                    !state.Collections[existing].ResourceIds.SequenceEqual(resourceIds, StringComparer.Ordinal);
+                if (changed && state.PolicyGeneration == long.MaxValue)
                 {
                     throw new IOException("The owner scope policy generation is exhausted.");
                 }
 
-                nextGeneration++;
-            }
+                var updated = new OwnerScopeCollection(collectionId!, resourceIds);
+                if (!changed)
+                {
+                    return (state, CloneCollection(updated));
+                }
 
-            var updated = new OwnerScopeCollection(collectionId!, resourceIds);
-            var collections = state.Collections.Where((_, index) => index != existing)
-                .Append(updated)
-                .OrderBy(collection => collection.CollectionId, StringComparer.Ordinal)
-                .ToArray();
-            var nextState = new OwnerScopeGrantState(
-                OwnerScopeGrantState.CurrentSchemaVersion, nextGeneration, state.Grants, collections);
-            if (nextGeneration != state.PolicyGeneration)
-            {
-                persistence.SaveScopeGrantState(nextState);
-            }
-
-            return CloneCollection(updated);
+                var collections = state.Collections.Where((_, index) => index != existing)
+                    .Append(updated)
+                    .OrderBy(collection => collection.CollectionId, StringComparer.Ordinal)
+                    .ToArray();
+                var nextState = state with
+                {
+                    PolicyGeneration = state.PolicyGeneration + 1,
+                    Collections = collections
+                };
+                return (nextState, CloneCollection(updated));
+            });
         }
     }
 
@@ -204,7 +211,7 @@ public sealed class OwnerScopeGrantAuthority
         EnsureOwner(actor);
         lock (_gate)
         {
-            var state = ValidateState(persistence.LoadScopeGrantState());
+            var state = ValidateAndMigrateState(persistence.LoadScopeGrantState());
             return Array.AsReadOnly(state.Collections.Select(CloneCollection).ToArray());
         }
     }
@@ -234,7 +241,7 @@ public sealed class OwnerScopeGrantAuthority
 
         var preview = new OwnerScopeGrantPreview(
             Guid.NewGuid().ToString("N"), sourceSnapshot, operationSnapshot, destinationSnapshot,
-            now, expiresAtUtc, egress, state.PolicyGeneration, collectionId);
+            now, expiresAtUtc, egress, state.PolicyGeneration, collectionId, state.UnlockEpoch);
         _previews.Add(preview.PreviewId, new PendingPreview(preview, now + PreviewLifetime));
         return ClonePreview(preview);
     }
@@ -274,34 +281,38 @@ public sealed class OwnerScopeGrantAuthority
                 throw new InvalidOperationException("The owner scope preview is expired.");
             }
 
-            var state = ValidateState(persistence.LoadScopeGrantState());
-            if (state.PolicyGeneration != preview.PolicyGeneration)
-            {
-                _previews.Remove(previewId!);
-                throw new InvalidOperationException("The owner scope preview is stale.");
-            }
-
-            if (state.PolicyGeneration == long.MaxValue || state.Grants.Length >= 10_000)
-            {
-                throw new IOException("The owner scope grant state cannot accept another grant.");
-            }
-
             var tokenBytes = RandomNumberGenerator.GetBytes(32);
             var verifierBytes = SHA256.HashData(tokenBytes);
             try
             {
-                var nextGeneration = state.PolicyGeneration + 1;
-                var grant = new PersistedScopeGrant(
-                    Guid.NewGuid().ToString("N"), EncodeBase64Url(verifierBytes),
-                    CloneResources(preview.Resources), (string[])preview.Operations.Clone(),
-                    CloneResources(preview.DestinationResources), DateTimeOffset.UtcNow,
-                    preview.ExpiresAtUtc, preview.Egress, nextGeneration);
-                var nextState = new OwnerScopeGrantState(
-                    OwnerScopeGrantState.CurrentSchemaVersion, nextGeneration,
-                    state.Grants.Append(grant).ToArray(), state.Collections);
-                persistence.SaveScopeGrantState(nextState);
+                var issue = persistence.UpdateScopeGrantState(state =>
+                {
+                    if (state.PolicyGeneration != preview.PolicyGeneration || state.UnlockEpoch != preview.UnlockEpoch)
+                    {
+                        throw new InvalidOperationException("The owner scope preview is stale.");
+                    }
+
+                    if (state.Grants.Length >= 10_000)
+                    {
+                        throw new IOException("The owner scope grant state cannot accept another grant.");
+                    }
+
+                    var grant = new PersistedScopeGrant(
+                        Guid.NewGuid().ToString("N"), EncodeBase64Url(verifierBytes),
+                        CloneResources(preview.Resources), (string[])preview.Operations.Clone(),
+                        CloneResources(preview.DestinationResources), DateTimeOffset.UtcNow,
+                        preview.ExpiresAtUtc, preview.Egress, state.PolicyGeneration, state.UnlockEpoch);
+                    var nextState = state with { Grants = state.Grants.Append(grant).ToArray() };
+                    var issued = new OwnerScopeGrantIssue("mb1_" + EncodeBase64Url(tokenBytes), CloneGrant(grant));
+                    return (nextState, issued);
+                });
                 _previews.Remove(previewId!);
-                return new OwnerScopeGrantIssue("mb1_" + EncodeBase64Url(tokenBytes), CloneGrant(grant));
+                return issue;
+            }
+            catch (InvalidOperationException)
+            {
+                _previews.Remove(previewId!);
+                throw;
             }
             finally
             {
@@ -319,7 +330,7 @@ public sealed class OwnerScopeGrantAuthority
 
         lock (_gate)
         {
-            var state = ValidateState(persistence.LoadScopeGrantState());
+            var state = ValidateAndMigrateState(persistence.LoadScopeGrantState());
             return Array.AsReadOnly(state.Grants.Select(CloneGrant).ToArray());
         }
     }
@@ -332,14 +343,28 @@ public sealed class OwnerScopeGrantAuthority
     }
 
 
-    private static OwnerScopeGrantState ValidateState(OwnerScopeGrantState state)
+    public static OwnerScopeGrantState ValidateAndMigrateState(OwnerScopeGrantState state)
     {
-        if (state is null || state.SchemaVersion != OwnerScopeGrantState.CurrentSchemaVersion ||
-            state.PolicyGeneration < 0 || state.Grants is null || state.Grants.Length > 10_000 ||
-            state.Collections is null || state.Collections.Length > 1000)
+        if (state is null || state.Grants is null || state.Grants.Length > 10_000 ||
+            state.Collections is null || state.Collections.Length > 1000 ||
+            state.PolicyGeneration < 0 || state.UnlockEpoch < 0 ||
+            (state.SchemaVersion != OwnerScopeGrantState.CurrentSchemaVersion && state.SchemaVersion != 2))
         {
             throw new InvalidDataException("Invalid encrypted owner scope grant state.");
         }
+
+        var consumedVerifiers = state.ConsumedTokenVerifiers;
+        if (consumedVerifiers is null && state.SchemaVersion == 2)
+        {
+            consumedVerifiers = Array.Empty<string>();
+        }
+
+        if (consumedVerifiers is null || consumedVerifiers.Length > 10_000)
+        {
+            throw new InvalidDataException("Invalid encrypted owner scope grant state.");
+        }
+
+
 
         var grantIds = new HashSet<string>(StringComparer.Ordinal);
         var verifiers = new HashSet<string>(StringComparer.Ordinal);
@@ -352,7 +377,9 @@ public sealed class OwnerScopeGrantAuthority
                 grant.Resources is null || grant.Operations is null || grant.Operations.Length == 0 ||
                 grant.DestinationResources is null ||
                 grant.CreatedAtUtc.Offset != TimeSpan.Zero || grant.ExpiresAtUtc.Offset != TimeSpan.Zero ||
-                grant.ExpiresAtUtc <= grant.CreatedAtUtc || grant.PolicyGeneration is < 1 || grant.PolicyGeneration > state.PolicyGeneration)
+                grant.ExpiresAtUtc <= grant.CreatedAtUtc || grant.PolicyGeneration < 0 ||
+                grant.PolicyGeneration > state.PolicyGeneration || grant.UnlockEpoch < 0 ||
+                grant.UnlockEpoch > state.UnlockEpoch)
             {
                 throw new InvalidDataException("Invalid encrypted owner scope grant record.");
             }
@@ -386,7 +413,8 @@ public sealed class OwnerScopeGrantAuthority
             throw new InvalidDataException("Invalid encrypted owner scope collection state.", ex);
         }
 
-        return new OwnerScopeGrantState(state.SchemaVersion, state.PolicyGeneration, grants, collections);
+        var consumed = NormalizeConsumedVerifiers(consumedVerifiers);
+        return new OwnerScopeGrantState(OwnerScopeGrantState.CurrentSchemaVersion, state.PolicyGeneration, grants, collections, state.UnlockEpoch, consumed);
     }
 
     private static OwnerScopeCollection[] NormalizeCollections(OwnerScopeCollection[]? collections)
@@ -415,6 +443,26 @@ public sealed class OwnerScopeGrantAuthority
             }
 
             normalized[index] = collection with { ResourceIds = resourceIds };
+        }
+
+        return normalized;
+    }
+
+    private static string[] NormalizeConsumedVerifiers(string[]? consumed)
+    {
+        if (consumed is null || consumed.Length > 10_000 || consumed.Any(value => value is null))
+        {
+            throw new ArgumentException("The encrypted consumed token state is invalid.", nameof(consumed));
+        }
+
+        var normalized = consumed.Order(StringComparer.Ordinal).ToArray();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var verifier in normalized)
+        {
+            if (!IsValidVerifier(verifier) || !seen.Add(verifier))
+            {
+                throw new ArgumentException("The encrypted consumed token record is invalid.", nameof(consumed));
+            }
         }
 
         return normalized;

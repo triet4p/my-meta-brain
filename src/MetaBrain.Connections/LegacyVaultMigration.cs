@@ -145,7 +145,8 @@ internal static class LegacyVaultMigration
         {
             schemaVersion = ServiceSettings.CurrentSchemaVersion,
             ownerSid,
-            controlPipe
+            controlPipe,
+            agentPipe = controlPipe + ".agent"
         }, JsonOptions);
         var directory = Path.GetDirectoryName(settingsPath) ?? throw new InvalidDataException("Invalid service settings path.");
         var temporaryPath = Path.Combine(directory, ".service-settings." + Guid.NewGuid().ToString("N") + ".tmp");

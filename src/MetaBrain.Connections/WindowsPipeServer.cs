@@ -42,7 +42,13 @@ internal static class WindowsPipeServer
     [DllImport("kernel32.dll")]
     private static extern IntPtr LocalFree(IntPtr memory);
 
-    public static NamedPipeServerStream Create(ServiceSettings settings, bool firstInstance)
+    public static NamedPipeServerStream Create(ServiceSettings settings, bool firstInstance) =>
+        Create(settings, settings.ControlPipe, firstInstance);
+
+    public static NamedPipeServerStream CreateAgent(ServiceSettings settings, bool firstInstance) =>
+        Create(settings, settings.AgentPipe, firstInstance);
+
+    private static NamedPipeServerStream Create(ServiceSettings settings, string pipeName, bool firstInstance)
     {
         using var identity = WindowsIdentity.GetCurrent();
         var serviceSid = identity.User?.Value ?? throw new InvalidDataException("The service process has no user SID.");
@@ -67,7 +73,7 @@ internal static class WindowsPipeServer
             }
 
             var handle = CreateNamedPipe(
-                $"\\\\.\\pipe\\{settings.ControlPipe}",
+                $"\\\\.\\pipe\\{pipeName}",
                 openMode,
                 PipeRejectRemoteClients,
                 PipeUnlimitedInstances,

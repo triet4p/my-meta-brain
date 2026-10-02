@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Globalization;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using MetaBrain.Application;
 
@@ -33,6 +34,8 @@ internal static class OwnerControlCli
                 "grants" => await ListGrantsAsync(options).ConfigureAwait(false),
                 "collection-set" => await SetCollectionAsync(options).ConfigureAwait(false),
                 "collections" => await ListCollectionsAsync(options).ConfigureAwait(false),
+                "redeem" => await RedeemAsync(options).ConfigureAwait(false),
+                "session" => await SessionAsync(options).ConfigureAwait(false),
                 "migrate" => Migrate(options),
                 _ => Usage()
             };
@@ -56,7 +59,7 @@ internal static class OwnerControlCli
         }
 
         var vaultState = result.Reply.TryGetProperty("vaultState", out var state) ? state.GetString() : null;
-        Console.WriteLine($"SERVICE running; vault={vaultState ?? "unknown"}; token issuance is owner-only; redemption/session support is unavailable");
+        Console.WriteLine($"SERVICE running; vault={vaultState ?? "unknown"}; token issuance is owner-only; agent redemption uses the agent channel");
         return 0;
     }
 
@@ -612,6 +615,84 @@ internal static class OwnerControlCli
         return pipe;
     }
 
+    private static async Task<int> RedeemAsync(CommandOptions options)
+    {
+        options.RequireOnly("--agent-pipe", "--handoff-file", "--session-file");
+        var agentPipe = PipeName(options, "--agent-pipe");
+        var handoffPath = options.Required("--handoff-file");
+        var sessionPath = options.Required("--session-file");
+        string token;
+        try
+        {
+            token = ReadHandoffToken(handoffPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Console.Error.WriteLine("ERROR handoff_unreadable");
+            return 3;
+        }
+
+        {
+            var result = await InvokeAgentAsync(agentPipe,
+                new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.AgentRedeemOperation, Token: token)).ConfigureAwait(false);
+            if (!result.Success || !HasStatus(result.Reply, "session_issued") ||
+                !result.Reply.TryGetProperty("sessionToken", out var sessionToken) ||
+                sessionToken.ValueKind != JsonValueKind.String ||
+                !result.Reply.TryGetProperty("agentSession", out var session) ||
+                session.ValueKind != JsonValueKind.Object)
+            {
+                WriteServiceError(result);
+                return 3;
+            }
+
+            try
+            {
+                AgentSessionFile.Write(sessionToken.GetString() ?? string.Empty, sessionPath);
+            }
+            catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                Console.Error.WriteLine("ERROR session_handoff_failed");
+                return 4;
+            }
+
+            PrintAgentSession(session);
+            Console.WriteLine($"SESSION issued; local session handoff={sessionPath}; bearer redacted");
+            return 0;
+        }
+    }
+
+    private static async Task<int> SessionAsync(CommandOptions options)
+    {
+        options.RequireOnly("--agent-pipe", "--session-file");
+        var agentPipe = PipeName(options, "--agent-pipe");
+        var sessionPath = options.Required("--session-file");
+        string sessionToken;
+        try
+        {
+            sessionToken = AgentSessionFile.Read(sessionPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Console.Error.WriteLine("ERROR session_unreadable");
+            return 3;
+        }
+
+        var result = await InvokeAgentAsync(agentPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.AgentSessionInspectOperation, SessionToken: sessionToken)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "session_valid") ||
+            !result.Reply.TryGetProperty("agentSession", out var session) ||
+            session.ValueKind != JsonValueKind.Object)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintAgentSession(session);
+        return 0;
+    }
+
     private static async Task<(bool Success, JsonElement Reply)> InvokeOwnerAsync(string pipe, ServiceRequest request)
     {
         var requestJson = JsonSerializer.Serialize(request, JsonOptions);
@@ -627,11 +708,68 @@ internal static class OwnerControlCli
         }
     }
 
+    private static async Task<(bool Success, JsonElement Reply)> InvokeAgentAsync(string pipe, ServiceRequest request)
+    {
+        var requestJson = JsonSerializer.Serialize(request, JsonOptions);
+        var result = await PipeClient.InvokeAgentAsync(pipe, requestJson, CancellationToken.None).ConfigureAwait(false);
+        try
+        {
+            using var document = JsonDocument.Parse(result.Json);
+            return (result.Success, document.RootElement.Clone());
+        }
+        catch (JsonException)
+        {
+            return (false, default);
+        }
+    }
+
+    private static string PipeName(CommandOptions options, string name)
+    {
+        var pipe = options.Required(name);
+        if (!ServiceSettingsLoader.IsSafeIdentifier(pipe))
+        {
+            throw new ArgumentException("The pipe name is invalid.");
+        }
+
+        return pipe;
+    }
+
+    private static string ReadHandoffToken(string path)
+    {
+        var protectedBytes = File.ReadAllBytes(path);
+        try
+        {
+            return AgentSessionFile.UnprotectHandoff(protectedBytes);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(protectedBytes);
+        }
+    }
+
+    private static void PrintAgentSession(JsonElement session)
+    {
+        Console.WriteLine($"SESSION id={JsonValueText(session, "sessionId")} grant={JsonValueText(session, "grantId")} generation={JsonValueText(session, "policyGeneration")} epoch={JsonValueText(session, "unlockEpoch")} expiresUtc={JsonValueText(session, "expiresAtUtc")}");
+        if (session.TryGetProperty("resources", out var resources) && resources.ValueKind == JsonValueKind.Array)
+        {
+            PrintResources("source", resources);
+        }
+
+        if (session.TryGetProperty("destinationResources", out var destinations) && destinations.ValueKind == JsonValueKind.Array)
+        {
+            PrintResources("destination", destinations);
+        }
+
+        if (session.TryGetProperty("operations", out var operations) && operations.ValueKind == JsonValueKind.Array)
+        {
+            Console.WriteLine("operations=" + string.Join(",", operations.EnumerateArray().Select(value => value.GetString())));
+        }
+    }
+
     private static bool HasStatus(JsonElement reply, string expected) =>
         reply.ValueKind == JsonValueKind.Object &&
         reply.TryGetProperty("status", out var status) &&
         string.Equals(status.GetString(), expected, StringComparison.Ordinal);
-
     private static void WriteServiceError((bool Success, JsonElement Reply) result)
     {
         var error = result.Reply.ValueKind == JsonValueKind.Object && result.Reply.TryGetProperty("error", out var value)
@@ -642,7 +780,7 @@ internal static class OwnerControlCli
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Owner commands: owner {status|read|write|provision|unlock|recover|lock|grant|grants|collection-set|collections} --control-pipe <name>; owner migrate --config <legacy-owner-settings>. `grant` selects one zone, collection, or exact resource set; `collection-set` replaces owner-managed membership after `SET`; grants require explicit UTC expiry and protected handoff. Keys are prompted, never accepted as arguments; tokens are never printed. Redemption/session support is unavailable.");
+        Console.Error.WriteLine("Owner commands: owner {status|read|write|provision|unlock|recover|lock|grant|grants|collection-set|collections} --control-pipe <name>; owner migrate --config <legacy-owner-settings>; owner redeem --agent-pipe <name> --handoff-file <path> --session-file <new-path>; owner session --agent-pipe <name> --session-file <path>. Grants require explicit owner preview and UTC expiry; opaque bearers are accepted only through DPAPI-protected local handoffs and are never passed as arguments or printed.");
         return 2;
     }
 
