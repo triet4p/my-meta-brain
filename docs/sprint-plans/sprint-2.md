@@ -16,7 +16,7 @@ Envelope giữ source locators/availability, attribution/schema/revision/time/le
 
 ## Atomic Tasks
 
-Status legend: [ ] pending / [~] in progress / [x] done. Artifact cho S2-T<M>: artifacts/sprint-2/task-<M>.md.
+Status legend: [ ] pending / [~] in progress / [x] done. OMP role selection, evidence review, record ownership, and exact-snapshot checkpoints follow the [canonical execution contract](../PLAN.md#planning-and-execution-contract). Worker artifact for S2-T<M>: `artifacts/sprint-2/task-<M>.md`; reviewers and checkpoint executors own their separate records under the sprint artifact tree.
 
 - [ ] **S2-T1 — Triển khai domain envelope và zone/resource semantics.** Requirements: R10, R11, R12, R32.
     - Scope: một model dùng chung cho source reference và typed memory metadata, validation/identity; không profile extraction.

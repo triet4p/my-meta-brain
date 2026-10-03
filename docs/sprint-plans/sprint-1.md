@@ -6,7 +6,7 @@ Thiết lập key/unlock/lock và encrypted storage thực; agent khám phá cat
 
 ## Status and Dependencies
 
-- Status: In progress — CR01/D016 replacement implementation owner-authorized 2026-10-02. S1-T1 evidence retained; S1-T2 and S1-T3 evidence PASS with reviewed-snapshot commits confirmed; S1-T4 active, S1-T5–T9 Pending. Replacement sprint gate Pending; old gates remain historical.
+- Status: In progress — CR01/D016 replacement implementation owner-authorized 2026-10-02. S1-T1 evidence retained; S1-T2–T4 evidence PASS with reviewed-snapshot commits confirmed; S1-T5 active, S1-T6–T9 Pending. Replacement sprint gate Pending; old gates remain historical.
 - [Global plan](../PLAN.md), [specification](../META-BRAIN.md), [requirements](../REQUIREMENTS.md), [D016](../../.agents/memory/decisions.md).
 - Requirements: R02–R06, R36; đặt nền cho R07, R24, R31–R34, R38, R40.
 - Sprint 2 chỉ bắt đầu sau replacement gate CR01. Bảy task gates và deep PASS cũ giữ dưới Historical Gate Record, không thay nghiệm thu mới. Supplemental protected model proof superseded/stopped, không tiếp tục dùng key hoặc gọi provider.
@@ -21,7 +21,7 @@ S1 dùng synthetic encrypted resource fixtures với crypto/storage contract tá
 
 ## Atomic Tasks
 
-Status legend: [ ] pending / [~] in progress / [x] done. Theo [OMP execution contract](../PLAN.md#planning-and-execution-contract), Main chỉ [x] cho new implementation/correction sau evidence PASS và successful reviewed-snapshot commit; commit_pending giữ [~], chặn task độc lập tiếp theo. Fresh async worker/reviewer cho từng task; deep review chỉ sau mọi task gate và required checkpoint PASS. Artifacts S1-T<M>: artifacts/sprint-1/task-<M>.md, gồm matching attempt IDs, review reference và Main-owned commit state/SHA/base/snapshot; append evidence CR01 vào files cũ, không viết đè lịch sử hoặc tạo artifact PASS giả. S1-T1 retained và S1-CLEAN/old gates không bị đổi status hoặc coi là retroactive async/checkpoint proof.
+Status legend: [ ] pending / [~] in progress / [x] done. OMP role selection, review gates, record ownership, and exact-snapshot checkpoints follow the [canonical execution contract](../PLAN.md#planning-and-execution-contract). Worker artifact for S1-T<M>: `artifacts/sprint-1/task-<M>.md`; append corrections instead of overwriting its history. Evidence reviewers and checkpoint executors own their separate records under the sprint artifact tree. S1-T1 retained and S1-CLEAN/old gates remain historical, never retroactive async/checkpoint proof.
 
 - [x] **S1-T1 — Giữ stack/module decisions và frozen operational envelope.** Requirements: R32, R38, R40.
     - Retained evidence: stack C#/.NET 10, WPF, versioned local pipes, modular boundaries, authorized bounded source sample và targets đã qua gate trước CR01; không crypto/isolation acceptance mới.
@@ -38,12 +38,12 @@ Status legend: [ ] pending / [~] in progress / [x] done. Theo [OMP execution con
     - Acceptance: chỉ explicit owner workflow mint; zone/collection selection chốt concrete scope, không auto descendants/membership/new revisions; read-only mặc định, proposal/link scope riêng; token không chứa key hoặc quyền do agent sửa được. No-grant deny.
     - Evidence: mint hai scopes qua owner API, tự khai owner/scope/expiry bị từ chối; inspect encrypted state và token handoff không secrets trong args/URI/prompt.
 
-- [~] **S1-T4 — Single-use redemption và scoped agent channel.** Requirements: R03, R05, R32.
+- [x] **S1-T4 — Single-use redemption và scoped agent channel.** Requirements: R03, R05, R32.
     - Scope: atomically consume token, establish bounded session, migrate channel/connector contracts khỏi AppContainer SID/HMAC launch bindings; application-created access context.
     - Acceptance: concurrent redeem chỉ một thành công; replay/used/expired/revoked token deny kể cả crash/restart; agent session không gọi owner API hoặc tự đổi scope. Same-owner SID không tự tạo approval; bearer possession không được gọi là OS identity.
     - Evidence: real IPC requests và race/interruption/restart; invalid token/body spoof/owner operation negatives. Clean cutover callers/settings/tests, không obsolete binding shim.
 
-- [ ] **S1-T5 — Scoped session lifecycle, revoke/expiry và lock invalidation.** Requirements: R02, R03, R07.
+- [~] **S1-T5 — Scoped session lifecycle, revoke/expiry và lock invalidation.** Requirements: R02, R03, R07.
     - Scope: session inspection/revoke/expiry, policy generation/cache invalidation, fail-closed persistence; egress fields enforceable, không provider adapter.
     - Acceptance: request tiếp sau revoke/expiry/lock deny; restart không hồi sinh sessions/pending hoặc used tokens; unlock lại cần grant/token mới. Hai valid sessions có scope khác, copied bearer không vượt scope; không claim ngăn token theft cùng OS.
     - Evidence: actual session/access authorization requests trước/sau revoke/expiry/lock/restart, stale credential/generation negatives và owner unlock; T6 kiểm chứng plaintext read/cache khi read surface mới có. Frozen egress budget negatives, không network inference hoặc mock future features.
@@ -74,7 +74,7 @@ User unlock synthetic vault, publish limited catalog, review hai requests và mi
 
 ## Notes / Blockers
 
-S1-CLEAN removed superseded AppContainer/agent/proof sources. S1-T2 encrypted key/lifecycle and S1-T3 authoritative scope/token issuance have evidence PASS and confirmed exact-snapshot commits. S1-T4 atomic redemption/scoped agent channel active; session lifecycle/resource reads/catalog/request work remain Pending. Không claim optional legacy-policy migration đã được exercise hoặc OS permission chặn same-owner agent. Historical credential exposure/unknown reservation remains preserved; provider proof stays superseded. Crypto/private-index implementation must keep approved-package rules and frozen budgets.
+S1-CLEAN obsolete-source cleanup and S1-T2–T4 encrypted key/lifecycle, authoritative scope issuance, atomic redemption/scoped agent channel have evidence PASS and confirmed exact-snapshot commits. S1-T5 session lifecycle/access authorization active; scoped plaintext resource reads/catalog/request/client walkthrough remain Pending. Optional legacy-policy migration/SCM/provider proof remains unverified, same-owner OS isolation not claimed. Historical credential incident/unknown reservation preserved; frozen budgets and approved-package rules unchanged.
 
 ## Retained S1-T1 Decisions and Operational Envelope
 
@@ -177,7 +177,7 @@ Các mốc dưới đây giữ nguyên chronology, kể cả trạng thái/block
 
 ## CR01 Replacement Gate Record
 
-In progress. S1-T2 and S1-T3 evidence gates and commit checkpoints confirmed; S1-T4 active, T5–T9 Pending. Owner authorized full Sprint 1 delivery 2026-10-02. Retained T1 evidence does not replace crypto/catalog/token acceptance; M1 remains not [x] until T2–T9 evidence gates, required commit checkpoints and replacement deep review PASS.
+In progress. S1-T2–T4 evidence gates and commit checkpoints confirmed; S1-T5 active, T6–T9 Pending. Owner authorized full Sprint 1 delivery 2026-10-02. Retained T1 evidence does not replace crypto/catalog/token acceptance; M1 remains not [x] until T2–T9 evidence gates, required commit checkpoints and replacement deep review PASS.
 
 - S1-T2 attempt `S1T2-CR01-20261002-A1`: fresh default `task` worker agent/job `S1T2KeyLifecycleA1` launched asynchronously; artifact `artifacts/sprint-1/task-2.md`. Crypto domain alone does not justify `hard-task`; no escalation recorded. User definitions for all four flow roles have `blocking: false`; no project flow override found, dispatch returned a background job. Supervision timer `bg_3`, generation `G1`, 20-minute observation interval; proactive preflight notice received. Evidence gate and commit checkpoint Pending.
 - Assigned repository `F:/ai-ml/my-meta-brain`, ref `refs/heads/main`, origin `triet4p/my-meta-brain`; verified starting HEAD `999831fef4036f8fa3049a70c9b72c5127af2cb6`, real index initially empty. Owner explicitly approved including preexisting workflow-sync content in `AGENTS.md`, `docs/PLAN.md` and this sprint plan in the first reviewed checkpoint. Preexisting Sprint 2–8 plan edits remain outside task ownership and commits. No push authorized.
@@ -191,6 +191,8 @@ In progress. S1-T2 and S1-T3 evidence gates and commit checkpoints confirmed; S1
 - S1-T4 fresh continuation attempt `S1T4-CR01-20261002-A2`, default `task` agent/job `S1T4CompleteA2` launched asynchronously from the same committed base `f118ea1b1832f5325b896ef86b2ed2d155ed3469` with A1 inherited task-owned edits and `artifacts/sprint-1/task-4.md` handoff. Effective user `task` `blocking: false`, no project override; background receipt confirmed. Timer `bg_20`, generation `G1`, 20-minute observation; proactive prerequisite/rules notice received. Full acceptance unchanged, evidence gate/commit Pending.
 - S1-T4 A2 `S1T4CompleteA2` completed with actual scoped build (0 warnings/errors) and real IPC smoke exit 0, but final handoff remained incomplete on stale specification status (T2/T3 already committed versus text saying Pending/unrun). No evidence gate/commit advanced. A2 superseded; timer G5 cancelled. Fresh default A3 finishes documentary consistency and preserves A2 evidence; no implementation/runtime rerun solely for status correction.
 - S1-T4 attempt `S1T4-CR01-20261002-A3`, fresh default `task` agent/job `S1T4HandoffA3` launched asynchronously for remaining documentary consistency and complete handoff only; same base `f118ea1b1832f5325b896ef86b2ed2d155ed3469`, same artifact. A2 runtime evidence preserved, no wording-driven rerun requested. Effective `task` remains `blocking: false`, no project override; background receipt confirmed. Timer `bg_25`, generation `G1`, 10 minutes. Gate/commit Pending.
+- S1-T4 fresh reviewer agent/job `S1T4EvidenceA1`, attempt `S1T4-REVIEW-20261002-A1` completed **PASS**, no actionable findings; current worker completion A3 with A2 runtime lineage preserved. Accepted report/real reviewer-computed 22-path fingerprint `artifacts/sprint-1/task-4-evidence-A1.json`, Main record `artifacts/sprint-1/task-4.md`. Checkpoint commit `1ede35e2a908a090aeb43e94621ba7a8f9293c70`, parent `f118ea1b1832f5325b896ef86b2ed2d155ed3469`, tree `9d5c2cec5c5be4a4516e4bdf293664ed59ef1f5b`, snapshot SHA-256 `6d740429a4f5fba56e19e06916414292bf9807b749829d36dbb6024a0031abd9`; exact ref/content/index checks passed. Seven owner Sprint 2–8 dirty plans preserved, index empty; no push. Reviewer output null fingerprint entries recovered from the same reviewer's recorded hash-result rows, not guessed; raw report/provenance retained.
+
 
 
 

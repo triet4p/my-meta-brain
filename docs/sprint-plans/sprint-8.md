@@ -17,7 +17,7 @@ Release không reset dữ liệu. Versioned encrypted envelope/key/control/canon
 
 ## Atomic Tasks
 
-Status legend: [ ] pending / [~] in progress / [x] done. Artifact cho S8-T<M>: artifacts/sprint-8/task-<M>.md.
+Status legend: [ ] pending / [~] in progress / [x] done. OMP role selection, evidence review, record ownership, and exact-snapshot checkpoints follow the [canonical execution contract](../PLAN.md#planning-and-execution-contract). Worker artifact for S8-T<M>: `artifacts/sprint-8/task-<M>.md`; reviewers and checkpoint executors own their separate records under the sprint artifact tree.
 
 - [ ] **S8-T1 — Production installation và locked lifecycle packaging.** Requirements: R35, R02, R04, R05.
     - Scope: installer/application-service startup, autostart opt-in, health/uninstall; shared S1 key/session lifecycle, không account isolation hoặc patched agent runtime.

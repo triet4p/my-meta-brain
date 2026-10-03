@@ -16,7 +16,7 @@ Jobs dùng encrypted source/proposals/revision/lineage chung và review UI; khô
 
 ## Atomic Tasks
 
-Status legend: [ ] pending / [~] in progress / [x] done. Artifact cho S6-T<M>: artifacts/sprint-6/task-<M>.md.
+Status legend: [ ] pending / [~] in progress / [x] done. OMP role selection, evidence review, record ownership, and exact-snapshot checkpoints follow the [canonical execution contract](../PLAN.md#planning-and-execution-contract). Worker artifact for S6-T<M>: `artifacts/sprint-6/task-<M>.md`; reviewers and checkpoint executors own their separate records under the sprint artifact tree.
 
 - [ ] **S6-T1 — Scoped model job execution và provider controls.** Requirements: R07, R09, R22.
     - Scope: bounded job lifecycle, provider adapter/configuration, consent/cost limit và validated output boundary; không định nghĩa nhiều profile ở đây.

@@ -16,7 +16,7 @@ UI dùng shared encrypted core và key/lock/approval APIs; không direct decrypt
 
 ## Atomic Tasks
 
-Status legend: [ ] pending / [~] in progress / [x] done. Artifact cho S5-T<M>: artifacts/sprint-5/task-<M>.md.
+Status legend: [ ] pending / [~] in progress / [x] done. OMP role selection, evidence review, record ownership, and exact-snapshot checkpoints follow the [canonical execution contract](../PLAN.md#planning-and-execution-contract). Worker artifact for S5-T<M>: `artifacts/sprint-5/task-<M>.md`; reviewers and checkpoint executors own their separate records under the sprint artifact tree.
 
 - [ ] **S5-T1 — Owner UI host và authenticated application boundary.** Requirements: R02, R05, R30, R32.
     - Scope: runtime UI đã chọn, owner session/auth, navigation và lỗi kết nối; không dashboard giả bằng mocks.

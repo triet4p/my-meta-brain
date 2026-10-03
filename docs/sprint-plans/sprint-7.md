@@ -16,7 +16,7 @@ Lifecycle không sửa authored content cho ranking. Private state encrypted; lo
 
 ## Atomic Tasks
 
-Status legend: [ ] pending / [~] in progress / [x] done. Artifact cho S7-T<M>: artifacts/sprint-7/task-<M>.md.
+Status legend: [ ] pending / [~] in progress / [x] done. OMP role selection, evidence review, record ownership, and exact-snapshot checkpoints follow the [canonical execution contract](../PLAN.md#planning-and-execution-contract). Worker artifact for S7-T<M>: `artifacts/sprint-7/task-<M>.md`; reviewers and checkpoint executors own their separate records under the sprint artifact tree.
 
 - [ ] **S7-T1 — Temporal recall và lịch sử quyết định end-to-end.** Requirements: R26, R23, R30.
     - Scope: hoàn thiện current/as-of/history query và UI timeline trên validity/revision đã có; không đổi temporal schema meaning.

@@ -16,7 +16,7 @@ UI S5 dùng catalog/request/redeem/session và private search APIs, không query
 
 ## Atomic Tasks
 
-Status legend: [ ] pending / [~] in progress / [x] done. Artifact cho S4-T<M>: artifacts/sprint-4/task-<M>.md.
+Status legend: [ ] pending / [~] in progress / [x] done. OMP role selection, evidence review, record ownership, and exact-snapshot checkpoints follow the [canonical execution contract](../PLAN.md#planning-and-execution-contract). Worker artifact for S4-T<M>: `artifacts/sprint-4/task-<M>.md`; reviewers and checkpoint executors own their separate records under the sprint artifact tree.
 
 - [ ] **S4-T1 — MCP catalog/request/token-session bridge cho Codex và OMP.** Requirements: R03–R07, R24.
     - Scope: real transport/capability dispatch, dùng S1 catalog/request/approval/redemption APIs, no key/storage/policy trong bridge.

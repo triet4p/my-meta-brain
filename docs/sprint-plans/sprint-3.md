@@ -16,7 +16,7 @@ Adapters normalized events/source refs, không publish/mint grant hoặc map quy
 
 ## Atomic Tasks
 
-Status legend: [ ] pending / [~] in progress / [x] done. Artifact cho S3-T<M>: artifacts/sprint-3/task-<M>.md.
+Status legend: [ ] pending / [~] in progress / [x] done. OMP role selection, evidence review, record ownership, and exact-snapshot checkpoints follow the [canonical execution contract](../PLAN.md#planning-and-execution-contract). Worker artifact for S3-T<M>: `artifacts/sprint-3/task-<M>.md`; reviewers and checkpoint executors own their separate records under the sprint artifact tree.
 
 - [ ] **S3-T1 — Source enrollment và incremental ingestion coordinator.** Requirements: R16, R17, R18.
     - Scope: allowlist/mapping, encrypted checkpoint/quarantine, idempotence/version dispatch và lock-aware coordinator; không parsing format ở đây.
