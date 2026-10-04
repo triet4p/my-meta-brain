@@ -21,7 +21,15 @@ public sealed record ServiceRequest(
     string? PreviewId = null,
     string? CollectionId = null,
     string? Token = null,
-    string? SessionToken = null);
+    string? SessionToken = null,
+    string? SessionId = null,
+    string? AccessOperation = null,
+    long? ResourceRevision = null,
+    string? DestinationResourceId = null,
+    long? DestinationRevision = null,
+    decimal? EstimatedCostUsd = null,
+    long? InputTokens = null,
+    long? OutputTokens = null);
 
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
@@ -54,7 +62,9 @@ public sealed record ServiceReply(
     string? GrantId = null,
     string? Token = null,
     string? SessionToken = null,
-    AgentSessionSnapshot? AgentSession = null);
+    AgentSessionSnapshot? AgentSession = null,
+    AgentSessionSnapshot[]? AgentSessions = null,
+    string? SessionId = null);
 
 
 public sealed class ServiceRequestHandler
@@ -69,6 +79,9 @@ public sealed class ServiceRequestHandler
     public const string OwnerScopeCollectionListOperation = "owner.scope.collection.list";
     public const string AgentRedeemOperation = "agent.session.redeem";
     public const string AgentSessionInspectOperation = "agent.session.inspect";
+    public const string AgentAccessAuthorizeOperation = "agent.access.authorize";
+    public const string OwnerSessionListOperation = "owner.sessions";
+    public const string OwnerSessionRevokeOperation = "owner.session.revoke";
     private readonly GrantAuthority _grantAuthority;
     private readonly IVaultLifecycle _vault;
     private readonly OwnerScopeGrantAuthority _ownerScopeGrants;
@@ -118,6 +131,11 @@ public sealed class ServiceRequestHandler
         {
             return HandleAgentSessionInspect(context, request, operation);
         }
+        if (string.Equals(request.Operation, AgentAccessAuthorizeOperation, StringComparison.Ordinal))
+        {
+            return HandleAgentAccessAuthorize(context, request, operation);
+        }
+
 
         if (context.Kind != PrincipalKind.Owner)
         {
@@ -184,6 +202,16 @@ public sealed class ServiceRequestHandler
         {
             return HandleScopeCollectionList(context, operation);
         }
+        if (string.Equals(request.Operation, OwnerSessionListOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerSessionList(request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerSessionRevokeOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerSessionRevoke(request, operation);
+        }
+
 
         if (string.Equals(request.Operation, ResourceReadOperation, StringComparison.Ordinal))
         {
@@ -494,7 +522,7 @@ public sealed class ServiceRequestHandler
             return Error("vault_locked");
         }
 
-        if (HasOwnerOnlyFields(request))
+        if (HasOwnerOnlyFields(request, allowGrantToken: true))
         {
             return Error("forbidden");
         }
@@ -544,7 +572,8 @@ public sealed class ServiceRequestHandler
         AgentSessionLookupResult lookup;
         try
         {
-            lookup = _agentSessions.LookupSession(request.SessionToken, CurrentEpoch(operation), CurrentGeneration(operation));
+            var state = operation.LoadScopeGrantState();
+            lookup = _agentSessions.LookupSession(request.SessionToken, state.UnlockEpoch, state.PolicyGeneration);
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
         {
@@ -559,24 +588,164 @@ public sealed class ServiceRequestHandler
             AgentSessionLookupStatus.Revoked => Error("session_revoked"),
             AgentSessionLookupStatus.Superseded => Error("session_superseded"),
             AgentSessionLookupStatus.Expired => Error("session_expired"),
-            _ => Error("session_unknown"),
+            _ => Error("session_unknown")
         };
+    }
+
+    private ServiceReply HandleAgentAccessAuthorize(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Agent)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasOwnerOnlyFields(request, allowAccessFields: true))
+        {
+            return Error("forbidden");
+        }
+
+        try
+        {
+            var state = operation.LoadScopeGrantState();
+            var decision = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                state.UnlockEpoch,
+                state.PolicyGeneration,
+                new AgentAccessRequest(
+                    request.AccessOperation,
+                    request.ResourceId,
+                    request.ResourceRevision,
+                    request.DestinationResourceId,
+                    request.DestinationRevision,
+                    request.Provider,
+                    request.Model,
+                    request.EstimatedCostUsd,
+                    request.InputTokens,
+                    request.OutputTokens));
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "authorization_decision",
+                "agent",
+                null,
+                Decision: decision,
+                PolicyGeneration: state.PolicyGeneration);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            return Error("authorization_unavailable");
+        }
+    }
+
+    private ServiceReply HandleOwnerSessionList(ServiceRequest request, IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasSessionAdministrationExtras(request, allowSessionId: false))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var state = operation.LoadScopeGrantState();
+            var sessions = _agentSessions.ListSessions(state.UnlockEpoch, state.PolicyGeneration);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "sessions_listed",
+                "owner",
+                null,
+                PolicyGeneration: state.PolicyGeneration,
+                AgentSessions: sessions);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            return Error("session_unavailable");
+        }
+    }
+
+    private ServiceReply HandleOwnerSessionRevoke(ServiceRequest request, IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasSessionAdministrationExtras(request, allowSessionId: true))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var state = operation.LoadScopeGrantState();
+            var result = _agentSessions.RevokeSession(
+                request.SessionId, state.UnlockEpoch, state.PolicyGeneration);
+            return result.Status switch
+            {
+                AgentSessionRevocationStatus.Revoked =>
+                    new ServiceReply(
+                        CurrentProtocolVersion,
+                        "session_revoked",
+                        "owner",
+                        null,
+                        PolicyGeneration: state.PolicyGeneration,
+                        SessionId: request.SessionId),
+                AgentSessionRevocationStatus.Expired => Error("session_expired"),
+                AgentSessionRevocationStatus.Superseded => Error("session_superseded"),
+                _ => Error("session_unknown")
+            };
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            return Error("session_unavailable");
+        }
     }
 
     private static long CurrentEpoch(IVaultOperation operation) =>
         operation.LoadScopeGrantState().UnlockEpoch;
 
-    private static long CurrentGeneration(IVaultOperation operation) =>
-        operation.LoadScopeGrantState().PolicyGeneration;
-
-    private static bool HasOwnerOnlyFields(ServiceRequest request) =>
+    private static bool HasOwnerOnlyFields(
+        ServiceRequest request,
+        bool allowAccessFields = false,
+        bool allowGrantToken = false) =>
         request.Passphrase is not null || request.RecoveryCode is not null ||
         request.ResourceIds is not null || request.Operations is not null ||
         request.DestinationResourceIds is not null || request.ExpiresAtUtc is not null ||
-        request.Provider is not null || request.Model is not null ||
         request.MaximumCostUsd is not null || request.PreviewId is not null ||
-        request.CollectionId is not null || request.ResourceId is not null ||
-        request.ZoneId is not null || request.ContentBase64 is not null;
+        request.CollectionId is not null || request.ZoneId is not null ||
+        request.ContentBase64 is not null || (!allowGrantToken && request.Token is not null) ||
+        request.SessionId is not null ||
+        (!allowAccessFields &&
+         (request.AccessOperation is not null || request.ResourceId is not null ||
+          request.ResourceRevision is not null || request.DestinationResourceId is not null ||
+          request.DestinationRevision is not null || request.Provider is not null ||
+          request.Model is not null || request.EstimatedCostUsd is not null ||
+          request.InputTokens is not null || request.OutputTokens is not null));
+
+    private static bool HasSessionAdministrationExtras(ServiceRequest request, bool allowSessionId) =>
+        request.ResourceId is not null || request.ZoneId is not null ||
+        request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ContentBase64 is not null || request.ResourceIds is not null ||
+        request.Operations is not null || request.DestinationResourceIds is not null ||
+        request.ExpiresAtUtc is not null || request.Provider is not null ||
+        request.Model is not null || request.MaximumCostUsd is not null ||
+        request.PreviewId is not null || request.CollectionId is not null ||
+        request.Token is not null || request.SessionToken is not null ||
+        request.AccessOperation is not null || request.ResourceRevision is not null ||
+        request.DestinationResourceId is not null || request.DestinationRevision is not null ||
+        request.EstimatedCostUsd is not null || request.InputTokens is not null ||
+        request.OutputTokens is not null || (!allowSessionId && request.SessionId is not null);
 
     private static ScopeResourceRevision[] ResolveResourceSelection(
         IReadOnlyList<ScopeResourceRevision> available,

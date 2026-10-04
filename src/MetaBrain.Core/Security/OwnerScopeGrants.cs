@@ -61,6 +61,10 @@ public sealed record OwnerScopeGrantIssue(string Token, PersistedScopeGrant Gran
 /// </summary>
 public sealed class OwnerScopeGrantAuthority
 {
+    public const decimal MaximumEgressJobCostUsd = 0.25m;
+    public const long MaximumEgressInputTokens = 10_000;
+    public const long MaximumEgressOutputTokens = 2_000;
+
     private static readonly HashSet<string> AllowedOperations = new(StringComparer.Ordinal)
     {
         "resource.read",
@@ -518,9 +522,10 @@ public sealed class OwnerScopeGrantAuthority
 
         var hasEgressOperation = operations.Contains("provider.egress", StringComparer.Ordinal);
         if (hasEgressOperation != (egress is not null) ||
-            (egress is not null && (!IsValidIdentifier(egress.Provider) || !IsValidIdentifier(egress.Model) || egress.MaximumCostUsd <= 0)))
+            (egress is not null && (!IsValidIdentifier(egress.Provider) || !IsValidIdentifier(egress.Model) ||
+                egress.MaximumCostUsd <= 0 || egress.MaximumCostUsd > MaximumEgressJobCostUsd)))
         {
-            throw new ArgumentException("Provider egress requires an explicit valid provider, model, and positive cost limit.");
+            throw new ArgumentException("Provider egress requires an explicit valid provider, model, and cost limit within the frozen per-job maximum.");
         }
     }
 

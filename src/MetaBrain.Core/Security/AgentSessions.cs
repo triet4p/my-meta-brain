@@ -67,6 +67,28 @@ public sealed record AgentSessionLookupResult(
     AgentSessionLookupStatus Status,
     AgentSessionSnapshot? Session);
 
+public sealed record AgentAccessRequest(
+    string? Operation,
+    string? ResourceId = null,
+    long? ResourceRevision = null,
+    string? DestinationResourceId = null,
+    long? DestinationRevision = null,
+    string? Provider = null,
+    string? Model = null,
+    decimal? EstimatedCostUsd = null,
+    long? InputTokens = null,
+    long? OutputTokens = null);
+
+public enum AgentSessionRevocationStatus
+{
+    Revoked,
+    Unknown,
+    Expired,
+    Superseded
+}
+
+public sealed record AgentSessionRevocationResult(AgentSessionRevocationStatus Status);
+
 internal static class AgentBearerEncoding
 {
     public const string GrantTokenPrefix = "mb1_";

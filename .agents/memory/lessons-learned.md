@@ -56,3 +56,10 @@
 **Root cause:** The generic quoter escapes inner quotes as `\"`, which Rust/CRT argv parsing expects but `cmd.exe` does not understand; cmd received a corrupted `type` argument (earlier variants surfaced a filename-syntax error, and the literal `/c` comparison absorbed all output so no stderr diagnostic survived). `type` output redirection and `&&`/`||` chaining therefore never ran against the intended path.
 **Fix / workaround:** Build `cmd.exe /d /c` with the quoter and append the `/c` payload verbatim (`BuildCommandLine(shell, ["/d", "/c"]) + " " + command`), so only the executable and flags are quoted while cmd parses its own quoting/redirection. Compare the captured marker with `.Trim()` because captured stdio may carry `\r\n` vs `\n` line endings.
 **Watch out for:** Any AppContainer `cmd.exe /c` probe whose payload contains quoted paths or redirection: never route the whole payload through a C-style argv quoter, and never infer an ACL/path-resolution cause from an empty `type`-probe capture without echoing the raw exit/output first.
+
+## [2026-10-04] Real owner redemption stayed blocked at the IPC boundary
+
+**Symptom:** The focused lifecycle smoke initially could not redeem a fresh owner-approved grant. After enabling the already-implemented CLI handler, the real agent-pipe reply was `ERROR forbidden`.
+**Root cause:** `owner redeem` was missing from the CLI dispatch table, and then the shared `HasOwnerOnlyFields` predicate classified the legitimate grant bearer (`Token`) as an owner-only field on the agent redemption request.
+**Fix / workaround:** Dispatch `owner redeem` to its existing handler and allow the grant token only when `HandleAgentRedeem` invokes the shared field guard; all other owner-only request fields remain rejected. The dedicated real-pipe smoke now redeems the token and exercises subsequent authorization.
+**Watch out for:** A shared owner-only-field predicate must distinguish credentials that are valid inputs for one agent operation from owner mutation fields. Test actual dispatch plus the service's response, not just the presence of a command handler or usage text.

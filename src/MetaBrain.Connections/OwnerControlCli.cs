@@ -34,8 +34,11 @@ internal static class OwnerControlCli
                 "grants" => await ListGrantsAsync(options).ConfigureAwait(false),
                 "collection-set" => await SetCollectionAsync(options).ConfigureAwait(false),
                 "collections" => await ListCollectionsAsync(options).ConfigureAwait(false),
-                "redeem" => await RedeemAsync(options).ConfigureAwait(false),
                 "session" => await SessionAsync(options).ConfigureAwait(false),
+                "redeem" => await RedeemAsync(options).ConfigureAwait(false),
+                "sessions" => await ListSessionsAsync(options).ConfigureAwait(false),
+                "revoke-session" => await RevokeSessionAsync(options).ConfigureAwait(false),
+                "authorize" => await AuthorizeAsync(options).ConfigureAwait(false),
                 "migrate" => Migrate(options),
                 _ => Usage()
             };
@@ -693,6 +696,171 @@ internal static class OwnerControlCli
         return 0;
     }
 
+    private static async Task<int> ListSessionsAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerSessionListOperation)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "sessions_listed") ||
+            !result.Reply.TryGetProperty("agentSessions", out var sessions) || sessions.ValueKind != JsonValueKind.Array)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        var generation = JsonValueText(result.Reply, "policyGeneration");
+        Console.WriteLine($"SESSIONS count={sessions.GetArrayLength()} generation={generation}");
+        foreach (var session in sessions.EnumerateArray())
+        {
+            PrintAgentSession(session);
+        }
+
+        return 0;
+    }
+
+    private static async Task<int> RevokeSessionAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--session-id");
+        var sessionId = options.Required("--session-id");
+        if (!Guid.TryParseExact(sessionId, "N", out _))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerSessionRevokeOperation,
+                SessionId: sessionId)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "session_revoked"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine($"SESSION revoked id={sessionId}");
+        return 0;
+    }
+
+    private static async Task<int> AuthorizeAsync(CommandOptions options)
+    {
+        options.RequireOnly(
+            "--agent-pipe", "--session-file", "--operation", "--resource-id", "--resource-revision",
+            "--destination-resource-id", "--destination-revision", "--provider", "--model",
+            "--estimated-cost-usd", "--input-tokens", "--output-tokens");
+        var agentPipe = PipeName(options, "--agent-pipe");
+        var sessionPath = options.Required("--session-file");
+        var accessOperation = options.Required("--operation");
+        if (string.IsNullOrWhiteSpace(accessOperation) || accessOperation.Length > 64)
+        {
+            return Usage();
+        }
+
+        long? resourceRevision = null;
+        if (options.Optional("--resource-revision") is { } resourceRevisionText)
+        {
+            if (!long.TryParse(resourceRevisionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+            {
+                return Usage();
+            }
+
+            resourceRevision = parsed;
+        }
+
+        long? destinationRevision = null;
+        if (options.Optional("--destination-revision") is { } destinationRevisionText)
+        {
+            if (!long.TryParse(destinationRevisionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+            {
+                return Usage();
+            }
+
+            destinationRevision = parsed;
+        }
+
+        decimal? estimatedCost = null;
+        if (options.Optional("--estimated-cost-usd") is { } estimatedCostText)
+        {
+            if (!decimal.TryParse(estimatedCostText, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed))
+            {
+                return Usage();
+            }
+
+            estimatedCost = parsed;
+        }
+
+        long? inputTokens = ParseOptionalTokenCount(options.Optional("--input-tokens"));
+        long? outputTokens = ParseOptionalTokenCount(options.Optional("--output-tokens"));
+        if ((options.Optional("--input-tokens") is not null && inputTokens is null) ||
+            (options.Optional("--output-tokens") is not null && outputTokens is null))
+        {
+            return Usage();
+        }
+
+        string sessionToken;
+        try
+        {
+            sessionToken = AgentSessionFile.Read(sessionPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Console.Error.WriteLine("ERROR session_unreadable");
+            return 3;
+        }
+
+        var result = await InvokeAgentAsync(agentPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.AgentAccessAuthorizeOperation,
+                ResourceId: options.Optional("--resource-id"),
+                SessionToken: sessionToken,
+                AccessOperation: accessOperation,
+                ResourceRevision: resourceRevision,
+                DestinationResourceId: options.Optional("--destination-resource-id"),
+                DestinationRevision: destinationRevision,
+                Provider: options.Optional("--provider"),
+                Model: options.Optional("--model"),
+                EstimatedCostUsd: estimatedCost,
+                InputTokens: inputTokens,
+                OutputTokens: outputTokens)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "authorization_decision") ||
+            !result.Reply.TryGetProperty("decision", out var decision) ||
+            decision.ValueKind != JsonValueKind.Object ||
+            !decision.TryGetProperty("allowed", out var allowed) ||
+            allowed.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        var generation = JsonValueText(result.Reply, "policyGeneration");
+        if (allowed.GetBoolean())
+        {
+            Console.WriteLine($"ALLOW operation={accessOperation} generation={generation}");
+            return 0;
+        }
+
+        var reason = decision.TryGetProperty("reason", out var denialReason) &&
+            denialReason.ValueKind == JsonValueKind.String
+                ? denialReason.GetString()
+                : "resource_unavailable";
+        Console.Error.WriteLine($"DENY operation={accessOperation} reason={reason}");
+        return 3;
+    }
+
+    private static long? ParseOptionalTokenCount(string? value)
+    {
+        if (value is null)
+        {
+            return null;
+        }
+
+        return long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : null;
+    }
+
     private static async Task<(bool Success, JsonElement Reply)> InvokeOwnerAsync(string pipe, ServiceRequest request)
     {
         var requestJson = JsonSerializer.Serialize(request, JsonOptions);
@@ -764,6 +932,11 @@ internal static class OwnerControlCli
         {
             Console.WriteLine("operations=" + string.Join(",", operations.EnumerateArray().Select(value => value.GetString())));
         }
+        if (session.TryGetProperty("egress", out var egress) && egress.ValueKind == JsonValueKind.Object)
+        {
+            Console.WriteLine($"egress={JsonValueText(egress, "provider")}/{JsonValueText(egress, "model")} maxCostUsd={JsonValueText(egress, "maximumCostUsd")}");
+        }
+
     }
 
     private static bool HasStatus(JsonElement reply, string expected) =>
@@ -780,7 +953,7 @@ internal static class OwnerControlCli
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Owner commands: owner {status|read|write|provision|unlock|recover|lock|grant|grants|collection-set|collections} --control-pipe <name>; owner migrate --config <legacy-owner-settings>; owner redeem --agent-pipe <name> --handoff-file <path> --session-file <new-path>; owner session --agent-pipe <name> --session-file <path>. Grants require explicit owner preview and UTC expiry; opaque bearers are accepted only through DPAPI-protected local handoffs and are never passed as arguments or printed.");
+        Console.Error.WriteLine("Owner commands: owner {status|read|write|provision|unlock|recover|lock|grant|grants|collection-set|collections|sessions|revoke-session} --control-pipe <name>; owner authorize --agent-pipe <name> --session-file <protected-path> --operation <operation> [scoped resource/revision and egress fields]; owner migrate --config <legacy-owner-settings>; owner redeem --agent-pipe <name> --handoff-file <path> --session-file <new-path>; owner session --agent-pipe <name> --session-file <path>. Tokens are used only through protected handoffs; same-owner bearer theft is not prevented.");
         return 2;
     }
 
