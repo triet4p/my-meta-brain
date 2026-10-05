@@ -71,6 +71,7 @@ public sealed class ServiceRequestHandler
 {
     public const int CurrentProtocolVersion = 1;
     public const string ResourceReadOperation = "resource.read";
+    public const string SourceReadOperation = "source.read";
     public const string ResourceWriteOperation = "resource.write";
     public const string OwnerScopePreviewOperation = "owner.scope.preview";
     public const string OwnerScopeIssueOperation = "owner.scope.issue";
@@ -80,6 +81,7 @@ public sealed class ServiceRequestHandler
     public const string AgentRedeemOperation = "agent.session.redeem";
     public const string AgentSessionInspectOperation = "agent.session.inspect";
     public const string AgentAccessAuthorizeOperation = "agent.access.authorize";
+    public const string AgentResourceReadOperation = "agent.resource.read";
     public const string OwnerSessionListOperation = "owner.sessions";
     public const string OwnerSessionRevokeOperation = "owner.session.revoke";
     private readonly GrantAuthority _grantAuthority;
@@ -130,6 +132,11 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, AgentSessionInspectOperation, StringComparison.Ordinal))
         {
             return HandleAgentSessionInspect(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, AgentResourceReadOperation, StringComparison.Ordinal))
+        {
+            return HandleAgentResourceRead(context, request, operation);
         }
         if (string.Equals(request.Operation, AgentAccessAuthorizeOperation, StringComparison.Ordinal))
         {
@@ -286,6 +293,65 @@ public sealed class ServiceRequestHandler
         finally
         {
             CryptographicOperations.ZeroMemory(snapshot);
+        }
+    }
+
+    private ServiceReply HandleAgentResourceRead(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Agent || operation is null ||
+            HasAgentResourceReadExtras(request) ||
+            request.AccessOperation is not (ResourceReadOperation or SourceReadOperation))
+        {
+            return ResourceDenied();
+        }
+
+        byte[]? snapshot = null;
+        try
+        {
+            var beforeRead = operation.LoadScopeGrantState();
+            var decision = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                beforeRead.UnlockEpoch,
+                beforeRead.PolicyGeneration,
+                new AgentAccessRequest(request.AccessOperation, request.ResourceId, request.ResourceRevision));
+            if (!decision.Allowed || request.ResourceId is null)
+            {
+                return ResourceDenied();
+            }
+
+            snapshot = operation.ReadContent(request.ResourceId, request.ResourceRevision);
+            var beforeServe = operation.LoadScopeGrantState();
+            var recheck = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                beforeServe.UnlockEpoch,
+                beforeServe.PolicyGeneration,
+                new AgentAccessRequest(request.AccessOperation, request.ResourceId, request.ResourceRevision));
+            if (!recheck.Allowed)
+            {
+                return ResourceDenied();
+            }
+
+            operation.ValidateRegistration(request.ResourceId, request.ResourceRevision);
+            return new ServiceReply(
+                CurrentProtocolVersion, "content", null, null,
+                Decision: recheck,
+                PolicyGeneration: recheck.PolicyGeneration,
+                ContentBase64: Convert.ToBase64String(snapshot),
+                ContentType: "application/octet-stream");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return ResourceDenied();
+        }
+        finally
+        {
+            if (snapshot is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(snapshot);
+            }
         }
     }
 
@@ -732,6 +798,19 @@ public sealed class ServiceRequestHandler
           request.DestinationRevision is not null || request.Provider is not null ||
           request.Model is not null || request.EstimatedCostUsd is not null ||
           request.InputTokens is not null || request.OutputTokens is not null));
+
+    private static bool HasAgentResourceReadExtras(ServiceRequest request) =>
+        request.ZoneId is not null ||
+        request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ContentBase64 is not null || request.ResourceIds is not null ||
+        request.Operations is not null || request.DestinationResourceIds is not null ||
+        request.ExpiresAtUtc is not null || request.Provider is not null ||
+        request.Model is not null || request.MaximumCostUsd is not null ||
+        request.PreviewId is not null || request.CollectionId is not null ||
+        request.Token is not null || request.SessionId is not null ||
+        request.DestinationResourceId is not null || request.DestinationRevision is not null ||
+        request.EstimatedCostUsd is not null || request.InputTokens is not null ||
+        request.OutputTokens is not null;
 
     private static bool HasSessionAdministrationExtras(ServiceRequest request, bool allowSessionId) =>
         request.ResourceId is not null || request.ZoneId is not null ||

@@ -25,6 +25,7 @@ internal static class OwnerControlCli
             {
                 "status" => await StatusAsync(options).ConfigureAwait(false),
                 "read" => await ReadAsync(options).ConfigureAwait(false),
+                "agent-read" => await AgentReadAsync(options).ConfigureAwait(false),
                 "write" => await WriteAsync(options).ConfigureAwait(false),
                 "provision" => await ProvisionAsync(options).ConfigureAwait(false),
                 "unlock" => await UnlockAsync(options, useRecoveryCode: false).ConfigureAwait(false),
@@ -118,6 +119,75 @@ internal static class OwnerControlCli
             CryptographicOperations.ZeroMemory(bytes);
         }
     }
+
+    private static async Task<int> AgentReadAsync(CommandOptions options)
+    {
+        options.RequireOnly("--agent-pipe", "--session-file", "--operation", "--resource-id", "--resource-revision", "--output-file");
+        var agentPipe = PipeName(options, "--agent-pipe");
+        var sessionPath = options.Required("--session-file");
+        var accessOperation = options.Required("--operation");
+        var resourceId = options.Required("--resource-id");
+        var outputFile = options.Required("--output-file");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId) ||
+            (accessOperation is not ("resource.read" or "source.read")))
+        {
+            return Usage();
+        }
+
+        if (!long.TryParse(options.Required("--resource-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var resourceRevision) ||
+            resourceRevision < 1)
+        {
+            return Usage();
+        }
+
+        string sessionToken;
+        try
+        {
+            sessionToken = AgentSessionFile.Read(sessionPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Console.Error.WriteLine("ERROR session_unreadable");
+            return 3;
+        }
+
+        var result = await InvokeAgentAsync(agentPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.AgentResourceReadOperation,
+                ResourceId: resourceId,
+                SessionToken: sessionToken,
+                AccessOperation: accessOperation,
+                ResourceRevision: resourceRevision)).ConfigureAwait(false);
+        if (!result.Success)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        if (!HasStatus(result.Reply, "content") ||
+            !result.Reply.TryGetProperty("contentBase64", out var content) ||
+            content.ValueKind != JsonValueKind.String)
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        var bytes = Convert.FromBase64String(content.GetString() ?? string.Empty);
+        try
+        {
+            await using var output = new FileStream(outputFile, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            await output.WriteAsync(bytes).ConfigureAwait(false);
+            await output.FlushAsync().ConfigureAwait(false);
+            Console.WriteLine($"READ content bytes={bytes.Length}");
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(bytes);
+        }
+    }
+
 
     private static async Task<int> WriteAsync(CommandOptions options)
     {
@@ -953,7 +1023,7 @@ internal static class OwnerControlCli
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Owner commands: owner {status|read|write|provision|unlock|recover|lock|grant|grants|collection-set|collections|sessions|revoke-session} --control-pipe <name>; owner authorize --agent-pipe <name> --session-file <protected-path> --operation <operation> [scoped resource/revision and egress fields]; owner migrate --config <legacy-owner-settings>; owner redeem --agent-pipe <name> --handoff-file <path> --session-file <new-path>; owner session --agent-pipe <name> --session-file <path>. Tokens are used only through protected handoffs; same-owner bearer theft is not prevented.");
+        Console.Error.WriteLine("Owner commands: owner {status|read|write|provision|unlock|recover|lock|grant|grants|collection-set|collections|sessions|revoke-session} --control-pipe <name>; owner agent-read --agent-pipe <name> --session-file <protected-path> --operation <resource.read|source.read> --resource-id <id> --resource-revision <rev> --output-file <path>; owner authorize --agent-pipe <name> --session-file <protected-path> --operation <operation> [scoped resource/revision and egress fields]; owner migrate --config <legacy-owner-settings>; owner redeem --agent-pipe <name> --handoff-file <path> --session-file <new-path>; owner session --agent-pipe <name> --session-file <path>.");
         return 2;
     }
 

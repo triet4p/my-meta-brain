@@ -63,3 +63,10 @@
 **Root cause:** `owner redeem` was missing from the CLI dispatch table, and then the shared `HasOwnerOnlyFields` predicate classified the legitimate grant bearer (`Token`) as an owner-only field on the agent redemption request.
 **Fix / workaround:** Dispatch `owner redeem` to its existing handler and allow the grant token only when `HandleAgentRedeem` invokes the shared field guard; all other owner-only request fields remain rejected. The dedicated real-pipe smoke now redeems the token and exercises subsequent authorization.
 **Watch out for:** A shared owner-only-field predicate must distinguish credentials that are valid inputs for one agent operation from owner mutation fields. Test actual dispatch plus the service's response, not just the presence of a command handler or usage text.
+
+## [2026-10-05] Smoke DPAPI P/Invoke must name the real crypt32 entry point
+
+**Symptom:** The new S1-T6 smoke compiled but failed at runtime with `EntryPointNotFoundException: Unable to find an entry point named 'CryptUnprotectSessionData' in DLL 'crypt32.dll'` before any scenario ran.
+**Root cause:** The test declared its own method name as the native entry point; `DllImport` defaults `EntryPoint` to the method name, and `crypt32.dll` only exports `CryptUnprotectData`. The sibling `LocalFree` import had the same latent shape.
+**Fix / workaround:** Set `EntryPoint = "CryptUnprotectData"` (and `EntryPoint = "LocalFree"` for kernel32) while keeping the descriptive managed method names.
+**Watch out for:** Any custom-named DPAPI/P/Invoke wrapper in test or product code; a green build does not prove the entry point exists — only a real run does.

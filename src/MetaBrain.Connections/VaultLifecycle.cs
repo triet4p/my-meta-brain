@@ -193,7 +193,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
         }
     }
 
-    private byte[] ReadContent(string resourceId)
+    private byte[] ReadContent(string resourceId, long? expectedRevision = null)
     {
         lock (_contentGate)
         {
@@ -202,11 +202,11 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
                 throw new ManagedResourceUnavailableException();
             }
 
-            return _store.ReadResource(_manifest, _dataKey, resourceId);
+            return _store.ReadResource(_manifest, _dataKey, resourceId, expectedRevision);
         }
     }
 
-    private void ValidateRegistration(string resourceId)
+    private void ValidateRegistration(string resourceId, long? expectedRevision = null)
     {
         lock (_contentGate)
         {
@@ -215,7 +215,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
                 throw new ManagedResourceUnavailableException();
             }
 
-            _store.ValidateRegistration(_manifest, resourceId);
+            _store.ValidateRegistration(_manifest, resourceId, expectedRevision);
         }
     }
 
@@ -309,8 +309,8 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
             Func<OwnerScopeGrantState, (OwnerScopeGrantState State, T Result)> update) =>
             GetOwner().UpdateScopeGrantState(update);
         public bool TryGetZone(string resourceId, out string? zoneId) => GetOwner().TryGetZone(resourceId, out zoneId);
-        public byte[] ReadContent(string resourceId) => GetOwner().ReadContent(resourceId);
-        public void ValidateRegistration(string resourceId) => GetOwner().ValidateRegistration(resourceId);
+        public byte[] ReadContent(string resourceId, long? expectedRevision = null) => GetOwner().ReadContent(resourceId, expectedRevision);
+        public void ValidateRegistration(string resourceId, long? expectedRevision = null) => GetOwner().ValidateRegistration(resourceId, expectedRevision);
         public long WriteContent(string resourceId, string zoneId, byte[] content) => GetOwner().WriteContent(resourceId, zoneId, content);
 
         public void Dispose()

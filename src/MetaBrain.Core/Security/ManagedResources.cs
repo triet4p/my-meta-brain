@@ -63,21 +63,22 @@ public sealed class ManagedResourceCatalog
 }
 
 /// <summary>
-/// Reads bytes for an opaque resource ID through an unlocked private storage
-/// operation. Implementations decrypt per request, bind authenticated
-/// ciphertext to vault/resource identity/schema/revision, and fail closed on
-/// missing or tampered resources.
+/// Resolves only opaque resource IDs through unlocked private storage. Callers
+/// authorize the exact operation, ID, and revision before reading; implementations
+/// decrypt per request, bind ciphertext to vault/resource/schema/revision, and fail
+/// closed on missing, stale, malformed, or tampered resources. A requested revision
+/// that no longer matches the stored revision fails closed instead of serving
+/// newer bytes under an older grant.
 /// </summary>
 public interface IManagedResourceReader
 {
-    byte[] ReadContent(string resourceId);
+    byte[] ReadContent(string resourceId, long? expectedRevision = null);
 
     /// <summary>
-    /// Confirms the ID is still registered after an authorization re-check, so a
-    /// mapping change between two grant checks fails the request instead of
-    /// serving bytes resolved under a stale registration.
+    /// Confirms the mapping still names the authorized revision after the final
+    /// policy re-check, before the response is created.
     /// </summary>
-    void ValidateRegistration(string resourceId);
+    void ValidateRegistration(string resourceId, long? expectedRevision = null);
 }
 
 /// <summary>

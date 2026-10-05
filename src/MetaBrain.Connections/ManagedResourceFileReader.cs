@@ -70,9 +70,9 @@ internal sealed class ManagedResourceFileReader : IManagedResourceReader
         }
     }
 
-    public byte[] ReadContent(string resourceId)
+    public byte[] ReadContent(string resourceId, long? expectedRevision = null)
     {
-        return ReadSnapshot(resourceId);
+        return ReadSnapshot(resourceId, expectedRevision);
     }
 
     /// <summary>
@@ -83,7 +83,7 @@ internal sealed class ManagedResourceFileReader : IManagedResourceReader
     /// handle is opened with a share mode that denies write/delete opens for
     /// the lifetime of the read.
     /// </summary>
-    internal byte[] ReadSnapshot(string resourceId)
+    internal byte[] ReadSnapshot(string resourceId, long? expectedRevision = null)
     {
         string fileName;
         lock (_gate)
@@ -93,6 +93,8 @@ internal sealed class ManagedResourceFileReader : IManagedResourceReader
                 throw new ManagedResourceUnavailableException();
             }
         }
+
+        _ = expectedRevision;
 
         // Rebuild the full path only from the registered plain file name; the
         // caller-supplied ID never contributes path text.
@@ -167,7 +169,7 @@ internal sealed class ManagedResourceFileReader : IManagedResourceReader
     /// request path after the post-open authorization re-check: a mapping
     /// change between the two grant checks fails closed.
     /// </summary>
-    public void ValidateRegistration(string resourceId)
+    public void ValidateRegistration(string resourceId, long? expectedRevision = null)
     {
         lock (_gate)
         {

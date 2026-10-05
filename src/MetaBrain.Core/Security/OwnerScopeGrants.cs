@@ -68,6 +68,7 @@ public sealed class OwnerScopeGrantAuthority
     private static readonly HashSet<string> AllowedOperations = new(StringComparer.Ordinal)
     {
         "resource.read",
+        "source.read",
         "proposal.create",
         "link.create",
         "provider.egress"

@@ -296,20 +296,23 @@ internal sealed class EncryptedVaultStore
         }
     }
 
-    public void ValidateRegistration(VaultManifest manifest, string resourceId)
+    public void ValidateRegistration(VaultManifest manifest, string resourceId, long? expectedRevision = null)
     {
-        if (!manifest.Resources.Any(resource => !resource.InternalOnly &&
-                string.Equals(resource.ResourceId, resourceId, StringComparison.Ordinal)))
+        var descriptor = manifest.Resources.FirstOrDefault(resource => !resource.InternalOnly &&
+            string.Equals(resource.ResourceId, resourceId, StringComparison.Ordinal));
+        if (descriptor is null ||
+            (expectedRevision.HasValue && descriptor.Revision != expectedRevision.Value))
         {
             throw new ManagedResourceUnavailableException();
         }
     }
 
-    public byte[] ReadResource(VaultManifest manifest, ReadOnlySpan<byte> dataKey, string resourceId)
+    public byte[] ReadResource(VaultManifest manifest, ReadOnlySpan<byte> dataKey, string resourceId, long? expectedRevision = null)
     {
         var descriptor = manifest.Resources.FirstOrDefault(resource => !resource.InternalOnly &&
             string.Equals(resource.ResourceId, resourceId, StringComparison.Ordinal));
-        if (descriptor is null)
+        if (descriptor is null ||
+            (expectedRevision.HasValue && descriptor.Revision != expectedRevision.Value))
         {
             throw new ManagedResourceUnavailableException();
         }

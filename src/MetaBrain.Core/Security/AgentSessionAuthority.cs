@@ -310,6 +310,7 @@ public sealed class AgentSessionAuthority
         switch (request.Operation)
         {
             case "resource.read":
+            case "source.read":
                 if (request.DestinationResourceId is not null || request.DestinationRevision is not null ||
                     HasEgressFields(request))
                 {
@@ -319,7 +320,6 @@ public sealed class AgentSessionAuthority
                 return IsInScope(session.Resources, request.ResourceId, request.ResourceRevision)
                     ? Allow(policyGeneration)
                     : Deny("resource_unavailable", policyGeneration);
-
             case "proposal.create":
                 if (request.ResourceId is not null || request.ResourceRevision is not null ||
                     request.DestinationResourceId is null || request.DestinationRevision is null ||

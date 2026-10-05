@@ -138,6 +138,7 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.AgentRedeemOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.AgentSessionInspectOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.AgentAccessAuthorizeOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.AgentResourceReadOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerSessionListOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerSessionRevokeOperation, StringComparison.Ordinal);
                 using var operation = needsVaultOperation ? _vault.TryBeginOperation() : null;
@@ -170,12 +171,14 @@ internal sealed class NamedPipeService
         {
             return !string.Equals(operation, ServiceRequestHandler.AgentRedeemOperation, StringComparison.Ordinal) &&
                 !string.Equals(operation, ServiceRequestHandler.AgentSessionInspectOperation, StringComparison.Ordinal) &&
-                !string.Equals(operation, ServiceRequestHandler.AgentAccessAuthorizeOperation, StringComparison.Ordinal);
+                !string.Equals(operation, ServiceRequestHandler.AgentAccessAuthorizeOperation, StringComparison.Ordinal) &&
+                !string.Equals(operation, ServiceRequestHandler.AgentResourceReadOperation, StringComparison.Ordinal);
         }
 
         return string.Equals(operation, ServiceRequestHandler.AgentRedeemOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentSessionInspectOperation, StringComparison.Ordinal) ||
-            string.Equals(operation, ServiceRequestHandler.AgentAccessAuthorizeOperation, StringComparison.Ordinal);
+            string.Equals(operation, ServiceRequestHandler.AgentAccessAuthorizeOperation, StringComparison.Ordinal) ||
+            string.Equals(operation, ServiceRequestHandler.AgentResourceReadOperation, StringComparison.Ordinal);
     }
 
     private static bool SidEquals(string left, string right)

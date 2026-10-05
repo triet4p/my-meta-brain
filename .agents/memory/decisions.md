@@ -207,3 +207,13 @@ Append-only. Baseline chi tiết: [đặc tả](../../docs/META-BRAIN.md), [yêu
 **Reason:** The existing service has no trusted provider call/pricing adapter, and owner approval must remain authoritative rather than being inferred from agent IPC fields. A decision-only operation preserves the single policy authority while enabling real IPC lifecycle checks without returning plaintext or claiming a downstream consumer.
 
 **Consequences:** Policy-generation changes invalidate live sessions; lock and process restart clear process-local sessions, while unlock epochs supersede old grants. Selective session revocation is not durable grant revocation. Agent egress remains denied even for exact, in-cap synthetic requests; no provider/model call or $5/30-day rolling-spend ledger is implemented. Managed-resource retrieval/decryption remains a separate downstream task.
+
+## [2026-10-05] D021 — Serve scoped reads through authorize-decrypt-reauthorize on the agent channel
+
+**Decision:** Serve `agent.resource.read` on the agent pipe by authorizing the exact frozen operation/ID/revision against current epoch/generation, decrypting the vault bytes, re-authorizing against fresh epoch/generation, re-validating the live registration/revision, then returning content; every other outcome uses one generic `resource_unavailable` denial. Keep `resource.read` and `source.read` as distinct grantable operations so a readable summary cannot expand into an ungranted source endpoint.
+
+**Alternatives considered:** Single-check-then-read without the serve-boundary recheck; a second canonical content store or S2 search/catalog framework inside T6; inheriting A1's revision-threaded store API without the serve binding; trusting agent-supplied paths or extra zone/body fields as scope.
+
+**Reason:** T5 sessions already freeze operation/ID/revision with epoch/generation invalidation, and the S1 vault binds ciphertext to resource/schema/revision; the double check plus registration/revision validation closes TOCTOU between approval and serve without a second policy, while the generic denial and opaque-ID-only resolution close existence oracles and path injection. `source.read` separation preserves the R06 catalog/body boundary for S2–S4 reuse.
+
+**Consequences:** Warm reads and cached credentials deny after revoke/expiry/generation/lock; restart plus unlock epoch retires old sessions and pending tokens. Stale revisions fail closed instead of serving newer bytes under an older grant. MCP/product-client integration, provider egress, and timing-channel hardening remain downstream/out of scope.
