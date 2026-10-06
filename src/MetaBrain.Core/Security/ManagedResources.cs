@@ -91,6 +91,14 @@ public interface IManagedResourceStore : IManagedResourceReader
     IReadOnlyList<ScopeResourceRevision> ListResources();
     bool TryGetZone(string resourceId, out string? zoneId);
     long WriteContent(string resourceId, string zoneId, byte[] content);
+    void ValidateRegistrationForAll(IReadOnlyList<ScopeResourceRevision> expected)
+    {
+        ArgumentNullException.ThrowIfNull(expected);
+        foreach (var resource in expected)
+        {
+            ValidateRegistration(resource.ResourceId, resource.Revision);
+        }
+    }
 }
 
 /// <summary>

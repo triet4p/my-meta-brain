@@ -38,12 +38,13 @@ public sealed record OwnerScopeGrantState(
     PersistedScopeGrant[] Grants,
     OwnerScopeCollection[] Collections,
     long UnlockEpoch = 0,
-    string[] ConsumedTokenVerifiers = null!)
+    string[] ConsumedTokenVerifiers = null!,
+    OwnerAccessRequest[] Requests = null!)
 {
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
     public static OwnerScopeGrantState Empty { get; } = new(
         CurrentSchemaVersion, 0, Array.Empty<PersistedScopeGrant>(), Array.Empty<OwnerScopeCollection>(),
-        0, Array.Empty<string>());
+        0, Array.Empty<string>(), Array.Empty<OwnerAccessRequest>());
 }
 
 public interface IScopeGrantPersistence
@@ -59,7 +60,7 @@ public sealed record OwnerScopeGrantIssue(string Token, PersistedScopeGrant Gran
 /// Creates owner-confirmed scope previews and persists grants containing only a verifier for the random bearer.
 /// Token redemption and session creation are intentionally separate lifecycle operations.
 /// </summary>
-public sealed class OwnerScopeGrantAuthority
+public sealed partial class OwnerScopeGrantAuthority
 {
     public const decimal MaximumEgressJobCostUsd = 0.25m;
     public const long MaximumEgressInputTokens = 10_000;
@@ -353,13 +354,13 @@ public sealed class OwnerScopeGrantAuthority
         if (state is null || state.Grants is null || state.Grants.Length > 10_000 ||
             state.Collections is null || state.Collections.Length > 1000 ||
             state.PolicyGeneration < 0 || state.UnlockEpoch < 0 ||
-            (state.SchemaVersion != OwnerScopeGrantState.CurrentSchemaVersion && state.SchemaVersion != 2))
+            (state.SchemaVersion != OwnerScopeGrantState.CurrentSchemaVersion && state.SchemaVersion != 3 && state.SchemaVersion != 2))
         {
             throw new InvalidDataException("Invalid encrypted owner scope grant state.");
         }
 
         var consumedVerifiers = state.ConsumedTokenVerifiers;
-        if (consumedVerifiers is null && state.SchemaVersion == 2)
+        if (consumedVerifiers is null && (state.SchemaVersion == 2 || state.SchemaVersion == 3))
         {
             consumedVerifiers = Array.Empty<string>();
         }
@@ -419,7 +420,37 @@ public sealed class OwnerScopeGrantAuthority
         }
 
         var consumed = NormalizeConsumedVerifiers(consumedVerifiers);
-        return new OwnerScopeGrantState(OwnerScopeGrantState.CurrentSchemaVersion, state.PolicyGeneration, grants, collections, state.UnlockEpoch, consumed);
+        OwnerAccessRequest[] requests;
+        try
+        {
+            requests = state.Requests switch
+            {
+                null when state.SchemaVersion is 2 or 3 => Array.Empty<OwnerAccessRequest>(),
+                null => throw new ArgumentException("The encrypted access request state is missing."),
+                _ => NormalizeAccessRequests(state.Requests)
+            };
+        }
+        catch (ArgumentException ex)
+        {
+            throw new InvalidDataException("Invalid encrypted access request state.", ex);
+        }
+
+        var approved = new HashSet<string>(grants.Select(grant => grant.GrantId), StringComparer.Ordinal);
+        foreach (var request in requests)
+        {
+            if (string.Equals(request.Status, RequestStatusPending, StringComparison.Ordinal) ||
+                string.Equals(request.Status, RequestStatusRejected, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (!approved.Contains(request.ApprovedGrantId ?? string.Empty))
+            {
+                throw new InvalidDataException("Invalid encrypted access request state.");
+            }
+        }
+
+        return new OwnerScopeGrantState(OwnerScopeGrantState.CurrentSchemaVersion, state.PolicyGeneration, grants, collections, state.UnlockEpoch, consumed, requests);
     }
 
     private static OwnerScopeCollection[] NormalizeCollections(OwnerScopeCollection[]? collections)

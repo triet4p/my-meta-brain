@@ -307,7 +307,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
             }
 
             var nextEpoch = state.UnlockEpoch + 1;
-            var grants = persistedState.SchemaVersion == 2
+            var grants = persistedState.SchemaVersion is 2 or 3
                 ? state.Grants.Select(grant => grant with
                 {
                     PolicyGeneration = state.PolicyGeneration,

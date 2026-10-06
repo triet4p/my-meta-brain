@@ -33,7 +33,13 @@ public sealed record ServiceRequest(
     string? CatalogId = null,
     string? Label = null,
     string? Description = null,
-    string? Query = null);
+    string? Query = null,
+    string[]? CatalogIds = null,
+    string? Purpose = null,
+    string? AgentId = null,
+    string? AgentContext = null,
+    string? DisclosureContext = null,
+    string? RequestId = null);
 
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
@@ -46,6 +52,22 @@ public sealed record OwnerScopeGrantSummary(
     long PolicyGeneration);
 
 public sealed record OwnerScopeCollectionSummary(string CollectionId, string[] ResourceIds);
+
+public sealed record OwnerAccessRequestSummary(
+    string RequestId,
+    string[] CatalogIds,
+    string Purpose,
+    string? AgentId,
+    string? AgentContext,
+    string? Provider,
+    string? Model,
+    string? DisclosureContext,
+    string[] RequestedOperations,
+    ScopeResourceRevision[] ResolvedResources,
+    DateTimeOffset CreatedAtUtc,
+    string Status,
+    string? ApprovedGrantId,
+    DateTimeOffset? DecidedAtUtc);
 
 public sealed record ServiceReply(
     int ProtocolVersion,
@@ -72,7 +94,11 @@ public sealed record ServiceReply(
     OwnerCatalogPreview? CatalogPreview = null,
     OwnerCatalogEntry[]? CatalogEntries = null,
     PublishedCatalogEntry[]? PublishedCatalog = null,
-    string? CatalogId = null);
+    string? CatalogId = null,
+    OwnerAccessRequestSummary[]? AccessRequests = null,
+    OwnerAccessRequestSummary? AccessRequest = null,
+    OwnerAccessRequestPreview? AccessRequestPreview = null,
+    string? RequestId = null);
 
 
 public sealed class ServiceRequestHandler
@@ -92,6 +118,12 @@ public sealed class ServiceRequestHandler
     public const string OwnerCatalogWithdrawOperation = "owner.catalog.withdraw";
     public const string CatalogListOperation = "catalog.list";
     public const string CatalogQueryOperation = "catalog.query";
+    public const string AgentAccessRequestOperation = "agent.access.request";
+    public const string AgentAccessRequestStatusOperation = "agent.access.request.status";
+    public const string OwnerAccessRequestListOperation = "owner.access.requests";
+    public const string OwnerAccessRequestPreviewOperation = "owner.access.request.preview";
+    public const string OwnerAccessRequestApproveOperation = "owner.access.request.approve";
+    public const string OwnerAccessRequestRejectOperation = "owner.access.request.reject";
     public const string AgentRedeemOperation = "agent.session.redeem";
     public const string AgentSessionInspectOperation = "agent.session.inspect";
     public const string AgentAccessAuthorizeOperation = "agent.access.authorize";
@@ -163,6 +195,16 @@ public sealed class ServiceRequestHandler
             return HandleAgentAccessAuthorize(context, request, operation);
         }
 
+        if (string.Equals(request.Operation, AgentAccessRequestOperation, StringComparison.Ordinal))
+        {
+            return HandleAgentAccessRequest(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, AgentAccessRequestStatusOperation, StringComparison.Ordinal))
+        {
+            return HandleAgentAccessRequestStatus(context, request, operation);
+        }
+
         if (string.Equals(request.Operation, CatalogListOperation, StringComparison.Ordinal))
         {
             if (HasCatalogDiscoveryExtras(request))
@@ -217,6 +259,7 @@ public sealed class ServiceRequestHandler
         {
             await _vault.LockAsync().ConfigureAwait(false);
             _ownerScopeGrants.ClearPreviews();
+            _ownerScopeGrants.ClearRequestPreviews();
             _agentSessions.ClearSessions();
             return new ServiceReply(CurrentProtocolVersion, "locked", "owner", null, VaultState: _vault.State);
         }
@@ -263,6 +306,26 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, OwnerCatalogWithdrawOperation, StringComparison.Ordinal))
         {
             return HandleCatalogWithdraw(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerAccessRequestListOperation, StringComparison.Ordinal))
+        {
+            return HandleAccessRequestList(context, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerAccessRequestPreviewOperation, StringComparison.Ordinal))
+        {
+            return HandleAccessRequestPreview(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerAccessRequestApproveOperation, StringComparison.Ordinal))
+        {
+            return HandleAccessRequestApprove(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerAccessRequestRejectOperation, StringComparison.Ordinal))
+        {
+            return HandleAccessRequestReject(context, request, operation);
         }
 
         if (string.Equals(request.Operation, OwnerSessionListOperation, StringComparison.Ordinal))
@@ -957,6 +1020,292 @@ public sealed class ServiceRequestHandler
         }
     }
 
+    private ServiceReply HandleAgentAccessRequest(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Agent)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasAgentAccessRequestFields(request, forStatus: false))
+        {
+            return Error("forbidden");
+        }
+
+        try
+        {
+            var submitted = _ownerScopeGrants.SubmitAccessRequest(
+                context,
+                request.CatalogIds,
+                request.Purpose,
+                request.AgentId,
+                request.AgentContext,
+                request.Provider,
+                request.Model,
+                request.DisclosureContext,
+                request.Operations,
+                operation.LoadCatalogState(),
+                operation.ListResources(),
+                operation);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "access_requested",
+                "agent",
+                null,
+                RequestId: submitted.RequestId,
+                AccessRequest: ToAccessRequestSummary(submitted));
+        }
+        catch (OwnerAccessRequestException)
+        {
+            return Error("request_unavailable");
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            return Error("request_unavailable");
+        }
+    }
+
+    private ServiceReply HandleAgentAccessRequestStatus(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Agent)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasAgentAccessRequestFields(request, forStatus: true))
+        {
+            return Error("forbidden");
+        }
+
+        try
+        {
+            var status = _ownerScopeGrants.GetAccessRequestStatus(context, request.RequestId, operation);
+            return status switch
+            {
+                OwnerScopeGrantAuthority.RequestStatusPending => new ServiceReply(
+                    CurrentProtocolVersion, "access_request_pending", "agent", null, RequestId: request.RequestId),
+                OwnerScopeGrantAuthority.RequestStatusApproved => new ServiceReply(
+                    CurrentProtocolVersion, "access_request_approved", "agent", null, RequestId: request.RequestId),
+                OwnerScopeGrantAuthority.RequestStatusRejected => new ServiceReply(
+                    CurrentProtocolVersion, "access_request_rejected", "agent", null, RequestId: request.RequestId),
+                _ => Error("request_unavailable")
+            };
+        }
+        catch (OwnerAccessRequestException)
+        {
+            return Error("request_unavailable");
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            return Error("request_unavailable");
+        }
+    }
+
+    private ServiceReply HandleAccessRequestList(AuthenticatedContext context, IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        try
+        {
+            var requests = _ownerScopeGrants.ListAccessRequests(context, operation)
+                .Select(ToAccessRequestSummary)
+                .ToArray();
+            return new ServiceReply(
+                CurrentProtocolVersion, "access_requests", "owner", null,
+                AccessRequests: requests);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException)
+        {
+            return Error("request_unavailable");
+        }
+    }
+
+    private ServiceReply HandleAccessRequestPreview(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        try
+        {
+            var live = operation.ListResources();
+            var preview = _ownerScopeGrants.PreviewAccessRequest(
+                context, request.RequestId, operation.LoadCatalogState(), live, operation);
+            var scopes = new Dictionary<string, ScopeResourceRevision>(StringComparer.Ordinal);
+            foreach (var resource in preview.Resources)
+            {
+                scopes[resource.ResourceId] = resource;
+            }
+
+            var contents = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var resource in live)
+            {
+                if (scopes.TryGetValue(resource.ResourceId, out var frozen) &&
+                    resource.Revision == frozen.Revision)
+                {
+                    var body = operation.ReadContent(resource.ResourceId, frozen.Revision);
+                    try
+                    {
+                        contents[resource.ResourceId] = Convert.ToBase64String(body);
+                    }
+                    finally
+                    {
+                        CryptographicOperations.ZeroMemory(body);
+                    }
+                }
+            }
+
+            operation.ValidateRegistrationForAll(preview.Resources);
+            var wire = new OwnerAccessRequestPreview(
+                preview.PreviewId,
+                preview.RequestId,
+                preview.CatalogIds,
+                preview.Resources,
+                preview.Operations,
+                preview.Purpose,
+                preview.AgentId,
+                preview.AgentContext,
+                preview.Provider,
+                preview.Model,
+                preview.DisclosureContext,
+                preview.CreatedAtUtc,
+                preview.PolicyGeneration,
+                preview.UnlockEpoch);
+            return new ServiceReply(
+                CurrentProtocolVersion, "access_request_preview", "owner", null,
+                PolicyGeneration: wire.PolicyGeneration,
+                RequestId: wire.RequestId,
+                AccessRequestPreview: wire,
+                ContentBase64: Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(
+                    System.Text.Json.JsonSerializer.Serialize(contents))),
+                ResourceRevision: preview.Resources.Length);
+        }
+        catch (OwnerAccessRequestException ex)
+        {
+            return Error(ex.Code);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException)
+        {
+            return Error("request_unavailable");
+        }
+    }
+
+    private ServiceReply HandleAccessRequestApprove(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (request.ExpiresAtUtc is not { } expiresAtUtc)
+        {
+            return Error("request_invalid");
+        }
+
+        try
+        {
+            var live = operation.ListResources();
+            var issued = _ownerScopeGrants.ApproveAccessRequest(
+                context,
+                request.PreviewId,
+                request.ResourceIds,
+                request.Operations,
+                request.DestinationResourceIds,
+                expiresAtUtc,
+                request.Provider,
+                request.Model,
+                request.MaximumCostUsd,
+                operation.LoadCatalogState(),
+                live,
+                operation);
+            return new ServiceReply(
+                CurrentProtocolVersion, "access_request_approved", "owner", null,
+                PolicyGeneration: issued.Grant.PolicyGeneration,
+                GrantId: issued.Grant.GrantId,
+                Token: issued.Token,
+                RequestId: request.RequestId);
+        }
+        catch (OwnerAccessRequestException ex)
+        {
+            return Error(ex.Code);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException)
+        {
+            return Error("request_unavailable");
+        }
+    }
+
+    private ServiceReply HandleAccessRequestReject(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        try
+        {
+            var rejected = _ownerScopeGrants.RejectAccessRequest(context, request.RequestId, operation);
+            return new ServiceReply(
+                CurrentProtocolVersion, "access_request_rejected", "owner", null,
+                RequestId: rejected.RequestId,
+                AccessRequest: ToAccessRequestSummary(rejected));
+        }
+        catch (OwnerAccessRequestException ex)
+        {
+            return Error(ex.Code);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException)
+        {
+            return Error("request_unavailable");
+        }
+    }
+
+    private static OwnerAccessRequestSummary ToAccessRequestSummary(OwnerAccessRequest request) => new(
+        request.RequestId,
+        request.CatalogIds,
+        request.Purpose,
+        request.AgentId,
+        request.AgentContext,
+        request.Provider,
+        request.Model,
+        request.DisclosureContext,
+        request.RequestedOperations,
+        request.ResolvedResources,
+        request.CreatedAtUtc,
+        request.Status,
+        request.ApprovedGrantId,
+        request.DecidedAtUtc);
+
     private ServiceReply HandleOwnerSessionList(ServiceRequest request, IVaultOperation? operation)
     {
         if (operation is null)
@@ -1040,12 +1389,36 @@ public sealed class ServiceRequestHandler
         request.ContentBase64 is not null || (!allowGrantToken && request.Token is not null) ||
         request.SessionId is not null || request.CatalogId is not null ||
         request.Label is not null || request.Description is not null || request.Query is not null ||
+        request.CatalogIds is not null || request.Purpose is not null ||
+        request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null ||
         (!allowAccessFields &&
          (request.AccessOperation is not null || request.ResourceId is not null ||
           request.ResourceRevision is not null || request.DestinationResourceId is not null ||
           request.DestinationRevision is not null || request.Provider is not null ||
           request.Model is not null || request.EstimatedCostUsd is not null ||
           request.InputTokens is not null || request.OutputTokens is not null));
+    private static bool HasAgentAccessRequestFields(ServiceRequest request, bool forStatus) =>
+        request.ZoneId is not null ||
+        request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ContentBase64 is not null ||
+        (forStatus
+            ? request.CatalogIds is not null || request.Purpose is not null ||
+                request.AgentId is not null || request.AgentContext is not null ||
+                request.DisclosureContext is not null || request.Operations is not null
+            : request.RequestId is not null) ||
+        request.ResourceIds is not null ||
+        request.DestinationResourceIds is not null ||
+        request.ExpiresAtUtc is not null || request.MaximumCostUsd is not null ||
+        request.PreviewId is not null || request.CollectionId is not null ||
+        request.Token is not null || request.SessionId is not null ||
+        request.SessionToken is not null || request.ResourceId is not null ||
+        request.ResourceRevision is not null || request.AccessOperation is not null ||
+        request.DestinationResourceId is not null || request.DestinationRevision is not null ||
+        request.EstimatedCostUsd is not null || request.InputTokens is not null ||
+        request.OutputTokens is not null ||
+        request.CatalogId is not null || request.Label is not null ||
+        request.Description is not null || request.Query is not null;
     private static bool HasAgentResourceReadExtras(ServiceRequest request) =>
         request.ZoneId is not null ||
         request.Passphrase is not null || request.RecoveryCode is not null ||
@@ -1059,7 +1432,10 @@ public sealed class ServiceRequestHandler
         request.EstimatedCostUsd is not null || request.InputTokens is not null ||
         request.OutputTokens is not null ||
         request.CatalogId is not null || request.Label is not null ||
-        request.Description is not null || request.Query is not null;
+        request.Description is not null || request.Query is not null ||
+        request.CatalogIds is not null || request.Purpose is not null ||
+        request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null;
     private static bool HasCatalogDiscoveryExtras(ServiceRequest request, bool allowQuery = false) =>
         request.ZoneId is not null ||
         request.Passphrase is not null || request.RecoveryCode is not null ||
@@ -1075,6 +1451,9 @@ public sealed class ServiceRequestHandler
         request.EstimatedCostUsd is not null || request.InputTokens is not null ||
         request.OutputTokens is not null || request.CatalogId is not null ||
         request.Label is not null || request.Description is not null ||
+        request.CatalogIds is not null || request.Purpose is not null ||
+        request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null ||
         (!allowQuery && request.Query is not null);
     private static bool HasSessionAdministrationExtras(ServiceRequest request, bool allowSessionId) =>
         request.ResourceId is not null || request.ZoneId is not null ||
@@ -1090,6 +1469,9 @@ public sealed class ServiceRequestHandler
         request.EstimatedCostUsd is not null || request.InputTokens is not null ||
         request.OutputTokens is not null || request.CatalogId is not null ||
         request.Label is not null || request.Description is not null || request.Query is not null ||
+        request.CatalogIds is not null || request.Purpose is not null ||
+        request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null ||
         (!allowSessionId && request.SessionId is not null);
     private static ScopeResourceRevision[] ResolveResourceSelection(
         IReadOnlyList<ScopeResourceRevision> available,

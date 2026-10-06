@@ -40,6 +40,12 @@ internal static class OwnerControlCli
                 "catalog-list" => await CatalogListAsync(options).ConfigureAwait(false),
                 "catalog-withdraw" => await CatalogWithdrawAsync(options).ConfigureAwait(false),
                 "catalog-query" => await CatalogQueryAsync(options).ConfigureAwait(false),
+                "request" => await SubmitAccessRequestAsync(options).ConfigureAwait(false),
+                "request-status" => await AccessRequestStatusAsync(options).ConfigureAwait(false),
+                "requests" => await ListAccessRequestsAsync(options).ConfigureAwait(false),
+                "request-preview" => await PreviewAccessRequestAsync(options).ConfigureAwait(false),
+                "request-approve" => await ApproveAccessRequestAsync(options).ConfigureAwait(false),
+                "request-reject" => await RejectAccessRequestAsync(options).ConfigureAwait(false),
                 "session" => await SessionAsync(options).ConfigureAwait(false),
                 "redeem" => await RedeemAsync(options).ConfigureAwait(false),
                 "sessions" => await ListSessionsAsync(options).ConfigureAwait(false),
@@ -708,6 +714,350 @@ internal static class OwnerControlCli
         Console.WriteLine(entries.GetArrayLength() == 0 ? "CATALOG no_match" : $"CATALOG count={entries.GetArrayLength()}");
     }
 
+    private static async Task<int> SubmitAccessRequestAsync(CommandOptions options)
+    {
+        options.RequireOnly(
+            "--agent-pipe", "--catalog-ids", "--purpose", "--agent-id", "--agent-context",
+            "--provider", "--model", "--disclosure-context", "--operations");
+        var agentPipe = PipeName(options, "--agent-pipe");
+        var catalogIds = ParseIdentifiers(options.Required("--catalog-ids"));
+        var purpose = options.Required("--purpose");
+        var operations = ParseOperations(options.Optional("--operations"));
+        if (catalogIds is null)
+        {
+            return Usage();
+        }
+
+        var result = await InvokeAgentAsync(agentPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.AgentAccessRequestOperation,
+                CatalogIds: catalogIds,
+                Purpose: purpose,
+                AgentId: options.Optional("--agent-id"),
+                AgentContext: options.Optional("--agent-context"),
+                Provider: options.Optional("--provider"),
+                Model: options.Optional("--model"),
+                DisclosureContext: options.Optional("--disclosure-context"),
+                Operations: operations)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "access_requested") ||
+            !result.Reply.TryGetProperty("requestId", out var requestId) ||
+            requestId.ValueKind != JsonValueKind.String)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine($"REQUEST submitted id={requestId.GetString()}; opaque receipt only");
+        return 0;
+    }
+
+    private static async Task<int> AccessRequestStatusAsync(CommandOptions options)
+    {
+        options.RequireOnly("--agent-pipe", "--request-id");
+        var agentPipe = PipeName(options, "--agent-pipe");
+        var requestId = options.Required("--request-id");
+        if (!Guid.TryParseExact(requestId, "N", out _))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeAgentAsync(agentPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.AgentAccessRequestStatusOperation,
+                RequestId: requestId)).ConfigureAwait(false);
+        if (!result.Success)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine($"REQUEST status={JsonValueText(result.Reply, "status")} id={requestId}");
+        return HasStatus(result.Reply, "access_request_pending") ||
+            HasStatus(result.Reply, "access_request_approved") ||
+            HasStatus(result.Reply, "access_request_rejected") ? 0 : 3;
+    }
+
+    private static async Task<int> ListAccessRequestsAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerAccessRequestListOperation)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "access_requests") ||
+            !result.Reply.TryGetProperty("accessRequests", out var requests) ||
+            requests.ValueKind != JsonValueKind.Array)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        foreach (var request in requests.EnumerateArray())
+        {
+            PrintAccessRequest(request);
+        }
+
+        Console.WriteLine($"REQUESTS count={requests.GetArrayLength()}");
+        return 0;
+    }
+
+    private static async Task<int> PreviewAccessRequestAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--request-id");
+        var requestId = options.Required("--request-id");
+        if (!Guid.TryParseExact(requestId, "N", out _))
+        {
+            return Usage();
+        }
+
+        if (Console.IsOutputRedirected)
+        {
+            Console.Error.WriteLine("ERROR preview_redirect_denied: request bodies may only be reviewed on an attached owner console, never through redirected output");
+            return 3;
+        }
+
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerAccessRequestPreviewOperation,
+                RequestId: requestId)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "access_request_preview") ||
+            !result.Reply.TryGetProperty("accessRequestPreview", out var preview) ||
+            preview.ValueKind != JsonValueKind.Object ||
+            !result.Reply.TryGetProperty("contentBase64", out var bodies) ||
+            bodies.ValueKind != JsonValueKind.String)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine($"REQUEST PREVIEW id={JsonValueText(preview, "requestId")} preview={JsonValueText(preview, "previewId")} status=pending");
+        if (preview.TryGetProperty("catalogIds", out var catalogIds) && catalogIds.ValueKind == JsonValueKind.Array)
+        {
+            Console.WriteLine("catalogs=" + string.Join(",", catalogIds.EnumerateArray().Select(value => value.GetString())));
+        }
+
+        if (preview.TryGetProperty("resources", out var resources) && resources.ValueKind == JsonValueKind.Array)
+        {
+            PrintResources("source", resources);
+        }
+
+        if (preview.TryGetProperty("operations", out var previewOperations) && previewOperations.ValueKind == JsonValueKind.Array)
+        {
+            Console.WriteLine("operations=" + string.Join(",", previewOperations.EnumerateArray().Select(value => value.GetString())));
+        }
+
+        Console.WriteLine($"purpose={JsonValueText(preview, "purpose")}");
+        Console.WriteLine($"agent={JsonValueText(preview, "agentId")} context={JsonValueText(preview, "agentContext")}");
+        Console.WriteLine($"disclosure provider={JsonValueText(preview, "provider")} model={JsonValueText(preview, "model")} context={JsonValueText(preview, "disclosureContext")}");
+        try
+        {
+            var decoded = Convert.FromBase64String(bodies.GetString() ?? string.Empty);
+            Dictionary<string, string>? contents;
+            try
+            {
+                contents = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(decoded);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(decoded);
+            }
+
+            if (contents is null)
+            {
+                Console.Error.WriteLine("ERROR request_unavailable");
+                return 3;
+            }
+
+            Console.WriteLine("preview bodies shown once on this attached owner console only; nothing is written to disk and redirected output is refused");
+            foreach (var entry in contents.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+            {
+                var body = Convert.FromBase64String(entry.Value);
+                string text;
+                try
+                {
+                    text = Encoding.UTF8.GetString(body);
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(body);
+                }
+
+                Console.WriteLine($"--- preview body resource={entry.Key} ---");
+                Console.WriteLine(text);
+                Console.WriteLine($"--- end preview body resource={entry.Key} ---");
+            }
+        }
+        catch (Exception ex) when (ex is FormatException or System.Text.Json.JsonException)
+        {
+            Console.Error.WriteLine("ERROR request_unavailable");
+            return 3;
+        }
+
+        return 0;
+    }
+
+    private static async Task<int> ApproveAccessRequestAsync(CommandOptions options)
+    {
+        options.RequireOnly(
+            "--control-pipe", "--request-id", "--preview-id", "--resource-ids", "--operations",
+            "--destination-resource-ids", "--expires-at-utc", "--provider", "--model", "--max-cost-usd", "--handoff-file");
+        var controlPipe = ControlPipe(options);
+        var requestId = options.Required("--request-id");
+        var previewId = options.Required("--preview-id");
+        if (!Guid.TryParseExact(requestId, "N", out _) || !Guid.TryParseExact(previewId, "N", out _))
+        {
+            return Usage();
+        }
+
+        var resourceIds = ParseIdentifiers(options.Optional("--resource-ids"));
+        var operations = ParseOperations(options.Optional("--operations"));
+        var destinationIds = ParseIdentifiers(options.Optional("--destination-resource-ids"));
+        if ((resourceIds is not null && resourceIds.Any(value => !ServiceSettingsLoader.IsSafeIdentifier(value))) ||
+            (destinationIds is not null && destinationIds.Any(value => !ServiceSettingsLoader.IsSafeIdentifier(value))))
+        {
+            return Usage();
+        }
+
+        var expiryText = options.Required("--expires-at-utc");
+        var hasExplicitUtcSuffix = expiryText.EndsWith('Z') ||
+            expiryText.EndsWith("+00:00", StringComparison.Ordinal);
+        if (!hasExplicitUtcSuffix ||
+            !DateTimeOffset.TryParse(expiryText, CultureInfo.InvariantCulture, DateTimeStyles.None, out var expiresAtUtc) ||
+            expiresAtUtc.Offset != TimeSpan.Zero)
+        {
+            return Usage();
+        }
+
+        var provider = options.Optional("--provider");
+        var model = options.Optional("--model");
+        decimal? maximumCostUsd = null;
+        if (options.Optional("--max-cost-usd") is { } costText)
+        {
+            if (!decimal.TryParse(costText, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsedCost))
+            {
+                return Usage();
+            }
+
+            maximumCostUsd = parsedCost;
+        }
+
+        Console.WriteLine($"REQUEST APPROVE PREVIEW request={requestId} preview={previewId} (this explicit owner confirmation binds the shown snapshot)");
+        Console.Write("Type APPROVE to mint only this narrowed exact scope: ");
+        if (!string.Equals(Console.ReadLine(), "APPROVE", StringComparison.Ordinal))
+        {
+            Console.WriteLine("CANCELLED; no token issued");
+            return 3;
+        }
+
+        OwnerTokenHandoff handoff;
+        try
+        {
+            handoff = OwnerTokenHandoff.Create(options.Required("--handoff-file"));
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or Win32Exception)
+        {
+            Console.Error.WriteLine("ERROR handoff_destination_unavailable");
+            return 3;
+        }
+
+        using (handoff)
+        {
+            var issueResult = await InvokeOwnerAsync(controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.OwnerAccessRequestApproveOperation,
+                    ResourceIds: resourceIds,
+                    Operations: operations,
+                    DestinationResourceIds: destinationIds,
+                    ExpiresAtUtc: expiresAtUtc,
+                    Provider: provider,
+                    Model: model,
+                    MaximumCostUsd: maximumCostUsd,
+                    PreviewId: previewId,
+                    RequestId: requestId)).ConfigureAwait(false);
+            if (!issueResult.Success || !HasStatus(issueResult.Reply, "access_request_approved") ||
+                !issueResult.Reply.TryGetProperty("grantId", out var grantId) ||
+                grantId.ValueKind != JsonValueKind.String ||
+                !issueResult.Reply.TryGetProperty("token", out var token) ||
+                token.ValueKind != JsonValueKind.String)
+            {
+                WriteServiceError(issueResult);
+                return 3;
+            }
+
+            try
+            {
+                handoff.WriteToken(token.GetString() ?? string.Empty);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or Win32Exception)
+            {
+                Console.Error.WriteLine("ERROR token_handoff_failed");
+                return 4;
+            }
+
+            Console.WriteLine($"REQUEST approved id={requestId} grant={grantId.GetString()}; owner-only token handoff={handoff.Path}; token redacted");
+            return 0;
+        }
+    }
+
+    private static async Task<int> RejectAccessRequestAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--request-id");
+        var requestId = options.Required("--request-id");
+        if (!Guid.TryParseExact(requestId, "N", out _))
+        {
+            return Usage();
+        }
+
+        Console.WriteLine($"REQUEST REJECT PREVIEW id={requestId} (no grant will be created)");
+        Console.Write("Type REJECT to decline this request: ");
+        if (!string.Equals(Console.ReadLine(), "REJECT", StringComparison.Ordinal))
+        {
+            Console.WriteLine("CANCELLED; request remains pending");
+            return 3;
+        }
+
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerAccessRequestRejectOperation,
+                RequestId: requestId)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "access_request_rejected"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine($"REQUEST rejected id={requestId}; no grant created");
+        return 0;
+    }
+
+    private static void PrintAccessRequest(JsonElement request)
+    {
+        Console.WriteLine($"REQUEST id={JsonValueText(request, "requestId")} status={JsonValueText(request, "status")} purpose={JsonValueText(request, "purpose")}");
+        if (request.TryGetProperty("catalogIds", out var catalogIds) && catalogIds.ValueKind == JsonValueKind.Array)
+        {
+            Console.WriteLine("catalogs=" + string.Join(",", catalogIds.EnumerateArray().Select(value => value.GetString())));
+        }
+
+        if (request.TryGetProperty("resolvedResources", out var resources) && resources.ValueKind == JsonValueKind.Array)
+        {
+            PrintResources("resolved", resources);
+        }
+
+        if (request.TryGetProperty("requestedOperations", out var operations) && operations.ValueKind == JsonValueKind.Array)
+        {
+            Console.WriteLine("operations=" + string.Join(",", operations.EnumerateArray().Select(value => value.GetString())));
+        }
+
+        Console.WriteLine($"agent={JsonValueText(request, "agentId")} context={JsonValueText(request, "agentContext")}");
+        Console.WriteLine($"disclosure provider={JsonValueText(request, "provider")} model={JsonValueText(request, "model")} context={JsonValueText(request, "disclosureContext")}");
+        Console.WriteLine($"grant={JsonValueText(request, "approvedGrantId")}");
+    }
+
 
     private static string[]? ParseIdentifiers(string? value)
     {
@@ -1176,7 +1526,7 @@ internal static class OwnerControlCli
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Owner commands: owner {status|read|write|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw} --control-pipe <name>; owner catalog-query --agent-pipe <name> --query <text>; owner agent-read --agent-pipe <name> --session-file <protected-path> --operation <resource.read|source.read> --resource-id <id> --resource-revision <rev> --output-file <path>; owner authorize --agent-pipe <name> --session-file <protected-path> --operation <operation> [scoped resource/revision and egress fields]; owner ...");
+        Console.Error.WriteLine("Owner commands: owner {status|read|write|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject} --control-pipe <name>; owner catalog-query --agent-pipe <name> --query <text>; owner request --agent-pipe <name> --catalog-ids <ids> --purpose <text> [--operations <ops>] [--agent-id <id>] [--agent-context <text>] [--provider <p>] [--model <m>] [--disclosure-context <text>]; owner request-status --agent-pipe <name> --request-id <id>; owner agent-read --agent-pipe <name> --session-file <protected-path> --operation <resource.read|source.read> --resource-id <id> --resource-revision <rev> --output-file <path>; owner authorize --agent-pipe <name> --session-file…");
         return 2;
     }
 

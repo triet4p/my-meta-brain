@@ -573,7 +573,7 @@ internal static partial class OwnerServiceSmoke
                 "The redemption/restart path changed an unrelated source or encrypted resource content.");
 
             var finalState = ReadScopeGrantState(fixture.VaultDirectoryPath, passphrase, schemaTwoStatePath);
-            Require(finalState["schemaVersion"]?.GetValue<int>() == 3 &&
+            Require(finalState["schemaVersion"]?.GetValue<int>() == 4 &&
                     finalState["consumedTokenVerifiers"] is JsonArray consumed && consumed.Count == 4,
                 "The final encrypted state did not contain exactly the four durably consumed grant tombstones.");
             var finalGrants = await RunCliAsync("owner", "grants", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
@@ -674,7 +674,7 @@ internal static partial class OwnerServiceSmoke
         try
         {
             currentCiphertext = File.ReadAllBytes(scopeStatePath);
-            statePlaintext = DecryptScopeState(currentCiphertext, dataKey, vaultId, associatedSchemaVersion: 3);
+            statePlaintext = DecryptScopeState(currentCiphertext, dataKey, vaultId, associatedSchemaVersion: 4);
             var legacyState = JsonNode.Parse(Encoding.UTF8.GetString(statePlaintext))!.AsObject();
             var expected = (JsonObject)legacyState.DeepClone();
             var grants = legacyState["grants"]!.AsArray();
@@ -690,6 +690,7 @@ internal static partial class OwnerServiceSmoke
             legacyState["policyGeneration"] = finalLegacyGeneration;
             legacyState.Remove("unlockEpoch");
             legacyState.Remove("consumedTokenVerifiers");
+            legacyState.Remove("requests");
             for (var index = 0; index < grants.Count; index++)
             {
                 var legacyGrant = grants[index]!.AsObject();
@@ -701,10 +702,11 @@ internal static partial class OwnerServiceSmoke
                 migratedGrant["unlockEpoch"] = 1;
             }
 
-            expected["schemaVersion"] = 3;
+            expected["schemaVersion"] = 4;
             expected["policyGeneration"] = finalLegacyGeneration;
             expected["unlockEpoch"] = 1;
             expected["consumedTokenVerifiers"] = new JsonArray();
+            expected["requests"] = new JsonArray();
 
             legacyPlaintext = Encoding.UTF8.GetBytes(legacyState.ToJsonString());
             legacyCiphertext = EncryptScopeState(legacyPlaintext, dataKey, vaultId, associatedSchemaVersion: 2);
@@ -730,7 +732,7 @@ internal static partial class OwnerServiceSmoke
         try
         {
             ciphertext = File.ReadAllBytes(scopeStatePath);
-            plaintext = DecryptScopeState(ciphertext, dataKey, vaultId, associatedSchemaVersion: 3);
+            plaintext = DecryptScopeState(ciphertext, dataKey, vaultId, associatedSchemaVersion: 4);
             return JsonNode.Parse(Encoding.UTF8.GetString(plaintext))!.AsObject();
         }
         finally
@@ -743,26 +745,26 @@ internal static partial class OwnerServiceSmoke
 
     private static void AssertMigratedScopeState(JsonObject expected, JsonObject actual, string firstGrantId, string secondGrantId)
     {
-        Require(actual["schemaVersion"]?.GetValue<int>() == 3 &&
+        Require(actual["schemaVersion"]?.GetValue<int>() == 4 &&
                 actual["policyGeneration"]?.GetValue<long>() == expected["policyGeneration"]!.GetValue<long>() &&
                 actual["unlockEpoch"]?.GetValue<long>() == 1,
-            "The migrated grant state did not normalize its v3 schema, policy generation, and unlock epoch.");
+            "The migrated grant state did not normalize its v4 schema, policy generation, and unlock epoch.");
         var expectedCollections = expected["collections"]!.AsArray();
         var actualCollections = actual["collections"]!.AsArray();
         Require(expectedCollections.Count == actualCollections.Count &&
                 expectedCollections.Select(collection => collection!["collectionId"]!.GetValue<string>())
                     .SequenceEqual(actualCollections.Select(collection => collection!["collectionId"]!.GetValue<string>()), StringComparer.Ordinal),
-            "The v2-to-v3 migration changed or dropped an owner collection.");
+            "The v2-to-v4 migration changed or dropped an owner collection.");
         for (var index = 0; index < expectedCollections.Count; index++)
         {
             Require(expectedCollections[index]!["resourceIds"]!.ToJsonString() == actualCollections[index]!["resourceIds"]!.ToJsonString(),
-                "The v2-to-v3 migration changed the concrete collection membership.");
+                "The v2-to-v4 migration changed the concrete collection membership.");
         }
 
         var expectedGrants = expected["grants"]!.AsArray();
         var actualGrants = actual["grants"]!.AsArray();
         Require(expectedGrants.Count == 2 && actualGrants.Count == expectedGrants.Count,
-            "The v2-to-v3 migration dropped an existing grant.");
+            "The v2-to-v4 migration dropped an existing grant.");
         foreach (var grantId in new[] { firstGrantId, secondGrantId })
         {
             var prior = expectedGrants.Single(grant => grant!["grantId"]!.GetValue<string>() == grantId)!.AsObject();
@@ -779,11 +781,13 @@ internal static partial class OwnerServiceSmoke
                     migrated["operations"]!.ToJsonString() == prior["operations"]!.ToJsonString() &&
                     migrated["destinationResources"]!.ToJsonString() == prior["destinationResources"]!.ToJsonString() &&
                     JsonNode.DeepEquals(migrated["egress"], prior["egress"]),
-                "The v2-to-v3 migration changed a grant verifier, expiry, policy, resource revision, operation, destination, or egress bound.");
+                "The v2-to-v4 migration changed a grant verifier, expiry, policy, resource revision, operation, destination, or egress bound.");
         }
 
         Require(actual["consumedTokenVerifiers"] is JsonArray consumed && consumed.Count == 0,
-            "The v2-to-v3 migration did not initialize the durable one-use tombstone set.");
+            "The v2-to-v4 migration did not initialize the durable one-use tombstone set.");
+        Require(actual["requests"] is JsonArray requests && requests.Count == 0,
+            "The v2-to-v4 migration did not initialize the encrypted access-request set.");
     }
 
     private static string ReadSyntheticVaultId(string vaultDirectory)
