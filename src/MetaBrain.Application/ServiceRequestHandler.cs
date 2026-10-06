@@ -29,7 +29,11 @@ public sealed record ServiceRequest(
     long? DestinationRevision = null,
     decimal? EstimatedCostUsd = null,
     long? InputTokens = null,
-    long? OutputTokens = null);
+    long? OutputTokens = null,
+    string? CatalogId = null,
+    string? Label = null,
+    string? Description = null,
+    string? Query = null);
 
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
@@ -64,7 +68,11 @@ public sealed record ServiceReply(
     string? SessionToken = null,
     AgentSessionSnapshot? AgentSession = null,
     AgentSessionSnapshot[]? AgentSessions = null,
-    string? SessionId = null);
+    string? SessionId = null,
+    OwnerCatalogPreview? CatalogPreview = null,
+    OwnerCatalogEntry[]? CatalogEntries = null,
+    PublishedCatalogEntry[]? PublishedCatalog = null,
+    string? CatalogId = null);
 
 
 public sealed class ServiceRequestHandler
@@ -78,6 +86,12 @@ public sealed class ServiceRequestHandler
     public const string OwnerScopeListOperation = "owner.scope.list";
     public const string OwnerScopeCollectionSetOperation = "owner.scope.collection.set";
     public const string OwnerScopeCollectionListOperation = "owner.scope.collection.list";
+    public const string OwnerCatalogPreviewOperation = "owner.catalog.preview";
+    public const string OwnerCatalogPublishOperation = "owner.catalog.publish";
+    public const string OwnerCatalogListOperation = "owner.catalog.list";
+    public const string OwnerCatalogWithdrawOperation = "owner.catalog.withdraw";
+    public const string CatalogListOperation = "catalog.list";
+    public const string CatalogQueryOperation = "catalog.query";
     public const string AgentRedeemOperation = "agent.session.redeem";
     public const string AgentSessionInspectOperation = "agent.session.inspect";
     public const string AgentAccessAuthorizeOperation = "agent.access.authorize";
@@ -88,17 +102,23 @@ public sealed class ServiceRequestHandler
     private readonly IVaultLifecycle _vault;
     private readonly OwnerScopeGrantAuthority _ownerScopeGrants;
     private readonly AgentSessionAuthority _agentSessions;
+    private readonly OwnerCatalogAuthority _ownerCatalog;
+    private readonly ICatalogProjectionStore? _projections;
 
     public ServiceRequestHandler(
         GrantAuthority grantAuthority,
         IVaultLifecycle vault,
         OwnerScopeGrantAuthority ownerScopeGrants,
-        AgentSessionAuthority? agentSessions = null)
+        AgentSessionAuthority? agentSessions = null,
+        OwnerCatalogAuthority? ownerCatalog = null,
+        ICatalogProjectionStore? projections = null)
     {
         _grantAuthority = grantAuthority ?? throw new ArgumentNullException(nameof(grantAuthority));
         _vault = vault ?? throw new ArgumentNullException(nameof(vault));
         _ownerScopeGrants = ownerScopeGrants ?? throw new ArgumentNullException(nameof(ownerScopeGrants));
         _agentSessions = agentSessions ?? new AgentSessionAuthority();
+        _ownerCatalog = ownerCatalog ?? new OwnerCatalogAuthority();
+        _projections = projections;
     }
 
     public async Task<ServiceReply> HandleAsync(
@@ -141,6 +161,21 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, AgentAccessAuthorizeOperation, StringComparison.Ordinal))
         {
             return HandleAgentAccessAuthorize(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, CatalogListOperation, StringComparison.Ordinal))
+        {
+            if (HasCatalogDiscoveryExtras(request))
+            {
+                return CatalogDenied();
+            }
+
+            return ServeCatalogList();
+        }
+
+        if (string.Equals(request.Operation, CatalogQueryOperation, StringComparison.Ordinal))
+        {
+            return ServeCatalogQuery(request.Query, HasCatalogDiscoveryExtras(request, allowQuery: true));
         }
 
 
@@ -209,6 +244,27 @@ public sealed class ServiceRequestHandler
         {
             return HandleScopeCollectionList(context, operation);
         }
+
+        if (string.Equals(request.Operation, OwnerCatalogPreviewOperation, StringComparison.Ordinal))
+        {
+            return HandleCatalogPreview(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerCatalogPublishOperation, StringComparison.Ordinal))
+        {
+            return HandleCatalogPublish(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerCatalogListOperation, StringComparison.Ordinal))
+        {
+            return HandleCatalogList(context, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerCatalogWithdrawOperation, StringComparison.Ordinal))
+        {
+            return HandleCatalogWithdraw(context, request, operation);
+        }
+
         if (string.Equals(request.Operation, OwnerSessionListOperation, StringComparison.Ordinal))
         {
             return HandleOwnerSessionList(request, operation);
@@ -576,6 +632,197 @@ public sealed class ServiceRequestHandler
         }
     }
 
+    private ServiceReply HandleCatalogPreview(
+        AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        try
+        {
+            var preview = _ownerCatalog.Preview(
+                context, request.CatalogId, request.Label, request.Description,
+                request.ResourceId, operation.ListResources(), operation);
+            return new ServiceReply(CurrentProtocolVersion, "catalog_preview", "owner", null,
+                CatalogPreview: preview, CatalogId: preview.CatalogId);
+        }
+        catch (OwnerCatalogValidationException ex)
+        {
+            return Error(ex.Code);
+        }
+        catch (InvalidDataException)
+        {
+            return Error("catalog_state_unavailable");
+        }
+        catch (IOException)
+        {
+            return Error("catalog_state_unavailable");
+        }
+    }
+
+    private ServiceReply HandleCatalogPublish(
+        AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        try
+        {
+            var liveResources = operation.ListResources();
+            var published = _ownerCatalog.Publish(
+                context, request.CatalogId, request.Label, request.Description,
+                request.ResourceId, liveResources, operation);
+            RefreshProjection(operation);
+            return new ServiceReply(CurrentProtocolVersion, "catalog_published", "owner", null,
+                CatalogEntries: new[] { published }, CatalogId: published.CatalogId);
+        }
+        catch (OwnerCatalogValidationException ex)
+        {
+            return Error(ex.Code);
+        }
+        catch (InvalidDataException)
+        {
+            return Error("catalog_state_unavailable");
+        }
+        catch (IOException)
+        {
+            return Error("catalog_state_unavailable");
+        }
+    }
+
+    private ServiceReply HandleCatalogList(AuthenticatedContext context, IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        try
+        {
+            var entries = _ownerCatalog.List(context, operation).ToArray();
+            return new ServiceReply(CurrentProtocolVersion, "catalog_entries", "owner", null,
+                CatalogEntries: entries);
+        }
+        catch (InvalidDataException)
+        {
+            return Error("catalog_state_unavailable");
+        }
+        catch (IOException)
+        {
+            return Error("catalog_state_unavailable");
+        }
+    }
+
+    private ServiceReply HandleCatalogWithdraw(
+        AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        try
+        {
+            var withdrawn = _ownerCatalog.Withdraw(context, request.CatalogId, operation);
+            RefreshProjection(operation);
+            return new ServiceReply(CurrentProtocolVersion, "catalog_withdrawn", "owner", null,
+                CatalogId: withdrawn);
+        }
+        catch (OwnerCatalogValidationException ex)
+        {
+            return Error(ex.Code);
+        }
+        catch (InvalidDataException)
+        {
+            return Error("catalog_state_unavailable");
+        }
+        catch (IOException)
+        {
+            return Error("catalog_state_unavailable");
+        }
+    }
+
+    private void RefreshProjection(IVaultOperation operation)
+    {
+        if (_projections is null)
+        {
+            return;
+        }
+
+        var live = OwnerCatalogAuthority.ValidateAndNormalizeState(operation.LoadCatalogState()).Entries;
+        var published = live
+            .Select(OwnerCatalogAuthority.ToPublished)
+            .ToArray();
+        _projections.SaveProjections(published);
+    }
+
+    private ServiceReply ServeCatalogList()
+    {
+        try
+        {
+            var entries = _projections is null
+                ? Array.Empty<PublishedCatalogEntry>()
+                : OwnerCatalogAuthority.NormalizeProjections(_projections.LoadProjections());
+            return new ServiceReply(CurrentProtocolVersion, "catalog", null, null,
+                PublishedCatalog: entries);
+        }
+        catch (InvalidDataException)
+        {
+            return CatalogDenied();
+        }
+        catch (ArgumentException)
+        {
+            return CatalogDenied();
+        }
+        catch (IOException)
+        {
+            return CatalogDenied();
+        }
+    }
+
+    private ServiceReply ServeCatalogQuery(string? query, bool hasExtras)
+    {
+        if (hasExtras || string.IsNullOrWhiteSpace(query) || query!.Length > 256)
+        {
+            return CatalogDenied();
+        }
+
+        var needle = query.Trim();
+        try
+        {
+            var entries = _projections is null
+                ? Array.Empty<PublishedCatalogEntry>()
+                : OwnerCatalogAuthority.NormalizeProjections(_projections.LoadProjections());
+            var matches = entries
+                .Where(entry =>
+                    entry.CatalogId.Contains(needle, StringComparison.OrdinalIgnoreCase) ||
+                    entry.Label.Contains(needle, StringComparison.OrdinalIgnoreCase) ||
+                    entry.Description.Contains(needle, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            return matches.Length == 0
+                ? CatalogDenied()
+                : new ServiceReply(CurrentProtocolVersion, "catalog", null, null,
+                    PublishedCatalog: matches);
+        }
+        catch (InvalidDataException)
+        {
+            return CatalogDenied();
+        }
+        catch (ArgumentException)
+        {
+            return CatalogDenied();
+        }
+        catch (IOException)
+        {
+            return CatalogDenied();
+        }
+    }
+
+
     private ServiceReply HandleAgentRedeem(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
     {
         if (context.Kind != PrincipalKind.Agent)
@@ -791,14 +1038,14 @@ public sealed class ServiceRequestHandler
         request.MaximumCostUsd is not null || request.PreviewId is not null ||
         request.CollectionId is not null || request.ZoneId is not null ||
         request.ContentBase64 is not null || (!allowGrantToken && request.Token is not null) ||
-        request.SessionId is not null ||
+        request.SessionId is not null || request.CatalogId is not null ||
+        request.Label is not null || request.Description is not null || request.Query is not null ||
         (!allowAccessFields &&
          (request.AccessOperation is not null || request.ResourceId is not null ||
           request.ResourceRevision is not null || request.DestinationResourceId is not null ||
           request.DestinationRevision is not null || request.Provider is not null ||
           request.Model is not null || request.EstimatedCostUsd is not null ||
           request.InputTokens is not null || request.OutputTokens is not null));
-
     private static bool HasAgentResourceReadExtras(ServiceRequest request) =>
         request.ZoneId is not null ||
         request.Passphrase is not null || request.RecoveryCode is not null ||
@@ -810,8 +1057,25 @@ public sealed class ServiceRequestHandler
         request.Token is not null || request.SessionId is not null ||
         request.DestinationResourceId is not null || request.DestinationRevision is not null ||
         request.EstimatedCostUsd is not null || request.InputTokens is not null ||
-        request.OutputTokens is not null;
-
+        request.OutputTokens is not null ||
+        request.CatalogId is not null || request.Label is not null ||
+        request.Description is not null || request.Query is not null;
+    private static bool HasCatalogDiscoveryExtras(ServiceRequest request, bool allowQuery = false) =>
+        request.ZoneId is not null ||
+        request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ContentBase64 is not null || request.ResourceIds is not null ||
+        request.Operations is not null || request.DestinationResourceIds is not null ||
+        request.ExpiresAtUtc is not null || request.Provider is not null ||
+        request.Model is not null || request.MaximumCostUsd is not null ||
+        request.PreviewId is not null || request.CollectionId is not null ||
+        request.Token is not null || request.SessionId is not null ||
+        request.SessionToken is not null || request.ResourceId is not null ||
+        request.ResourceRevision is not null || request.AccessOperation is not null ||
+        request.DestinationResourceId is not null || request.DestinationRevision is not null ||
+        request.EstimatedCostUsd is not null || request.InputTokens is not null ||
+        request.OutputTokens is not null || request.CatalogId is not null ||
+        request.Label is not null || request.Description is not null ||
+        (!allowQuery && request.Query is not null);
     private static bool HasSessionAdministrationExtras(ServiceRequest request, bool allowSessionId) =>
         request.ResourceId is not null || request.ZoneId is not null ||
         request.Passphrase is not null || request.RecoveryCode is not null ||
@@ -824,8 +1088,9 @@ public sealed class ServiceRequestHandler
         request.AccessOperation is not null || request.ResourceRevision is not null ||
         request.DestinationResourceId is not null || request.DestinationRevision is not null ||
         request.EstimatedCostUsd is not null || request.InputTokens is not null ||
-        request.OutputTokens is not null || (!allowSessionId && request.SessionId is not null);
-
+        request.OutputTokens is not null || request.CatalogId is not null ||
+        request.Label is not null || request.Description is not null || request.Query is not null ||
+        (!allowSessionId && request.SessionId is not null);
     private static ScopeResourceRevision[] ResolveResourceSelection(
         IReadOnlyList<ScopeResourceRevision> available,
         string? zoneId,
@@ -879,6 +1144,9 @@ public sealed class ServiceRequestHandler
     private static ServiceReply ResourceDenied() =>
         new(CurrentProtocolVersion, "denied", null, "resource_unavailable",
             Decision: new AuthorizationDecision(false, "resource_unavailable", 0));
+
+    private static ServiceReply CatalogDenied() =>
+        new(CurrentProtocolVersion, "no_match", null, "catalog_no_match");
 
     private static ServiceReply Error(string error) => new(CurrentProtocolVersion, null, null, error);
 }

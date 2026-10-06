@@ -8,13 +8,14 @@ internal static class Program
             (string.Equals(args[0], "scope-issue", StringComparison.Ordinal) ||
              string.Equals(args[0], "agent-session", StringComparison.Ordinal) ||
              string.Equals(args[0], "s1-t5", StringComparison.Ordinal) ||
-             string.Equals(args[0], "s1-t6", StringComparison.Ordinal))
+             string.Equals(args[0], "s1-t6", StringComparison.Ordinal) ||
+             string.Equals(args[0], "s1-t7", StringComparison.Ordinal))
             ? args[0]
             : null;
         var executable = scenario is not null ? args[1] : args.Length == 1 ? args[0] : null;
         if (executable is null || !File.Exists(executable))
         {
-            Console.Error.WriteLine("Usage: MetaBrain.S1T4.Smoke <MetaBrain.Connections.exe> | scope-issue|agent-session|s1-t5|s1-t6 <MetaBrain.Connections.exe>");
+            Console.Error.WriteLine("Usage: MetaBrain.S1T4.Smoke <MetaBrain.Connections.exe> | scope-issue|agent-session|s1-t5|s1-t6|s1-t7 <MetaBrain.Connections.exe>");
             return 2;
         }
 
@@ -31,6 +32,9 @@ internal static class Program
                     break;
                 case "s1-t6":
                     await OwnerServiceSmoke.RunT6ScopedReadAsync(fullPath).ConfigureAwait(false);
+                    break;
+                case "s1-t7":
+                    await OwnerServiceSmoke.RunT7CatalogAsync(fullPath).ConfigureAwait(false);
                     break;
                 case "agent-session":
                     await OwnerServiceSmoke.RunAgentSessionAsync(fullPath).ConfigureAwait(false);

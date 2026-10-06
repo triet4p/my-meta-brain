@@ -22,7 +22,7 @@ internal sealed class NamedPipeService
         var store = new EncryptedVaultStore(settings.VaultDirectoryPath, settings.OwnerSid);
         _vault = new VaultLifecycle(store);
         var authority = new GrantAuthority(new InMemoryGrantStore());
-        _handler = new ServiceRequestHandler(authority, _vault, new OwnerScopeGrantAuthority());
+        _handler = new ServiceRequestHandler(authority, _vault, new OwnerScopeGrantAuthority(), projections: new FileCatalogProjectionStore(store));
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -135,6 +135,10 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerScopeListOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerScopeCollectionSetOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerScopeCollectionListOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerCatalogPreviewOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerCatalogPublishOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerCatalogListOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerCatalogWithdrawOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.AgentRedeemOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.AgentSessionInspectOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.AgentAccessAuthorizeOperation, StringComparison.Ordinal) ||
@@ -178,7 +182,9 @@ internal sealed class NamedPipeService
         return string.Equals(operation, ServiceRequestHandler.AgentRedeemOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentSessionInspectOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentAccessAuthorizeOperation, StringComparison.Ordinal) ||
-            string.Equals(operation, ServiceRequestHandler.AgentResourceReadOperation, StringComparison.Ordinal);
+            string.Equals(operation, ServiceRequestHandler.AgentResourceReadOperation, StringComparison.Ordinal) ||
+            string.Equals(operation, ServiceRequestHandler.CatalogListOperation, StringComparison.Ordinal) ||
+            string.Equals(operation, ServiceRequestHandler.CatalogQueryOperation, StringComparison.Ordinal);
     }
 
     private static bool SidEquals(string left, string right)

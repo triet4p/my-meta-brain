@@ -32,26 +32,32 @@ internal sealed class EncryptedVaultStore
     private const int MaximumEnvelopeBytes = 4 * 1024 * 1024;
     private const int MaximumScopeGrantBytes = 4 * 1024 * 1024;
     private const int MaximumScopeGrantEnvelopeBytes = 6 * 1024 * 1024;
+    private const int MaximumCatalogBytes = 512 * 1024;
+    private const int MaximumCatalogEnvelopeBytes = 768 * 1024;
+    private const int MaximumProjectionBytes = 1024 * 1024;
     private const int MaximumResourceBytes = 1024 * 1024;
     private const int KeyBytes = 32;
     private const int SaltBytes = 16;
     private const int NonceBytes = 12;
     private const int TagBytes = 16;
 
+    private static readonly SecurityIdentifier SystemSid = new("S-1-5-18");
+    private static readonly SecurityIdentifier AdministratorsSid = new("S-1-5-32-544");
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         PropertyNameCaseInsensitive = true
     };
 
-    private static readonly SecurityIdentifier SystemSid = new("S-1-5-18");
-    private static readonly SecurityIdentifier AdministratorsSid = new("S-1-5-32-544");
+    private readonly string _serviceDirectory;
     private readonly string _root;
     private readonly string _ownerSid;
     private readonly string _headerPath;
     private readonly string _manifestPath;
     private readonly string _resourcesPath;
     private readonly string _scopeGrantsPath;
+    private readonly string _catalogPath;
+    private readonly string _projectionPath;
 
     private sealed record KeyWrapper(int KdfIterations, string Salt, string Nonce, string Ciphertext, string Tag);
     private sealed record VaultHeader(int FormatVersion, string VaultId, KeyWrapper PassphraseKey, KeyWrapper RecoveryKey);
@@ -66,10 +72,13 @@ internal sealed class EncryptedVaultStore
 
         _root = Path.GetFullPath(root);
         _ownerSid = new SecurityIdentifier(ownerSid).Value;
+        _serviceDirectory = Path.GetFullPath(Path.Combine(_root, ".."));
         _headerPath = Path.Combine(_root, "vault-header.json");
         _manifestPath = Path.Combine(_root, "manifest.enc");
         _resourcesPath = Path.Combine(_root, "resources");
         _scopeGrantsPath = Path.Combine(_root, "scope-grants.enc");
+        _catalogPath = Path.Combine(_root, "owner-catalog.enc");
+        _projectionPath = Path.Combine(_serviceDirectory, "published-catalog.json");
     }
 
     public bool Exists => File.Exists(_headerPath) || Directory.Exists(_root);
@@ -293,6 +302,162 @@ internal sealed class EncryptedVaultStore
             {
                 CryptographicOperations.ZeroMemory(envelopeBytes);
             }
+        }
+    }
+
+    public OwnerCatalogState LoadCatalogState(VaultManifest manifest, ReadOnlySpan<byte> dataKey)
+    {
+        FileAttributes attributes;
+        try
+        {
+            attributes = File.GetAttributes(_catalogPath);
+        }
+        catch (FileNotFoundException)
+        {
+            return OwnerCatalogState.Empty;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return OwnerCatalogState.Empty;
+        }
+
+        if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+        {
+            throw new InvalidDataException("The encrypted owner catalog state must be a regular file.");
+        }
+
+        byte[]? associatedData = null;
+        byte[]? plaintext = null;
+        try
+        {
+            var json = ProtectedFile.ReadPrivateFile(_catalogPath, _ownerSid, MaximumCatalogEnvelopeBytes).Text;
+            var envelope = JsonSerializer.Deserialize<EncryptedPayload>(json, JsonOptions)
+                ?? throw new InvalidDataException("Invalid encrypted owner catalog envelope.");
+            associatedData = ResourceAssociatedData(
+                manifest.VaultId, "owner-catalog", OwnerCatalogState.CurrentSchemaVersion, 1);
+            plaintext = DecryptPayload(
+                envelope, dataKey, associatedData, OwnerCatalogState.CurrentSchemaVersion, 1, MaximumCatalogBytes);
+            return JsonSerializer.Deserialize<OwnerCatalogState>(plaintext, JsonOptions)
+                ?? throw new InvalidDataException("Invalid encrypted owner catalog state.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or
+                                   CryptographicException or ArgumentException or FormatException or OverflowException)
+        {
+            throw new InvalidDataException("The encrypted owner catalog state is unavailable.", ex);
+        }
+        finally
+        {
+            if (associatedData is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(associatedData);
+            }
+
+            if (plaintext is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(plaintext);
+            }
+        }
+    }
+
+    public void SaveCatalogState(
+        VaultManifest manifest,
+        ReadOnlySpan<byte> dataKey,
+        OwnerCatalogState state)
+    {
+        var plaintext = JsonSerializer.SerializeToUtf8Bytes(state, JsonOptions);
+        if (plaintext.Length is <= 0 or > MaximumCatalogBytes)
+        {
+            CryptographicOperations.ZeroMemory(plaintext);
+            throw new InvalidDataException("The owner catalog state exceeds its storage limit.");
+        }
+
+        var associatedData = ResourceAssociatedData(
+            manifest.VaultId, "owner-catalog", OwnerCatalogState.CurrentSchemaVersion, 1);
+        byte[]? envelopeBytes = null;
+        try
+        {
+            var envelope = EncryptPayload(plaintext, dataKey, associatedData);
+            envelopeBytes = JsonSerializer.SerializeToUtf8Bytes(envelope, JsonOptions);
+            AtomicWrite(_catalogPath, envelopeBytes);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(plaintext);
+            CryptographicOperations.ZeroMemory(associatedData);
+            if (envelopeBytes is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(envelopeBytes);
+            }
+        }
+    }
+
+    public PublishedCatalogProjection LoadPublishedProjection()
+    {
+        byte[]? raw = null;
+        try
+        {
+            raw = File.ReadAllBytes(_projectionPath);
+        }
+        catch (FileNotFoundException)
+        {
+            return new PublishedCatalogProjection(PublishedCatalogProjection.CurrentSchemaVersion, Array.Empty<PublishedCatalogEntry>());
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return new PublishedCatalogProjection(PublishedCatalogProjection.CurrentSchemaVersion, Array.Empty<PublishedCatalogEntry>());
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new InvalidDataException("The published catalog projection is unavailable.", ex);
+        }
+
+        if (raw.Length <= 0 || raw.Length > MaximumProjectionBytes)
+        {
+            throw new InvalidDataException("The published catalog projection is unavailable.");
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<PublishedCatalogProjection>(raw, JsonOptions)
+                ?? throw new InvalidDataException("Invalid published catalog projection.");
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidDataException("Invalid published catalog projection.", ex);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(raw);
+        }
+    }
+
+    public void SavePublishedProjection(IReadOnlyList<PublishedCatalogEntry> entries)
+    {
+        var projection = new PublishedCatalogProjection(
+            PublishedCatalogProjection.CurrentSchemaVersion,
+            OwnerCatalogAuthority.NormalizeProjections(entries));
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(projection, JsonOptions);
+        try
+        {
+            var directory = Path.GetDirectoryName(_projectionPath) ?? throw new InvalidDataException("Invalid catalog projection path.");
+            Directory.CreateDirectory(directory);
+            var temporaryPath = Path.Combine(directory, "." + Guid.NewGuid().ToString("N") + ".tmp");
+            try
+            {
+                File.WriteAllBytes(temporaryPath, bytes);
+                File.Move(temporaryPath, _projectionPath, overwrite: true);
+            }
+            finally
+            {
+                if (File.Exists(temporaryPath))
+                {
+                    File.Delete(temporaryPath);
+                }
+            }
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(bytes);
         }
     }
 

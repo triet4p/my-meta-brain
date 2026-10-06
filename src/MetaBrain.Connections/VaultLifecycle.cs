@@ -193,6 +193,43 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
         }
     }
 
+    private OwnerCatalogState LoadCatalogState()
+    {
+        lock (_contentGate)
+        {
+            if (_manifest is null || _dataKey is null)
+            {
+                throw new ManagedResourceUnavailableException();
+            }
+
+            return OwnerCatalogAuthority.ValidateAndNormalizeState(
+                _store.LoadCatalogState(_manifest, _dataKey));
+        }
+    }
+
+    private T UpdateCatalogState<T>(
+        Func<OwnerCatalogState, (OwnerCatalogState State, T Result)> update)
+    {
+        lock (_contentGate)
+        {
+            if (_manifest is null || _dataKey is null)
+            {
+                throw new ManagedResourceUnavailableException();
+            }
+
+            var state = OwnerCatalogAuthority.ValidateAndNormalizeState(
+                _store.LoadCatalogState(_manifest, _dataKey));
+            var (nextState, result) = update(state);
+            if (!ReferenceEquals(nextState, state))
+            {
+                nextState = OwnerCatalogAuthority.ValidateAndNormalizeState(nextState);
+                _store.SaveCatalogState(_manifest, _dataKey, nextState);
+            }
+
+            return result;
+        }
+    }
+
     private byte[] ReadContent(string resourceId, long? expectedRevision = null)
     {
         lock (_contentGate)
@@ -308,6 +345,10 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
         public T UpdateScopeGrantState<T>(
             Func<OwnerScopeGrantState, (OwnerScopeGrantState State, T Result)> update) =>
             GetOwner().UpdateScopeGrantState(update);
+        public OwnerCatalogState LoadCatalogState() => GetOwner().LoadCatalogState();
+        public T UpdateCatalogState<T>(
+            Func<OwnerCatalogState, (OwnerCatalogState State, T Result)> update) =>
+            GetOwner().UpdateCatalogState(update);
         public bool TryGetZone(string resourceId, out string? zoneId) => GetOwner().TryGetZone(resourceId, out zoneId);
         public byte[] ReadContent(string resourceId, long? expectedRevision = null) => GetOwner().ReadContent(resourceId, expectedRevision);
         public void ValidateRegistration(string resourceId, long? expectedRevision = null) => GetOwner().ValidateRegistration(resourceId, expectedRevision);

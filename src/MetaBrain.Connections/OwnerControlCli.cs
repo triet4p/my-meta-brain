@@ -35,6 +35,11 @@ internal static class OwnerControlCli
                 "grants" => await ListGrantsAsync(options).ConfigureAwait(false),
                 "collection-set" => await SetCollectionAsync(options).ConfigureAwait(false),
                 "collections" => await ListCollectionsAsync(options).ConfigureAwait(false),
+                "catalog-preview" => await CatalogPreviewAsync(options).ConfigureAwait(false),
+                "catalog-publish" => await CatalogPublishAsync(options).ConfigureAwait(false),
+                "catalog-list" => await CatalogListAsync(options).ConfigureAwait(false),
+                "catalog-withdraw" => await CatalogWithdrawAsync(options).ConfigureAwait(false),
+                "catalog-query" => await CatalogQueryAsync(options).ConfigureAwait(false),
                 "session" => await SessionAsync(options).ConfigureAwait(false),
                 "redeem" => await RedeemAsync(options).ConfigureAwait(false),
                 "sessions" => await ListSessionsAsync(options).ConfigureAwait(false),
@@ -556,6 +561,154 @@ internal static class OwnerControlCli
         return 0;
     }
 
+    private static async Task<int> CatalogPreviewAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--catalog-id", "--label", "--description", "--resource-id");
+        var catalogId = options.Required("--catalog-id");
+        var label = options.Required("--label");
+        var description = options.Required("--description");
+        var resourceId = options.Required("--resource-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(catalogId) || !ServiceSettingsLoader.IsSafeIdentifier(resourceId))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerCatalogPreviewOperation,
+                ResourceId: resourceId, CatalogId: catalogId, Label: label, Description: description)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "catalog_preview") ||
+            !result.Reply.TryGetProperty("catalogPreview", out var preview) ||
+            preview.ValueKind != JsonValueKind.Object)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine($"CATALOG PREVIEW id={JsonValueText(preview, "catalogId")} label={JsonValueText(preview, "label")} description={JsonValueText(preview, "description")}");
+        Console.WriteLine($"maps resource={JsonValueText(preview, "resourceId")} revision={JsonValueText(preview, "resourceRevision")} (private mapping stays encrypted; explicit owner text only)");
+        return 0;
+    }
+
+    private static async Task<int> CatalogPublishAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--catalog-id", "--label", "--description", "--resource-id");
+        var catalogId = options.Required("--catalog-id");
+        var label = options.Required("--label");
+        var description = options.Required("--description");
+        var resourceId = options.Required("--resource-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(catalogId) || !ServiceSettingsLoader.IsSafeIdentifier(resourceId))
+        {
+            return Usage();
+        }
+
+        Console.WriteLine($"CATALOG PUBLISH PREVIEW id={catalogId} label={label} description={description} resource={resourceId}");
+        Console.WriteLine("Only the exact label/description above will be public; the private resource mapping stays encrypted.");
+        Console.Write("Type PUBLISH to approve this exact public metadata: ");
+        if (!string.Equals(Console.ReadLine(), "PUBLISH", StringComparison.Ordinal))
+        {
+            Console.WriteLine("CANCELLED; catalog unchanged");
+            return 3;
+        }
+
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerCatalogPublishOperation,
+                ResourceId: resourceId, CatalogId: catalogId, Label: label, Description: description)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "catalog_published") ||
+            !result.Reply.TryGetProperty("catalogId", out var published) ||
+            published.ValueKind != JsonValueKind.String)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine($"CATALOG published id={published.GetString()}");
+        return 0;
+    }
+
+    private static async Task<int> CatalogListAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerCatalogListOperation)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "catalog_entries") ||
+            !result.Reply.TryGetProperty("catalogEntries", out var entries) ||
+            entries.ValueKind != JsonValueKind.Array)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        foreach (var entry in entries.EnumerateArray())
+        {
+            Console.WriteLine($"CATALOG id={JsonValueText(entry, "catalogId")} label={JsonValueText(entry, "label")} description={JsonValueText(entry, "description")} resource={JsonValueText(entry, "resourceId")} revision={JsonValueText(entry, "revision")}");
+        }
+
+        Console.WriteLine($"CATALOG count={entries.GetArrayLength()}");
+        return 0;
+    }
+
+    private static async Task<int> CatalogWithdrawAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--catalog-id");
+        var catalogId = options.Required("--catalog-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(catalogId))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerCatalogWithdrawOperation,
+                CatalogId: catalogId)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "catalog_withdrawn"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine($"CATALOG withdrawn id={catalogId}; future discovery serves no_match (already delivered copies cannot be recalled)");
+        return 0;
+    }
+
+    private static async Task<int> CatalogQueryAsync(CommandOptions options)
+    {
+        options.RequireOnly("--agent-pipe", "--query");
+        var agentPipe = PipeName(options, "--agent-pipe");
+        var query = options.Required("--query");
+        var result = await InvokeAgentAsync(agentPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.CatalogQueryOperation,
+                Query: query)).ConfigureAwait(false);
+        if (!result.Success)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintDiscovery(result.Reply);
+        return HasStatus(result.Reply, "catalog") ? 0 : 3;
+    }
+
+    private static void PrintDiscovery(JsonElement reply)
+    {
+        if (!reply.TryGetProperty("publishedCatalog", out var entries) || entries.ValueKind != JsonValueKind.Array)
+        {
+            Console.WriteLine("CATALOG no_match");
+            return;
+        }
+
+        foreach (var entry in entries.EnumerateArray())
+        {
+            Console.WriteLine($"CATALOG id={JsonValueText(entry, "catalogId")} label={JsonValueText(entry, "label")} description={JsonValueText(entry, "description")}");
+        }
+
+        Console.WriteLine(entries.GetArrayLength() == 0 ? "CATALOG no_match" : $"CATALOG count={entries.GetArrayLength()}");
+    }
+
+
     private static string[]? ParseIdentifiers(string? value)
     {
         if (value is null)
@@ -1023,7 +1176,7 @@ internal static class OwnerControlCli
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Owner commands: owner {status|read|write|provision|unlock|recover|lock|grant|grants|collection-set|collections|sessions|revoke-session} --control-pipe <name>; owner agent-read --agent-pipe <name> --session-file <protected-path> --operation <resource.read|source.read> --resource-id <id> --resource-revision <rev> --output-file <path>; owner authorize --agent-pipe <name> --session-file <protected-path> --operation <operation> [scoped resource/revision and egress fields]; owner migrate --config <legacy-owner-settings>; owner redeem --agent-pipe <name> --handoff-file <path> --session-file <new-path>; owner session --agent-pipe <name> --session-file <path>.");
+        Console.Error.WriteLine("Owner commands: owner {status|read|write|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw} --control-pipe <name>; owner catalog-query --agent-pipe <name> --query <text>; owner agent-read --agent-pipe <name> --session-file <protected-path> --operation <resource.read|source.read> --resource-id <id> --resource-revision <rev> --output-file <path>; owner authorize --agent-pipe <name> --session-file <protected-path> --operation <operation> [scoped resource/revision and egress fields]; owner ...");
         return 2;
     }
 

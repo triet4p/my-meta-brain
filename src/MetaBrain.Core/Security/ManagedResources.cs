@@ -111,7 +111,7 @@ public interface IVaultLifecycle
 /// Scoped unlocked access to private resource metadata and content. The
 /// application disposes this lease only after the operation response is sent.
 /// </summary>
-public interface IVaultOperation : IManagedResourceStore, IScopeGrantPersistence, IDisposable
+public interface IVaultOperation : IManagedResourceStore, IScopeGrantPersistence, ICatalogPersistence, IDisposable
 {
 }
 

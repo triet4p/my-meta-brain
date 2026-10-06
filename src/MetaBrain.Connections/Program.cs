@@ -61,7 +61,7 @@ internal static class Program
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Commands: serve-console --config <owner-settings>; serve-service --config <owner-settings>; owner {status|read|write|provision|unlock|recover|lock|grant|grants|collection-set|collections}; owner migrate --config <legacy-owner-settings>.");
+        Console.Error.WriteLine("Commands: serve-console --config <owner-settings>; serve-service --config <owner-settings>; owner {status|read|write|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|catalog-query}; owner migrate --config <legacy-owner-settings>.");
         return 2;
     }
 }
