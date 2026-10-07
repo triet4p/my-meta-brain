@@ -13,6 +13,7 @@ artifacts/
 build/
 dist/
 out/
+/.agents/tmp/
 .vs/
 .vscode/
 .idea/
