@@ -78,6 +78,11 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
             _manifest = manifest;
             try
             {
+                // Crash/interruption recovery on every successful unlock:
+                // staged-but-unpublished ciphertext and atomic-write temp
+                // files are never visible to readers; reaping them here keeps
+                // no half-published state across restarts.
+                _store.ReconcileUnpublished(manifest);
                 BumpUnlockEpochLocked();
                 return true;
             }
@@ -265,7 +270,24 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
                 throw new ManagedResourceUnavailableException();
             }
 
-            var next = _store.WriteResource(_manifest, _dataKey, resourceId, zoneId, content);
+            var current = _manifest.Resources.FirstOrDefault(resource =>
+                string.Equals(resource.ResourceId, resourceId, StringComparison.Ordinal));
+            var next = _store.WriteResource(_manifest, _dataKey, resourceId, zoneId, content, current?.Revision ?? 0);
+            _manifest = next;
+            return next.Resources.First(resource => string.Equals(resource.ResourceId, resourceId, StringComparison.Ordinal)).Revision;
+        }
+    }
+
+    private long WriteContent(string resourceId, string zoneId, byte[] content, long expectedRevision)
+    {
+        lock (_contentGate)
+        {
+            if (_manifest is null || _dataKey is null)
+            {
+                throw new ManagedResourceUnavailableException();
+            }
+
+            var next = _store.WriteResource(_manifest, _dataKey, resourceId, zoneId, content, expectedRevision);
             _manifest = next;
             return next.Resources.First(resource => string.Equals(resource.ResourceId, resourceId, StringComparison.Ordinal)).Revision;
         }
@@ -353,6 +375,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
         public byte[] ReadContent(string resourceId, long? expectedRevision = null) => GetOwner().ReadContent(resourceId, expectedRevision);
         public void ValidateRegistration(string resourceId, long? expectedRevision = null) => GetOwner().ValidateRegistration(resourceId, expectedRevision);
         public long WriteContent(string resourceId, string zoneId, byte[] content) => GetOwner().WriteContent(resourceId, zoneId, content);
+        public long WriteContent(string resourceId, string zoneId, byte[] content, long expectedRevision) => GetOwner().WriteContent(resourceId, zoneId, content, expectedRevision);
 
         public void Dispose()
         {

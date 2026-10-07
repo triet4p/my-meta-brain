@@ -147,11 +147,13 @@ public sealed class ServiceRequestHandler
     public const string AgentSessionInspectOperation = "agent.session.inspect";
     public const string AgentAccessAuthorizeOperation = "agent.access.authorize";
     public const string AgentResourceReadOperation = "agent.resource.read";
+    public const string AgentMemoryReadOperation = "agent.memory.read";
     public const string OwnerSessionListOperation = "owner.sessions";
     public const string OwnerSessionRevokeOperation = "owner.session.revoke";
     public const string MemoryCreateOperation = "memory.create";
+    public const string MemoryReviseOperation = "memory.revise";
+    public const string MemoryImportOperation = "memory.import";
     public const string MemoryReadOperation = "memory.read";
-    public const string AgentMemoryReadOperation = "agent.memory.read";
     private readonly GrantAuthority _grantAuthority;
     private readonly IVaultLifecycle _vault;
     private readonly OwnerScopeGrantAuthority _ownerScopeGrants;
@@ -370,6 +372,16 @@ public sealed class ServiceRequestHandler
             return HandleMemoryCreate(context, request, operation);
         }
 
+        if (string.Equals(request.Operation, MemoryReviseOperation, StringComparison.Ordinal))
+        {
+            return HandleMemoryRevise(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, MemoryImportOperation, StringComparison.Ordinal))
+        {
+            return HandleMemoryImport(context, request, operation);
+        }
+
         if (string.Equals(request.Operation, MemoryReadOperation, StringComparison.Ordinal))
         {
             return HandleMemoryRead(context, request, operation);
@@ -403,6 +415,99 @@ public sealed class ServiceRequestHandler
             var created = new MemoryItemService().Create(context, request.ResourceId, request.ZoneId, draft, operation);
             return new ServiceReply(CurrentProtocolVersion, "memory_created", "owner", null,
                 ResourceRevision: created.Revision, MemoryItem: ToMemoryWire(created));
+        }
+        catch (FormatException)
+        {
+            return Error("invalid_request");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        finally
+        {
+            if (draft is { Length: > 0 })
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(draft);
+            }
+        }
+    }
+
+    /// <summary>
+    /// S2-T2 explicit import boundary: replaces external plaintext editing of
+    /// canonical files. The owner supplies exact envelope bytes plus the live
+    /// revision they replace (0 for create-only). The bytes must decode as a
+    /// valid S2-T1/S2-T2 stored envelope with matching ID/zone before the
+    /// revision-gated commit; stale or mismatched imports fail closed and
+    /// publish nothing.
+    /// </summary>
+    private ServiceReply HandleMemoryImport(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || operation is null || HasMemoryWriteExtras(request) ||
+            string.IsNullOrEmpty(request.ResourceId) || string.IsNullOrEmpty(request.ZoneId) ||
+            request.ResourceRevision is not { } expectedRevision || expectedRevision < 0 ||
+            string.IsNullOrEmpty(request.ContentBase64))
+        {
+            return Error("invalid_request");
+        }
+
+        byte[]? envelope = null;
+        try
+        {
+            envelope = Convert.FromBase64String(request.ContentBase64);
+            var imported = new MemoryItemService().Import(context, request.ResourceId, request.ZoneId, expectedRevision, envelope, operation);
+            return new ServiceReply(CurrentProtocolVersion, "memory_imported", "owner", null,
+                ResourceRevision: imported.Revision, MemoryItem: ToMemoryWire(imported));
+        }
+        catch (FormatException)
+        {
+            return Error("invalid_request");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        finally
+        {
+            if (envelope is { Length: > 0 })
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(envelope);
+            }
+        }
+    }
+
+    /// <summary>
+    /// S2-T2 revision-gated revise: the caller must name the live revision it
+    /// replaces. Stale, missing, or mismatched revisions fail closed with the
+    /// same generic error as unknown IDs (no existence oracle) and publish
+    /// nothing. Successful revises re-validate the typed envelope and return
+    /// the new revision.
+    /// </summary>
+    private ServiceReply HandleMemoryRevise(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || operation is null || HasMemoryWriteExtras(request) ||
+            string.IsNullOrEmpty(request.ResourceId) || string.IsNullOrEmpty(request.ZoneId) ||
+            request.ResourceRevision is not { } expectedRevision || expectedRevision < 1 ||
+            string.IsNullOrEmpty(request.ContentBase64))
+        {
+            return Error("invalid_request");
+        }
+
+        byte[]? draft = null;
+        try
+        {
+            draft = Convert.FromBase64String(request.ContentBase64);
+            var revised = new MemoryItemService().Revise(context, request.ResourceId, request.ZoneId, expectedRevision, draft, operation);
+            return new ServiceReply(CurrentProtocolVersion, "memory_revised", "owner", null,
+                ResourceRevision: revised.Revision, MemoryItem: ToMemoryWire(revised));
         }
         catch (FormatException)
         {
@@ -686,6 +791,7 @@ public sealed class ServiceRequestHandler
     private ServiceReply HandleResourceWrite(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
     {
         if (operation is null || string.IsNullOrEmpty(request.ResourceId) || string.IsNullOrEmpty(request.ZoneId) ||
+            request.ResourceRevision is not { } expectedRevision ||
             string.IsNullOrEmpty(request.ContentBase64))
         {
             return ResourceDenied();
@@ -702,7 +808,10 @@ public sealed class ServiceRequestHandler
                 return ResourceDenied();
             }
 
-            var revision = operation.WriteContent(request.ResourceId, request.ZoneId, content);
+            // S2-T2 durable cutover: raw resource writes now require the live
+            // revision they replace (0 for create-only). Stale or unknown
+            // revisions fail closed without publishing new bytes.
+            var revision = operation.WriteContent(request.ResourceId, request.ZoneId, content, expectedRevision);
             return new ServiceReply(CurrentProtocolVersion, "written", null, null,
                 Decision: decision, PolicyGeneration: decision.PolicyGeneration, ResourceRevision: revision);
         }

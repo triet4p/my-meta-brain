@@ -62,7 +62,7 @@ internal static class Program
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Commands: serve-console --config <owner-settings>; serve-service --config <owner-settings>; agent-mcp --agent-pipe <name> (scoped reads return the approved body in memory, no output file); owner {status|read|write|memory-create|memory-read|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|catalog-query|agent-catalog-list|request|request-status|requests|request-preview|request-approve|request-reject|session|redeem|sessions|revoke-session|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read}");
+        Console.Error.WriteLine("Commands: serve-console --config <owner-settings>; serve-service --config <owner-settings>; agent-mcp --agent-pipe <name> (scoped reads return the approved body in memory, no output file); owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|catalog-query|agent-catalog-list|request|request-status|…");
         return 2;
     }
 }

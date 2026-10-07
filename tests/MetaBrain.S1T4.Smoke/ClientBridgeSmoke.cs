@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 
@@ -47,8 +48,8 @@ internal static partial class OwnerServiceSmoke
             Require(unlocked.ExitCode == 0 && unlocked.StandardOutput.Contains("VAULT unlocked", StringComparison.Ordinal),
                 "The owner could not unlock the isolated bridge fixture.");
 
-            await WriteBridgeBodyAsync(connectionsExecutable, fixture, SmokeFixture.ResourceA, BridgeBodyA).ConfigureAwait(false);
-            await WriteBridgeBodyAsync(connectionsExecutable, fixture, SmokeFixture.ResourceB, BridgeBodyB).ConfigureAwait(false);
+            await WriteBridgeBodyAsync(connectionsExecutable, fixture, SmokeFixture.ResourceA, BridgeBodyA, writeRevision: 1).ConfigureAwait(false);
+            await WriteBridgeBodyAsync(connectionsExecutable, fixture, SmokeFixture.ResourceB, BridgeBodyB, writeRevision: 1).ConfigureAwait(false);
             await PublishBridgeCatalogAsync(connectionsExecutable, fixture, BridgeCatalogA, BridgeLabelA, BridgeDescriptionA, SmokeFixture.ResourceA).ConfigureAwait(false);
             await PublishBridgeCatalogAsync(connectionsExecutable, fixture, BridgeCatalogB, BridgeLabelB, BridgeDescriptionB, SmokeFixture.ResourceB).ConfigureAwait(false);
             var bridgeList = await RunBridgeToolsListAsync(connectionsExecutable, fixture.AgentPipe).ConfigureAwait(false);
@@ -181,7 +182,7 @@ internal static partial class OwnerServiceSmoke
             // Owner inspect/revoke + lock: same bridge read denies after revoke and after lock.
             // Binary boundary first: store non-UTF8 revision 3, then a fresh request on
             // catalog A resolves it and proves the bridge carries it losslessly as base64.
-            await WriteBridgeBinaryBodyAsync(connectionsExecutable, fixture, SmokeFixture.ResourceA).ConfigureAwait(false);
+            await WriteBridgeBinaryBodyAsync(connectionsExecutable, fixture, SmokeFixture.ResourceA, writeRevision: 2).ConfigureAwait(false);
             var binaryRequest = await RunBridgeToolAsync(connectionsExecutable, fixture.AgentPipe,
                 "metabrain_access_request",
                 new { catalogIds = BridgeCatalogA, purpose = BridgePurposeB, operations = "resource.read", agentId = "synthetic-bridge-binary" }).ConfigureAwait(false);
@@ -241,7 +242,7 @@ internal static partial class OwnerServiceSmoke
         }
     }
 
-    private static async Task WriteBridgeBodyAsync(string executable, SmokeFixture fixture, string resourceId, string marker)
+    private static async Task WriteBridgeBodyAsync(string executable, SmokeFixture fixture, string resourceId, string marker, long writeRevision)
     {
         var input = Path.Combine(fixture.OutputDirectory, "bridge-body-" + Guid.NewGuid().ToString("N") + ".bin");
         var bytes = Encoding.UTF8.GetBytes($"synthetic bridge fixture body; marker={marker}; never a real owner secret.");
@@ -250,12 +251,13 @@ internal static partial class OwnerServiceSmoke
         var result = await RunOwnerCommandAsync(executable,
             "owner", "write", "--control-pipe", fixture.ControlPipe,
             "--resource-id", resourceId, "--zone-id", SmokeFixture.Zone,
+            "--expected-revision", writeRevision.ToString(CultureInfo.InvariantCulture),
             "--input-file", input).ConfigureAwait(false);
         Require(result.ExitCode == 0, "The bridge fixture could not store its synthetic private body.");
         File.Delete(input);
     }
 
-    private static async Task WriteBridgeBinaryBodyAsync(string executable, SmokeFixture fixture, string resourceId)
+    private static async Task WriteBridgeBinaryBodyAsync(string executable, SmokeFixture fixture, string resourceId, long writeRevision)
     {
         var input = Path.Combine(fixture.OutputDirectory, "bridge-binary-" + Guid.NewGuid().ToString("N") + ".bin");
         var bytes = new byte[] { 0xFF, 0xFE, 0x00, 0x01, 0x41, 0x42, 0x43, 0x44 };
@@ -264,12 +266,12 @@ internal static partial class OwnerServiceSmoke
         var result = await RunOwnerCommandAsync(executable,
             "owner", "write", "--control-pipe", fixture.ControlPipe,
             "--resource-id", resourceId, "--zone-id", SmokeFixture.Zone,
+            "--expected-revision", writeRevision.ToString(CultureInfo.InvariantCulture),
             "--input-file", input).ConfigureAwait(false);
         Require(result.ExitCode == 0 && result.StandardOutput.Contains("WRITE stored revision=3", StringComparison.Ordinal),
             "The bridge fixture could not store its synthetic binary revision.");
         File.Delete(input);
     }
-
     private static async Task PublishBridgeCatalogAsync(
         string executable, SmokeFixture fixture, string catalogId, string label, string description, string resourceId)
     {

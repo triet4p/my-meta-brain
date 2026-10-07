@@ -146,9 +146,9 @@ internal static partial class OwnerServiceSmoke
             var grantA = await IssueGrantAsync("migration-zone", longExpiry,
                 "--zone-id", SmokeFixture.Zone, "--operations", "resource.read").ConfigureAwait(false);
             await WriteFixtureResourceAsync(connectionsExecutable, fixture, SmokeFixture.ResourceA,
-                "A content advanced after the first immutable grant.", expectedRevision: 2).ConfigureAwait(false);
+                "A content advanced after the first immutable grant.", expectedRevision: 2, writeRevision: 1).ConfigureAwait(false);
             await WriteFixtureResourceAsync(connectionsExecutable, fixture, SmokeFixture.ResourceB,
-                "B content advanced after the first immutable grant.", expectedRevision: 2).ConfigureAwait(false);
+                "B content advanced after the first immutable grant.", expectedRevision: 2, writeRevision: 1).ConfigureAwait(false);
             var grantB = await IssueGrantAsync("migration-collection-egress", longExpiry,
                 "--collection-id", SmokeFixture.CollectionId,
                 "--operations", "proposal.create,link.create,provider.egress",

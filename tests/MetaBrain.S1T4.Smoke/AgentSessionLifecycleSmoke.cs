@@ -38,7 +38,7 @@ internal static partial class OwnerServiceSmoke
                 "The owner could not unlock the isolated lifecycle fixture.");
 
             await WriteFixtureResourceAsync(connectionsExecutable, fixture, SmokeFixture.ResourceA,
-                "synthetic resource A revision two for exact access authorization.", expectedRevision: 2).ConfigureAwait(false);
+                "synthetic resource A revision two for exact access authorization.", expectedRevision: 2, writeRevision: 1).ConfigureAwait(false);
             var collection = await RunOwnerCommandWithInputAsync(
                 connectionsExecutable, "SET" + Environment.NewLine,
                 "owner", "collection-set", "--control-pipe", fixture.ControlPipe,

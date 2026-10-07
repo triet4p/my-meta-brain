@@ -40,7 +40,7 @@ S1-T9 [behavioral evidence A3](../artifacts/sprint-1/reviews/S1-T9-S1T9-REVIEW-2
 | Sprint | Trạng thái | Task range | Gate |
 | --- | --- | --- | --- |
 | 1 | Complete — CR01 replacement M1 | S1-T1 retained; S1-T2–T9 [x] and doc correction committed | Task evidence/checkpoints PASS; final differential deep A2 PASS |
-| 2 | In progress — S2-T1 | S2-T1 [~]; S2-T2…S2-T7 pending | S2-T1 evidence/checkpoint pending |
+| 2 | In progress — S2-T2 | S2-T1 [x]; S2-T2 [~]; S2-T3…S2-T7 pending | S2-T1 checkpoint `4a1b9c5`; S2-T2 evidence/checkpoint pending |
 | 3 | Not started | S3-T1…S3-T6 | Pending |
 | 4 | Not started | S4-T1…S4-T7 | Pending |
 | 5 | Not started | S5-T1…S5-T7 | Pending |
@@ -48,7 +48,7 @@ S1-T9 [behavioral evidence A3](../artifacts/sprint-1/reviews/S1-T9-S1T9-REVIEW-2
 | 7 | Not started | S7-T1…S7-T6 | Pending |
 | 8 | Not started | S8-T1…S8-T7 | Pending |
 
-S2-T1 launch: fresh Gold `gold-task`, attempt `S2T1-IMPL-20261007-A1`, resolved `opencode-go/muse-spark-1.3-contributor:xhigh`; contextual domain/schema and scoped-service integration, quota/provider-applied effort unknown. Runtime IDs and gate/checkpoint references tracked in [Sprint 2](sprint-plans/sprint-2.md#gate-record); only S2-T1 authorized now, no push.
+S2-T1 complete: Gold implementation `S2T1-IMPL-20261007-A1` / `S2T1DomainImplA1`, evidence `S2T1-REVIEW-20261007-A1` / `S2T1EvidenceA1` PASS, exact-snapshot Bronze checkpoint `S2T1-CHECKPOINT-20261007-A1` / `S2T1CheckpointA1` successful at `4a1b9c53babade36cec080798792488188748cf0`. S2-T2 now authorized: fresh Gold attempt `S2T2-IMPL-20261007-A1`, resolved `opencode-go/muse-spark-1.3-contributor:xhigh`; durability/revision/migration integration, quota/provider-applied effort unknown. [Sprint 2 gate record](sprint-plans/sprint-2.md#gate-record) tracks task records and runtime IDs; S2-T2 stays [~] through evidence and checkpoint. Main-owned post-S2-T1 status updates and S2-T2 launch edits explicitly included in next reviewed planning snapshot. No push or S2-T3 launch authorized.
 
 ## Completed Sprints
 

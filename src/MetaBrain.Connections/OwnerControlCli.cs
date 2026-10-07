@@ -28,6 +28,8 @@ internal static class OwnerControlCli
                 "agent-read" => await AgentReadAsync(options).ConfigureAwait(false),
                 "write" => await WriteAsync(options).ConfigureAwait(false),
                 "memory-create" => await MemoryCreateAsync(options).ConfigureAwait(false),
+                "memory-revise" => await MemoryReviseAsync(options).ConfigureAwait(false),
+                "memory-import" => await MemoryImportAsync(options).ConfigureAwait(false),
                 "memory-read" => await MemoryReadAsync(options).ConfigureAwait(false),
                 "provision" => await ProvisionAsync(options).ConfigureAwait(false),
                 "unlock" => await UnlockAsync(options, useRecoveryCode: false).ConfigureAwait(false),
@@ -207,12 +209,18 @@ internal static class OwnerControlCli
 
     private static async Task<int> WriteAsync(CommandOptions options)
     {
-        options.RequireOnly("--control-pipe", "--resource-id", "--zone-id", "--input-file");
+        options.RequireOnly("--control-pipe", "--resource-id", "--zone-id", "--expected-revision", "--input-file");
         var controlPipe = ControlPipe(options);
         var resourceId = options.Required("--resource-id");
         var zoneId = options.Required("--zone-id");
         var inputPath = options.Required("--input-file");
         if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId) || !ServiceSettingsLoader.IsSafeIdentifier(zoneId))
+        {
+            return Usage();
+        }
+
+        if (!long.TryParse(options.Required("--expected-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var expectedRevision) ||
+            expectedRevision < 0)
         {
             return Usage();
         }
@@ -228,7 +236,7 @@ internal static class OwnerControlCli
 
             var result = await InvokeOwnerAsync(controlPipe,
                 new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.ResourceWriteOperation,
-                    resourceId, zoneId, ContentBase64: Convert.ToBase64String(content))).ConfigureAwait(false);
+                    resourceId, zoneId, ContentBase64: Convert.ToBase64String(content), ResourceRevision: expectedRevision)).ConfigureAwait(false);
             if (!result.Success || !HasStatus(result.Reply, "written"))
             {
                 WriteServiceError(result);
@@ -269,6 +277,100 @@ internal static class OwnerControlCli
                 new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.MemoryCreateOperation,
                     resourceId, zoneId, ContentBase64: Convert.ToBase64String(content))).ConfigureAwait(false);
             if (!result.Success || !HasStatus(result.Reply, "memory_created"))
+            {
+                WriteServiceError(result);
+                return 4;
+            }
+
+            var revision = result.Reply.TryGetProperty("resourceRevision", out var value) ? value.GetInt64() : 0;
+            PrintMemoryItem(result.Reply);
+            Console.WriteLine($"MEMORY stored revision={revision}");
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(content);
+        }
+    }
+
+    private static async Task<int> MemoryReviseAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--zone-id", "--expected-revision", "--input-file");
+        var controlPipe = ControlPipe(options);
+        var resourceId = options.Required("--resource-id");
+        var zoneId = options.Required("--zone-id");
+        var inputPath = options.Required("--input-file");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId) || !ServiceSettingsLoader.IsSafeIdentifier(zoneId))
+        {
+            return Usage();
+        }
+
+        if (!long.TryParse(options.Required("--expected-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var expectedRevision) ||
+            expectedRevision < 1)
+        {
+            return Usage();
+        }
+
+        var content = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        try
+        {
+            if (content.Length is <= 0 or > 1024 * 1024)
+            {
+                Console.Error.WriteLine("ERROR invalid_memory_size");
+                return 4;
+            }
+
+            var result = await InvokeOwnerAsync(controlPipe,
+                new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.MemoryReviseOperation,
+                    resourceId, zoneId, ContentBase64: Convert.ToBase64String(content), ResourceRevision: expectedRevision)).ConfigureAwait(false);
+            if (!result.Success || !HasStatus(result.Reply, "memory_revised"))
+            {
+                WriteServiceError(result);
+                return 4;
+            }
+
+            var revision = result.Reply.TryGetProperty("resourceRevision", out var value) ? value.GetInt64() : 0;
+            PrintMemoryItem(result.Reply);
+            Console.WriteLine($"MEMORY stored revision={revision}");
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(content);
+        }
+    }
+
+    private static async Task<int> MemoryImportAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--zone-id", "--expected-revision", "--input-file");
+        var controlPipe = ControlPipe(options);
+        var resourceId = options.Required("--resource-id");
+        var zoneId = options.Required("--zone-id");
+        var inputPath = options.Required("--input-file");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId) || !ServiceSettingsLoader.IsSafeIdentifier(zoneId))
+        {
+            return Usage();
+        }
+
+        if (!long.TryParse(options.Required("--expected-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var expectedRevision) ||
+            expectedRevision < 0)
+        {
+            return Usage();
+        }
+
+        var content = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        try
+        {
+            if (content.Length is <= 0 or > 1024 * 1024)
+            {
+                Console.Error.WriteLine("ERROR invalid_memory_size");
+                return 4;
+            }
+
+            var result = await InvokeOwnerAsync(controlPipe,
+                new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.MemoryImportOperation,
+                    resourceId, zoneId, ContentBase64: Convert.ToBase64String(content), ResourceRevision: expectedRevision)).ConfigureAwait(false);
+            if (!result.Success || !HasStatus(result.Reply, "memory_imported"))
             {
                 WriteServiceError(result);
                 return 4;
@@ -1638,7 +1740,7 @@ internal static class OwnerControlCli
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Owner commands: owner {status|read|write|memory-create|memory-read|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read}");
+        Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|re…");
         return 2;
     }
 

@@ -52,8 +52,8 @@ internal static partial class OwnerServiceSmoke
             Require(unlocked.ExitCode == 0 && unlocked.StandardOutput.Contains("VAULT unlocked", StringComparison.Ordinal),
                 "The owner could not unlock the isolated request fixture.");
 
-            await WriteRequestBodyAsync(connectionsExecutable, fixture, SmokeFixture.ResourceA, RequestBodyMarkerA).ConfigureAwait(false);
-            await WriteRequestBodyAsync(connectionsExecutable, fixture, SmokeFixture.ResourceB, RequestBodyMarkerB).ConfigureAwait(false);
+            await WriteRequestBodyAsync(connectionsExecutable, fixture, SmokeFixture.ResourceA, RequestBodyMarkerA, writeRevision: 1).ConfigureAwait(false);
+            await WriteRequestBodyAsync(connectionsExecutable, fixture, SmokeFixture.ResourceB, RequestBodyMarkerB, writeRevision: 1).ConfigureAwait(false);
             await PublishRequestCatalogAsync(connectionsExecutable, fixture, RequestCatalogA, RequestLabelA, RequestDescriptionA, SmokeFixture.ResourceA).ConfigureAwait(false);
             await PublishRequestCatalogAsync(connectionsExecutable, fixture, RequestCatalogB, RequestLabelB, RequestDescriptionB, SmokeFixture.ResourceB).ConfigureAwait(false);
 
@@ -282,6 +282,7 @@ internal static partial class OwnerServiceSmoke
             var tamperWrite = await RunOwnerCommandAsync(connectionsExecutable,
                 "owner", "write", "--control-pipe", fixture.ControlPipe,
                 "--resource-id", SmokeFixture.ResourceB, "--zone-id", SmokeFixture.Zone,
+                "--expected-revision", "2",
                 "--input-file", await WriteTempInputAsync(fixture, RequestRevisionMarker).ConfigureAwait(false)).ConfigureAwait(false);
             Require(tamperWrite.ExitCode == 0 && tamperWrite.StandardOutput.Contains("WRITE stored revision=3", StringComparison.Ordinal),
                 "The stale-preview revision bump did not persist.");
@@ -559,7 +560,7 @@ internal static partial class OwnerServiceSmoke
         }
     }
 
-    private static async Task WriteRequestBodyAsync(string executable, SmokeFixture fixture, string resourceId, string marker)
+    private static async Task WriteRequestBodyAsync(string executable, SmokeFixture fixture, string resourceId, string marker, long writeRevision)
     {
         var input = Path.Combine(fixture.OutputDirectory, "request-body-" + Guid.NewGuid().ToString("N") + ".bin");
         var bytes = Encoding.UTF8.GetBytes($"synthetic request fixture body; marker={marker}; never a real owner secret.");
@@ -568,6 +569,7 @@ internal static partial class OwnerServiceSmoke
         var result = await RunOwnerCommandAsync(executable,
             "owner", "write", "--control-pipe", fixture.ControlPipe,
             "--resource-id", resourceId, "--zone-id", SmokeFixture.Zone,
+            "--expected-revision", writeRevision.ToString(CultureInfo.InvariantCulture),
             "--input-file", input).ConfigureAwait(false);
         Require(result.ExitCode == 0, "The request fixture could not store its synthetic private body.");
         File.Delete(input);

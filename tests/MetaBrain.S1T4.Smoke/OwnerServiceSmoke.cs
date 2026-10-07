@@ -92,6 +92,7 @@ internal static partial class OwnerServiceSmoke
             var write = await RunOwnerCommandAsync(connectionsExecutable,
                 "owner", "write", "--control-pipe", fixture.ControlPipe,
                 "--resource-id", SmokeFixture.ResourceA, "--zone-id", SmokeFixture.Zone,
+                "--expected-revision", "1",
                 "--input-file", replacementPath).ConfigureAwait(false);
             Require(write.ExitCode == 0 && write.StandardOutput.Contains("WRITE stored revision=2", StringComparison.Ordinal),
                 "The owner CLI did not persist a revision-checked encrypted resource write.");
@@ -260,7 +261,7 @@ internal static partial class OwnerServiceSmoke
             VerifyOwnerHandoffAcl(handoffA);
 
             await WriteFixtureResourceAsync(connectionsExecutable, fixture, SmokeFixture.ResourceA,
-                "synthetic resource A revision two", expectedRevision: 2).ConfigureAwait(false);
+                "synthetic resource A revision two", expectedRevision: 2, writeRevision: 1).ConfigureAwait(false);
 
             var initialCollection = await RunOwnerCommandWithInputAsync(connectionsExecutable, "SET\n",
                 "owner", "collection-set", "--control-pipe", fixture.ControlPipe,
@@ -366,9 +367,9 @@ internal static partial class OwnerServiceSmoke
                 "An unapproved publish operation was accepted or received a token handoff.");
 
             await WriteFixtureResourceAsync(connectionsExecutable, fixture, SmokeFixture.ResourceA,
-                "synthetic resource A revision three after grants", expectedRevision: 3).ConfigureAwait(false);
+                "synthetic resource A revision three after grants", expectedRevision: 3, writeRevision: 2).ConfigureAwait(false);
             await WriteFixtureResourceAsync(connectionsExecutable, fixture, SmokeFixture.ResourceB,
-                "synthetic resource B revision two after grants", expectedRevision: 2).ConfigureAwait(false);
+                "synthetic resource B revision two after grants", expectedRevision: 2, writeRevision: 1).ConfigureAwait(false);
             var scopeStatePath = Path.Combine(fixture.VaultDirectoryPath, "scope-grants.enc");
             VerifyEncryptedScopeState(scopeStatePath, tokenA!, tokenB!);
             var beforeRestart = await RunOwnerCommandAsync(connectionsExecutable,
@@ -471,7 +472,8 @@ internal static partial class OwnerServiceSmoke
         SmokeFixture fixture,
         string resourceId,
         string contents,
-        long expectedRevision)
+        long expectedRevision,
+        long writeRevision)
     {
         var bytes = Encoding.UTF8.GetBytes(contents);
         var inputPath = Path.Combine(fixture.OutputDirectory, "scope-write-" + Guid.NewGuid().ToString("N") + ".bin");
@@ -480,6 +482,7 @@ internal static partial class OwnerServiceSmoke
         var result = await RunOwnerCommandAsync(executable,
             "owner", "write", "--control-pipe", fixture.ControlPipe,
             "--resource-id", resourceId, "--zone-id", SmokeFixture.Zone,
+            "--expected-revision", writeRevision.ToString(CultureInfo.InvariantCulture),
             "--input-file", inputPath).ConfigureAwait(false);
         Require(result.ExitCode == 0 &&
                 result.StandardOutput.Contains($"WRITE stored revision={expectedRevision}", StringComparison.Ordinal),
@@ -777,6 +780,7 @@ internal static partial class OwnerServiceSmoke
         var seedWrite = await RunOwnerCommandAsync(executable,
             "owner", "write", "--control-pipe", fixture.ControlPipe,
             "--resource-id", SmokeFixture.ResourceA, "--zone-id", SmokeFixture.Zone,
+            "--expected-revision", "2",
             "--input-file", fixture.RaceInputPath).ConfigureAwait(false);
         CryptographicOperations.ZeroMemory(largeContent);
         Require(seedWrite.ExitCode == 0, "Could not prepare the bounded large synthetic record for the lock race.");
@@ -891,6 +895,7 @@ internal static partial class OwnerServiceSmoke
         var result = await RunOwnerCommandAsync(executable,
             "owner", "write", "--control-pipe", fixture.ControlPipe,
             "--resource-id", resourceId, "--zone-id", SmokeFixture.Zone,
+            "--expected-revision", "999999",
             "--input-file", inputPath).ConfigureAwait(false);
         return result.ExitCode == 4 && result.StandardError.Contains("resource_unavailable", StringComparison.Ordinal);
     }

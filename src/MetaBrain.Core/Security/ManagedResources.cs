@@ -91,6 +91,15 @@ public interface IManagedResourceStore : IManagedResourceReader
     IReadOnlyList<ScopeResourceRevision> ListResources();
     bool TryGetZone(string resourceId, out string? zoneId);
     long WriteContent(string resourceId, string zoneId, byte[] content);
+    /// <summary>
+    /// Revision-gated write. An <paramref name="expectedRevision"/> of zero
+    /// requires the ID to be absent (create-only); a positive value must equal
+    /// the live revision (revise). Any mismatch fails closed and publishes
+    /// nothing. Implementations enforce the check atomically with the manifest
+    /// commit under the content gate, so concurrent stale writers cannot
+    /// overwrite the winner.
+    /// </summary>
+    long WriteContent(string resourceId, string zoneId, byte[] content, long expectedRevision);
     void ValidateRegistrationForAll(IReadOnlyList<ScopeResourceRevision> expected)
     {
         ArgumentNullException.ThrowIfNull(expected);

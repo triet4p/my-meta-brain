@@ -175,7 +175,7 @@ internal static partial class OwnerServiceSmoke
                 "--collection-id", "s2t1-collection", "--resource-ids", questionId).ConfigureAwait(false);
             Require(membership.ExitCode == 0, "Owner collection membership could not be set for S2-T1.");
             var revisedDraft = questionDraft.Replace("Why does staging reject this payload?", "Why does staging reject this payload, revised?");
-            await WriteDraftAsync(connectionsExecutable, fixture, questionId, questionZone, revisedDraft, expectedRevision: 2).ConfigureAwait(false);
+            await ReviseS2T1DraftAsync(connectionsExecutable, fixture, questionId, questionZone, revisedDraft, writeRevision: 1, expectedRevision: 2).ConfigureAwait(false);
             var grantAfter = await ReadScopeSnapshotAsync(connectionsExecutable, fixture).ConfigureAwait(false);
             Require(grantBefore == grantAfter, "Adding a memory item, membership, or revision changed the grant snapshot.");
             Console.WriteLine("PASS grant snapshot unchanged after item add, membership set, and revision bump");
@@ -245,6 +245,19 @@ internal static partial class OwnerServiceSmoke
         var result = await WriteDraftResultAsync(executable, fixture, resourceId, zoneId, draftJson).ConfigureAwait(false);
         Require(result.ExitCode == 0 && result.StandardOutput.Contains($"MEMORY stored revision={expectedRevision}", StringComparison.Ordinal),
             $"Memory create did not store {resourceId} at revision {expectedRevision} (exit={result.ExitCode}; stdout={result.StandardOutput.Trim()}; stderr={result.StandardError.Trim()}; draft={draftJson}).");
+    }
+
+    private static async Task ReviseS2T1DraftAsync(string executable, SmokeFixture fixture, string resourceId, string zoneId, string draftJson, long writeRevision, long expectedRevision)
+    {
+        var input = Path.Combine(fixture.OutputDirectory, "s2t1-revise-" + Guid.NewGuid().ToString("N") + ".json");
+        await File.WriteAllTextAsync(input, draftJson, Encoding.UTF8).ConfigureAwait(false);
+        var result = await RunOwnerCommandAsync(executable,
+            "owner", "memory-revise", "--control-pipe", fixture.ControlPipe,
+            "--resource-id", resourceId, "--zone-id", zoneId,
+            "--expected-revision", writeRevision.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            "--input-file", input).ConfigureAwait(false);
+        Require(result.ExitCode == 0 && result.StandardOutput.Contains($"MEMORY stored revision={expectedRevision}", StringComparison.Ordinal),
+            $"Memory revise did not store {resourceId} at revision {expectedRevision} (exit={result.ExitCode}; stdout={result.StandardOutput.Trim()}; stderr={result.StandardError.Trim()}; draft={draftJson}).");
     }
 
     private static async Task<CommandResult> WriteDraftResultAsync(string executable, SmokeFixture fixture, string resourceId, string zoneId, string draftJson)

@@ -522,10 +522,11 @@ internal sealed class EncryptedVaultStore
         ReadOnlySpan<byte> dataKey,
         string resourceId,
         string zoneId,
-        byte[] content)
+        byte[] content,
+        long expectedRevision)
     {
         if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId) || !ServiceSettingsLoader.IsSafeIdentifier(zoneId) ||
-            content.Length <= 0 || content.Length > MaximumResourceBytes)
+            content.Length <= 0 || content.Length > MaximumResourceBytes || expectedRevision < 0)
         {
             throw new ManagedResourceUnavailableException();
         }
@@ -537,12 +538,22 @@ internal sealed class EncryptedVaultStore
             throw new ManagedResourceUnavailableException();
         }
 
+        var liveRevision = current?.Revision ?? 0;
+        if (liveRevision != expectedRevision)
+        {
+            throw new ManagedResourceUnavailableException();
+        }
+
         var descriptor = new VaultResourceDescriptor(
             resourceId,
             zoneId,
             CurrentResourceSchemaVersion,
-            checked((current?.Revision ?? 0) + 1),
+            checked(liveRevision + 1),
             NewStorageName());
+        // Staged ciphertext first: the new bytes are unreachable until the
+        // manifest commit below succeeds. A crash here leaves only an orphan
+        // `.mbv` file that unlock recovery reaps; readers still see the old
+        // revision and never a half-published state.
         WriteResourceFile(_root, manifest.VaultId, descriptor, content, dataKey);
         var resources = manifest.Resources.Where(resource => !string.Equals(resource.ResourceId, resourceId, StringComparison.Ordinal))
             .Append(descriptor)
@@ -842,6 +853,93 @@ internal sealed class EncryptedVaultStore
         {
             // Orphaned resource ciphertext is not addressable from the committed manifest.
         }
+    }
+    /// <summary>
+    /// Crash/interruption recovery: reaps staged-but-unpublished resource
+    /// ciphertext and interrupted atomic-write temp files. Unpublished bytes
+    /// are never addressable from the committed manifest and carry the same
+    /// authenticated envelope as published bytes; reaping them changes no
+    /// visible revision. Returns the count of reaped files.
+    /// </summary>
+    public int ReconcileUnpublished(VaultManifest manifest)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var resource in manifest.Resources)
+        {
+            if (IsStorageName(resource.StorageName))
+            {
+                known.Add(resource.StorageName);
+            }
+        }
+
+        known.Add("manifest.enc");
+        known.Add("scope-grants.enc");
+        known.Add("owner-catalog.enc");
+        known.Add("vault-header.json");
+        var reaped = 0;
+        if (Directory.Exists(_resourcesPath))
+        {
+            foreach (var path in Directory.GetFiles(_resourcesPath, "*", SearchOption.TopDirectoryOnly))
+            {
+                var name = Path.GetFileName(path);
+                if (name is null || known.Contains(name))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var attributes = File.GetAttributes(path);
+                    if ((attributes & FileAttributes.Directory) != 0)
+                    {
+                        continue;
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    continue;
+                }
+
+                TryDeleteCiphertext(path);
+                reaped++;
+            }
+        }
+
+        foreach (var directory in new[] { _root, _serviceDirectory })
+        {
+            string[] candidates;
+            try
+            {
+                if (!Directory.Exists(directory))
+                {
+                    continue;
+                }
+
+                candidates = Directory.GetFiles(directory, ".*.tmp", SearchOption.TopDirectoryOnly);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            foreach (var path in candidates)
+            {
+                try
+                {
+                    if (File.Exists(path))
+                    {
+                        File.Delete(path);
+                        reaped++;
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+
+        return reaped;
     }
 
     private FileSecurity CreateFileSecurity()

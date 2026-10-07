@@ -58,6 +58,7 @@ internal static partial class OwnerServiceSmoke
             var markerWrite = await RunOwnerCommandAsync(connectionsExecutable,
                 "owner", "write", "--control-pipe", fixture.ControlPipe,
                 "--resource-id", markerResource, "--zone-id", SmokeFixture.Zone,
+                "--expected-revision", "0",
                 "--input-file", markerInput).ConfigureAwait(false);
             Require(markerWrite.ExitCode == 0 && markerWrite.StandardOutput.Contains("WRITE stored revision=1", StringComparison.Ordinal),
                 "The owner could not store the synthetic sensitive private marker resource.");
