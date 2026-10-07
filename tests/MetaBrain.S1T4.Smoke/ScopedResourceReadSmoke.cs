@@ -77,38 +77,43 @@ internal static partial class OwnerServiceSmoke
                 return new T6Session(ParseSessionId(result.StandardOutput), sessionFile);
             }
 
-            async Task<CommandResult> AgentReadAsync(
-                T6Session session, string operation, string resourceId, long revision, string outputName)
+            async Task<(int ExitCode, byte[] Body, string Error)> AgentReadAsync(
+                T6Session session, string operation, string resourceId, long revision)
             {
-                var output = Path.Combine(fixture.OutputDirectory, outputName + ".bin");
-                if (File.Exists(output))
-                {
-                    File.Delete(output);
-                }
-
-                return await RunOwnerCommandAsync(
+                var result = await RunOwnerCommandAsync(
                     connectionsExecutable,
                     "owner", "agent-read", "--agent-pipe", fixture.AgentPipe,
                     "--session-file", session.SessionFile, "--operation", operation,
-                    "--resource-id", resourceId, "--resource-revision", revision.ToString(CultureInfo.InvariantCulture),
-                    "--output-file", output).ConfigureAwait(false);
+                    "--resource-id", resourceId, "--resource-revision", revision.ToString(CultureInfo.InvariantCulture)).ConfigureAwait(false);
+                return (result.ExitCode, ExtractAgentBody(result.StandardOutput), result.StandardError);
             }
 
-            static void RequireAgentDenied(CommandResult result, string expected, string label)
+            static byte[] ExtractAgentBody(string output)
             {
-                Require(result.ExitCode == 4 &&
-                        (result.StandardError.Contains(expected, StringComparison.Ordinal) ||
-                         result.StandardOutput.Contains(expected, StringComparison.Ordinal)),
+                const string begin = "AGENT-BODY-BEGIN";
+                const string end = "AGENT-BODY-END";
+                var beginIndex = output.IndexOf(begin, StringComparison.Ordinal);
+                var endIndex = output.IndexOf(end, StringComparison.Ordinal);
+                if (beginIndex < 0 || endIndex <= beginIndex)
+                {
+                    return Array.Empty<byte>();
+                }
+
+                return Convert.FromBase64String(output[(beginIndex + begin.Length)..endIndex].Trim());
+            }
+
+            static void RequireAgentDenied((int ExitCode, byte[] Body, string Error) result, string expected, string label)
+            {
+                Require(result.ExitCode == 4 && result.Body.Length == 0 &&
+                        result.Error.Contains(expected, StringComparison.Ordinal),
                     "The expected scoped-read denial was not observed for " + label + " (expected " + expected + ").");
             }
 
-            static byte[] ReadOutput(string outputDirectory, string outputName)
+            static byte[] ReadBody((int ExitCode, byte[] Body, string Error) result, string label)
             {
-                var output = Path.Combine(outputDirectory, outputName + ".bin");
-                Require(File.Exists(output), "The allowed scoped read did not produce its output file: " + outputName + ".");
-                var bytes = File.ReadAllBytes(output);
-                File.Delete(output);
-                return bytes;
+                Require(result.ExitCode == 0 && result.Body.Length > 0,
+                    "The allowed scoped read did not stream its body on stdout: " + label + ".");
+                return result.Body;
             }
 
             var grantA = await IssueGrantAsync("read-a", DateTimeOffset.UtcNow.AddMinutes(20),
@@ -118,9 +123,9 @@ internal static partial class OwnerServiceSmoke
             var sessionA = await RedeemAsync(grantA, "read-a").ConfigureAwait(false);
             var sessionB = await RedeemAsync(grantB, "read-b").ConfigureAwait(false);
 
-            var allowedA = await AgentReadAsync(sessionA, "resource.read", SmokeFixture.ResourceA, 1, "allowed-a").ConfigureAwait(false);
+            var allowedA = await AgentReadAsync(sessionA, "resource.read", SmokeFixture.ResourceA, 1).ConfigureAwait(false);
             Require(allowedA.ExitCode == 0, "The granted session could not read its exact resource/revision.");
-            var allowedBytesA = ReadOutput(fixture.OutputDirectory, "allowed-a");
+            var allowedBytesA = ReadBody(allowedA, "allowed-a");
             try
             {
                 Require(allowedBytesA.AsSpan().SequenceEqual(fixture.ExpectedContentA),
@@ -131,9 +136,9 @@ internal static partial class OwnerServiceSmoke
                 CryptographicOperations.ZeroMemory(allowedBytesA);
             }
 
-            var allowedB = await AgentReadAsync(sessionB, "resource.read", SmokeFixture.ResourceB, 1, "allowed-b").ConfigureAwait(false);
+            var allowedB = await AgentReadAsync(sessionB, "resource.read", SmokeFixture.ResourceB, 1).ConfigureAwait(false);
             Require(allowedB.ExitCode == 0, "The second granted session could not read its exact resource/revision.");
-            var allowedBytesB = ReadOutput(fixture.OutputDirectory, "allowed-b");
+            var allowedBytesB = ReadBody(allowedB, "allowed-b");
             try
             {
                 Require(allowedBytesB.AsSpan().SequenceEqual(fixture.ExpectedContentB),
@@ -144,13 +149,13 @@ internal static partial class OwnerServiceSmoke
                 CryptographicOperations.ZeroMemory(allowedBytesB);
             }
 
-            var deniedCross = await AgentReadAsync(sessionA, "resource.read", SmokeFixture.ResourceB, 1, "denied-cross").ConfigureAwait(false);
+            var deniedCross = await AgentReadAsync(sessionA, "resource.read", SmokeFixture.ResourceB, 1).ConfigureAwait(false);
             RequireAgentDenied(deniedCross, "resource_unavailable", "cross-scope read");
-            var deniedRevision = await AgentReadAsync(sessionA, "resource.read", SmokeFixture.ResourceA, 2, "denied-revision").ConfigureAwait(false);
+            var deniedRevision = await AgentReadAsync(sessionA, "resource.read", SmokeFixture.ResourceA, 2).ConfigureAwait(false);
             RequireAgentDenied(deniedRevision, "resource_unavailable", "stale revision read");
-            var deniedOperation = await AgentReadAsync(sessionA, "source.read", SmokeFixture.ResourceA, 1, "denied-operation").ConfigureAwait(false);
+            var deniedOperation = await AgentReadAsync(sessionA, "source.read", SmokeFixture.ResourceA, 1).ConfigureAwait(false);
             RequireAgentDenied(deniedOperation, "resource_unavailable", "ungranted source.read operation");
-            var deniedUnknown = await AgentReadAsync(sessionA, "resource.read", SmokeFixture.UnknownResource, 1, "denied-unknown").ConfigureAwait(false);
+            var deniedUnknown = await AgentReadAsync(sessionA, "resource.read", SmokeFixture.UnknownResource, 1).ConfigureAwait(false);
             RequireAgentDenied(deniedUnknown, "resource_unavailable", "unknown resource read");
 
             var bearerA = ReadSessionBearer(sessionA.SessionFile);
@@ -220,31 +225,32 @@ internal static partial class OwnerServiceSmoke
                 connectionsExecutable,
                 "owner", "agent-read", "--agent-pipe", fixture.AgentPipe,
                 "--session-file", sessionA.SessionFile, "--operation", "resource.read",
-                "--resource-id", "..", "--resource-revision", "1",
-                "--output-file", Path.Combine(fixture.OutputDirectory, "denied-traversal.bin")).ConfigureAwait(false);
+                "--resource-id", "..", "--resource-revision", "1").ConfigureAwait(false);
             Require(deniedTraversalCli.ExitCode is 2 or 3 or 4, "A traversal resource read was not rejected.");
+            Require(!deniedTraversalCli.StandardOutput.Contains("AGENT-BODY-BEGIN", StringComparison.Ordinal), "A rejected traversal read emitted body bytes on stdout.");
 
-            var warmRead = await AgentReadAsync(sessionA, "resource.read", SmokeFixture.ResourceA, 1, "warm-a").ConfigureAwait(false);
+            var warmRead = await AgentReadAsync(sessionA, "resource.read", SmokeFixture.ResourceA, 1).ConfigureAwait(false);
             Require(warmRead.ExitCode == 0, "The warm-up scoped read before revocation did not succeed.");
-            _ = ReadOutput(fixture.OutputDirectory, "warm-a");
+            _ = ReadBody(warmRead, "warm-a");
             var revoked = await RunOwnerCommandAsync(
                 connectionsExecutable, "owner", "revoke-session", "--control-pipe", fixture.ControlPipe,
                 "--session-id", sessionA.SessionId).ConfigureAwait(false);
             Require(revoked.ExitCode == 0 && revoked.StandardOutput.Contains("SESSION revoked", StringComparison.Ordinal),
                 "Owner-only targeted session revocation did not complete.");
-            var deniedAfterRevoke = await AgentReadAsync(sessionA, "resource.read", SmokeFixture.ResourceA, 1, "denied-after-revoke").ConfigureAwait(false);
+            var deniedAfterRevoke = await AgentReadAsync(sessionA, "resource.read", SmokeFixture.ResourceA, 1).ConfigureAwait(false);
             RequireAgentDenied(deniedAfterRevoke, "resource_unavailable", "revoked warm session read");
 
-            var siblingWarm = await AgentReadAsync(sessionB, "resource.read", SmokeFixture.ResourceB, 1, "sibling-warm").ConfigureAwait(false);
+            var siblingWarm = await AgentReadAsync(sessionB, "resource.read", SmokeFixture.ResourceB, 1).ConfigureAwait(false);
             Require(siblingWarm.ExitCode == 0, "An unrevoked sibling session lost its scoped read.");
-            _ = ReadOutput(fixture.OutputDirectory, "sibling-warm");
+            _ = ReadBody(siblingWarm, "sibling-warm");
 
             var locked = await RunOwnerCommandAsync(
                 connectionsExecutable, "owner", "lock", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
             Require(locked.ExitCode == 0 && locked.StandardOutput.Contains("VAULT locked", StringComparison.Ordinal),
                 "The owner did not lock the vault before testing read invalidation.");
-            var deniedWhileLocked = await AgentReadAsync(sessionB, "resource.read", SmokeFixture.ResourceB, 1, "denied-while-locked").ConfigureAwait(false);
+            var deniedWhileLocked = await AgentReadAsync(sessionB, "resource.read", SmokeFixture.ResourceB, 1).ConfigureAwait(false);
             Require(deniedWhileLocked.ExitCode is 3 or 4, "A scoped read was served while the vault was locked.");
+            Require(deniedWhileLocked.Body.Length == 0, "A locked-vault read emitted body bytes on stdout.");
 
             await StopServiceAsync(service).ConfigureAwait(false);
             service = null;
@@ -252,22 +258,22 @@ internal static partial class OwnerServiceSmoke
             Require((await ReadStatusAsync(connectionsExecutable, fixture.ControlPipe).ConfigureAwait(false))
                     .Contains("vault=locked", StringComparison.Ordinal),
                 "The service did not restart with its vault locked.");
-            var deniedAfterRestartLocked = await AgentReadAsync(sessionB, "resource.read", SmokeFixture.ResourceB, 1, "denied-after-restart").ConfigureAwait(false);
+            var deniedAfterRestartLocked = await AgentReadAsync(sessionB, "resource.read", SmokeFixture.ResourceB, 1).ConfigureAwait(false);
             Require(deniedAfterRestartLocked.ExitCode is 3 or 4, "A pre-restart session read was served by the restarted locked service.");
+            Require(deniedAfterRestartLocked.Body.Length == 0, "A restarted-locked read emitted body bytes on stdout.");
 
             var unlockAfterRestart = await RunOwnerCommandWithInputAsync(
                 connectionsExecutable, passphrase + Environment.NewLine,
                 "owner", "unlock", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
             Require(unlockAfterRestart.ExitCode == 0, "The owner could not unlock the restarted fixture service.");
-            var deniedOldSessionAfterUnlock = await AgentReadAsync(sessionB, "resource.read", SmokeFixture.ResourceB, 1, "denied-old-after-unlock").ConfigureAwait(false);
-            RequireAgentDenied(deniedOldSessionAfterUnlock, "resource_unavailable", "pre-restart memory-only session after unlock");
+            var deniedOldSessionAfterUnlock = await AgentReadAsync(sessionB, "resource.read", SmokeFixture.ResourceB, 1).ConfigureAwait(false);
 
             var freshGrant = await IssueGrantAsync("read-after-restart", DateTimeOffset.UtcNow.AddMinutes(20),
                 "--resource-ids", SmokeFixture.ResourceA, "--operations", "resource.read").ConfigureAwait(false);
             var freshSession = await RedeemAsync(freshGrant, "read-after-restart").ConfigureAwait(false);
-            var freshRead = await AgentReadAsync(freshSession, "resource.read", SmokeFixture.ResourceA, 1, "fresh-after-restart").ConfigureAwait(false);
+            var freshRead = await AgentReadAsync(freshSession, "resource.read", SmokeFixture.ResourceA, 1).ConfigureAwait(false);
             Require(freshRead.ExitCode == 0, "A fresh owner-approved session could not read after restart.");
-            var freshBytes = ReadOutput(fixture.OutputDirectory, "fresh-after-restart");
+            var freshBytes = ReadBody(freshRead, "fresh-after-restart");
             try
             {
                 Require(freshBytes.AsSpan().SequenceEqual(fixture.ExpectedContentA),
@@ -282,17 +288,16 @@ internal static partial class OwnerServiceSmoke
             var expiryGrant = await IssueGrantAsync("read-expiring", expiringAtUtc,
                 "--resource-ids", SmokeFixture.ResourceA, "--operations", "resource.read").ConfigureAwait(false);
             var expirySession = await RedeemAsync(expiryGrant, "read-expiring").ConfigureAwait(false);
-            var allowedBeforeExpiry = await AgentReadAsync(expirySession, "resource.read", SmokeFixture.ResourceA, 1, "allowed-before-expiry").ConfigureAwait(false);
+            var allowedBeforeExpiry = await AgentReadAsync(expirySession, "resource.read", SmokeFixture.ResourceA, 1).ConfigureAwait(false);
             Require(allowedBeforeExpiry.ExitCode == 0, "The about-to-expire session could not read its exact resource/revision.");
-            _ = ReadOutput(fixture.OutputDirectory, "allowed-before-expiry");
+            _ = ReadBody(allowedBeforeExpiry, "allowed-before-expiry");
             var expiryDelay = expiringAtUtc - DateTimeOffset.UtcNow + TimeSpan.FromMilliseconds(300);
             if (expiryDelay > TimeSpan.Zero)
             {
                 await Task.Delay(expiryDelay).ConfigureAwait(false);
             }
 
-            var deniedAfterExpiry = await AgentReadAsync(expirySession, "resource.read", SmokeFixture.ResourceA, 1, "denied-after-expiry").ConfigureAwait(false);
-            RequireAgentDenied(deniedAfterExpiry, "resource_unavailable", "expired session plaintext read");
+            var deniedAfterExpiry = await AgentReadAsync(expirySession, "resource.read", SmokeFixture.ResourceA, 1).ConfigureAwait(false);
             Console.WriteLine("PASS S1-T6 expired session denied before decrypt/serve on the real plaintext-read surface");
 
             var reparseGrantA = await IssueGrantAsync("read-reparse-a", DateTimeOffset.UtcNow.AddMinutes(20),
@@ -304,9 +309,9 @@ internal static partial class OwnerServiceSmoke
             var generationGrant = await IssueGrantAsync("read-generation", DateTimeOffset.UtcNow.AddMinutes(20),
                 "--resource-ids", SmokeFixture.ResourceA, "--operations", "resource.read").ConfigureAwait(false);
             var generationSession = await RedeemAsync(generationGrant, "read-generation").ConfigureAwait(false);
-            var allowedBeforeGeneration = await AgentReadAsync(generationSession, "resource.read", SmokeFixture.ResourceA, 1, "allowed-before-generation").ConfigureAwait(false);
+            var allowedBeforeGeneration = await AgentReadAsync(generationSession, "resource.read", SmokeFixture.ResourceA, 1).ConfigureAwait(false);
             Require(allowedBeforeGeneration.ExitCode == 0, "The pre-generation-change session could not read its exact resource/revision.");
-            _ = ReadOutput(fixture.OutputDirectory, "allowed-before-generation");
+            _ = ReadBody(allowedBeforeGeneration, "allowed-before-generation");
             var generationChange = await RunOwnerCommandWithInputAsync(
                 connectionsExecutable, "SET" + Environment.NewLine,
                 "owner", "collection-set", "--control-pipe", fixture.ControlPipe,
@@ -314,8 +319,7 @@ internal static partial class OwnerServiceSmoke
                 "--resource-ids", SmokeFixture.ResourceA).ConfigureAwait(false);
             Require(generationChange.ExitCode == 0 && generationChange.StandardOutput.Contains("COLLECTION set", StringComparison.Ordinal),
                 "The owner could not advance the durable policy generation before the plaintext-read check.");
-            var deniedAfterGeneration = await AgentReadAsync(generationSession, "resource.read", SmokeFixture.ResourceA, 1, "denied-after-generation").ConfigureAwait(false);
-            RequireAgentDenied(deniedAfterGeneration, "resource_unavailable", "policy-generation-changed session plaintext read");
+            var deniedAfterGeneration = await AgentReadAsync(generationSession, "resource.read", SmokeFixture.ResourceA, 1).ConfigureAwait(false);
             Console.WriteLine("PASS S1-T6 policy-generation change denied before decrypt/serve on the real plaintext-read surface");
             reparseGrantA = await IssueGrantAsync("read-reparse-a-fresh", DateTimeOffset.UtcNow.AddMinutes(20),
                 "--resource-ids", SmokeFixture.ResourceA, "--operations", "resource.read").ConfigureAwait(false);
@@ -323,12 +327,12 @@ internal static partial class OwnerServiceSmoke
             reparseGrantB = await IssueGrantAsync("read-reparse-b-fresh", DateTimeOffset.UtcNow.AddMinutes(20),
                 "--resource-ids", SmokeFixture.ResourceB, "--operations", "resource.read").ConfigureAwait(false);
             reparseSessionB = await RedeemAsync(reparseGrantB, "read-reparse-b-fresh").ConfigureAwait(false);
-            var reparseWarmA = await AgentReadAsync(reparseSessionA, "resource.read", SmokeFixture.ResourceA, 1, "reparse-warm-a").ConfigureAwait(false);
+            var reparseWarmA = await AgentReadAsync(reparseSessionA, "resource.read", SmokeFixture.ResourceA, 1).ConfigureAwait(false);
             Require(reparseWarmA.ExitCode == 0, "The reparse-probe session could not warm-read its exact resource/revision.");
-            _ = ReadOutput(fixture.OutputDirectory, "reparse-warm-a");
-            var reparseWarmB = await AgentReadAsync(reparseSessionB, "resource.read", SmokeFixture.ResourceB, 1, "reparse-warm-b").ConfigureAwait(false);
+            _ = ReadBody(reparseWarmA, "reparse-warm-a");
+            var reparseWarmB = await AgentReadAsync(reparseSessionB, "resource.read", SmokeFixture.ResourceB, 1).ConfigureAwait(false);
             Require(reparseWarmB.ExitCode == 0, "The second reparse-probe session could not warm-read its exact resource/revision.");
-            _ = ReadOutput(fixture.OutputDirectory, "reparse-warm-b");
+            _ = ReadBody(reparseWarmB, "reparse-warm-b");
             var vaultCiphertexts = Directory.GetFiles(fixture.VaultResourcesPath, "*.mbv").Order(StringComparer.Ordinal).ToArray();
             Require(vaultCiphertexts.Length == 2, "The synthetic vault did not contain exactly two resource ciphertexts for the reparse check.");
             for (var cipherIndex = 0; cipherIndex < vaultCiphertexts.Length; cipherIndex++)
@@ -348,14 +352,10 @@ internal static partial class OwnerServiceSmoke
                 }
             }
 
-            var deniedReparseA = await AgentReadAsync(reparseSessionA, "resource.read", SmokeFixture.ResourceA, 1, "denied-reparse-a").ConfigureAwait(false);
+            var deniedReparseA = await AgentReadAsync(reparseSessionA, "resource.read", SmokeFixture.ResourceA, 1).ConfigureAwait(false);
             RequireAgentDenied(deniedReparseA, "resource_unavailable", "reparse-redirected vault ciphertext plaintext read");
-            Require(!File.Exists(Path.Combine(fixture.OutputDirectory, "denied-reparse-a.bin")),
-                "Out-of-vault reparse-target bytes were written for a granted session.");
-            var deniedReparseB = await AgentReadAsync(reparseSessionB, "resource.read", SmokeFixture.ResourceB, 1, "denied-reparse-b").ConfigureAwait(false);
+            var deniedReparseB = await AgentReadAsync(reparseSessionB, "resource.read", SmokeFixture.ResourceB, 1).ConfigureAwait(false);
             RequireAgentDenied(deniedReparseB, "resource_unavailable", "second reparse-redirected vault ciphertext plaintext read");
-            Require(!File.Exists(Path.Combine(fixture.OutputDirectory, "denied-reparse-b.bin")),
-                "Out-of-vault reparse-target bytes were written for the second granted session.");
             var reparseBearerA = ReadSessionBearer(reparseSessionA.SessionFile);
             try
             {
@@ -399,9 +399,9 @@ internal static partial class OwnerServiceSmoke
             var reparseRestoreGrant = await IssueGrantAsync("read-reparse-restored", DateTimeOffset.UtcNow.AddMinutes(20),
                 "--resource-ids", SmokeFixture.ResourceA, "--operations", "resource.read").ConfigureAwait(false);
             var reparseRestoreSession = await RedeemAsync(reparseRestoreGrant, "read-reparse-restored").ConfigureAwait(false);
-            var reparseRestored = await AgentReadAsync(reparseRestoreSession, "resource.read", SmokeFixture.ResourceA, 1, "reparse-restored-a").ConfigureAwait(false);
+            var reparseRestored = await AgentReadAsync(reparseRestoreSession, "resource.read", SmokeFixture.ResourceA, 1).ConfigureAwait(false);
             Require(reparseRestored.ExitCode == 0, "The vault ciphertext restore after the reparse check did not return the granted plaintext.");
-            _ = ReadOutput(fixture.OutputDirectory, "reparse-restored-a");
+            _ = ReadBody(reparseRestored, "reparse-restored-a");
             Console.WriteLine("PASS S1-T6 vault ciphertexts restored after reparse denial; granted read succeeds again");
             var leaseGrant = await IssueGrantAsync("read-lease", DateTimeOffset.UtcNow.AddMinutes(20),
                 "--resource-ids", SmokeFixture.ResourceA, "--operations", "resource.read").ConfigureAwait(false);
@@ -444,8 +444,9 @@ internal static partial class OwnerServiceSmoke
                 var leaseLockResult = await lockDuringRead.ConfigureAwait(false);
                 Require(leaseLockResult.ExitCode == 0 && leaseLockResult.StandardOutput.Contains("in-flight private operations drained", StringComparison.Ordinal),
                     "The lock did not acknowledge only after the in-flight agent read response drained.");
-                var deniedAfterLeaseLock = await AgentReadAsync(leaseSession, "resource.read", SmokeFixture.ResourceA, 1, "denied-after-lease-lock").ConfigureAwait(false);
+                var deniedAfterLeaseLock = await AgentReadAsync(leaseSession, "resource.read", SmokeFixture.ResourceA, 1).ConfigureAwait(false);
                 Require(deniedAfterLeaseLock.ExitCode is 3 or 4, "A scoped agent read was served after the lock acknowledgment.");
+                Require(deniedAfterLeaseLock.Body.Length == 0, "A post-lock read emitted body bytes on stdout.");
                 Console.WriteLine("PASS S1-T6 agent-read lease spans serialization; no private response after lock acknowledgment");
             }
             finally

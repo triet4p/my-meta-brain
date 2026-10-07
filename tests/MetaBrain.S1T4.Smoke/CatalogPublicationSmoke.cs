@@ -219,9 +219,8 @@ internal static partial class OwnerServiceSmoke
                 "owner", "agent-read", "--agent-pipe", fixture.AgentPipe,
                 "--session-file", Path.Combine(fixture.OutputDirectory, "missing-session.bin"),
                 "--operation", "resource.read", "--resource-id", SmokeFixture.ResourceA,
-                "--resource-revision", "1",
-                "--output-file", Path.Combine(fixture.OutputDirectory, "catalog-no-session.bin")).ConfigureAwait(false);
-            Require(noSessionRead.ExitCode == 3, "A body read without a session unexpectedly succeeded.");
+                "--resource-revision", "1").ConfigureAwait(false);
+            Require(noSessionRead.ExitCode == 3 && !noSessionRead.StandardOutput.Contains("AGENT-BODY-BEGIN", StringComparison.Ordinal), "A body read without a session unexpectedly succeeded.");
 
             // Owner publishes B; discovery serves both approved triplets.
             var publishB = await RunOwnerCommandWithInputAsync(connectionsExecutable, "PUBLISH\n",

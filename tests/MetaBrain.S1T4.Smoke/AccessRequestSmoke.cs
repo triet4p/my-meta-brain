@@ -160,19 +160,20 @@ internal static partial class OwnerServiceSmoke
                 return (ParseSessionId(result.StandardOutput), sessionFile);
             }
 
-            async Task<CommandResult> AgentReadAsync(string sessionFile, string resourceId, long revision, string outputName)
+            async Task<(int ExitCode, byte[] Body, string StandardOutput, string StandardError)> AgentReadAsync(string sessionFile, string resourceId, long revision)
             {
-                var output = Path.Combine(fixture.OutputDirectory, outputName + ".bin");
-                if (File.Exists(output))
-                {
-                    File.Delete(output);
-                }
-
-                return await RunOwnerCommandAsync(connectionsExecutable,
+                var result = await RunOwnerCommandAsync(connectionsExecutable,
                     "owner", "agent-read", "--agent-pipe", fixture.AgentPipe,
                     "--session-file", sessionFile, "--operation", "resource.read",
-                    "--resource-id", resourceId, "--resource-revision", revision.ToString(CultureInfo.InvariantCulture),
-                    "--output-file", output).ConfigureAwait(false);
+                    "--resource-id", resourceId, "--resource-revision", revision.ToString(CultureInfo.InvariantCulture)).ConfigureAwait(false);
+                const string begin = "AGENT-BODY-BEGIN";
+                const string end = "AGENT-BODY-END";
+                var beginIndex = result.StandardOutput.IndexOf(begin, StringComparison.Ordinal);
+                var endIndex = result.StandardOutput.IndexOf(end, StringComparison.Ordinal);
+                var body = beginIndex >= 0 && endIndex > beginIndex
+                    ? Convert.FromBase64String(result.StandardOutput[(beginIndex + begin.Length)..endIndex].Trim())
+                    : Array.Empty<byte>();
+                return (result.ExitCode, body, result.StandardOutput, result.StandardError);
             }
 
             var expiry = DateTimeOffset.UtcNow.AddMinutes(20).ToString("O", CultureInfo.InvariantCulture);
@@ -420,9 +421,9 @@ internal static partial class OwnerServiceSmoke
             var sessionA = await RedeemHandoffAsync(grantA.Handoff, "request-a").ConfigureAwait(false);
             var sessionB = await RedeemHandoffAsync(grantB.Handoff, "request-b").ConfigureAwait(false);
 
-            var allowedA = await AgentReadAsync(sessionA.SessionFile, SmokeFixture.ResourceA, 2, "request-allowed-a").ConfigureAwait(false);
-            Require(allowedA.ExitCode == 0, "The first approved session could not read its exact resource/revision.");
-            var allowedBytesA = await File.ReadAllBytesAsync(Path.Combine(fixture.OutputDirectory, "request-allowed-a.bin")).ConfigureAwait(false);
+            var allowedA = await AgentReadAsync(sessionA.SessionFile, SmokeFixture.ResourceA, 2).ConfigureAwait(false);
+            Require(allowedA.ExitCode == 0 && allowedA.Body.Length > 0, "The first approved session could not read its exact resource/revision.");
+            var allowedBytesA = allowedA.Body;
             try
             {
                 Require(Encoding.UTF8.GetString(allowedBytesA).Contains(RequestBodyMarkerA, StringComparison.Ordinal),
@@ -433,14 +434,13 @@ internal static partial class OwnerServiceSmoke
                 CryptographicOperations.ZeroMemory(allowedBytesA);
             }
 
-            var allowedB = await AgentReadAsync(sessionB.SessionFile, SmokeFixture.ResourceA, 2, "request-allowed-b").ConfigureAwait(false);
-            Require(allowedB.ExitCode == 0, "The narrowed second session could not read its exact resource/revision.");
-            File.Delete(Path.Combine(fixture.OutputDirectory, "request-allowed-b.bin"));
+            var allowedB = await AgentReadAsync(sessionB.SessionFile, SmokeFixture.ResourceA, 2).ConfigureAwait(false);
+            Require(allowedB.ExitCode == 0 && allowedB.Body.Length > 0, "The narrowed second session could not read its exact resource/revision.");
+            CryptographicOperations.ZeroMemory(allowedB.Body);
 
-            var deniedExcluded = await AgentReadAsync(sessionB.SessionFile, SmokeFixture.ResourceB, 3, "request-denied-excluded").ConfigureAwait(false);
-            Require(deniedExcluded.ExitCode == 4 &&
-                    (deniedExcluded.StandardError.Contains("resource_unavailable", StringComparison.Ordinal) ||
-                     deniedExcluded.StandardOutput.Contains("resource_unavailable", StringComparison.Ordinal)),
+            var deniedExcluded = await AgentReadAsync(sessionB.SessionFile, SmokeFixture.ResourceB, 3).ConfigureAwait(false);
+            Require(deniedExcluded.ExitCode == 4 && deniedExcluded.Body.Length == 0 &&
+                    deniedExcluded.StandardError.Contains("resource_unavailable", StringComparison.Ordinal),
                 "A narrowed/excluded resource read was served.");
             var deniedSourceProbe = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
@@ -452,8 +452,8 @@ internal static partial class OwnerServiceSmoke
                 resourceRevision = 2,
             }).ConfigureAwait(false);
             Require(ReplyCode(deniedSourceProbe) == "denied", "An ungranted source operation expanded a readable summary.");
-            var deniedCross = await AgentReadAsync(sessionA.SessionFile, SmokeFixture.ResourceB, 3, "request-denied-cross").ConfigureAwait(false);
-            Require(deniedCross.ExitCode == 4, "A cross-scope resource read was served.");
+            var deniedCross = await AgentReadAsync(sessionA.SessionFile, SmokeFixture.ResourceB, 3).ConfigureAwait(false);
+            Require(deniedCross.ExitCode == 4 && deniedCross.Body.Length == 0, "A cross-scope resource read was served.");
 
             var agentConfirm = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {

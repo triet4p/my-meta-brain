@@ -1059,10 +1059,10 @@ internal static partial class OwnerServiceSmoke
 
             throw;
         }
-        return new CommandResult(process.ExitCode,
-            await standardOutput.ConfigureAwait(false), await standardError.ConfigureAwait(false));
+        var outputText = await standardOutput.ConfigureAwait(false);
+        return new CommandResult(process.ExitCode, outputText,
+            await standardError.ConfigureAwait(false));
     }
-
     private static async Task StopServiceAsync(RunningService service)
     {
         var process = service.Process;

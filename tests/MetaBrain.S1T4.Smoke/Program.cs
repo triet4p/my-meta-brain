@@ -10,7 +10,8 @@ internal static class Program
              string.Equals(args[0], "s1-t5", StringComparison.Ordinal) ||
              string.Equals(args[0], "s1-t6", StringComparison.Ordinal) ||
              string.Equals(args[0], "s1-t7", StringComparison.Ordinal) ||
-             string.Equals(args[0], "s1-t8", StringComparison.Ordinal))
+             string.Equals(args[0], "s1-t8", StringComparison.Ordinal) ||
+             string.Equals(args[0], "s1-t9", StringComparison.Ordinal))
             ? args[0]
             : null;
         var executable = scenario is not null ? args[1] : args.Length == 1 ? args[0] : null;
@@ -39,6 +40,9 @@ internal static class Program
                     break;
                 case "s1-t8":
                     await OwnerServiceSmoke.RunT8AccessRequestAsync(fullPath).ConfigureAwait(false);
+                    break;
+                case "s1-t9":
+                    await OwnerServiceSmoke.RunT9BridgeAsync(fullPath).ConfigureAwait(false);
                     break;
                 case "agent-session":
                     await OwnerServiceSmoke.RunAgentSessionAsync(fullPath).ConfigureAwait(false);

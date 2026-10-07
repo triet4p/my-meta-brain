@@ -22,6 +22,7 @@ internal static class Program
                 "serve-console" => await RunConsoleServiceAsync(Options.Parse(args, 1), CancellationToken.None).ConfigureAwait(false),
                 "serve-service" => RunWindowsService(Options.Parse(args, 1)),
                 "owner" => await OwnerControlCli.RunAsync(args[1..]).ConfigureAwait(false),
+                "agent-mcp" => await McpAgentBridge.RunAsync(args[1..]).ConfigureAwait(false),
                 _ => Usage()
             };
         }
@@ -61,7 +62,7 @@ internal static class Program
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Commands: serve-console --config <owner-settings>; serve-service --config <owner-settings>; owner {status|read|write|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|catalog-query|request|request-status|requests|request-preview|request-approve|request-reject}; owner migrate --config <legacy-owner-settings>.");
+        Console.Error.WriteLine("Commands: serve-console --config <owner-settings>; serve-service --config <owner-settings>; agent-mcp --agent-pipe <name> (scoped reads return the approved body in memory, no output file); owner {status|read|write|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|catalog-query|agent-catalog-list|request|request-status|requests|request-preview|request-approve|request-reject|session|redeem|sessions|revoke-session|authorize|agent-read}; owner migrate --config <legacy-settings> (legacy only)");
         return 2;
     }
 }

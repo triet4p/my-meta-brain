@@ -40,6 +40,7 @@ internal static class OwnerControlCli
                 "catalog-list" => await CatalogListAsync(options).ConfigureAwait(false),
                 "catalog-withdraw" => await CatalogWithdrawAsync(options).ConfigureAwait(false),
                 "catalog-query" => await CatalogQueryAsync(options).ConfigureAwait(false),
+                "agent-catalog-list" => await AgentCatalogListAsync(options).ConfigureAwait(false),
                 "request" => await SubmitAccessRequestAsync(options).ConfigureAwait(false),
                 "request-status" => await AccessRequestStatusAsync(options).ConfigureAwait(false),
                 "requests" => await ListAccessRequestsAsync(options).ConfigureAwait(false),
@@ -133,12 +134,11 @@ internal static class OwnerControlCli
 
     private static async Task<int> AgentReadAsync(CommandOptions options)
     {
-        options.RequireOnly("--agent-pipe", "--session-file", "--operation", "--resource-id", "--resource-revision", "--output-file");
+        options.RequireOnly("--agent-pipe", "--session-file", "--operation", "--resource-id", "--resource-revision");
         var agentPipe = PipeName(options, "--agent-pipe");
         var sessionPath = options.Required("--session-file");
         var accessOperation = options.Required("--operation");
         var resourceId = options.Required("--resource-id");
-        var outputFile = options.Required("--output-file");
         if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId) ||
             (accessOperation is not ("resource.read" or "source.read")))
         {
@@ -187,10 +187,13 @@ internal static class OwnerControlCli
         var bytes = Convert.FromBase64String(content.GetString() ?? string.Empty);
         try
         {
-            await using var output = new FileStream(outputFile, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-            await output.WriteAsync(bytes).ConfigureAwait(false);
-            await output.FlushAsync().ConfigureAwait(false);
-            Console.WriteLine($"READ content bytes={bytes.Length}");
+            // Intentional agent retrieval: stream the exact approved bytes on stdout
+            // framed as base64 between markers so the byte stream survives any text
+            // stdout decoding. No automatic plaintext file is created; denials stay
+            // on stderr. The MCP bridge decodes this frame back to exact bytes.
+            Console.WriteLine("AGENT-BODY-BEGIN");
+            Console.WriteLine(Convert.ToBase64String(bytes));
+            Console.WriteLine("AGENT-BODY-END");
             return 0;
         }
         finally
@@ -688,6 +691,23 @@ internal static class OwnerControlCli
             new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
                 ServiceRequestHandler.CatalogQueryOperation,
                 Query: query)).ConfigureAwait(false);
+        if (!result.Success)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintDiscovery(result.Reply);
+        return HasStatus(result.Reply, "catalog") ? 0 : 3;
+    }
+
+    private static async Task<int> AgentCatalogListAsync(CommandOptions options)
+    {
+        options.RequireOnly("--agent-pipe");
+        var agentPipe = PipeName(options, "--agent-pipe");
+        var result = await InvokeAgentAsync(agentPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.CatalogListOperation)).ConfigureAwait(false);
         if (!result.Success)
         {
             WriteServiceError(result);
@@ -1526,7 +1546,7 @@ internal static class OwnerControlCli
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Owner commands: owner {status|read|write|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject} --control-pipe <name>; owner catalog-query --agent-pipe <name> --query <text>; owner request --agent-pipe <name> --catalog-ids <ids> --purpose <text> [--operations <ops>] [--agent-id <id>] [--agent-context <text>] [--provider <p>] [--model <m>] [--disclosure-context <text>]; owner request-status --agent-pipe <name> --request-id <id>; owner agent-read --agent-pipe <name> --session-file <protected-path> --operation <resource.read|source.read> --resource-id <id> --resource-revision <rev> --output-file <path>; owner authorize --agent-pipe <name> --session-file…");
+        Console.Error.WriteLine("Owner commands: owner {status|read|write|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read} --agent-pipe <name>.");
         return 2;
     }
 

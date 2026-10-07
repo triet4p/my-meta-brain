@@ -70,3 +70,10 @@
 **Root cause:** The test declared its own method name as the native entry point; `DllImport` defaults `EntryPoint` to the method name, and `crypt32.dll` only exports `CryptUnprotectData`. The sibling `LocalFree` import had the same latent shape.
 **Fix / workaround:** Set `EntryPoint = "CryptUnprotectData"` (and `EntryPoint = "LocalFree"` for kernel32) while keeping the descriptive managed method names.
 **Watch out for:** Any custom-named DPAPI/P/Invoke wrapper in test or product code; a green build does not prove the entry point exists — only a real run does.
+
+## [2026-10-07] Restarted services invalidate memory sessions even when the vault is unlocked again
+
+**Symptom:** After restarting the walkthrough service and unlocking, every previously redeemed session denied with `resource_unavailable`, and `owner sessions` showed count 0 despite successful pre-restart redeems.
+**Root cause:** Sessions are process-local and epoch-bounded by design; restart wipes them and unlock does not restore them. A denial-turn prompt that pointed at a pre-restart session therefore proved fail-closed behavior but not the intended granted leg.
+**Fix / workaround:** Redeem fresh request→preview→approve→redeem sessions after the final restart/unlock, verify each grants via CLI before the client turn, and keep revoked versus never-revoked session files in distinctly named outputs.
+**Watch out for:** Any multi-turn walkthrough spanning a service restart or lock: never reuse pre-restart session files as granted legs; re-verify with `owner sessions` and a CLI granted read first.
