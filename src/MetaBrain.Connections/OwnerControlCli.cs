@@ -27,6 +27,8 @@ internal static class OwnerControlCli
                 "read" => await ReadAsync(options).ConfigureAwait(false),
                 "agent-read" => await AgentReadAsync(options).ConfigureAwait(false),
                 "write" => await WriteAsync(options).ConfigureAwait(false),
+                "memory-create" => await MemoryCreateAsync(options).ConfigureAwait(false),
+                "memory-read" => await MemoryReadAsync(options).ConfigureAwait(false),
                 "provision" => await ProvisionAsync(options).ConfigureAwait(false),
                 "unlock" => await UnlockAsync(options, useRecoveryCode: false).ConfigureAwait(false),
                 "recover" => await UnlockAsync(options, useRecoveryCode: true).ConfigureAwait(false),
@@ -241,6 +243,96 @@ internal static class OwnerControlCli
         {
             CryptographicOperations.ZeroMemory(content);
         }
+    }
+    private static async Task<int> MemoryCreateAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--zone-id", "--input-file");
+        var controlPipe = ControlPipe(options);
+        var resourceId = options.Required("--resource-id");
+        var zoneId = options.Required("--zone-id");
+        var inputPath = options.Required("--input-file");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId) || !ServiceSettingsLoader.IsSafeIdentifier(zoneId))
+        {
+            return Usage();
+        }
+
+        var content = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        try
+        {
+            if (content.Length is <= 0 or > 1024 * 1024)
+            {
+                Console.Error.WriteLine("ERROR invalid_memory_size");
+                return 4;
+            }
+
+            var result = await InvokeOwnerAsync(controlPipe,
+                new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.MemoryCreateOperation,
+                    resourceId, zoneId, ContentBase64: Convert.ToBase64String(content))).ConfigureAwait(false);
+            if (!result.Success || !HasStatus(result.Reply, "memory_created"))
+            {
+                WriteServiceError(result);
+                return 4;
+            }
+
+            var revision = result.Reply.TryGetProperty("resourceRevision", out var value) ? value.GetInt64() : 0;
+            PrintMemoryItem(result.Reply);
+            Console.WriteLine($"MEMORY stored revision={revision}");
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(content);
+        }
+    }
+
+    private static async Task<int> MemoryReadAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--resource-revision");
+        var controlPipe = ControlPipe(options);
+        var resourceId = options.Required("--resource-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId))
+        {
+            return Usage();
+        }
+
+        long? revision = null;
+        if (options.Optional("--resource-revision") is { } revisionText)
+        {
+            if (!long.TryParse(revisionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) || parsed < 1)
+            {
+                return Usage();
+            }
+
+            revision = parsed;
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.MemoryReadOperation,
+                ResourceId: resourceId, ResourceRevision: revision)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "memory"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintMemoryItem(result.Reply);
+        return 0;
+    }
+
+    private static void PrintMemoryItem(JsonElement reply)
+    {
+        if (!reply.TryGetProperty("memoryItem", out var item) || item.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        Console.WriteLine($"MEMORY id={JsonValueText(item, "id")} zone={JsonValueText(item, "zoneId")} revision={JsonValueText(item, "revision")} kind={JsonValueText(item, "kind")} author={JsonValueText(item, "author")} executor={JsonValueText(item, "executor")} method={JsonValueText(item, "creationMethod")} evidence={JsonValueText(item, "evidence")} level={JsonValueText(item, "level")}");
+        if (item.TryGetProperty("title", out var title) && title.ValueKind == JsonValueKind.String)
+        {
+            Console.WriteLine($"title={title.GetString()}");
+        }
+
+        Console.WriteLine($"body={JsonValueText(item, "body")}");
     }
 
     private static async Task<int> ProvisionAsync(CommandOptions options)
@@ -1546,7 +1638,7 @@ internal static class OwnerControlCli
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Owner commands: owner {status|read|write|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read} --agent-pipe <name>.");
+        Console.Error.WriteLine("Owner commands: owner {status|read|write|memory-create|memory-read|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read}");
         return 2;
     }
 

@@ -311,6 +311,7 @@ public sealed class AgentSessionAuthority
         {
             case "resource.read":
             case "source.read":
+            case "memory.read":
                 if (request.DestinationResourceId is not null || request.DestinationRevision is not null ||
                     HasEgressFields(request))
                 {

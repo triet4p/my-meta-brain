@@ -6,7 +6,7 @@ Lưu tri thức canonical mã hóa có revision/provenance/relations/time, priva
 
 ## Status and Dependencies
 
-- Status: Not started — CR01 updated. Entry: replacement Sprint 1 encryption/key/catalog/token gate PASS; old AppContainer PASS không đủ. Dùng shared encrypted storage và scoped application boundary, không OS identities/launcher dependency.
+- Status: In progress — S2-T1 implementation. Entry satisfied by replacement Sprint 1/M1 final differential `S1-DEEP-20261007-A2` PASS and accepted task checkpoints. Old AppContainer PASS remains historical only. Dùng shared encrypted storage và scoped application boundary, không OS identities/launcher dependency.
 - [Global plan](../PLAN.md), [specification](../META-BRAIN.md), [requirements](../REQUIREMENTS.md).
 - Requirements: R10, R11, R12, R14, R32, R33; bảo toàn R02–R06, R36, chuẩn bị R13, R16, R26, R27, R39.
 
@@ -18,7 +18,7 @@ Envelope giữ source locators/availability, attribution/schema/revision/time/le
 
 Status legend: [ ] pending / [~] in progress / [x] done. OMP role selection, evidence review, record ownership, and exact-snapshot checkpoints follow the [canonical execution contract](../PLAN.md#planning-and-execution-contract). Worker artifact for S2-T<M>: `artifacts/sprint-2/task-<M>.md`; reviewers and checkpoint executors own their separate records under the sprint artifact tree.
 
-- [ ] **S2-T1 — Triển khai domain envelope và zone/resource semantics.** Requirements: R10, R11, R12, R32.
+- [~] **S2-T1 — Triển khai domain envelope và zone/resource semantics.** Requirements: R10, R11, R12, R32.
     - Scope: một model dùng chung cho source reference và typed memory metadata, validation/identity; không profile extraction.
     - Acceptance: IDs độc lập path/title; unknown không bị bịa; kind/tác giả/executor/cách tạo/evidence tách biệt; zone/collection/level không interchangeable. APIs dùng scoped trusted context; thêm item/membership/revision không tăng grant snapshot.
     - Evidence: tạo/read các item user question, AI synthesis, tool observation qua core/service thật; reject invalid attribution/schema; không đơn thuần assert class wiring.
@@ -63,4 +63,6 @@ Encrypted envelope/storage và recovery/index-protection là implementation deci
 
 ## Gate Record
 
-Pending. Chưa có task evidence hoặc review pass.
+S2-T1 implementation `S2T1-IMPL-20261007-A1`, agent/job `S2T1DomainImplA1`, completed with [worker artifact](../../artifacts/sprint-2/task-1.md). Route: domain/schema and scoped-service integration, `gold-task` (Gold), resolved `opencode-go/muse-spark-1.3-contributor:xhigh`, `blocking: false`; contextual domain design/policy integration, no task-specific route history, quota/provider-applied effort unknown. Worker reports real service smoke 13 checks and focused regressions successful; no blocking findings declared. All implementation timer generations invalidated, final timer `bg_13` cancelled; no advisor pending.
+
+Evidence assignment `S2T1-REVIEW-20261007-A1`: fresh `evidence-reviewer`, resolved `google-antigravity/gemini-3.8-flash:high`, `blocking: false`; async task tool available, no project `.omp/` override present in root listing. Reviewer owns [report](../../artifacts/sprint-2/reviews/S2-T1-S2T1-REVIEW-20261007-A1.md) and sibling frozen manifest. Repository/worktree/-C/evidence root `F:/ai-ml/my-meta-brain`, expected git-dir `.git`, target `refs/heads/main`. Main launch/status changes in `docs/PLAN.md` and this plan are S2-T1-owned and frozen during review/checkpoint; runtime IDs tracked in Main's delivered event correlation. Gate/checkpoint pending; keep [~], no S2-T2 or push authorized.

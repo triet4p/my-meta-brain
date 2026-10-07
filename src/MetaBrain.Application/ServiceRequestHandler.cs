@@ -69,6 +69,24 @@ public sealed record OwnerAccessRequestSummary(
     string? ApprovedGrantId,
     DateTimeOffset? DecidedAtUtc);
 
+public sealed record MemoryItemWire(
+    string Id,
+    string ZoneId,
+    long Revision,
+    int SchemaVersion,
+    string Kind,
+    string Author,
+    string Executor,
+    string CreationMethod,
+    string Evidence,
+    string Level,
+    string? Title,
+    string Body,
+    Core.Domain.MemorySourceReference[] Sources,
+    DateTimeOffset? OccurredAtUtc,
+    DateTimeOffset RecordedAtUtc,
+    Core.Domain.MemoryApplicability? Applicability);
+
 public sealed record ServiceReply(
     int ProtocolVersion,
     string? Status,
@@ -98,7 +116,8 @@ public sealed record ServiceReply(
     OwnerAccessRequestSummary[]? AccessRequests = null,
     OwnerAccessRequestSummary? AccessRequest = null,
     OwnerAccessRequestPreview? AccessRequestPreview = null,
-    string? RequestId = null);
+    string? RequestId = null,
+    MemoryItemWire? MemoryItem = null);
 
 
 public sealed class ServiceRequestHandler
@@ -130,6 +149,9 @@ public sealed class ServiceRequestHandler
     public const string AgentResourceReadOperation = "agent.resource.read";
     public const string OwnerSessionListOperation = "owner.sessions";
     public const string OwnerSessionRevokeOperation = "owner.session.revoke";
+    public const string MemoryCreateOperation = "memory.create";
+    public const string MemoryReadOperation = "memory.read";
+    public const string AgentMemoryReadOperation = "agent.memory.read";
     private readonly GrantAuthority _grantAuthority;
     private readonly IVaultLifecycle _vault;
     private readonly OwnerScopeGrantAuthority _ownerScopeGrants;
@@ -189,6 +211,10 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, AgentResourceReadOperation, StringComparison.Ordinal))
         {
             return HandleAgentResourceRead(context, request, operation);
+        }
+        if (string.Equals(request.Operation, AgentMemoryReadOperation, StringComparison.Ordinal))
+        {
+            return HandleAgentMemoryRead(context, request, operation);
         }
         if (string.Equals(request.Operation, AgentAccessAuthorizeOperation, StringComparison.Ordinal))
         {
@@ -339,6 +365,16 @@ public sealed class ServiceRequestHandler
         }
 
 
+        if (string.Equals(request.Operation, MemoryCreateOperation, StringComparison.Ordinal))
+        {
+            return HandleMemoryCreate(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, MemoryReadOperation, StringComparison.Ordinal))
+        {
+            return HandleMemoryRead(context, request, operation);
+        }
+
         if (string.Equals(request.Operation, ResourceReadOperation, StringComparison.Ordinal))
         {
             return HandleResourceRead(context, request.ResourceId, operation);
@@ -351,6 +387,103 @@ public sealed class ServiceRequestHandler
 
         return Error("unknown_operation");
     }
+
+    private ServiceReply HandleMemoryCreate(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || operation is null || HasMemoryWriteExtras(request) ||
+            string.IsNullOrEmpty(request.ResourceId) || string.IsNullOrEmpty(request.ZoneId) ||
+            string.IsNullOrEmpty(request.ContentBase64))
+        {
+            return Error("invalid_request");
+        }
+        byte[]? draft = null;
+        try
+        {
+            draft = Convert.FromBase64String(request.ContentBase64);
+            var created = new MemoryItemService().Create(context, request.ResourceId, request.ZoneId, draft, operation);
+            return new ServiceReply(CurrentProtocolVersion, "memory_created", "owner", null,
+                ResourceRevision: created.Revision, MemoryItem: ToMemoryWire(created));
+        }
+        catch (FormatException)
+        {
+            return Error("invalid_request");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        finally
+        {
+            if (draft is { Length: > 0 })
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(draft);
+            }
+        }
+    }
+
+    private ServiceReply HandleMemoryRead(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || operation is null || HasMemoryReadExtras(request) ||
+            string.IsNullOrEmpty(request.ResourceId))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var item = new MemoryItemService().Read(context, request.ResourceId, request.ResourceRevision, operation);
+            return new ServiceReply(CurrentProtocolVersion, "memory", "owner", null,
+                ResourceRevision: item.Revision, MemoryItem: ToMemoryWire(item));
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+    }
+
+    private static MemoryItemWire ToMemoryWire(Core.Domain.MemoryItem item) => new(
+        item.Id,
+        item.ZoneId,
+        item.Revision,
+        item.SchemaVersion,
+        ToWireToken(item.Kind.ToString()),
+        ToWireToken(item.Author.ToString()),
+        ToWireToken(item.Executor.ToString()),
+        ToWireToken(item.CreationMethod.ToString()),
+        ToWireToken(item.Evidence.ToString()),
+        ToWireToken(item.Level.ToString()),
+        item.Title,
+        item.Body,
+        item.Sources,
+        item.OccurredAtUtc,
+        item.RecordedAtUtc,
+        item.Applicability);
+
+    private static string ToWireToken(string name)
+    {
+        if (string.IsNullOrEmpty(name))
+        {
+            return name;
+        }
+
+        var buffer = new char[name.Length];
+        buffer[0] = char.ToLowerInvariant(name[0]);
+        for (var index = 1; index < name.Length; index++)
+        {
+            buffer[index] = name[index];
+        }
+
+        return new string(buffer);
+    }
+
 
     private ServiceReply HandleResourceRead(AuthenticatedContext context, string? resourceId, IVaultOperation? operation)
     {
@@ -472,6 +605,82 @@ public sealed class ServiceRequestHandler
                 CryptographicOperations.ZeroMemory(snapshot);
             }
         }
+    }
+    private ServiceReply HandleAgentMemoryRead(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Agent || operation is null ||
+            HasAgentResourceReadExtras(request) ||
+            request.AccessOperation is not "memory.read")
+        {
+            return ResourceDenied();
+        }
+
+        byte[]? snapshot = null;
+        try
+        {
+            var beforeRead = operation.LoadScopeGrantState();
+            var decision = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                beforeRead.UnlockEpoch,
+                beforeRead.PolicyGeneration,
+                new AgentAccessRequest(request.AccessOperation, request.ResourceId, request.ResourceRevision));
+            if (!decision.Allowed || request.ResourceId is null)
+            {
+                return ResourceDenied();
+            }
+
+            snapshot = operation.ReadContent(request.ResourceId, request.ResourceRevision);
+            Core.Domain.StoredMemoryEnvelope stored;
+            try
+            {
+                stored = Core.Domain.MemoryEnvelopeCodec.DecodeStored(snapshot);
+            }
+            catch (ArgumentException)
+            {
+                return ResourceDenied();
+            }
+
+            var beforeServe = operation.LoadScopeGrantState();
+            var recheck = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                beforeServe.UnlockEpoch,
+                beforeServe.PolicyGeneration,
+                new AgentAccessRequest(request.AccessOperation, request.ResourceId, request.ResourceRevision));
+            if (!recheck.Allowed)
+            {
+                return ResourceDenied();
+            }
+
+            operation.ValidateRegistration(request.ResourceId, request.ResourceRevision);
+            var wire = ToMemoryWire(MemoryItemService.ToItem(stored, request.ResourceRevision ?? ResolveMemoryRevision(operation, request.ResourceId)));
+            return new ServiceReply(
+                CurrentProtocolVersion, "memory", null, null,
+                Decision: recheck,
+                PolicyGeneration: recheck.PolicyGeneration,
+                ResourceRevision: wire.Revision,
+                MemoryItem: wire);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return ResourceDenied();
+        }
+        finally
+        {
+            if (snapshot is { Length: > 0 })
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(snapshot);
+            }
+        }
+    }
+
+    private static long ResolveMemoryRevision(IVaultOperation operation, string resourceId)
+    {
+        var live = operation.ListResources().FirstOrDefault(resource =>
+            string.Equals(resource.ResourceId, resourceId, StringComparison.Ordinal));
+        return live?.Revision ?? throw new ManagedResourceUnavailableException();
     }
 
     private ServiceReply HandleResourceWrite(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
@@ -1398,6 +1607,41 @@ public sealed class ServiceRequestHandler
           request.DestinationRevision is not null || request.Provider is not null ||
           request.Model is not null || request.EstimatedCostUsd is not null ||
           request.InputTokens is not null || request.OutputTokens is not null));
+
+    private static bool HasMemoryWriteExtras(ServiceRequest request) =>
+        request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ResourceIds is not null || request.Operations is not null ||
+        request.DestinationResourceIds is not null || request.ExpiresAtUtc is not null ||
+        request.Provider is not null || request.Model is not null ||
+        request.MaximumCostUsd is not null || request.PreviewId is not null ||
+        request.CollectionId is not null || request.Token is not null ||
+        request.SessionToken is not null || request.SessionId is not null ||
+        request.AccessOperation is not null || request.DestinationResourceId is not null ||
+        request.DestinationRevision is not null || request.EstimatedCostUsd is not null ||
+        request.InputTokens is not null || request.OutputTokens is not null ||
+        request.CatalogId is not null || request.Label is not null ||
+        request.Description is not null || request.Query is not null ||
+        request.CatalogIds is not null || request.Purpose is not null ||
+        request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null;
+
+    private static bool HasMemoryReadExtras(ServiceRequest request) =>
+        request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ContentBase64 is not null || request.ResourceIds is not null ||
+        request.Operations is not null || request.DestinationResourceIds is not null ||
+        request.ExpiresAtUtc is not null || request.Provider is not null ||
+        request.Model is not null || request.MaximumCostUsd is not null ||
+        request.PreviewId is not null || request.CollectionId is not null ||
+        request.Token is not null || request.SessionToken is not null ||
+        request.SessionId is not null || request.AccessOperation is not null ||
+        request.DestinationResourceId is not null || request.DestinationRevision is not null ||
+        request.EstimatedCostUsd is not null || request.InputTokens is not null ||
+        request.OutputTokens is not null || request.CatalogId is not null ||
+        request.Label is not null || request.Description is not null ||
+        request.Query is not null || request.CatalogIds is not null ||
+        request.Purpose is not null || request.AgentId is not null ||
+        request.AgentContext is not null || request.DisclosureContext is not null ||
+        request.RequestId is not null || request.ZoneId is not null;
     private static bool HasAgentAccessRequestFields(ServiceRequest request, bool forStatus) =>
         request.ZoneId is not null ||
         request.Passphrase is not null || request.RecoveryCode is not null ||
