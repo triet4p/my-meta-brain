@@ -155,7 +155,11 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.MemoryCreateOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.MemoryReviseOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.MemoryImportOperation, StringComparison.Ordinal) ||
-                    string.Equals(request.Operation, ServiceRequestHandler.MemoryReadOperation, StringComparison.Ordinal);
+                    string.Equals(request.Operation, ServiceRequestHandler.MemoryReadOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceCreateOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceReviseOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceReadOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.AgentSourceReadOperation, StringComparison.Ordinal);
                 using var operation = needsVaultOperation ? _vault.TryBeginOperation() : null;
                 // Application creates the access context: owner channel gets owner authority,
                 // while the agent channel receives a placeholder agent identity that carries
@@ -198,6 +202,7 @@ internal sealed class NamedPipeService
             string.Equals(operation, ServiceRequestHandler.AgentAccessAuthorizeOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentResourceReadOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentMemoryReadOperation, StringComparison.Ordinal) ||
+            string.Equals(operation, ServiceRequestHandler.AgentSourceReadOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentAccessRequestOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentAccessRequestStatusOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.CatalogListOperation, StringComparison.Ordinal) ||

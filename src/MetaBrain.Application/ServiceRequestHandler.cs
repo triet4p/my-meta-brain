@@ -87,6 +87,20 @@ public sealed record MemoryItemWire(
     DateTimeOffset RecordedAtUtc,
     Core.Domain.MemoryApplicability? Applicability);
 
+public sealed record RegisteredSourceWire(
+    string Id,
+    string ZoneId,
+    long Revision,
+    int SchemaVersion,
+    string Executor,
+    string CreationMethod,
+    string? Title,
+    string? Locator,
+    string? Version,
+    string Availability,
+    DateTimeOffset? CapturedAtUtc,
+    DateTimeOffset RecordedAtUtc);
+
 public sealed record ServiceReply(
     int ProtocolVersion,
     string? Status,
@@ -117,7 +131,8 @@ public sealed record ServiceReply(
     OwnerAccessRequestSummary? AccessRequest = null,
     OwnerAccessRequestPreview? AccessRequestPreview = null,
     string? RequestId = null,
-    MemoryItemWire? MemoryItem = null);
+    MemoryItemWire? MemoryItem = null,
+    RegisteredSourceWire? Source = null);
 
 
 public sealed class ServiceRequestHandler
@@ -154,6 +169,9 @@ public sealed class ServiceRequestHandler
     public const string MemoryReviseOperation = "memory.revise";
     public const string MemoryImportOperation = "memory.import";
     public const string MemoryReadOperation = "memory.read";
+    public const string SourceCreateOperation = "source.create";
+    public const string SourceReviseOperation = "source.revise";
+    public const string AgentSourceReadOperation = "agent.source.read";
     private readonly GrantAuthority _grantAuthority;
     private readonly IVaultLifecycle _vault;
     private readonly OwnerScopeGrantAuthority _ownerScopeGrants;
@@ -217,6 +235,10 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, AgentMemoryReadOperation, StringComparison.Ordinal))
         {
             return HandleAgentMemoryRead(context, request, operation);
+        }
+        if (string.Equals(request.Operation, AgentSourceReadOperation, StringComparison.Ordinal))
+        {
+            return HandleAgentSourceRead(context, request, operation);
         }
         if (string.Equals(request.Operation, AgentAccessAuthorizeOperation, StringComparison.Ordinal))
         {
@@ -387,6 +409,21 @@ public sealed class ServiceRequestHandler
             return HandleMemoryRead(context, request, operation);
         }
 
+        if (string.Equals(request.Operation, SourceCreateOperation, StringComparison.Ordinal))
+        {
+            return HandleSourceCreate(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, SourceReviseOperation, StringComparison.Ordinal))
+        {
+            return HandleSourceRevise(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, SourceReadOperation, StringComparison.Ordinal))
+        {
+            return HandleSourceRead(context, request, operation);
+        }
+
         if (string.Equals(request.Operation, ResourceReadOperation, StringComparison.Ordinal))
         {
             return HandleResourceRead(context, request.ResourceId, operation);
@@ -402,7 +439,7 @@ public sealed class ServiceRequestHandler
 
     private ServiceReply HandleMemoryCreate(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
     {
-        if (context.Kind != PrincipalKind.Owner || operation is null || HasMemoryWriteExtras(request) ||
+        if (context.Kind != PrincipalKind.Owner || operation is null || HasContentWriteExtras(request) ||
             string.IsNullOrEmpty(request.ResourceId) || string.IsNullOrEmpty(request.ZoneId) ||
             string.IsNullOrEmpty(request.ContentBase64))
         {
@@ -447,7 +484,7 @@ public sealed class ServiceRequestHandler
     /// </summary>
     private ServiceReply HandleMemoryImport(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
     {
-        if (context.Kind != PrincipalKind.Owner || operation is null || HasMemoryWriteExtras(request) ||
+        if (context.Kind != PrincipalKind.Owner || operation is null || HasContentWriteExtras(request) ||
             string.IsNullOrEmpty(request.ResourceId) || string.IsNullOrEmpty(request.ZoneId) ||
             request.ResourceRevision is not { } expectedRevision || expectedRevision < 0 ||
             string.IsNullOrEmpty(request.ContentBase64))
@@ -493,7 +530,7 @@ public sealed class ServiceRequestHandler
     /// </summary>
     private ServiceReply HandleMemoryRevise(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
     {
-        if (context.Kind != PrincipalKind.Owner || operation is null || HasMemoryWriteExtras(request) ||
+        if (context.Kind != PrincipalKind.Owner || operation is null || HasContentWriteExtras(request) ||
             string.IsNullOrEmpty(request.ResourceId) || string.IsNullOrEmpty(request.ZoneId) ||
             request.ResourceRevision is not { } expectedRevision || expectedRevision < 1 ||
             string.IsNullOrEmpty(request.ContentBase64))
@@ -532,7 +569,7 @@ public sealed class ServiceRequestHandler
 
     private ServiceReply HandleMemoryRead(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
     {
-        if (context.Kind != PrincipalKind.Owner || operation is null || HasMemoryReadExtras(request) ||
+        if (context.Kind != PrincipalKind.Owner || operation is null || HasContentReadExtras(request) ||
             string.IsNullOrEmpty(request.ResourceId))
         {
             return Error("invalid_request");
@@ -553,6 +590,206 @@ public sealed class ServiceRequestHandler
             return Error("forbidden");
         }
     }
+
+    /// <summary>
+    /// S2-T3 owner source registry: create-only, revision-gated revise, and
+    /// pinned-revision read over the shared encrypted store. A registered
+    /// source carries metadata only (title, private locator, version,
+    /// explicit availability); no source body is persisted here and item
+    /// read grants never authorize this API.
+    /// </summary>
+    private ServiceReply HandleSourceCreate(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || operation is null || HasContentWriteExtras(request) ||
+            string.IsNullOrEmpty(request.ResourceId) || string.IsNullOrEmpty(request.ZoneId) ||
+            string.IsNullOrEmpty(request.ContentBase64))
+        {
+            return Error("invalid_request");
+        }
+
+        byte[]? draft = null;
+        try
+        {
+            draft = Convert.FromBase64String(request.ContentBase64);
+            var created = new SourceRegistryService().Create(context, request.ResourceId, request.ZoneId, draft, operation);
+            return new ServiceReply(CurrentProtocolVersion, "source_created", "owner", null,
+                ResourceRevision: created.Revision, Source: ToSourceWire(created));
+        }
+        catch (FormatException)
+        {
+            return Error("invalid_request");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        finally
+        {
+            if (draft is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(draft);
+            }
+        }
+    }
+
+    private ServiceReply HandleSourceRevise(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || operation is null || HasContentWriteExtras(request) ||
+            string.IsNullOrEmpty(request.ResourceId) || string.IsNullOrEmpty(request.ZoneId) ||
+            request.ResourceRevision is not { } expectedRevision || expectedRevision < 1 ||
+            string.IsNullOrEmpty(request.ContentBase64))
+        {
+            return Error("invalid_request");
+        }
+
+        byte[]? draft = null;
+        try
+        {
+            draft = Convert.FromBase64String(request.ContentBase64);
+            var revised = new SourceRegistryService().Revise(context, request.ResourceId, request.ZoneId, expectedRevision, draft, operation);
+            return new ServiceReply(CurrentProtocolVersion, "source_revised", "owner", null,
+                ResourceRevision: revised.Revision, Source: ToSourceWire(revised));
+        }
+        catch (FormatException)
+        {
+            return Error("invalid_request");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        finally
+        {
+            if (draft is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(draft);
+            }
+        }
+    }
+
+    private ServiceReply HandleSourceRead(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || operation is null || HasContentReadExtras(request) ||
+            string.IsNullOrEmpty(request.ResourceId))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var source = new SourceRegistryService().Read(context, request.ResourceId, request.ResourceRevision, operation);
+            return new ServiceReply(CurrentProtocolVersion, "source", "owner", null,
+                ResourceRevision: source.Revision, Source: ToSourceWire(source));
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+    }
+
+    /// <summary>
+    /// S2-T3 scoped agent source read: the agent channel separately authorizes
+    /// the exact "source.read" operation, source ID, and revision against the
+    /// frozen grant before and after opening the encrypted registry bytes. An
+    /// item grant (memory.read) never satisfies this path, and a grant on a
+    /// different resource or revision denies with the same generic code.
+    /// </summary>
+    private ServiceReply HandleAgentSourceRead(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Agent || operation is null ||
+            HasAgentResourceReadExtras(request) ||
+            request.AccessOperation is not SourceReadOperation)
+        {
+            return ResourceDenied();
+        }
+
+        byte[]? snapshot = null;
+        try
+        {
+            var beforeRead = operation.LoadScopeGrantState();
+            var decision = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                beforeRead.UnlockEpoch,
+                beforeRead.PolicyGeneration,
+                new AgentAccessRequest(request.AccessOperation, request.ResourceId, request.ResourceRevision));
+            if (!decision.Allowed || request.ResourceId is null)
+            {
+                return ResourceDenied();
+            }
+
+            snapshot = operation.ReadContent(request.ResourceId, request.ResourceRevision);
+            Core.Domain.StoredRegisteredSource stored;
+            try
+            {
+                stored = Core.Domain.RegisteredSourceCodec.DecodeStored(snapshot);
+            }
+            catch (ArgumentException)
+            {
+                return ResourceDenied();
+            }
+
+            var beforeServe = operation.LoadScopeGrantState();
+            var recheck = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                beforeServe.UnlockEpoch,
+                beforeServe.PolicyGeneration,
+                new AgentAccessRequest(request.AccessOperation, request.ResourceId, request.ResourceRevision));
+            if (!recheck.Allowed)
+            {
+                return ResourceDenied();
+            }
+
+            operation.ValidateRegistration(request.ResourceId, request.ResourceRevision);
+            var wire = ToSourceWire(SourceRegistryService.ToSource(stored,
+                request.ResourceRevision ?? ResolveLiveResourceRevision(operation, request.ResourceId)));
+            return new ServiceReply(
+                CurrentProtocolVersion, "source", null, null,
+                Decision: recheck,
+                PolicyGeneration: recheck.PolicyGeneration,
+                ResourceRevision: wire.Revision,
+                Source: wire);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return ResourceDenied();
+        }
+        finally
+        {
+            if (snapshot is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(snapshot);
+            }
+        }
+    }
+
+    private static RegisteredSourceWire ToSourceWire(Core.Domain.RegisteredSource source) => new(
+        source.Id,
+        source.ZoneId,
+        source.Revision,
+        source.SchemaVersion,
+        ToWireToken(source.Executor.ToString()),
+        ToWireToken(source.CreationMethod.ToString()),
+        source.Title,
+        source.Locator,
+        source.Version,
+        ToWireToken(source.Availability.ToString()),
+        source.CapturedAtUtc,
+        source.RecordedAtUtc);
 
     private static MemoryItemWire ToMemoryWire(Core.Domain.MemoryItem item) => new(
         item.Id,
@@ -760,7 +997,7 @@ public sealed class ServiceRequestHandler
             }
 
             operation.ValidateRegistration(request.ResourceId, request.ResourceRevision);
-            var wire = ToMemoryWire(MemoryItemService.ToItem(stored, request.ResourceRevision ?? ResolveMemoryRevision(operation, request.ResourceId)));
+            var wire = ToMemoryWire(MemoryItemService.ToItem(stored, request.ResourceRevision ?? ResolveLiveResourceRevision(operation, request.ResourceId)));
             return new ServiceReply(
                 CurrentProtocolVersion, "memory", null, null,
                 Decision: recheck,
@@ -781,7 +1018,7 @@ public sealed class ServiceRequestHandler
         }
     }
 
-    private static long ResolveMemoryRevision(IVaultOperation operation, string resourceId)
+    private static long ResolveLiveResourceRevision(IVaultOperation operation, string resourceId)
     {
         var live = operation.ListResources().FirstOrDefault(resource =>
             string.Equals(resource.ResourceId, resourceId, StringComparison.Ordinal));
@@ -1717,7 +1954,7 @@ public sealed class ServiceRequestHandler
           request.Model is not null || request.EstimatedCostUsd is not null ||
           request.InputTokens is not null || request.OutputTokens is not null));
 
-    private static bool HasMemoryWriteExtras(ServiceRequest request) =>
+    private static bool HasContentWriteExtras(ServiceRequest request) =>
         request.Passphrase is not null || request.RecoveryCode is not null ||
         request.ResourceIds is not null || request.Operations is not null ||
         request.DestinationResourceIds is not null || request.ExpiresAtUtc is not null ||
@@ -1734,7 +1971,7 @@ public sealed class ServiceRequestHandler
         request.AgentId is not null || request.AgentContext is not null ||
         request.DisclosureContext is not null || request.RequestId is not null;
 
-    private static bool HasMemoryReadExtras(ServiceRequest request) =>
+    private static bool HasContentReadExtras(ServiceRequest request) =>
         request.Passphrase is not null || request.RecoveryCode is not null ||
         request.ContentBase64 is not null || request.ResourceIds is not null ||
         request.Operations is not null || request.DestinationResourceIds is not null ||

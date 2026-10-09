@@ -9,9 +9,12 @@ namespace MetaBrain.Core.Domain;
 /// vault store; no plaintext files, no parallel key hierarchy. Zone owns,
 /// collection organizes externally, level describes abstraction: the three
 /// are never interchangeable (envelope carries ZoneId + Level, never a
-/// CollectionId). Source registry (S2-T3), relations/lifecycle (S2-T4..T5),
-/// collections/views (S2-T6) and index (S2-T7) remain pending and are not
-/// represented here beyond the frozen S1 scope snapshot.
+/// CollectionId). The S2-T3 source registry itself lives in
+/// <see cref="SourceRegistry"/>; item citations only reference registered
+/// sources by opaque ID plus revision-anchored spans, never by reading the
+/// registry. Relations/lifecycle (S2-T4..T5), collections/views (S2-T6) and
+/// index (S2-T7) remain pending and are not represented here beyond the
+/// frozen S1 scope snapshot.
 /// </summary>
 public enum MemoryKind
 {
@@ -82,7 +85,9 @@ public enum SourceAvailability
 public sealed record MemorySourceReference(
     string? SourceId,
     string? Locator,
-    SourceAvailability? Availability);
+    SourceAvailability? Availability,
+    long? SourceRevision = null,
+    SourceSpan? Span = null);
 
 public sealed record MemoryApplicability(
     string? Project,
@@ -159,6 +164,8 @@ public static class MemoryEnvelopeCodec
     public const int MaximumBodyChars = 200_000;
     public const int MaximumLocatorLength = 512;
     public const int MaximumApplicabilityLength = 128;
+    public const long MaximumSpanEnd = 1_000_000_000;
+    public const long MaximumSpanLength = 1_048_576;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -237,12 +244,12 @@ public static class MemoryItemValidator
     public static void ValidateDraft(MemoryItemDraft draft, string resourceId, string zoneId)
     {
         ArgumentNullException.ThrowIfNull(draft);
-        if (!IsSafeIdentifier(resourceId))
+        if (!DomainIdentifiers.IsSafeIdentifier(resourceId))
         {
             throw new ArgumentException("The memory ID must be an opaque safe identifier.");
         }
 
-        if (!IsSafeIdentifier(zoneId))
+        if (!DomainIdentifiers.IsSafeIdentifier(zoneId))
         {
             throw new ArgumentException("The memory zone must be an opaque safe identifier.");
         }
@@ -291,12 +298,12 @@ public static class MemoryItemValidator
             throw new ArgumentException("The memory envelope schema version is unsupported.");
         }
 
-        if (!IsSafeIdentifier(envelope.Id))
+        if (!DomainIdentifiers.IsSafeIdentifier(envelope.Id))
         {
             throw new ArgumentException("The memory ID must be an opaque safe identifier.");
         }
 
-        if (!IsSafeIdentifier(envelope.ZoneId))
+        if (!DomainIdentifiers.IsSafeIdentifier(envelope.ZoneId))
         {
             throw new ArgumentException("The memory zone must be an opaque safe identifier.");
         }
@@ -423,9 +430,39 @@ public static class MemoryItemValidator
                 throw new ArgumentException("A memory source reference is invalid.");
             }
 
-            if (source.SourceId is not null && !IsSafeIdentifier(source.SourceId))
+            if (source.SourceId is not null && !DomainIdentifiers.IsSafeIdentifier(source.SourceId))
             {
                 throw new ArgumentException("A memory source ID must be an opaque safe identifier.");
+            }
+
+            if (source.SourceRevision is <= 0)
+            {
+                throw new ArgumentException("A citation source revision must name a positive source revision.");
+            }
+
+            if (source.Span is not null)
+            {
+                if (source.SourceId is null)
+                {
+                    throw new ArgumentException("A citation span requires a registered source ID.");
+                }
+
+                if (source.SourceRevision is null)
+                {
+                    throw new ArgumentException("A citation span must be anchored to a source revision.");
+                }
+
+                var span = source.Span;
+                if (span.Start < 0 || span.End <= span.Start ||
+                    span.End > MemoryEnvelopeCodec.MaximumSpanEnd ||
+                    span.End - span.Start > MemoryEnvelopeCodec.MaximumSpanLength)
+                {
+                    throw new ArgumentException("A citation span must be a non-empty bounded range.");
+                }
+            }
+            else if (source.SourceRevision is not null && source.SourceId is null)
+            {
+                throw new ArgumentException("A citation source revision requires a registered source ID.");
             }
 
             if (source.Locator is not null &&
@@ -506,8 +543,16 @@ public static class MemoryItemValidator
             }
         }
     }
+}
 
-    private static bool IsSafeIdentifier(string? value)
+/// <summary>
+/// One opaque-identifier grammar shared by every domain envelope so an ID
+/// can never carry path or traversal text. Identifiers are stable keys: they
+/// never derive from titles or paths (R10).
+/// </summary>
+internal static class DomainIdentifiers
+{
+    public static bool IsSafeIdentifier(string? value)
     {
         if (string.IsNullOrEmpty(value) || value.Length > 128 || !IsAsciiAlphaNumeric(value[0]))
         {
@@ -526,6 +571,6 @@ public static class MemoryItemValidator
         return true;
     }
 
-    private static bool IsAsciiAlphaNumeric(char value) =>
+    public static bool IsAsciiAlphaNumeric(char value) =>
         value is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9';
 }

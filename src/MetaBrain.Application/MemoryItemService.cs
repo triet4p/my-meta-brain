@@ -80,6 +80,11 @@ public sealed class MemoryItemService
             throw new ArgumentException("The imported envelope identity does not match the target.");
         }
 
+        // Imported citations are validated against the live registry exactly
+        // like fresh writes: a stale or unregistered anchor fails closed
+        // instead of silently implying verified provenance.
+        ValidateCitationAnchors(stored.Sources, store);
+
         try
         {
             var revision = store.WriteContent(resourceId, zoneId, envelopeJson, expectedRevision);
@@ -119,6 +124,12 @@ public sealed class MemoryItemService
         }
 
         MemoryItemValidator.ValidateDraft(draft, resourceId, zoneId);
+
+        // S2-T3: citations that name a registered source revision (or a span)
+        // are checked against the live registry before commit, so an anchor
+        // can never point at a revision the vault does not hold. Unregistered
+        // references keep their declared availability: unknown stays unknown.
+        ValidateCitationAnchors(draft.Sources, store);
         var now = DateTimeOffset.UtcNow;
         var recordedAtUtc = draft.RecordedAtUtc ?? now;
         if (recordedAtUtc.Offset != TimeSpan.Zero)
@@ -203,6 +214,44 @@ public sealed class MemoryItemService
         finally
         {
             System.Security.Cryptography.CryptographicOperations.ZeroMemory(raw);
+        }
+    }
+
+    /// <summary>
+    /// S2-T3 citation anchor check: a citation that names a registered source
+    /// revision (with or without a span) must name the live registry revision
+    /// at write time. Stale anchors and anchors for unregistered sources fail
+    /// closed instead of implying verified provenance; loosely-declared
+    /// references (no revision) keep their declared availability. Reads never
+    /// perform this check, so a stored anchor stays a truthful historical
+    /// record after the source itself is revised.
+    /// </summary>
+    private static void ValidateCitationAnchors(
+        MemorySourceReference[]? sources,
+        IManagedResourceStore store)
+    {
+        if (sources is null || sources.Length == 0)
+        {
+            return;
+        }
+
+        foreach (var source in sources)
+        {
+            if (source?.SourceRevision is not { } claimedRevision)
+            {
+                continue;
+            }
+
+            var liveRevision = SourceRegistryService.TryGetLiveRevision(store, source.SourceId);
+            if (liveRevision is null)
+            {
+                throw new ArgumentException("A citation source revision requires a registered source.");
+            }
+
+            if (liveRevision.Value != claimedRevision)
+            {
+                throw new ArgumentException("A citation anchor must name the live registered source revision.");
+            }
         }
     }
 

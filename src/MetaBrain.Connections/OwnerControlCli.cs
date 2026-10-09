@@ -31,6 +31,9 @@ internal static class OwnerControlCli
                 "memory-revise" => await MemoryReviseAsync(options).ConfigureAwait(false),
                 "memory-import" => await MemoryImportAsync(options).ConfigureAwait(false),
                 "memory-read" => await MemoryReadAsync(options).ConfigureAwait(false),
+                "source-create" => await SourceCreateAsync(options).ConfigureAwait(false),
+                "source-revise" => await SourceReviseAsync(options).ConfigureAwait(false),
+                "source-read" => await SourceReadAsync(options).ConfigureAwait(false),
                 "provision" => await ProvisionAsync(options).ConfigureAwait(false),
                 "unlock" => await UnlockAsync(options, useRecoveryCode: false).ConfigureAwait(false),
                 "recover" => await UnlockAsync(options, useRecoveryCode: true).ConfigureAwait(false),
@@ -435,6 +438,155 @@ internal static class OwnerControlCli
         }
 
         Console.WriteLine($"body={JsonValueText(item, "body")}");
+        if (item.TryGetProperty("sources", out var sources) && sources.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var source in sources.EnumerateArray())
+            {
+                var span = source.TryGetProperty("span", out var spanValue) && spanValue.ValueKind == JsonValueKind.Object
+                    ? $"{JsonValueText(spanValue, "start")}-{JsonValueText(spanValue, "end")}"
+                    : "none";
+                Console.WriteLine(
+                    $"source id={JsonValueText(source, "sourceId")} locator={JsonValueText(source, "locator")} availability={JsonValueText(source, "availability")} revision={JsonValueText(source, "sourceRevision")} span={span}");
+            }
+        }
+    }
+
+    private static async Task<int> SourceCreateAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--zone-id", "--input-file");
+        var controlPipe = ControlPipe(options);
+        var resourceId = options.Required("--resource-id");
+        var zoneId = options.Required("--zone-id");
+        var inputPath = options.Required("--input-file");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId) || !ServiceSettingsLoader.IsSafeIdentifier(zoneId))
+        {
+            return Usage();
+        }
+
+        var content = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        try
+        {
+            if (content.Length is <= 0 or > 1024 * 1024)
+            {
+                Console.Error.WriteLine("ERROR invalid_source_size");
+                return 4;
+            }
+
+            var result = await InvokeOwnerAsync(controlPipe,
+                new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.SourceCreateOperation,
+                    resourceId, zoneId, ContentBase64: Convert.ToBase64String(content))).ConfigureAwait(false);
+            if (!result.Success || !HasStatus(result.Reply, "source_created"))
+            {
+                WriteServiceError(result);
+                return 4;
+            }
+
+            var revision = result.Reply.TryGetProperty("resourceRevision", out var value) ? value.GetInt64() : 0;
+            PrintRegisteredSource(result.Reply);
+            Console.WriteLine($"SOURCE stored revision={revision}");
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(content);
+        }
+    }
+
+    private static async Task<int> SourceReviseAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--zone-id", "--expected-revision", "--input-file");
+        var controlPipe = ControlPipe(options);
+        var resourceId = options.Required("--resource-id");
+        var zoneId = options.Required("--zone-id");
+        var inputPath = options.Required("--input-file");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId) || !ServiceSettingsLoader.IsSafeIdentifier(zoneId))
+        {
+            return Usage();
+        }
+
+        if (!long.TryParse(options.Required("--expected-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var expectedRevision) ||
+            expectedRevision < 1)
+        {
+            return Usage();
+        }
+
+        var content = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        try
+        {
+            if (content.Length is <= 0 or > 1024 * 1024)
+            {
+                Console.Error.WriteLine("ERROR invalid_source_size");
+                return 4;
+            }
+
+            var result = await InvokeOwnerAsync(controlPipe,
+                new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.SourceReviseOperation,
+                    resourceId, zoneId, ContentBase64: Convert.ToBase64String(content), ResourceRevision: expectedRevision)).ConfigureAwait(false);
+            if (!result.Success || !HasStatus(result.Reply, "source_revised"))
+            {
+                WriteServiceError(result);
+                return 4;
+            }
+
+            var revision = result.Reply.TryGetProperty("resourceRevision", out var value) ? value.GetInt64() : 0;
+            PrintRegisteredSource(result.Reply);
+            Console.WriteLine($"SOURCE stored revision={revision}");
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(content);
+        }
+    }
+
+    private static async Task<int> SourceReadAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--resource-revision");
+        var controlPipe = ControlPipe(options);
+        var resourceId = options.Required("--resource-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId))
+        {
+            return Usage();
+        }
+
+        long? revision = null;
+        if (options.Optional("--resource-revision") is { } revisionText)
+        {
+            if (!long.TryParse(revisionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) || parsed < 1)
+            {
+                return Usage();
+            }
+
+            revision = parsed;
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.SourceReadOperation,
+                ResourceId: resourceId, ResourceRevision: revision)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "source"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintRegisteredSource(result.Reply);
+        return 0;
+    }
+
+    private static void PrintRegisteredSource(JsonElement reply)
+    {
+        if (!reply.TryGetProperty("source", out var source) || source.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        Console.WriteLine($"SOURCE id={JsonValueText(source, "id")} zone={JsonValueText(source, "zoneId")} revision={JsonValueText(source, "revision")} executor={JsonValueText(source, "executor")} method={JsonValueText(source, "creationMethod")} availability={JsonValueText(source, "availability")}");
+        if (source.TryGetProperty("title", out var title) && title.ValueKind == JsonValueKind.String)
+        {
+            Console.WriteLine($"title={title.GetString()}");
+        }
+
+        Console.WriteLine($"locator={JsonValueText(source, "locator")} version={JsonValueText(source, "version")}");
     }
 
     private static async Task<int> ProvisionAsync(CommandOptions options)
@@ -1740,7 +1892,7 @@ internal static class OwnerControlCli
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|re…");
+        Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|re…");
         return 2;
     }
 
