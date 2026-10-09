@@ -20,9 +20,10 @@ public sealed record SourceSpan(long Start, long End);
 /// source carries no body: originals stay outside vault protection (R16),
 /// and encrypted snapshots/refresh belong to Sprint 3. Availability is an
 /// explicit registrant assertion; unknown is explicit and is never reported
-/// as available or verified (R18). Relations (S2-T4), lifecycle (S2-T5),
-/// collection views (S2-T6) and the private index (S2-T7) stay pending and
-/// are not represented here.
+/// as available or verified (R18). Typed relations over items and registered
+/// sources live in <see cref="Relations"/>; lifecycle (S2-T5), collection
+/// views (S2-T6) and the private index (S2-T7) stay pending and are not
+/// represented here.
 /// </summary>
 public sealed record RegisteredSourceDraft(
     string? Title,
@@ -153,7 +154,7 @@ public static class RegisteredSourceValidator
     public static void ValidateDraft(RegisteredSourceDraft draft, string sourceId, string zoneId)
     {
         ArgumentNullException.ThrowIfNull(draft);
-        if (!DomainIdentifiers.IsSafeIdentifier(sourceId))
+        if (!DomainIdentifiers.IsNonRelationIdentifier(sourceId))
         {
             throw new ArgumentException("The source ID must be an opaque safe identifier.");
         }
@@ -187,7 +188,7 @@ public static class RegisteredSourceValidator
             throw new ArgumentException("The registered source schema version is unsupported.");
         }
 
-        if (!DomainIdentifiers.IsSafeIdentifier(source.Id))
+        if (!DomainIdentifiers.IsNonRelationIdentifier(source.Id))
         {
             throw new ArgumentException("The source ID must be an opaque safe identifier.");
         }

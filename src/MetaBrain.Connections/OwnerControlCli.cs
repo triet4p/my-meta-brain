@@ -34,6 +34,12 @@ internal static class OwnerControlCli
                 "source-create" => await SourceCreateAsync(options).ConfigureAwait(false),
                 "source-revise" => await SourceReviseAsync(options).ConfigureAwait(false),
                 "source-read" => await SourceReadAsync(options).ConfigureAwait(false),
+                "relation-create" => await RelationCreateAsync(options).ConfigureAwait(false),
+                "relation-accept" => await RelationAcceptAsync(options).ConfigureAwait(false),
+                "relation-reject" => await RelationRejectAsync(options).ConfigureAwait(false),
+                "relation-unlink" => await RelationUnlinkAsync(options).ConfigureAwait(false),
+                "relation-relink" => await RelationRelinkAsync(options).ConfigureAwait(false),
+                "relation-read" => await RelationReadAsync(options).ConfigureAwait(false),
                 "provision" => await ProvisionAsync(options).ConfigureAwait(false),
                 "unlock" => await UnlockAsync(options, useRecoveryCode: false).ConfigureAwait(false),
                 "recover" => await UnlockAsync(options, useRecoveryCode: true).ConfigureAwait(false),
@@ -588,6 +594,193 @@ internal static class OwnerControlCli
 
         Console.WriteLine($"locator={JsonValueText(source, "locator")} version={JsonValueText(source, "version")}");
     }
+
+    private static async Task<int> RelationCreateAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--zone-id", "--input-file");
+        var controlPipe = ControlPipe(options);
+        var resourceId = options.Required("--resource-id");
+        var zoneId = options.Required("--zone-id");
+        var inputPath = options.Required("--input-file");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId) || !ServiceSettingsLoader.IsSafeIdentifier(zoneId))
+        {
+            return Usage();
+        }
+
+        var content = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        try
+        {
+            if (content.Length is <= 0 or > 1024 * 1024)
+            {
+                Console.Error.WriteLine("ERROR invalid_relation_size");
+                return 4;
+            }
+
+            var result = await InvokeOwnerAsync(controlPipe,
+                new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.RelationCreateOperation,
+                    resourceId, zoneId, ContentBase64: Convert.ToBase64String(content))).ConfigureAwait(false);
+            if (!result.Success || !HasStatus(result.Reply, "relation_created"))
+            {
+                WriteServiceError(result);
+                return 4;
+            }
+
+            var revision = result.Reply.TryGetProperty("resourceRevision", out var value) ? value.GetInt64() : 0;
+            PrintRelation(result.Reply);
+            Console.WriteLine($"RELATION stored revision={revision}");
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(content);
+        }
+    }
+
+    private static async Task<int> RelationTransitionAsync(CommandOptions options, string transitionCommand)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--expected-revision", "--input-file");
+        var controlPipe = ControlPipe(options);
+        var resourceId = options.Required("--resource-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId))
+        {
+            return Usage();
+        }
+
+        if (!long.TryParse(options.Required("--expected-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var expectedRevision) ||
+            expectedRevision < 1)
+        {
+            return Usage();
+        }
+
+        var inputPath = options.Optional("--input-file");
+        byte[]? content = inputPath is null ? null : await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        try
+        {
+            if (content is { Length: <= 0 or > 1024 * 1024 })
+            {
+                Console.Error.WriteLine("ERROR invalid_relation_size");
+                return 4;
+            }
+
+            var result = await InvokeOwnerAsync(controlPipe,
+                new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, transitionCommand,
+                    ResourceId: resourceId,
+                    ContentBase64: content is null ? null : Convert.ToBase64String(content),
+                    ResourceRevision: expectedRevision)).ConfigureAwait(false);
+            var expectedStatus = string.Equals(transitionCommand, ServiceRequestHandler.RelationAcceptOperation, StringComparison.Ordinal)
+                ? "relation_accepted"
+                : string.Equals(transitionCommand, ServiceRequestHandler.RelationRejectOperation, StringComparison.Ordinal)
+                    ? "relation_rejected"
+                    : string.Equals(transitionCommand, ServiceRequestHandler.RelationUnlinkOperation, StringComparison.Ordinal)
+                        ? "relation_unlinked"
+                        : "relation_relinked";
+            if (!result.Success || !HasStatus(result.Reply, expectedStatus))
+            {
+                WriteServiceError(result);
+                return 4;
+            }
+
+            var revision = result.Reply.TryGetProperty("resourceRevision", out var value) ? value.GetInt64() : 0;
+            PrintRelation(result.Reply);
+            Console.WriteLine($"RELATION stored revision={revision}");
+            return 0;
+        }
+        finally
+        {
+            if (content is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(content);
+            }
+        }
+    }
+
+    private static Task<int> RelationAcceptAsync(CommandOptions options) =>
+        RelationTransitionAsync(options, ServiceRequestHandler.RelationAcceptOperation);
+
+    private static Task<int> RelationRejectAsync(CommandOptions options) =>
+        RelationTransitionAsync(options, ServiceRequestHandler.RelationRejectOperation);
+
+    private static Task<int> RelationUnlinkAsync(CommandOptions options) =>
+        RelationTransitionAsync(options, ServiceRequestHandler.RelationUnlinkOperation);
+
+    private static Task<int> RelationRelinkAsync(CommandOptions options) =>
+        RelationTransitionAsync(options, ServiceRequestHandler.RelationRelinkOperation);
+
+    private static async Task<int> RelationReadAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--resource-revision");
+        var controlPipe = ControlPipe(options);
+        var resourceId = options.Required("--resource-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId))
+        {
+            return Usage();
+        }
+
+        long? revision = null;
+        if (options.Optional("--resource-revision") is { } revisionText)
+        {
+            if (!long.TryParse(revisionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) || parsed < 1)
+            {
+                return Usage();
+            }
+
+            revision = parsed;
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.RelationReadOperation,
+                ResourceId: resourceId, ResourceRevision: revision)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "relation"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintRelation(result.Reply);
+        return 0;
+    }
+
+    private static void PrintRelation(JsonElement reply)
+    {
+        if (!reply.TryGetProperty("relation", out var relation) || relation.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        Console.WriteLine($"RELATION id={JsonValueText(relation, "id")} zone={JsonValueText(relation, "zoneId")} revision={JsonValueText(relation, "revision")} kind={JsonValueText(relation, "kind")} state={JsonValueText(relation, "state")}");
+        if (relation.TryGetProperty("from", out var from) && from.ValueKind == JsonValueKind.Object)
+        {
+            Console.WriteLine($"from resource={JsonValueText(from, "resourceId")} kind={JsonValueText(from, "endpointKind")} revision={JsonValueText(from, "revision")} span={SpanText(from)}");
+        }
+
+        if (relation.TryGetProperty("to", out var to) && to.ValueKind == JsonValueKind.Object)
+        {
+            Console.WriteLine($"to resource={JsonValueText(to, "resourceId")} kind={JsonValueText(to, "endpointKind")} revision={JsonValueText(to, "revision")} span={SpanText(to)}");
+        }
+
+        Console.WriteLine($"executor={JsonValueText(relation, "executor")} method={JsonValueText(relation, "creationMethod")} recordedUtc={JsonValueText(relation, "recordedAtUtc")} stateExecutor={JsonValueText(relation, "stateExecutor")} stateRecordedUtc={JsonValueText(relation, "stateRecordedAtUtc")}");
+        Console.WriteLine($"reason={JsonValueText(relation, "reason")}");
+        if (relation.TryGetProperty("stateReason", out var stateReason) && stateReason.ValueKind == JsonValueKind.String)
+        {
+            Console.WriteLine($"stateReason={stateReason.GetString()}");
+        }
+
+        if (relation.TryGetProperty("review", out var review) && review.ValueKind == JsonValueKind.Object)
+        {
+            var reasons = review.TryGetProperty("reasons", out var reasonList) && reasonList.ValueKind == JsonValueKind.Array
+                ? string.Join(",", reasonList.EnumerateArray().Select(value => value.GetString()))
+                : string.Empty;
+            var stale = review.TryGetProperty("staleResourceIds", out var staleList) && staleList.ValueKind == JsonValueKind.Array
+                ? string.Join(",", staleList.EnumerateArray().Select(value => value.GetString()))
+                : string.Empty;
+            Console.WriteLine($"review={JsonValueText(review, "state")} reasons={reasons} stale={stale}");
+        }
+    }
+
+    private static string SpanText(JsonElement endpoint) =>
+        endpoint.TryGetProperty("span", out var span) && span.ValueKind == JsonValueKind.Object
+            ? $"{JsonValueText(span, "start")}-{JsonValueText(span, "end")}"
+            : "none";
 
     private static async Task<int> ProvisionAsync(CommandOptions options)
     {
@@ -1892,7 +2085,7 @@ internal static class OwnerControlCli
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|re…");
+        Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|re…");
         return 2;
     }
 

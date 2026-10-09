@@ -71,6 +71,7 @@ public sealed partial class OwnerScopeGrantAuthority
         "resource.read",
         "source.read",
         "memory.read",
+        "relation.read",
         "proposal.create",
         "link.create",
         "provider.egress"

@@ -8,7 +8,7 @@
 
 Meta Brain là bộ nhớ thứ hai local-first cho owner, encrypted personal vault với key user kiểm soát. Agents chạy bình thường, khám phá owner-published catalog, request memory và đổi token một lần lấy scoped session qua MCP; không sandbox hoặc bảo mật lại original agent sessions. Provenance, durability, owner control và selective synthesis giữ nguyên.
 
-- Baseline: 2026-09-28; owner-approved CR01/D016 ngày 2026-10-01 thay security model. Replacement Sprint 1/M1 complete: S1-T1 retained, S1-T2–T9 evidence/checkpoints PASS, documentation correction PASS/checkpoint `911c12a0f157e7d176587528a0a32b52c8345407`, final differential deep `S1-DEEP-20261007-A2` PASS with no actionable findings. Walkthrough consent does not change product/S6/secret policies. Sprint 2: S2-T1–T2 complete, S2-T3 in progress; Sprints 3–8 Not started. Old AppContainer PASS historical only; no production acceptance or new push authorization.
+- Baseline: 2026-09-28; owner-approved CR01/D016 ngày 2026-10-01 thay security model. Replacement Sprint 1/M1 complete: S1-T1 retained, S1-T2–T9 evidence/checkpoints PASS, documentation correction PASS/checkpoint `911c12a0f157e7d176587528a0a32b52c8345407`, final differential deep `S1-DEEP-20261007-A2` PASS with no actionable findings. Walkthrough consent does not change product/S6/secret policies. Sprint 2: S2-T1–T3 complete, S2-T4 in progress; Sprints 3–8 Not started. Old AppContainer PASS historical only; no production acceptance or new push authorization.
 - Đặc tả: [META-BRAIN](META-BRAIN.md).
 - Hợp đồng yêu cầu và change control: [REQUIREMENTS](REQUIREMENTS.md).
 - Hướng dẫn agent: [AGENTS](../AGENTS.md).
@@ -40,7 +40,7 @@ S1-T9 [behavioral evidence A3](../artifacts/sprint-1/reviews/S1-T9-S1T9-REVIEW-2
 | Sprint | Trạng thái | Task range | Gate |
 | --- | --- | --- | --- |
 | 1 | Complete — CR01 replacement M1 | S1-T1 retained; S1-T2–T9 [x] and doc correction committed | Task evidence/checkpoints PASS; final differential deep A2 PASS |
-| 2 | In progress — S2-T3 | S2-T1–T2 [x]; S2-T3 [~]; S2-T4 authorized next; S2-T5…S2-T7 pending | Checkpoints `4a1b9c5`, `d6bc087`; sprint deep pending |
+| 2 | In progress — S2-T4 | S2-T1–T3 [x]; S2-T4 [~]; S2-T5…S2-T7 pending | Checkpoints `4a1b9c5`, `d6bc087`, `2c478e8`; sprint deep pending |
 | 3 | Not started | S3-T1…S3-T6 | Pending |
 | 4 | Not started | S4-T1…S4-T7 | Pending |
 | 5 | Not started | S5-T1…S5-T7 | Pending |
@@ -48,7 +48,7 @@ S1-T9 [behavioral evidence A3](../artifacts/sprint-1/reviews/S1-T9-S1T9-REVIEW-2
 | 7 | Not started | S7-T1…S7-T6 | Pending |
 | 8 | Not started | S8-T1…S8-T7 | Pending |
 
-S2-T1/T2 checkpoints `4a1b9c53babade36cec080798792488188748cf0` and `d6bc087805e328884a92bcbbe36128693e35de22` retained. Owner confirmed S2-T3/T4. S2-T3 implementation `S2T3-IMPL-20261008-A1` / planned agent `S2T3SourceImplA1`, Gold source/provenance scoped-service integration, resolved `opencode-go/muse-spark-1.3-contributor:xhigh`, `blocking: false`; quota/provider-applied effort unknown. [Sprint 2 gate record](sprint-plans/sprint-2.md#gate-record) retains accepted evidence and records routing/ownership; S2-T3 includes prior Main plan-only carryover and current orchestration changes for its own review/checkpoint. S2-T4 remains unlaunched until S2-T3 PASS/checkpoint; no push and no Sprint 3 launch.
+S2-T1/T2 checkpoints retained. S2-T3 complete: implementation `S2T3-IMPL-20261008-A1` / `S2T3SourceImplA1`, evidence `S2T3-REVIEW-20261008-A1` / `S2T3EvidenceA1` PASS, exact-snapshot Bronze checkpoint `S2T3-CHECKPOINT-20261008-A1` / `S2T3CheckpointA1` success at `2c478e89dd6e2eafcfc718eeb3bd4acf021bbb5b`. [Sprint 2 gate record](sprint-plans/sprint-2.md#gate-record) links records/frozen snapshot and limitations. S2-T4 implementation `S2T4-IMPL-20261008-A1` / planned agent `S2T4RelationImplA1`, Gold relation/revision/scoping integration, resolved `opencode-go/muse-spark-1.3-contributor:xhigh`, non-blocking; quota/provider-applied effort unknown. S2-T4 explicitly owns current post-S2-T3 plan-only gate/status and orchestration edits for review/checkpoint. No push or Sprint 3 launch; sprint deep pending.
 
 ## Completed Sprints
 

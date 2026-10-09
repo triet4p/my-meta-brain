@@ -12,9 +12,10 @@ namespace MetaBrain.Core.Domain;
 /// CollectionId). The S2-T3 source registry itself lives in
 /// <see cref="SourceRegistry"/>; item citations only reference registered
 /// sources by opaque ID plus revision-anchored spans, never by reading the
-/// registry. Relations/lifecycle (S2-T4..T5), collections/views (S2-T6) and
-/// index (S2-T7) remain pending and are not represented here beyond the
-/// frozen S1 scope snapshot.
+/// registry. Typed relations between items and sources live in
+/// <see cref="Relations"/>; domain lifecycle (S2-T5), collections/views
+/// (S2-T6) and the private index (S2-T7) remain pending and are not
+/// represented here beyond the frozen S1 scope snapshot.
 /// </summary>
 public enum MemoryKind
 {
@@ -244,7 +245,7 @@ public static class MemoryItemValidator
     public static void ValidateDraft(MemoryItemDraft draft, string resourceId, string zoneId)
     {
         ArgumentNullException.ThrowIfNull(draft);
-        if (!DomainIdentifiers.IsSafeIdentifier(resourceId))
+        if (!DomainIdentifiers.IsNonRelationIdentifier(resourceId))
         {
             throw new ArgumentException("The memory ID must be an opaque safe identifier.");
         }
@@ -298,7 +299,7 @@ public static class MemoryItemValidator
             throw new ArgumentException("The memory envelope schema version is unsupported.");
         }
 
-        if (!DomainIdentifiers.IsSafeIdentifier(envelope.Id))
+        if (!DomainIdentifiers.IsNonRelationIdentifier(envelope.Id))
         {
             throw new ArgumentException("The memory ID must be an opaque safe identifier.");
         }
@@ -430,7 +431,7 @@ public static class MemoryItemValidator
                 throw new ArgumentException("A memory source reference is invalid.");
             }
 
-            if (source.SourceId is not null && !DomainIdentifiers.IsSafeIdentifier(source.SourceId))
+            if (source.SourceId is not null && !DomainIdentifiers.IsNonRelationIdentifier(source.SourceId))
             {
                 throw new ArgumentException("A memory source ID must be an opaque safe identifier.");
             }
@@ -552,6 +553,16 @@ public static class MemoryItemValidator
 /// </summary>
 internal static class DomainIdentifiers
 {
+    /// <summary>
+    /// Reserved resource-ID prefix for typed relations. Relation records are
+    /// canonical resources on the shared store, and this prefix is what makes
+    /// the relation set enumerable from the encrypted manifest without
+    /// decrypting items or sources (and without a second link index). Items
+    /// and registered sources reject the prefix so a resource ID can never be
+    /// mistaken for a relation.
+    /// </summary>
+    public const string RelationIdPrefix = "rel-";
+
     public static bool IsSafeIdentifier(string? value)
     {
         if (string.IsNullOrEmpty(value) || value.Length > 128 || !IsAsciiAlphaNumeric(value[0]))
@@ -570,6 +581,12 @@ internal static class DomainIdentifiers
 
         return true;
     }
+
+    public static bool IsRelationId(string? value) =>
+        value is not null && value.StartsWith(RelationIdPrefix, StringComparison.Ordinal) && IsSafeIdentifier(value);
+
+    public static bool IsNonRelationIdentifier(string? value) =>
+        IsSafeIdentifier(value) && !value!.StartsWith(RelationIdPrefix, StringComparison.Ordinal);
 
     public static bool IsAsciiAlphaNumeric(char value) =>
         value is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9';

@@ -101,6 +101,36 @@ public sealed record RegisteredSourceWire(
     DateTimeOffset? CapturedAtUtc,
     DateTimeOffset RecordedAtUtc);
 
+public sealed record RelationEndpointWire(
+    string ResourceId,
+    string EndpointKind,
+    long Revision,
+    Core.Domain.SourceSpan? Span);
+
+public sealed record RelationReviewWire(
+    string State,
+    string[] Reasons,
+    string[] StaleResourceIds);
+
+public sealed record RelationWire(
+    string Id,
+    string ZoneId,
+    long Revision,
+    int SchemaVersion,
+    string Kind,
+    string State,
+    RelationEndpointWire From,
+    RelationEndpointWire To,
+    string Executor,
+    string CreationMethod,
+    string Reason,
+    string? StateReason,
+    DateTimeOffset? OccurredAtUtc,
+    DateTimeOffset RecordedAtUtc,
+    string StateExecutor,
+    DateTimeOffset StateRecordedAtUtc,
+    RelationReviewWire Review);
+
 public sealed record ServiceReply(
     int ProtocolVersion,
     string? Status,
@@ -132,7 +162,8 @@ public sealed record ServiceReply(
     OwnerAccessRequestPreview? AccessRequestPreview = null,
     string? RequestId = null,
     MemoryItemWire? MemoryItem = null,
-    RegisteredSourceWire? Source = null);
+    RegisteredSourceWire? Source = null,
+    RelationWire? Relation = null);
 
 
 public sealed class ServiceRequestHandler
@@ -172,6 +203,23 @@ public sealed class ServiceRequestHandler
     public const string SourceCreateOperation = "source.create";
     public const string SourceReviseOperation = "source.revise";
     public const string AgentSourceReadOperation = "agent.source.read";
+    public const string RelationCreateOperation = "relation.create";
+    public const string RelationAcceptOperation = "relation.accept";
+    public const string RelationRejectOperation = "relation.reject";
+    public const string RelationUnlinkOperation = "relation.unlink";
+    public const string RelationRelinkOperation = "relation.relink";
+    public const string RelationReadOperation = "relation.read";
+    public const string AgentLinkCreateOperation = "agent.link.create";
+    public const string AgentRelationReadOperation = "agent.relation.read";
+
+    /// <summary>
+    /// Owner-grantable agent operation that authorizes creating one link
+    /// between an exact subject (source scope) and object (destination scope)
+    /// at pinned revisions. The wire operation is
+    /// <see cref="AgentLinkCreateOperation"/>; this is the grant operation name
+    /// already fixed by the scope authority.
+    /// </summary>
+    public const string LinkCreateOperation = "link.create";
     private readonly GrantAuthority _grantAuthority;
     private readonly IVaultLifecycle _vault;
     private readonly OwnerScopeGrantAuthority _ownerScopeGrants;
@@ -239,6 +287,14 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, AgentSourceReadOperation, StringComparison.Ordinal))
         {
             return HandleAgentSourceRead(context, request, operation);
+        }
+        if (string.Equals(request.Operation, AgentLinkCreateOperation, StringComparison.Ordinal))
+        {
+            return HandleAgentLinkCreate(context, request, operation);
+        }
+        if (string.Equals(request.Operation, AgentRelationReadOperation, StringComparison.Ordinal))
+        {
+            return HandleAgentRelationRead(context, request, operation);
         }
         if (string.Equals(request.Operation, AgentAccessAuthorizeOperation, StringComparison.Ordinal))
         {
@@ -422,6 +478,36 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, SourceReadOperation, StringComparison.Ordinal))
         {
             return HandleSourceRead(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, RelationCreateOperation, StringComparison.Ordinal))
+        {
+            return HandleRelationCreate(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, RelationAcceptOperation, StringComparison.Ordinal))
+        {
+            return HandleRelationTransition(context, request, operation, RelationAcceptOperation);
+        }
+
+        if (string.Equals(request.Operation, RelationRejectOperation, StringComparison.Ordinal))
+        {
+            return HandleRelationTransition(context, request, operation, RelationRejectOperation);
+        }
+
+        if (string.Equals(request.Operation, RelationUnlinkOperation, StringComparison.Ordinal))
+        {
+            return HandleRelationTransition(context, request, operation, RelationUnlinkOperation);
+        }
+
+        if (string.Equals(request.Operation, RelationRelinkOperation, StringComparison.Ordinal))
+        {
+            return HandleRelationTransition(context, request, operation, RelationRelinkOperation);
+        }
+
+        if (string.Equals(request.Operation, RelationReadOperation, StringComparison.Ordinal))
+        {
+            return HandleRelationRead(context, request, operation);
         }
 
         if (string.Equals(request.Operation, ResourceReadOperation, StringComparison.Ordinal))
@@ -698,6 +784,418 @@ public sealed class ServiceRequestHandler
             return Error("forbidden");
         }
     }
+
+    /// <summary>
+    /// S2-T4 owner relation store: create-only over the shared encrypted
+    /// canonical store. Both endpoints must exist at the live revision the link
+    /// pins and must decode as the declared kind (memory item or registered
+    /// source); derivation cycles are refused. A duplicate create fails closed
+    /// through the vault revision gate.
+    /// </summary>
+    private ServiceReply HandleRelationCreate(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || operation is null || HasContentWriteExtras(request) ||
+            string.IsNullOrEmpty(request.ResourceId) || string.IsNullOrEmpty(request.ZoneId) ||
+            request.ResourceRevision is not null ||
+            string.IsNullOrEmpty(request.ContentBase64))
+        {
+            return Error("invalid_request");
+        }
+
+        byte[]? draft = null;
+        try
+        {
+            draft = Convert.FromBase64String(request.ContentBase64);
+            var created = new RelationService().Create(context, request.ResourceId, request.ZoneId, draft, operation);
+            return new ServiceReply(CurrentProtocolVersion, "relation_created", "owner", null,
+                ResourceRevision: created.Relation.Revision, Relation: ToRelationWire(created.Relation, created.Review));
+        }
+        catch (FormatException)
+        {
+            return Error("invalid_request");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        finally
+        {
+            if (draft is { Length: > 0 })
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(draft);
+            }
+        }
+    }
+
+    /// <summary>
+    /// S2-T4 owner relation lifecycle: accept, reject, unlink, relink. Every
+    /// transition is a revision-gated write of the same record; endpoints, kind
+    /// and the original reason never change, and reject/unlink require an
+    /// explicit recorded rationale instead of a silent edit.
+    /// </summary>
+    private ServiceReply HandleRelationTransition(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation,
+        string transitionOperation)
+    {
+        if (context.Kind != PrincipalKind.Owner || operation is null || HasRelationTransitionExtras(request) ||
+            string.IsNullOrEmpty(request.ResourceId) ||
+            request.ResourceRevision is not { } expectedRevision || expectedRevision < 1)
+        {
+            return Error("invalid_request");
+        }
+
+        byte[]? draft = null;
+        try
+        {
+            draft = request.ContentBase64 is null ? null : Convert.FromBase64String(request.ContentBase64);
+            var service = new RelationService();
+            var result = string.Equals(transitionOperation, RelationAcceptOperation, StringComparison.Ordinal)
+                ? service.Accept(context, request.ResourceId, expectedRevision, draft, operation)
+                : string.Equals(transitionOperation, RelationRejectOperation, StringComparison.Ordinal)
+                    ? service.Reject(context, request.ResourceId, expectedRevision, draft, operation)
+                    : string.Equals(transitionOperation, RelationUnlinkOperation, StringComparison.Ordinal)
+                        ? service.Unlink(context, request.ResourceId, expectedRevision, draft, operation)
+                        : service.Relink(context, request.ResourceId, expectedRevision, draft, operation);
+            var status = string.Equals(transitionOperation, RelationAcceptOperation, StringComparison.Ordinal)
+                ? "relation_accepted"
+                : string.Equals(transitionOperation, RelationRejectOperation, StringComparison.Ordinal)
+                    ? "relation_rejected"
+                    : string.Equals(transitionOperation, RelationUnlinkOperation, StringComparison.Ordinal)
+                        ? "relation_unlinked"
+                        : "relation_relinked";
+            return new ServiceReply(CurrentProtocolVersion, status, "owner", null,
+                ResourceRevision: result.Relation.Revision, Relation: ToRelationWire(result.Relation, result.Review));
+        }
+        catch (FormatException)
+        {
+            return Error("invalid_request");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        finally
+        {
+            if (draft is { Length: > 0 })
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(draft);
+            }
+        }
+    }
+
+    /// <summary>
+    /// S2-T4 owner relation read: the stored record plus its live review
+    /// state. Unknown, unavailable, or tampered relations share one generic
+    /// denial, so a read is never an existence oracle.
+    /// </summary>
+    private ServiceReply HandleRelationRead(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || operation is null || HasContentReadExtras(request) ||
+            string.IsNullOrEmpty(request.ResourceId))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var result = new RelationService().Read(context, request.ResourceId, request.ResourceRevision, operation);
+            if (result.Relation is null || result.Review is null)
+            {
+                return Error("invalid_request");
+            }
+
+            return new ServiceReply(CurrentProtocolVersion, "relation", "owner", null,
+                ResourceRevision: result.Relation.Revision, Relation: ToRelationWire(result.Relation, result.Review));
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+    }
+
+    /// <summary>
+    /// S2-T4 scoped agent link creation inside the existing owner-approved
+    /// `link.create` grant: the session authority must hold both the subject
+    /// (source scope) and the object (destination scope) at the pinned
+    /// revisions. The relation ID is minted server-side, the owning zone comes
+    /// from the subject endpoint's registered zone, and the link is always
+    /// proposed: an agent session never records owner acceptance.
+    /// </summary>
+    private ServiceReply HandleAgentLinkCreate(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Agent || operation is null ||
+            HasAgentLinkCreateExtras(request) ||
+            request.AccessOperation is not LinkCreateOperation ||
+            string.IsNullOrEmpty(request.ContentBase64))
+        {
+            return ResourceDenied();
+        }
+
+        byte[]? draft = null;
+        try
+        {
+            draft = Convert.FromBase64String(request.ContentBase64);
+            Core.Domain.RelationDraft parsed;
+            try
+            {
+                parsed = Core.Domain.RelationCodec.DecodeDraft(draft);
+            }
+            catch (ArgumentException)
+            {
+                return ResourceDenied();
+            }
+
+            if (parsed.From is null || parsed.To is null)
+            {
+                return ResourceDenied();
+            }
+
+            // Authorize the exact operation and both endpoint revisions against
+            // the frozen snapshot before any relation data is written.
+            AgentAccessRequest Authorize() => new(
+                LinkCreateOperation,
+                parsed.From.ResourceId,
+                parsed.From.Revision,
+                parsed.To.ResourceId,
+                parsed.To.Revision);
+
+            var beforeWrite = operation.LoadScopeGrantState();
+            var decision = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                beforeWrite.UnlockEpoch,
+                beforeWrite.PolicyGeneration,
+                Authorize());
+            if (!decision.Allowed)
+            {
+                return ResourceDenied();
+            }
+
+            RelationWriteResult created;
+            try
+            {
+                created = new RelationService().CreateAgentLink(context, draft, operation);
+            }
+            catch (ArgumentException)
+            {
+                return ResourceDenied();
+            }
+
+            var beforeServe = operation.LoadScopeGrantState();
+            var recheck = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                beforeServe.UnlockEpoch,
+                beforeServe.PolicyGeneration,
+                Authorize());
+            if (!recheck.Allowed)
+            {
+                return ResourceDenied();
+            }
+
+            operation.ValidateRegistration(created.Relation.Id, created.Relation.Revision);
+            return new ServiceReply(
+                CurrentProtocolVersion, "relation_created", null, null,
+                Decision: recheck,
+                PolicyGeneration: recheck.PolicyGeneration,
+                ResourceRevision: created.Relation.Revision,
+                Relation: ToRelationWire(created.Relation, created.Review));
+        }
+        catch (FormatException)
+        {
+            return ResourceDenied();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return ResourceDenied();
+        }
+        finally
+        {
+            if (draft is { Length: > 0 })
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(draft);
+            }
+        }
+    }
+
+    /// <summary>
+    /// S2-T4 scoped agent relation read: the session must hold `relation.read`
+    /// on the exact relation ID/revision, and both endpoints must be inside the
+    /// granted snapshot at their live revisions with the read operation that
+    /// matches the endpoint kind (`source.read` for registered sources,
+    /// `memory.read` for memory items). A cross-zone or ungranted endpoint is
+    /// one generic denial with no endpoint metadata, title, count, or backlink.
+    /// </summary>
+    private ServiceReply HandleAgentRelationRead(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Agent || operation is null ||
+            HasAgentResourceReadExtras(request) ||
+            request.AccessOperation is not RelationReadOperation ||
+            string.IsNullOrEmpty(request.ResourceId))
+        {
+            return ResourceDenied();
+        }
+
+        try
+        {
+            // The relation-level check goes through the single session
+            // authority: exact frozen operation, relation ID, and revision.
+            var beforeRead = operation.LoadScopeGrantState();
+            var decision = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                beforeRead.UnlockEpoch,
+                beforeRead.PolicyGeneration,
+                new AgentAccessRequest(RelationReadOperation, request.ResourceId, request.ResourceRevision));
+            if (!decision.Allowed)
+            {
+                return ResourceDenied();
+            }
+
+            // The snapshot supplies the granted endpoint scope for the
+            // per-endpoint check the relation service needs.
+            var lookup = _agentSessions.LookupSession(
+                request.SessionToken,
+                beforeRead.UnlockEpoch,
+                beforeRead.PolicyGeneration);
+            if (lookup.Status != AgentSessionLookupStatus.Valid || lookup.Session is null)
+            {
+                return ResourceDenied();
+            }
+
+            var snapshot = lookup.Session;
+            Func<Core.Domain.RelationEndpoint, bool> endpointAuthorizer = endpoint =>
+            {
+                var live = SourceRegistryService.TryGetLiveRevision(operation, endpoint.ResourceId);
+                if (live is null)
+                {
+                    return false;
+                }
+
+                var required = endpoint.EndpointKind == Core.Domain.RelationEndpointKind.RegisteredSource
+                    ? SourceReadOperation
+                    : MemoryReadOperation;
+                if (!snapshot.Operations.Contains(required, StringComparer.Ordinal))
+                {
+                    return false;
+                }
+
+                return IsInGrantScope(snapshot.Resources, endpoint.ResourceId, live.Value) ||
+                    IsInGrantScope(snapshot.DestinationResources, endpoint.ResourceId, live.Value);
+            };
+
+            var result = new RelationService().Read(context, request.ResourceId, request.ResourceRevision, operation, endpointAuthorizer);
+            if (result.Relation is null || result.Review is null)
+            {
+                return ResourceDenied();
+            }
+
+            var beforeServe = operation.LoadScopeGrantState();
+            var recheck = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                beforeServe.UnlockEpoch,
+                beforeServe.PolicyGeneration,
+                new AgentAccessRequest(RelationReadOperation, request.ResourceId, request.ResourceRevision));
+            if (!recheck.Allowed)
+            {
+                return ResourceDenied();
+            }
+
+            operation.ValidateRegistration(request.ResourceId, request.ResourceRevision);
+            return new ServiceReply(
+                CurrentProtocolVersion, "relation", null, null,
+                Decision: recheck,
+                PolicyGeneration: recheck.PolicyGeneration,
+                ResourceRevision: result.Relation.Revision,
+                Relation: ToRelationWire(result.Relation, result.Review));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return ResourceDenied();
+        }
+    }
+
+    private static RelationWire ToRelationWire(Core.Domain.Relation relation, Core.Domain.RelationReview review) => new(
+        relation.Id,
+        relation.ZoneId,
+        relation.Revision,
+        relation.SchemaVersion,
+        ToWireToken(relation.Kind.ToString()),
+        ToWireToken(relation.State.ToString()),
+        ToRelationEndpointWire(relation.From),
+        ToRelationEndpointWire(relation.To),
+        ToWireToken(relation.Executor.ToString()),
+        ToWireToken(relation.CreationMethod.ToString()),
+        relation.Reason,
+        relation.StateReason,
+        relation.OccurredAtUtc,
+        relation.RecordedAtUtc,
+        ToWireToken(relation.StateExecutor.ToString()),
+        relation.StateRecordedAtUtc,
+        ToRelationReviewWire(review));
+
+    private static RelationEndpointWire ToRelationEndpointWire(Core.Domain.RelationEndpoint endpoint) => new(
+        endpoint.ResourceId,
+        ToWireToken(endpoint.EndpointKind.ToString()),
+        endpoint.Revision,
+        endpoint.Span);
+
+    private static RelationReviewWire ToRelationReviewWire(Core.Domain.RelationReview review) => new(
+        ToWireToken(review.State.ToString()),
+        ReviewReasonTokens(review.Reasons),
+        review.StaleResourceIds);
+
+    private static string[] ReviewReasonTokens(Core.Domain.RelationReviewReason reasons)
+    {
+        var tokens = new List<string>();
+        if (reasons.HasFlag(Core.Domain.RelationReviewReason.EndpointMissing))
+        {
+            tokens.Add("endpointMissing");
+        }
+
+        if (reasons.HasFlag(Core.Domain.RelationReviewReason.EndpointRevisionChanged))
+        {
+            tokens.Add("endpointRevisionChanged");
+        }
+
+        if (reasons.HasFlag(Core.Domain.RelationReviewReason.SourceUnavailable))
+        {
+            tokens.Add("sourceUnavailable");
+        }
+
+        if (reasons.HasFlag(Core.Domain.RelationReviewReason.DependencyNeedsReview))
+        {
+            tokens.Add("dependencyNeedsReview");
+        }
+
+        return tokens.ToArray();
+    }
+
+    private static bool IsInGrantScope(
+        IReadOnlyList<ScopeResourceRevision> scope,
+        string? resourceId,
+        long? revision) =>
+        !string.IsNullOrWhiteSpace(resourceId) && revision is > 0 &&
+        scope.Any(resource =>
+            string.Equals(resource.ResourceId, resourceId, StringComparison.Ordinal) &&
+            resource.Revision == revision.Value);
 
     /// <summary>
     /// S2-T3 scoped agent source read: the agent channel separately authorizes
@@ -2026,6 +2524,54 @@ public sealed class ServiceRequestHandler
         request.CatalogIds is not null || request.Purpose is not null ||
         request.AgentId is not null || request.AgentContext is not null ||
         request.DisclosureContext is not null || request.RequestId is not null;
+
+    /// <summary>
+    /// Owner relation lifecycle transitions carry only the relation ID, the
+    /// live revision they replace, and the optional rationale draft; every
+    /// other field (zone, session, scope, egress, catalog) is refused.
+    /// </summary>
+    private static bool HasRelationTransitionExtras(ServiceRequest request) =>
+        request.ZoneId is not null ||
+        request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ResourceIds is not null || request.Operations is not null ||
+        request.DestinationResourceIds is not null || request.ExpiresAtUtc is not null ||
+        request.Provider is not null || request.Model is not null ||
+        request.MaximumCostUsd is not null || request.PreviewId is not null ||
+        request.CollectionId is not null || request.Token is not null ||
+        request.SessionToken is not null || request.SessionId is not null ||
+        request.AccessOperation is not null || request.DestinationResourceId is not null ||
+        request.DestinationRevision is not null || request.EstimatedCostUsd is not null ||
+        request.InputTokens is not null || request.OutputTokens is not null ||
+        request.CatalogId is not null || request.Label is not null ||
+        request.Description is not null || request.Query is not null ||
+        request.CatalogIds is not null || request.Purpose is not null ||
+        request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null;
+
+    /// <summary>
+    /// Agent link creation carries only the session bearer, the access
+    /// operation name, and the relation draft: identity, zone, scope, and
+    /// egress fields are never accepted from the agent body.
+    /// </summary>
+    private static bool HasAgentLinkCreateExtras(ServiceRequest request) =>
+        request.ResourceId is not null || request.ZoneId is not null ||
+        request.ResourceRevision is not null || request.DestinationResourceId is not null ||
+        request.DestinationRevision is not null ||
+        request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ResourceIds is not null || request.Operations is not null ||
+        request.DestinationResourceIds is not null || request.ExpiresAtUtc is not null ||
+        request.Provider is not null || request.Model is not null ||
+        request.MaximumCostUsd is not null || request.PreviewId is not null ||
+        request.CollectionId is not null || request.Token is not null ||
+        request.SessionId is not null ||
+        request.EstimatedCostUsd is not null || request.InputTokens is not null ||
+        request.OutputTokens is not null ||
+        request.CatalogId is not null || request.Label is not null ||
+        request.Description is not null || request.Query is not null ||
+        request.CatalogIds is not null || request.Purpose is not null ||
+        request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null;
+
     private static bool HasCatalogDiscoveryExtras(ServiceRequest request, bool allowQuery = false) =>
         request.ZoneId is not null ||
         request.Passphrase is not null || request.RecoveryCode is not null ||
