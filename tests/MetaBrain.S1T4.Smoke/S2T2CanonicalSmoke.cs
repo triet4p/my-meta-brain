@@ -133,25 +133,31 @@ internal static partial class OwnerServiceSmoke
                 await File.WriteAllBytesAsync(swappedPath, original).ConfigureAwait(false);
                 try
                 {
-                    Require(await IsS2T2MemoryDeniedAsync(connectionsExecutable, fixture, "s2t2-swapped-ghost").ConfigureAwait(false),
-                        "A swapped valid ciphertext was served under a different resource ID.");
+                    await RequireS2T2CanonicalReadDeniedAsync(connectionsExecutable, fixture, "s2t2-swapped-ghost", "swapped").ConfigureAwait(false);
                 }
                 finally
                 {
                     File.Delete(swappedPath);
                 }
 
-                var tampered = (byte[])original.Clone();
-                tampered[tampered.Length / 2] ^= 0x20;
-                await File.WriteAllBytesAsync(canonicalFiles[0], tampered).ConfigureAwait(false);
-                CryptographicOperations.ZeroMemory(tampered);
-                Require(await IsS2T2MemoryDeniedAsync(connectionsExecutable, fixture, resourceId).ConfigureAwait(false),
-                    "A tampered canonical ciphertext was accepted.");
+                // Authenticated-byte tamper. The mutation must land in the
+                // decoded envelope fields (nonce/ciphertext/tag), not merely
+                // in the raw file bytes: the envelope is JSON, so a raw byte
+                // flip at a fixed offset can land inside a \uXXXX escape or
+                // in the ignored padding bits of the final base64 group and
+                // leave the decoded authenticated bytes byte-identical. That
+                // is not a tamper at all, and the service would then be right
+                // to serve the ciphertext — which is exactly how an
+                // intermittent "tampered ciphertext was accepted" failure
+                // can appear without any product defect.
+                var tampered = await MutateS2T2AuthenticatedEnvelopeAsync(canonicalFiles[0], original).ConfigureAwait(false);
+                Require(S2T2AuthenticatedBytesChanged(original, tampered),
+                    "The synthetic tamper mutation did not change the decoded authenticated envelope bytes, so it proves nothing about the ciphertext boundary.");
+                await RequireS2T2CanonicalReadDeniedAsync(connectionsExecutable, fixture, resourceId, "tampered").ConfigureAwait(false);
                 await File.WriteAllBytesAsync(canonicalFiles[0], original).ConfigureAwait(false);
 
                 await File.WriteAllBytesAsync(canonicalFiles[0], original.AsMemory(0, Math.Min(8, original.Length))).ConfigureAwait(false);
-                Require(await IsS2T2MemoryDeniedAsync(connectionsExecutable, fixture, resourceId).ConfigureAwait(false),
-                    "A truncated canonical ciphertext was accepted.");
+                await RequireS2T2CanonicalReadDeniedAsync(connectionsExecutable, fixture, resourceId, "truncated").ConfigureAwait(false);
                 await File.WriteAllBytesAsync(canonicalFiles[0], original).ConfigureAwait(false);
 
                 // Wrong-key proof needs a locked vault: lock first so unlock
@@ -180,6 +186,24 @@ internal static partial class OwnerServiceSmoke
             }
 
             Console.WriteLine("PASS ciphertext swap/tamper/truncation/wrong-key fail closed");
+
+            // Deterministic controlled negative for the boundary check
+            // itself: a command that never reaches the ciphertext boundary
+            // must not be classifiable as a denial or as an acceptance. No
+            // service listens on this endpoint, so the real owner CLI fails
+            // at the transport seam with its own exit code and error. If
+            // that failure ever classified as a denial, a transport or usage
+            // error could silently stand in for a cryptographic rejection,
+            // and the earlier check would again report an unrelated command
+            // failure as "the ciphertext was accepted".
+            var transportProbe = await RunOwnerCommandAsync(connectionsExecutable,
+                "owner", "memory-read", "--control-pipe", "metabrain-s2t2-no-control-pipe",
+                "--resource-id", resourceId).ConfigureAwait(false);
+            Require(ClassifyS2T2CanonicalRead(transportProbe) == S2T2CanonicalReadOutcome.CommandFailed,
+                "A non-security command failure was classified as a ciphertext-boundary denial or an acceptance " +
+                $"(exit={transportProbe.ExitCode}; stdout={TrimS2T2CanonicalEvidence(transportProbe.StandardOutput)}; " +
+                $"stderr={TrimS2T2CanonicalEvidence(transportProbe.StandardError)}).");
+            Console.WriteLine("PASS ciphertext read diagnostic separates transport failure from tamper acceptance and rejection");
 
             // Explicit import boundary: no external plaintext editing of
             // canonical files. Prove the boundary rejects a mismatched
@@ -299,12 +323,196 @@ internal static partial class OwnerServiceSmoke
             "--input-file", input).ConfigureAwait(false);
     }
 
-    private static async Task<bool> IsS2T2MemoryDeniedAsync(string executable, SmokeFixture fixture, string resourceId)
+    /// <summary>
+    /// What one owner ciphertext read actually did. The three outcomes stay
+    /// distinct so a failing boundary check reports the observed command
+    /// instead of collapsing every non-denial into one message: the read was
+    /// denied by the authenticated-envelope boundary, the mutated bytes were
+    /// served (the security failure this scenario exists to catch), or the
+    /// command never reached the boundary (transport, authentication, lock,
+    /// or usage failure). A command that never reached the ciphertext
+    /// boundary is evidence of nothing about it, so it is never reported as
+    /// an acceptance and never accepted as a rejection.
+    /// </summary>
+    private enum S2T2CanonicalReadOutcome
+    {
+        BoundaryDenied,
+        Served,
+        CommandFailed
+    }
+
+    private static async Task RequireS2T2CanonicalReadDeniedAsync(string executable, SmokeFixture fixture, string resourceId, string mutation)
     {
         var result = await RunOwnerCommandAsync(executable,
             "owner", "memory-read", "--control-pipe", fixture.ControlPipe,
             "--resource-id", resourceId).ConfigureAwait(false);
-        return result.ExitCode == 3 && result.StandardError.Contains("invalid_request", StringComparison.Ordinal);
+        Require(ClassifyS2T2CanonicalRead(result) == S2T2CanonicalReadOutcome.BoundaryDenied,
+            DescribeS2T2CanonicalRead(mutation, resourceId, result));
+    }
+
+    private static S2T2CanonicalReadOutcome ClassifyS2T2CanonicalRead(CommandResult result) =>
+        result.ExitCode == 0
+            ? S2T2CanonicalReadOutcome.Served
+            : result.ExitCode == 3 && result.StandardError.Contains("invalid_request", StringComparison.Ordinal)
+                ? S2T2CanonicalReadOutcome.BoundaryDenied
+                : S2T2CanonicalReadOutcome.CommandFailed;
+
+    /// <summary>
+    /// Failure evidence for the canonical ciphertext boundary: which of the
+    /// three outcomes was observed, plus the exact exit code and the trimmed
+    /// stdout/stderr of the real owner CLI call. Only synthetic fixture text
+    /// can reach these streams (the passphrase is written to the CLI's stdin
+    /// and never echoed back), and each stream is capped so one diagnostic
+    /// cannot bury the scenario log.
+    /// </summary>
+    private static string DescribeS2T2CanonicalRead(string mutation, string resourceId, CommandResult result)
+    {
+        var observed = ClassifyS2T2CanonicalRead(result) switch
+        {
+            S2T2CanonicalReadOutcome.Served =>
+                "the read was ACCEPTED: the mutated canonical ciphertext was served to the owner",
+            S2T2CanonicalReadOutcome.BoundaryDenied =>
+                "the read was denied, which is the expected outcome and not a failure",
+            _ => "the command failed outside the ciphertext boundary (transport, authentication, lock, or usage), so this run proves nothing about the mutation: it is neither an acceptance nor a rejection"
+        };
+        return $"A {mutation} canonical ciphertext check failed for {resourceId}: {observed} " +
+            $"(exit={result.ExitCode}; stdout={TrimS2T2CanonicalEvidence(result.StandardOutput)}; " +
+            $"stderr={TrimS2T2CanonicalEvidence(result.StandardError)}).";
+    }
+
+    /// <summary>
+    /// Writes a tampered copy of a stored canonical envelope at rest and
+    /// returns the bytes now on disk. Every base64 envelope field (nonce,
+    /// ciphertext, tag) is decoded, one bit of its first decoded byte is
+    /// flipped, and the field is re-encoded, so the mutation is a real
+    /// mutation of the authenticated bytes the service will decrypt. A raw
+    /// byte flip at a fixed file offset is not sufficient: the envelope is
+    /// JSON, so such a flip can land inside a <c>\uXXXX</c> escape or in the
+    /// ignored padding bits of the final base64 group and leave the decoded
+    /// authenticated bytes byte-identical — serving that file is correct, and
+    /// asserting a denial against it is a false failure.
+    /// </summary>
+    private static async Task<byte[]> MutateS2T2AuthenticatedEnvelopeAsync(string path, byte[] original)
+    {
+        using var document = JsonDocument.Parse(original);
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartObject();
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                writer.WritePropertyName(property.Name);
+                if (property.Value.ValueKind == JsonValueKind.String &&
+                    TryMutateS2T2Base64Field(property.Value.GetString()!, out var mutated))
+                {
+                    writer.WriteStringValue(mutated);
+                }
+                else
+                {
+                    property.Value.WriteTo(writer);
+                }
+            }
+
+            writer.WriteEndObject();
+        }
+
+        var bytes = stream.ToArray();
+        try
+        {
+            await File.WriteAllBytesAsync(path, bytes).ConfigureAwait(false);
+            return await File.ReadAllBytesAsync(path).ConfigureAwait(false);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(bytes);
+        }
+    }
+
+    private static bool TryMutateS2T2Base64Field(string value, out string mutated)
+    {
+        byte[]? decoded = null;
+        try
+        {
+            decoded = Convert.FromBase64String(value);
+            if (decoded.Length == 0)
+            {
+                mutated = value;
+                return false;
+            }
+
+            decoded[0] ^= 0x20;
+            mutated = Convert.ToBase64String(decoded);
+            return true;
+        }
+        catch (FormatException)
+        {
+            mutated = value;
+            return false;
+        }
+        finally
+        {
+            if (decoded is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(decoded);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Self-check for the tamper mutation: the decoded authenticated bytes
+    /// of the stored envelope must actually differ. Without this, a mutation
+    /// that only changes raw file bytes could be asserted as a rejection the
+    /// boundary never had to make.
+    /// </summary>
+    private static bool S2T2AuthenticatedBytesChanged(byte[] original, byte[] tampered)
+    {
+        try
+        {
+            using var reference = JsonDocument.Parse(original);
+            using var current = JsonDocument.Parse(tampered);
+            foreach (var name in new[] { "nonce", "ciphertext", "tag" })
+            {
+                if (!reference.RootElement.TryGetProperty(name, out var referenceValue) ||
+                    !current.RootElement.TryGetProperty(name, out var currentValue) ||
+                    referenceValue.ValueKind != JsonValueKind.String ||
+                    currentValue.ValueKind != JsonValueKind.String)
+                {
+                    continue;
+                }
+
+                byte[]? referenceDecoded = null;
+                byte[]? currentDecoded = null;
+                try
+                {
+                    referenceDecoded = Convert.FromBase64String(referenceValue.GetString()!);
+                    currentDecoded = Convert.FromBase64String(currentValue.GetString()!);
+                }
+                catch (FormatException)
+                {
+                    continue;
+                }
+
+                var changed = !currentDecoded.AsSpan().SequenceEqual(referenceDecoded);
+                CryptographicOperations.ZeroMemory(referenceDecoded);
+                CryptographicOperations.ZeroMemory(currentDecoded);
+                if (changed)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+        catch (JsonException)
+        {
+            return !original.AsSpan().SequenceEqual(tampered);
+        }
+    }
+
+    private static string TrimS2T2CanonicalEvidence(string text)
+    {
+        var trimmed = text.Trim();
+        return trimmed.Length <= 600 ? trimmed : trimmed[..600] + "...[truncated]";
     }
 
     private static bool HasS2T2TemporaryFiles(string directory) =>

@@ -77,6 +77,7 @@ internal static class OwnerControlCli
                 "request-approve" => await ApproveAccessRequestAsync(options).ConfigureAwait(false),
                 "request-reject" => await RejectAccessRequestAsync(options).ConfigureAwait(false),
                 "session" => await SessionAsync(options).ConfigureAwait(false),
+                "agent-collection-view" => await AgentCollectionViewAsync(options).ConfigureAwait(false),
                 "redeem" => await RedeemAsync(options).ConfigureAwait(false),
                 "sessions" => await ListSessionsAsync(options).ConfigureAwait(false),
                 "revoke-session" => await RevokeSessionAsync(options).ConfigureAwait(false),
@@ -2145,6 +2146,69 @@ internal static class OwnerControlCli
         return 0;
     }
 
+    /// <summary>
+    /// Browses the owner collections through the session's frozen approved
+    /// snapshot. The reply is the permission-filtered view only: the approved
+    /// resource IDs and revisions, never a member, title, count or collection
+    /// name the session was not granted.
+    /// </summary>
+    private static async Task<int> AgentCollectionViewAsync(CommandOptions options)
+    {
+        options.RequireOnly("--agent-pipe", "--session-file");
+        var agentPipe = PipeName(options, "--agent-pipe");
+        var sessionPath = options.Required("--session-file");
+        string sessionToken;
+        try
+        {
+            sessionToken = AgentSessionFile.Read(sessionPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Console.Error.WriteLine("ERROR session_unreadable");
+            return 3;
+        }
+
+        var result = await InvokeAgentAsync(agentPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.AgentCollectionViewOperation, SessionToken: sessionToken)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "collection_view") ||
+            !result.Reply.TryGetProperty("collectionView", out var view) ||
+            view.ValueKind != JsonValueKind.Object)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintAgentCollectionView(result.Reply);
+        return 0;
+    }
+
+    private static void PrintAgentCollectionView(JsonElement reply)
+    {
+        if (!reply.TryGetProperty("collectionView", out var view) || view.ValueKind != JsonValueKind.Object)
+        {
+            Console.WriteLine("COLLECTION VIEW unknown");
+            return;
+        }
+
+        var generation = reply.TryGetProperty("policyGeneration", out var generationValue)
+            ? generationValue.ToString()
+            : "unknown";
+        Console.WriteLine($"COLLECTION VIEW session={JsonValueText(view, "sessionId")} grant={JsonValueText(view, "grantId")} generation={generation}");
+        if (view.TryGetProperty("operations", out var operations) && operations.ValueKind == JsonValueKind.Array)
+        {
+            Console.WriteLine("operations=" + string.Join(",", operations.EnumerateArray().Select(value => value.GetString())));
+        }
+
+        if (view.TryGetProperty("resources", out var resources) && resources.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var resource in resources.EnumerateArray())
+            {
+                Console.WriteLine($"approved resource={JsonValueText(resource, "resourceId")} revision={JsonValueText(resource, "revision")}");
+            }
+        }
+    }
+
     private static async Task<int> ListSessionsAsync(CommandOptions options)
     {
         options.RequireOnly("--control-pipe");
@@ -2402,7 +2466,7 @@ internal static class OwnerControlCli
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|lifecycle-create|lifecycle-read|lifecycle-retained-read --resource-revision|lifecycle-publish --expected-revision|lifecycle-reject --expected-revision|lifecycle-withdraw --expected-revision|lifecycle-repropose --expected-revision|lifecycle-question-resolve --expected-revision|lifecycle-question-reopen --expected-revision|lifecycle-intention-complete --expected-revision|lifecycle-intention-cancel --expected-revision|lifecycle-intention-supersede --expected-revision|lifecycle-intention-notify --expected-revision|lifecycle-intention-acknowledge --expected-revision|lifecycle-validity-set --expected-revision|lifecycle-retain --expected-revision|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read}; lifecycle --resource-id is the subject item ID; relation/lifecycle transitions need --expected-revision and an optional --input-file draft");
+        Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|lifecycle-create|lifecycle-read|lifecycle-retained-read --resource-revision|lifecycle-publish --expected-revision|lifecycle-reject --expected-revision|lifecycle-withdraw --expected-revision|lifecycle-repropose --expected-revision|lifecycle-question-resolve --expected-revision|lifecycle-question-reopen --expected-revision|lifecycle-intention-complete --expected-revision|lifecycle-intention-cancel --expected-revision|lifecycle-intention-supersede --expected-revision|lifecycle-intention-notify --expected-revision|lifecycle-intention-acknowledge --expected-revision|lifecycle-validity-set --expected-revision|lifecycle-retain --expected-revision|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read|agent-collection-view}; lifecycle --resource-id is the subject item ID; relation/lifecycle transitions need --expected-revision and an optional --input-file draft");
         return 2;
     }
 

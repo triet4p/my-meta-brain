@@ -223,6 +223,7 @@ public sealed record ServiceReply(
     OwnerAccessRequestSummary[]? AccessRequests = null,
     OwnerAccessRequestSummary? AccessRequest = null,
     OwnerAccessRequestPreview? AccessRequestPreview = null,
+    AgentCollectionView? CollectionView = null,
     string? RequestId = null,
     MemoryItemWire? MemoryItem = null,
     RegisteredSourceWire? Source = null,
@@ -259,6 +260,7 @@ public sealed class ServiceRequestHandler
     public const string AgentAccessAuthorizeOperation = "agent.access.authorize";
     public const string AgentResourceReadOperation = "agent.resource.read";
     public const string AgentMemoryReadOperation = "agent.memory.read";
+    public const string AgentCollectionViewOperation = "agent.collection.view";
     public const string OwnerSessionListOperation = "owner.sessions";
     public const string OwnerSessionRevokeOperation = "owner.session.revoke";
     public const string MemoryCreateOperation = "memory.create";
@@ -364,6 +366,10 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, AgentMemoryReadOperation, StringComparison.Ordinal))
         {
             return HandleAgentMemoryRead(context, request, operation);
+        }
+        if (string.Equals(request.Operation, AgentCollectionViewOperation, StringComparison.Ordinal))
+        {
+            return HandleAgentCollectionView(context, request, operation);
         }
         if (string.Equals(request.Operation, AgentSourceReadOperation, StringComparison.Ordinal))
         {
@@ -1918,6 +1924,74 @@ public sealed class ServiceRequestHandler
         }
     }
 
+    /// <summary>
+    /// Permission-filtered collection view for one redeemed agent session.
+    /// The view is projected from the session's frozen approved snapshot
+    /// through the single Core projection contract, never from live
+    /// collection membership: a member added to the collection after the
+    /// grant, a renamed title, a moved path or a new revision cannot enter a
+    /// live view, and a subset grant never discloses the members, titles or
+    /// counts it was not approved for. Every denial is the generic session
+    /// error, so the reply distinguishes nothing about unavailable scope.
+    /// </summary>
+    private ServiceReply HandleAgentCollectionView(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Agent)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasAgentCollectionViewExtras(request))
+        {
+            return Error("forbidden");
+        }
+
+        AgentSessionLookupResult lookup;
+        try
+        {
+            var state = operation.LoadScopeGrantState();
+            lookup = _agentSessions.LookupSession(request.SessionToken, state.UnlockEpoch, state.PolicyGeneration);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            return Error("session_unavailable");
+        }
+
+        if (lookup.Status != AgentSessionLookupStatus.Valid || lookup.Session is null)
+        {
+            return lookup.Status switch
+            {
+                AgentSessionLookupStatus.Revoked => Error("session_revoked"),
+                AgentSessionLookupStatus.Superseded => Error("session_superseded"),
+                AgentSessionLookupStatus.Expired => Error("session_expired"),
+                _ => Error("session_unknown")
+            };
+        }
+
+        AgentCollectionView view;
+        try
+        {
+            view = CollectionViewAuthority.ProjectSession(lookup.Session);
+        }
+        catch (InvalidDataException)
+        {
+            return Error("session_unavailable");
+        }
+
+        return new ServiceReply(
+            CurrentProtocolVersion, "collection_view", "agent", null,
+            PolicyGeneration: lookup.Session.PolicyGeneration,
+            CollectionView: view);
+    }
+
     private static long ResolveLiveResourceRevision(IVaultOperation operation, string resourceId)
     {
         var live = operation.ListResources().FirstOrDefault(resource =>
@@ -2919,6 +2993,31 @@ public sealed class ServiceRequestHandler
         request.PreviewId is not null || request.CollectionId is not null ||
         request.Token is not null || request.SessionId is not null ||
         request.DestinationResourceId is not null || request.DestinationRevision is not null ||
+        request.EstimatedCostUsd is not null || request.InputTokens is not null ||
+        request.OutputTokens is not null ||
+        request.CatalogId is not null || request.Label is not null ||
+        request.Description is not null || request.Query is not null ||
+        request.CatalogIds is not null || request.Purpose is not null ||
+        request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null;
+
+    /// <summary>
+    /// The agent collection view carries only the session bearer. Every
+    /// identity, zone, scope, credential, catalog, egress and request field
+    /// is refused, so a body can never steer the view toward another scope.
+    /// </summary>
+    private static bool HasAgentCollectionViewExtras(ServiceRequest request) =>
+        request.ZoneId is not null ||
+        request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ContentBase64 is not null || request.ResourceIds is not null ||
+        request.Operations is not null || request.DestinationResourceIds is not null ||
+        request.ExpiresAtUtc is not null || request.Provider is not null ||
+        request.Model is not null || request.MaximumCostUsd is not null ||
+        request.PreviewId is not null || request.CollectionId is not null ||
+        request.Token is not null || request.SessionId is not null ||
+        request.AccessOperation is not null || request.ResourceId is not null ||
+        request.ResourceRevision is not null || request.DestinationResourceId is not null ||
+        request.DestinationRevision is not null ||
         request.EstimatedCostUsd is not null || request.InputTokens is not null ||
         request.OutputTokens is not null ||
         request.CatalogId is not null || request.Label is not null ||

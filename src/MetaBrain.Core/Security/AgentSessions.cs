@@ -24,8 +24,9 @@ public sealed record AgentSession(
 
 /// <summary>
 /// Authoritative session snapshot safe to disclose to the session holder.
-/// Contains no verifier material. Until scoped resource reads exist (T6),
-/// this metadata is the only session authorization surface.
+/// Contains no verifier material. The scoped agent collection view (S2-T6) is
+/// projected from this snapshot through <see cref="CollectionViewAuthority"/>,
+/// which re-expresses the frozen approved scope and never re-resolves it.
 /// </summary>
 public sealed record AgentSessionSnapshot(
     string SessionId,

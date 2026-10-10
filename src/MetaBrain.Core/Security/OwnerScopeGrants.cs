@@ -588,7 +588,7 @@ public sealed partial class OwnerScopeGrantAuthority
         }
     }
 
-    private static bool IsValidIdentifier(string? value)
+    internal static bool IsValidIdentifier(string? value)
     {
         if (string.IsNullOrEmpty(value) || value.Length > 128 || !IsAsciiAlphaNumeric(value[0]))
         {

@@ -21,9 +21,12 @@ public sealed record SourceSpan(long Start, long End);
 /// and encrypted snapshots/refresh belong to Sprint 3. Availability is an
 /// explicit registrant assertion; unknown is explicit and is never reported
 /// as available or verified (R18). Typed relations over items and registered
-/// sources live in <see cref="Relations"/>; lifecycle (S2-T5), collection
-/// views (S2-T6) and the private index (S2-T7) stay pending and are not
-/// represented here.
+/// sources live in <see cref="Relations"/>; lifecycle (S2-T5) is delivered,
+/// and owner collection membership plus the permission-filtered agent
+/// collection view (S2-T6, see <see cref="CollectionViewAuthority"/>) are a
+/// projection of the frozen grant snapshot rather than registry data, so the
+/// private index (S2-T7) alone stays pending and none of them is represented
+/// here.
 /// </summary>
 public sealed record RegisteredSourceDraft(
     string? Title,

@@ -15,9 +15,11 @@ namespace MetaBrain.Core.Domain;
 /// registry. Typed relations between items and sources live in
 /// <see cref="Relations"/>; the domain lifecycle and temporal validity of an
 /// item live in <see cref="Lifecycle"/> as one canonical record per subject
-/// with the retained-revision archive; collections/views (S2-T6) and the
-/// private index (S2-T7) remain pending and are not represented here beyond
-/// the frozen S1 scope snapshot.
+/// with the retained-revision archive; owner collection membership and the
+/// permission-filtered agent collection view (S2-T6) live outside this
+/// envelope in <see cref="CollectionViewAuthority"/> as a projection of the
+/// frozen grant snapshot, and the private index (S2-T7) remains pending.
+/// Neither is represented here beyond the frozen S1 scope snapshot.
 /// </summary>
 public enum MemoryKind
 {

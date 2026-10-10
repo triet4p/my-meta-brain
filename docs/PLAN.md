@@ -40,7 +40,7 @@ S1-T9 [behavioral evidence A3](../artifacts/sprint-1/reviews/S1-T9-S1T9-REVIEW-2
 | Sprint | Trạng thái | Task range | Gate |
 | --- | --- | --- | --- |
 | 1 | Complete — CR01 replacement M1 | S1-T1 retained; S1-T2–T9 [x] and doc correction committed | Task evidence/checkpoints PASS; final differential deep A2 PASS |
-| 2 | In progress — S2-T5 recovery authorized | S2-T1–T4 [x]; S2-T5 [~]; S2-T6–T7 next sequentially | Fresh evidence/checkpoint required; sprint deep pending |
+| 2 | In progress — S2-T6 continuation | S2-T1–T5 [x]; S2-T6 [~]; S2-T7 next sequentially | Fresh T6 evidence/checkpoint required; final deep pending |
 | 3 | Not started | S3-T1…S3-T6 | Pending |
 | 4 | Not started | S4-T1…S4-T7 | Pending |
 | 5 | Not started | S5-T1…S5-T7 | Pending |
@@ -51,6 +51,10 @@ S1-T9 [behavioral evidence A3](../artifacts/sprint-1/reviews/S1-T9-S1T9-REVIEW-2
 S2-T1–T4 accepted checkpoints retained, latest `1bbdea7321127e2d851c67fac3c90d09db81970e`. Owner authorizes S2-T5–T7 sequential delivery then final deep. S2-T5 `S2T5-IMPL-20261009-A1` / planned agent `S2T5LifecycleA1`, Gold lifecycle/temporal/history integration, resolved `opencode-go/muse-spark-1.3-contributor:xhigh`, non-blocking; quota/provider-applied effort unknown. [Sprint 2 gate record](sprint-plans/sprint-2.md#gate-record) retains routing/evidence/checkpoint links and limitations. Both plans' prior Main-only status carryover/current orchestration explicitly owned by S2-T5 for review/checkpoint. No push or Sprint 3; next tasks wait predecessor PASS/checkpoint.
 
 Owner resumes and explicitly authorizes S2-T5 recovery without the cancelled attempt's missing durable handoff. Fresh `S2T5-IMPL-20261009-A2` / planned agent `S2T5LifecycleA2`, `gold-task` (Gold), resolved `opencode-go/muse-spark-1.3-contributor:xhigh`, non-blocking; contextual recovery of lifecycle/history/temporal/attribution integration. Prior A1 evidence is context only; quota/provider-applied effort unknown. Existing plan carryover plus pause/recovery status edits remain explicitly S2-T5-owned for review/checkpoint. No Sprint 3 or push.
+
+S2-T5 accepted evidence/checkpoint complete: commit `58e2bedb48a6e9be79ee23f1607b461d568ed5af`, matching PASS snapshot and checkpoint in [Sprint 2 gate record](sprint-plans/sprint-2.md#gate-record), no push. S2-T6 `S2T6-IMPL-20261009-A1` / planned `S2T6CollectionsA1`, fresh Gold `opencode-go/muse-spark-1.3-contributor:xhigh`, non-blocking, organization/scope/catalog integration; quota/provider-applied effort unknown. Both plans' post-T5 Main status edits/current orchestration are expressly T6-owned review/checkpoint carryover. T7 waits T6 gate.
+
+Owner resumes S2-T6 from saved handoff. Fresh `S2T6-IMPL-20261009-A2` / planned agent `S2T6CollectionsA2`, `gold-task` (Gold), effective `opencode-go/muse-spark-1.3-contributor:xhigh`, non-blocking; permission-filtered organization/catalog integration and remaining real-service proof. Predecessor A1 remains cancelled; [handoff](../artifacts/sprint-2/task-6.md) and `history://S2T6CollectionsA1` must be read directly by successor. Base `58e2bedb48a6e9be79ee23f1607b461d568ed5af`; Main-only status carryover/pause/resume edits in both plans are expressly T6-owned for reviewed checkpoint. Quota/provider-applied effort unknown, no advisor, no push/Sprint 3.
 
 ## Completed Sprints
 
