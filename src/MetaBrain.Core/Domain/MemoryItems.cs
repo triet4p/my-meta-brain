@@ -13,9 +13,11 @@ namespace MetaBrain.Core.Domain;
 /// <see cref="SourceRegistry"/>; item citations only reference registered
 /// sources by opaque ID plus revision-anchored spans, never by reading the
 /// registry. Typed relations between items and sources live in
-/// <see cref="Relations"/>; domain lifecycle (S2-T5), collections/views
-/// (S2-T6) and the private index (S2-T7) remain pending and are not
-/// represented here beyond the frozen S1 scope snapshot.
+/// <see cref="Relations"/>; the domain lifecycle and temporal validity of an
+/// item live in <see cref="Lifecycle"/> as one canonical record per subject
+/// with the retained-revision archive; collections/views (S2-T6) and the
+/// private index (S2-T7) remain pending and are not represented here beyond
+/// the frozen S1 scope snapshot.
 /// </summary>
 public enum MemoryKind
 {
@@ -245,7 +247,7 @@ public static class MemoryItemValidator
     public static void ValidateDraft(MemoryItemDraft draft, string resourceId, string zoneId)
     {
         ArgumentNullException.ThrowIfNull(draft);
-        if (!DomainIdentifiers.IsNonRelationIdentifier(resourceId))
+        if (!DomainIdentifiers.IsDomainIdentifier(resourceId))
         {
             throw new ArgumentException("The memory ID must be an opaque safe identifier.");
         }
@@ -286,6 +288,14 @@ public static class MemoryItemValidator
         ValidateTimes(draft.OccurredAtUtc, draft.RecordedAtUtc);
         ValidateApplicability(draft.Applicability);
 
+        // R12: belief-grade evidence is a user assertion, so it can never be
+        // written onto an assistant, tool, or external speaker. An AI-written
+        // note stays AI-written no matter who saves it.
+        if (draft.Evidence == EvidenceLevel.UserConfirmed && draft.Author != SpeakerRole.User)
+        {
+            throw new ArgumentException("User-confirmed evidence requires the user as the original speaker.");
+        }
+
         if (draft.Kind == MemoryKind.Question && draft.Evidence != EvidenceLevel.Unverified)
         {
             throw new ArgumentException("A question cannot carry belief evidence; it stays unverified until resolved by a separate lifecycle step.");
@@ -299,7 +309,7 @@ public static class MemoryItemValidator
             throw new ArgumentException("The memory envelope schema version is unsupported.");
         }
 
-        if (!DomainIdentifiers.IsNonRelationIdentifier(envelope.Id))
+        if (!DomainIdentifiers.IsDomainIdentifier(envelope.Id))
         {
             throw new ArgumentException("The memory ID must be an opaque safe identifier.");
         }
@@ -431,7 +441,7 @@ public static class MemoryItemValidator
                 throw new ArgumentException("A memory source reference is invalid.");
             }
 
-            if (source.SourceId is not null && !DomainIdentifiers.IsNonRelationIdentifier(source.SourceId))
+            if (source.SourceId is not null && !DomainIdentifiers.IsDomainIdentifier(source.SourceId))
             {
                 throw new ArgumentException("A memory source ID must be an opaque safe identifier.");
             }
@@ -549,7 +559,13 @@ public static class MemoryItemValidator
 /// <summary>
 /// One opaque-identifier grammar shared by every domain envelope so an ID
 /// can never carry path or traversal text. Identifiers are stable keys: they
-/// never derive from titles or paths (R10).
+/// never derive from titles or paths (R10). Three namespaces are reserved for
+/// records that are not plain memory items or registered sources: typed
+/// relations (<see cref="RelationIdPrefix"/>), lifecycle records
+/// (<see cref="LifecycleIdPrefix"/>), and retained historical revisions
+/// (<see cref="ArchiveIdPrefix"/>). An item or a registered source ID in one
+/// of those namespaces would collide with its derived record, so they are
+/// refused here.
 /// </summary>
 internal static class DomainIdentifiers
 {
@@ -562,6 +578,21 @@ internal static class DomainIdentifiers
     /// mistaken for a relation.
     /// </summary>
     public const string RelationIdPrefix = "rel-";
+
+    /// <summary>
+    /// Reserved resource-ID prefix for lifecycle records. A lifecycle record
+    /// is canonical on the shared store and its ID is derived from the subject
+    /// memory item, so exactly one record covers one subject.
+    /// </summary>
+    public const string LifecycleIdPrefix = "lc-";
+
+    /// <summary>
+    /// Reserved resource-ID prefix for a retained historical revision. The
+    /// archive keeps the exact stored bytes of one superseded revision of a
+    /// subject item, addressed by subject and revision so the history of an
+    /// item stays retrievable after later revisions.
+    /// </summary>
+    public const string ArchiveIdPrefix = "arc-";
 
     public static bool IsSafeIdentifier(string? value)
     {
@@ -585,8 +616,35 @@ internal static class DomainIdentifiers
     public static bool IsRelationId(string? value) =>
         value is not null && value.StartsWith(RelationIdPrefix, StringComparison.Ordinal) && IsSafeIdentifier(value);
 
-    public static bool IsNonRelationIdentifier(string? value) =>
-        IsSafeIdentifier(value) && !value!.StartsWith(RelationIdPrefix, StringComparison.Ordinal);
+    public static bool IsLifecycleId(string? value) =>
+        value is not null && value.StartsWith(LifecycleIdPrefix, StringComparison.Ordinal) && IsSafeIdentifier(value);
+
+    public static bool IsArchiveId(string? value) =>
+        value is not null && value.StartsWith(ArchiveIdPrefix, StringComparison.Ordinal) && IsSafeIdentifier(value);
+
+    /// <summary>
+    /// An identifier that names a memory item or a registered source: never a
+    /// relation, a lifecycle record, or a retained revision.
+    /// </summary>
+    public static bool IsDomainIdentifier(string? value) =>
+        IsSafeIdentifier(value) &&
+        !value!.StartsWith(RelationIdPrefix, StringComparison.Ordinal) &&
+        !value.StartsWith(LifecycleIdPrefix, StringComparison.Ordinal) &&
+        !value.StartsWith(ArchiveIdPrefix, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Lifecycle record ID derived from its subject: the ID is never chosen by
+    /// a caller, so one subject has at most one lifecycle record.
+    /// </summary>
+    public static string LifecycleIdFor(string subjectResourceId) => LifecycleIdPrefix + subjectResourceId;
+
+    /// <summary>
+    /// Retained-revision archive ID derived from its subject and the exact
+    /// revision it keeps: a revision is retained at most once, and the stored
+    /// ID always names the subject and revision it holds.
+    /// </summary>
+    public static string ArchiveIdFor(string subjectResourceId, long revision) =>
+        ArchiveIdPrefix + subjectResourceId + "-r" + revision.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     public static bool IsAsciiAlphaNumeric(char value) =>
         value is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9';

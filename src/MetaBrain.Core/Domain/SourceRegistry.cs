@@ -154,7 +154,7 @@ public static class RegisteredSourceValidator
     public static void ValidateDraft(RegisteredSourceDraft draft, string sourceId, string zoneId)
     {
         ArgumentNullException.ThrowIfNull(draft);
-        if (!DomainIdentifiers.IsNonRelationIdentifier(sourceId))
+        if (!DomainIdentifiers.IsDomainIdentifier(sourceId))
         {
             throw new ArgumentException("The source ID must be an opaque safe identifier.");
         }
@@ -188,7 +188,7 @@ public static class RegisteredSourceValidator
             throw new ArgumentException("The registered source schema version is unsupported.");
         }
 
-        if (!DomainIdentifiers.IsNonRelationIdentifier(source.Id))
+        if (!DomainIdentifiers.IsDomainIdentifier(source.Id))
         {
             throw new ArgumentException("The source ID must be an opaque safe identifier.");
         }

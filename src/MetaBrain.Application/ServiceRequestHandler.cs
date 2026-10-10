@@ -131,6 +131,69 @@ public sealed record RelationWire(
     DateTimeOffset StateRecordedAtUtc,
     RelationReviewWire Review);
 
+public sealed record LifecycleStampWire(
+    string Precision,
+    DateTimeOffset? InstantUtc,
+    int? LocalYear,
+    int? LocalMonth,
+    int? LocalDay,
+    int? LocalQuarter,
+    int? TimeZoneOffsetMinutes);
+
+public sealed record LifecycleChangeWire(
+    string Aspect,
+    string Act,
+    string FromState,
+    string ToState,
+    string Executor,
+    DateTimeOffset RecordedAtUtc,
+    string? Rationale,
+    string? ReplacementResourceId);
+
+public sealed record LifecycleRetainedRevisionWire(
+    long SubjectRevision,
+    string ArchiveResourceId,
+    string Executor,
+    DateTimeOffset RecordedAtUtc);
+
+public sealed record LifecycleWire(
+    string Id,
+    string ZoneId,
+    long Revision,
+    int SchemaVersion,
+    string SubjectResourceId,
+    string SubjectKind,
+    string Publication,
+    string? Question,
+    string? Intention,
+    bool Notified,
+    DateTimeOffset? NotifiedAtUtc,
+    bool Acknowledged,
+    DateTimeOffset? AcknowledgedAtUtc,
+    string? SupersededBy,
+    LifecycleStampWire? Occurred,
+    LifecycleStampWire? Recorded,
+    LifecycleStampWire? ValidFrom,
+    LifecycleStampWire? ValidUntil,
+    LifecycleStampWire? ReviewAfter,
+    string Executor,
+    string CreationMethod,
+    string? Reason,
+    DateTimeOffset RecordedAtUtc,
+    LifecycleChangeWire[] History,
+    LifecycleRetainedRevisionWire[] RetainedRevisions);
+
+/// <summary>
+/// One retained historical revision read back through the archive resource:
+/// the archived envelope, the archive resource that holds it, and both the
+/// historical subject revision and the archive's own vault revision.
+/// </summary>
+public sealed record LifecycleRevisionWire(
+    string ArchiveResourceId,
+    long ArchiveRevision,
+    long SubjectRevision,
+    MemoryItemWire Subject);
+
 public sealed record ServiceReply(
     int ProtocolVersion,
     string? Status,
@@ -163,7 +226,9 @@ public sealed record ServiceReply(
     string? RequestId = null,
     MemoryItemWire? MemoryItem = null,
     RegisteredSourceWire? Source = null,
-    RelationWire? Relation = null);
+    RelationWire? Relation = null,
+    LifecycleWire? Lifecycle = null,
+    LifecycleRevisionWire? RetainedRevision = null);
 
 
 public sealed class ServiceRequestHandler
@@ -211,6 +276,22 @@ public sealed class ServiceRequestHandler
     public const string RelationReadOperation = "relation.read";
     public const string AgentLinkCreateOperation = "agent.link.create";
     public const string AgentRelationReadOperation = "agent.relation.read";
+    public const string LifecycleCreateOperation = "lifecycle.create";
+    public const string LifecycleReadOperation = "lifecycle.read";
+    public const string LifecycleRetainedRevisionReadOperation = "lifecycle.retained.read";
+    public const string LifecyclePublishOperation = "lifecycle.publish";
+    public const string LifecycleRejectProposalOperation = "lifecycle.reject";
+    public const string LifecycleWithdrawOperation = "lifecycle.withdraw";
+    public const string LifecycleReProposeOperation = "lifecycle.repropose";
+    public const string LifecycleResolveQuestionOperation = "lifecycle.question.resolve";
+    public const string LifecycleReopenQuestionOperation = "lifecycle.question.reopen";
+    public const string LifecycleCompleteIntentionOperation = "lifecycle.intention.complete";
+    public const string LifecycleCancelIntentionOperation = "lifecycle.intention.cancel";
+    public const string LifecycleSupersedeIntentionOperation = "lifecycle.intention.supersede";
+    public const string LifecycleNotifyOperation = "lifecycle.intention.notify";
+    public const string LifecycleAcknowledgeOperation = "lifecycle.intention.acknowledge";
+    public const string LifecycleSetValidityOperation = "lifecycle.validity.set";
+    public const string LifecycleRetainRevisionOperation = "lifecycle.retain";
 
     /// <summary>
     /// Owner-grantable agent operation that authorizes creating one link
@@ -508,6 +589,86 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, RelationReadOperation, StringComparison.Ordinal))
         {
             return HandleRelationRead(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, LifecycleCreateOperation, StringComparison.Ordinal))
+        {
+            return HandleLifecycleCreate(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, LifecycleReadOperation, StringComparison.Ordinal))
+        {
+            return HandleLifecycleRead(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, LifecycleRetainedRevisionReadOperation, StringComparison.Ordinal))
+        {
+            return HandleLifecycleRetainedRevisionRead(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, LifecyclePublishOperation, StringComparison.Ordinal))
+        {
+            return HandleLifecycleTransition(context, request, operation, Core.Domain.LifecycleAct.Publish, LifecyclePublishOperation);
+        }
+
+        if (string.Equals(request.Operation, LifecycleRejectProposalOperation, StringComparison.Ordinal))
+        {
+            return HandleLifecycleTransition(context, request, operation, Core.Domain.LifecycleAct.RejectProposal, LifecycleRejectProposalOperation);
+        }
+
+        if (string.Equals(request.Operation, LifecycleWithdrawOperation, StringComparison.Ordinal))
+        {
+            return HandleLifecycleTransition(context, request, operation, Core.Domain.LifecycleAct.Withdraw, LifecycleWithdrawOperation);
+        }
+
+        if (string.Equals(request.Operation, LifecycleReProposeOperation, StringComparison.Ordinal))
+        {
+            return HandleLifecycleTransition(context, request, operation, Core.Domain.LifecycleAct.RePropose, LifecycleReProposeOperation);
+        }
+
+        if (string.Equals(request.Operation, LifecycleResolveQuestionOperation, StringComparison.Ordinal))
+        {
+            return HandleLifecycleTransition(context, request, operation, Core.Domain.LifecycleAct.ResolveQuestion, LifecycleResolveQuestionOperation);
+        }
+
+        if (string.Equals(request.Operation, LifecycleReopenQuestionOperation, StringComparison.Ordinal))
+        {
+            return HandleLifecycleTransition(context, request, operation, Core.Domain.LifecycleAct.ReopenQuestion, LifecycleReopenQuestionOperation);
+        }
+
+        if (string.Equals(request.Operation, LifecycleCompleteIntentionOperation, StringComparison.Ordinal))
+        {
+            return HandleLifecycleTransition(context, request, operation, Core.Domain.LifecycleAct.CompleteIntention, LifecycleCompleteIntentionOperation);
+        }
+
+        if (string.Equals(request.Operation, LifecycleCancelIntentionOperation, StringComparison.Ordinal))
+        {
+            return HandleLifecycleTransition(context, request, operation, Core.Domain.LifecycleAct.CancelIntention, LifecycleCancelIntentionOperation);
+        }
+
+        if (string.Equals(request.Operation, LifecycleSupersedeIntentionOperation, StringComparison.Ordinal))
+        {
+            return HandleLifecycleTransition(context, request, operation, Core.Domain.LifecycleAct.SupersedeIntention, LifecycleSupersedeIntentionOperation);
+        }
+
+        if (string.Equals(request.Operation, LifecycleNotifyOperation, StringComparison.Ordinal))
+        {
+            return HandleLifecycleTransition(context, request, operation, Core.Domain.LifecycleAct.Notify, LifecycleNotifyOperation);
+        }
+
+        if (string.Equals(request.Operation, LifecycleAcknowledgeOperation, StringComparison.Ordinal))
+        {
+            return HandleLifecycleTransition(context, request, operation, Core.Domain.LifecycleAct.Acknowledge, LifecycleAcknowledgeOperation);
+        }
+
+        if (string.Equals(request.Operation, LifecycleSetValidityOperation, StringComparison.Ordinal))
+        {
+            return HandleLifecycleTransition(context, request, operation, Core.Domain.LifecycleAct.SetValidity, LifecycleSetValidityOperation);
+        }
+
+        if (string.Equals(request.Operation, LifecycleRetainRevisionOperation, StringComparison.Ordinal))
+        {
+            return HandleLifecycleTransition(context, request, operation, Core.Domain.LifecycleAct.RetainRevision, LifecycleRetainRevisionOperation);
         }
 
         if (string.Equals(request.Operation, ResourceReadOperation, StringComparison.Ordinal))
@@ -1161,6 +1322,247 @@ public sealed class ServiceRequestHandler
         ToWireToken(review.State.ToString()),
         ReviewReasonTokens(review.Reasons),
         review.StaleResourceIds);
+
+    /// <summary>
+    /// S2-T5 owner lifecycle create. The subject item ID is the only identity
+    /// the request carries: the record ID, the zone, the initial states and the
+    /// executor are all derived server-side, so no body field can name a
+    /// lifecycle identity, declare a state, or spoof an executor.
+    /// </summary>
+    private ServiceReply HandleLifecycleCreate(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || operation is null || HasLifecycleWriteExtras(request) ||
+            string.IsNullOrEmpty(request.ResourceId) || string.IsNullOrEmpty(request.ContentBase64))
+        {
+            return Error("invalid_request");
+        }
+
+        byte[]? draft = null;
+        try
+        {
+            draft = Convert.FromBase64String(request.ContentBase64);
+            var created = new LifecycleService().Create(context, request.ResourceId, draft, operation);
+            return new ServiceReply(CurrentProtocolVersion, "lifecycle_created", "owner", null,
+                ResourceRevision: created.Revision, Lifecycle: ToLifecycleWire(created));
+        }
+        catch (FormatException)
+        {
+            return Error("invalid_request");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        finally
+        {
+            if (draft is { Length: > 0 })
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(draft);
+            }
+        }
+    }
+
+    /// <summary>
+    /// S2-T5 owner lifecycle read: the current states plus the recorded history
+    /// and retained revisions of one subject. Unknown, unavailable, tampered or
+    /// wrongly shaped records share one generic denial.
+    /// </summary>
+    private ServiceReply HandleLifecycleRead(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || operation is null || HasContentReadExtras(request) ||
+            string.IsNullOrEmpty(request.ResourceId))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var record = new LifecycleService().Read(context, request.ResourceId, request.ResourceRevision, operation);
+            if (record is null)
+            {
+                return Error("invalid_request");
+            }
+
+            return new ServiceReply(CurrentProtocolVersion, "lifecycle", "owner", null,
+                ResourceRevision: record.Revision, Lifecycle: ToLifecycleWire(record));
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+    }
+
+    /// <summary>
+    /// A retained historical revision read names the subject and the exact
+    /// historical revision it asks for, and nothing else: the shared content
+    /// read guard already refuses every other field.
+    /// </summary>
+    private ServiceReply HandleLifecycleRetainedRevisionRead(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || operation is null || HasContentReadExtras(request) ||
+            string.IsNullOrEmpty(request.ResourceId) || request.ResourceRevision is not { } revision || revision < 1)
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var retained = new LifecycleService()
+                .ReadRetainedRevision(context, request.ResourceId, revision, operation);
+            if (retained is null)
+            {
+                return Error("invalid_request");
+            }
+
+            return new ServiceReply(CurrentProtocolVersion, "retained_revision", "owner", null,
+                ResourceRevision: retained.ArchiveRevision,
+                RetainedRevision: new LifecycleRevisionWire(
+                    retained.ArchiveResourceId,
+                    retained.ArchiveRevision,
+                    retained.Subject.Revision,
+                    ToMemoryWire(retained.Subject)));
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+    }
+
+    /// <summary>
+    /// S2-T5 owner lifecycle acts: publish/reject/withdraw/re-propose, question
+    /// resolve/reopen, intention complete/cancel/supersede, the notify and
+    /// acknowledge markers, a validity update, and a revision retention. Every
+    /// act names the subject and the live revision it replaces; the rationale,
+    /// the supersession pointer and the temporal stamps travel only in the
+    /// draft body the act itself uses.
+    /// </summary>
+    private ServiceReply HandleLifecycleTransition(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation,
+        Core.Domain.LifecycleAct act,
+        string transitionOperation)
+    {
+        if (context.Kind != PrincipalKind.Owner || operation is null || HasLifecycleTransitionExtras(request) ||
+            string.IsNullOrEmpty(request.ResourceId) ||
+            request.ResourceRevision is not { } expectedRevision || expectedRevision < 1)
+        {
+            return Error("invalid_request");
+        }
+
+        byte[]? draft = null;
+        try
+        {
+            draft = request.ContentBase64 is null ? null : Convert.FromBase64String(request.ContentBase64);
+            var result = new LifecycleService()
+                .Transition(context, request.ResourceId, act, expectedRevision, draft, operation);
+            return new ServiceReply(CurrentProtocolVersion, LifecycleStatusOf(transitionOperation), "owner", null,
+                ResourceRevision: result.Revision, Lifecycle: ToLifecycleWire(result));
+        }
+        catch (FormatException)
+        {
+            return Error("invalid_request");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        finally
+        {
+            if (draft is { Length: > 0 })
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(draft);
+            }
+        }
+    }
+
+    private static string LifecycleStatusOf(string transitionOperation) => transitionOperation switch
+    {
+        LifecyclePublishOperation => "lifecycle_published",
+        LifecycleRejectProposalOperation => "lifecycle_rejected",
+        LifecycleWithdrawOperation => "lifecycle_withdrawn",
+        LifecycleReProposeOperation => "lifecycle_reproposed",
+        LifecycleResolveQuestionOperation => "lifecycle_question_resolved",
+        LifecycleReopenQuestionOperation => "lifecycle_question_reopened",
+        LifecycleCompleteIntentionOperation => "lifecycle_intention_completed",
+        LifecycleCancelIntentionOperation => "lifecycle_intention_cancelled",
+        LifecycleSupersedeIntentionOperation => "lifecycle_intention_superseded",
+        LifecycleNotifyOperation => "lifecycle_intention_notified",
+        LifecycleAcknowledgeOperation => "lifecycle_intention_acknowledged",
+        LifecycleSetValidityOperation => "lifecycle_validity_set",
+        _ => "lifecycle_revision_retained"
+    };
+
+    private static LifecycleStampWire? ToLifecycleStampWire(Core.Domain.TemporalStamp? stamp) => stamp is null
+        ? null
+        : new LifecycleStampWire(
+            ToWireToken(stamp.Precision.ToString()),
+            stamp.InstantUtc,
+            stamp.LocalYear,
+            stamp.LocalMonth,
+            stamp.LocalDay,
+            stamp.LocalQuarter,
+            stamp.TimeZoneOffsetMinutes);
+
+    private static LifecycleChangeWire ToLifecycleChangeWire(Core.Domain.LifecycleStateChange change) => new(
+        Core.Domain.LifecycleTokens.Aspect(change.Aspect),
+        ToWireToken(change.Act.ToString()),
+        change.FromState,
+        change.ToState,
+        ToWireToken(change.Executor.ToString()),
+        change.RecordedAtUtc,
+        change.Rationale,
+        change.ReplacementResourceId);
+
+    private static LifecycleRetainedRevisionWire ToLifecycleRetainedRevisionWire(
+        Core.Domain.LifecycleRetainedRevision retained) => new(
+        retained.SubjectRevision,
+        retained.ArchiveResourceId,
+        ToWireToken(retained.Executor.ToString()),
+        retained.RecordedAtUtc);
+
+    private static LifecycleWire ToLifecycleWire(Core.Domain.LifecycleRecord record) => new(
+        record.Id,
+        record.ZoneId,
+        record.Revision,
+        record.SchemaVersion,
+        record.SubjectResourceId,
+        Core.Domain.LifecycleTokens.Subject(record.SubjectKind),
+        Core.Domain.LifecycleTokens.Publication(record.Publication),
+        record.Question is { } question ? Core.Domain.LifecycleTokens.Question(question) : null,
+        record.Intention is { } intention ? Core.Domain.LifecycleTokens.Intention(intention) : null,
+        record.Notified,
+        record.NotifiedAtUtc,
+        record.Acknowledged,
+        record.AcknowledgedAtUtc,
+        record.SupersededBy,
+        ToLifecycleStampWire(record.Occurred),
+        ToLifecycleStampWire(record.Recorded),
+        ToLifecycleStampWire(record.ValidFrom),
+        ToLifecycleStampWire(record.ValidUntil),
+        ToLifecycleStampWire(record.ReviewAfter),
+        ToWireToken(record.Executor.ToString()),
+        ToWireToken(record.CreationMethod.ToString()),
+        record.Reason,
+        record.RecordedAtUtc,
+        record.History.Select(ToLifecycleChangeWire).ToArray(),
+        record.RetainedRevisions.Select(ToLifecycleRetainedRevisionWire).ToArray());
 
     private static string[] ReviewReasonTokens(Core.Domain.RelationReviewReason reasons)
     {
@@ -2609,6 +3011,60 @@ public sealed class ServiceRequestHandler
         request.AgentId is not null || request.AgentContext is not null ||
         request.DisclosureContext is not null || request.RequestId is not null ||
         (!allowSessionId && request.SessionId is not null);
+    /// <summary>
+    /// Owner lifecycle writes carry only the subject item ID and the draft
+    /// body: the record ID, the zone, and every initial state are derived
+    /// server-side, so no other field (including an executor, a state, or a
+    /// lifecycle identity) is accepted from the request.
+    /// </summary>
+    private static bool HasLifecycleWriteExtras(ServiceRequest request) =>
+        request.ZoneId is not null ||
+        request.ResourceRevision is not null ||
+        request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ResourceIds is not null || request.Operations is not null ||
+        request.DestinationResourceIds is not null || request.ExpiresAtUtc is not null ||
+        request.Provider is not null || request.Model is not null ||
+        request.MaximumCostUsd is not null || request.PreviewId is not null ||
+        request.CollectionId is not null || request.Token is not null ||
+        request.SessionToken is not null || request.SessionId is not null ||
+        request.AccessOperation is not null || request.DestinationResourceId is not null ||
+        request.DestinationRevision is not null || request.EstimatedCostUsd is not null ||
+        request.InputTokens is not null || request.OutputTokens is not null ||
+        request.CatalogId is not null || request.Label is not null ||
+        request.Description is not null || request.Query is not null ||
+        request.CatalogIds is not null || request.Purpose is not null ||
+        request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null;
+
+    /// <summary>
+    /// Owner lifecycle transitions carry only the subject item ID, the live
+    /// revision they replace, and the act's own draft (rationale, explicit
+    /// replacement item, temporal stamps). A zone, a state, an executor, or any
+    /// session/scope field is refused.
+    /// </summary>
+    private static bool HasLifecycleTransitionExtras(ServiceRequest request) =>
+        request.ZoneId is not null ||
+        request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ResourceIds is not null || request.Operations is not null ||
+        request.DestinationResourceIds is not null || request.ExpiresAtUtc is not null ||
+        request.Provider is not null || request.Model is not null ||
+        request.MaximumCostUsd is not null || request.PreviewId is not null ||
+        request.CollectionId is not null || request.Token is not null ||
+        request.SessionToken is not null || request.SessionId is not null ||
+        request.AccessOperation is not null || request.DestinationResourceId is not null ||
+        request.DestinationRevision is not null || request.EstimatedCostUsd is not null ||
+        request.InputTokens is not null || request.OutputTokens is not null ||
+        request.CatalogId is not null || request.Label is not null ||
+        request.Description is not null || request.Query is not null ||
+        request.CatalogIds is not null || request.Purpose is not null ||
+        request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null;
+
+    /// <summary>
+    /// A retained historical revision read names the subject and the exact
+    /// historical revision it asks for, and nothing else: the shared content
+    /// read guard already refuses every other field.
+    /// </summary>
     private static ScopeResourceRevision[] ResolveResourceSelection(
         IReadOnlyList<ScopeResourceRevision> available,
         string? zoneId,

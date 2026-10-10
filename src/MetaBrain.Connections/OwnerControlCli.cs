@@ -40,6 +40,22 @@ internal static class OwnerControlCli
                 "relation-unlink" => await RelationUnlinkAsync(options).ConfigureAwait(false),
                 "relation-relink" => await RelationRelinkAsync(options).ConfigureAwait(false),
                 "relation-read" => await RelationReadAsync(options).ConfigureAwait(false),
+                "lifecycle-create" => await LifecycleCreateAsync(options).ConfigureAwait(false),
+                "lifecycle-read" => await LifecycleReadAsync(options).ConfigureAwait(false),
+                "lifecycle-retained-read" => await LifecycleRetainedReadAsync(options).ConfigureAwait(false),
+                "lifecycle-publish" => await LifecycleTransitionAsync(options, ServiceRequestHandler.LifecyclePublishOperation).ConfigureAwait(false),
+                "lifecycle-reject" => await LifecycleTransitionAsync(options, ServiceRequestHandler.LifecycleRejectProposalOperation).ConfigureAwait(false),
+                "lifecycle-withdraw" => await LifecycleTransitionAsync(options, ServiceRequestHandler.LifecycleWithdrawOperation).ConfigureAwait(false),
+                "lifecycle-repropose" => await LifecycleTransitionAsync(options, ServiceRequestHandler.LifecycleReProposeOperation).ConfigureAwait(false),
+                "lifecycle-question-resolve" => await LifecycleTransitionAsync(options, ServiceRequestHandler.LifecycleResolveQuestionOperation).ConfigureAwait(false),
+                "lifecycle-question-reopen" => await LifecycleTransitionAsync(options, ServiceRequestHandler.LifecycleReopenQuestionOperation).ConfigureAwait(false),
+                "lifecycle-intention-complete" => await LifecycleTransitionAsync(options, ServiceRequestHandler.LifecycleCompleteIntentionOperation).ConfigureAwait(false),
+                "lifecycle-intention-cancel" => await LifecycleTransitionAsync(options, ServiceRequestHandler.LifecycleCancelIntentionOperation).ConfigureAwait(false),
+                "lifecycle-intention-supersede" => await LifecycleTransitionAsync(options, ServiceRequestHandler.LifecycleSupersedeIntentionOperation).ConfigureAwait(false),
+                "lifecycle-intention-notify" => await LifecycleTransitionAsync(options, ServiceRequestHandler.LifecycleNotifyOperation).ConfigureAwait(false),
+                "lifecycle-intention-acknowledge" => await LifecycleTransitionAsync(options, ServiceRequestHandler.LifecycleAcknowledgeOperation).ConfigureAwait(false),
+                "lifecycle-validity-set" => await LifecycleTransitionAsync(options, ServiceRequestHandler.LifecycleSetValidityOperation).ConfigureAwait(false),
+                "lifecycle-retain" => await LifecycleTransitionAsync(options, ServiceRequestHandler.LifecycleRetainRevisionOperation).ConfigureAwait(false),
                 "provision" => await ProvisionAsync(options).ConfigureAwait(false),
                 "unlock" => await UnlockAsync(options, useRecoveryCode: false).ConfigureAwait(false),
                 "recover" => await UnlockAsync(options, useRecoveryCode: true).ConfigureAwait(false),
@@ -437,6 +453,15 @@ internal static class OwnerControlCli
             return;
         }
 
+        PrintMemoryItemElement(item);
+    }
+
+    /// <summary>
+    /// Prints one memory item projection element, wherever it was served from
+    /// (a live read or a retained historical revision).
+    /// </summary>
+    private static void PrintMemoryItemElement(JsonElement item)
+    {
         Console.WriteLine($"MEMORY id={JsonValueText(item, "id")} zone={JsonValueText(item, "zoneId")} revision={JsonValueText(item, "revision")} kind={JsonValueText(item, "kind")} author={JsonValueText(item, "author")} executor={JsonValueText(item, "executor")} method={JsonValueText(item, "creationMethod")} evidence={JsonValueText(item, "evidence")} level={JsonValueText(item, "level")}");
         if (item.TryGetProperty("title", out var title) && title.ValueKind == JsonValueKind.String)
         {
@@ -781,6 +806,273 @@ internal static class OwnerControlCli
         endpoint.TryGetProperty("span", out var span) && span.ValueKind == JsonValueKind.Object
             ? $"{JsonValueText(span, "start")}-{JsonValueText(span, "end")}"
             : "none";
+
+    /// <summary>
+    /// Creates the lifecycle record of one subject item. The resource ID is
+    /// the subject item, never a lifecycle identity: the record ID, zone and
+    /// initial states are derived server-side.
+    /// </summary>
+    private static async Task<int> LifecycleCreateAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--input-file");
+        var controlPipe = ControlPipe(options);
+        var subjectId = options.Required("--resource-id");
+        var inputPath = options.Required("--input-file");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(subjectId))
+        {
+            return Usage();
+        }
+
+        var content = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        try
+        {
+            if (content.Length is <= 0 or > 1024 * 1024)
+            {
+                Console.Error.WriteLine("ERROR invalid_lifecycle_size");
+                return 4;
+            }
+
+            var result = await InvokeOwnerAsync(controlPipe,
+                new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.LifecycleCreateOperation,
+                    ResourceId: subjectId, ContentBase64: Convert.ToBase64String(content))).ConfigureAwait(false);
+            if (!result.Success || !HasStatus(result.Reply, "lifecycle_created"))
+            {
+                WriteServiceError(result);
+                return 4;
+            }
+
+            var revision = result.Reply.TryGetProperty("resourceRevision", out var value) ? value.GetInt64() : 0;
+            PrintLifecycle(result.Reply);
+            Console.WriteLine($"LIFECYCLE stored revision={revision}");
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(content);
+        }
+    }
+
+    private static async Task<int> LifecycleReadAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--resource-revision");
+        var controlPipe = ControlPipe(options);
+        var subjectId = options.Required("--resource-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(subjectId))
+        {
+            return Usage();
+        }
+
+        long? revision = null;
+        if (options.Optional("--resource-revision") is { } revisionText)
+        {
+            if (!long.TryParse(revisionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) || parsed < 1)
+            {
+                return Usage();
+            }
+
+            revision = parsed;
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.LifecycleReadOperation,
+                ResourceId: subjectId, ResourceRevision: revision)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "lifecycle"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintLifecycle(result.Reply);
+        return 0;
+    }
+
+    /// <summary>
+    /// Reads one retained historical revision of a subject back: the archived
+    /// envelope, the archive resource that holds it, and both revisions.
+    /// </summary>
+    private static async Task<int> LifecycleRetainedReadAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--resource-revision");
+        var controlPipe = ControlPipe(options);
+        var subjectId = options.Required("--resource-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(subjectId) ||
+            !long.TryParse(options.Required("--resource-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var revision) ||
+            revision < 1)
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.LifecycleRetainedRevisionReadOperation,
+                ResourceId: subjectId, ResourceRevision: revision)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "retained_revision") ||
+            !result.Reply.TryGetProperty("retainedRevision", out var retained) ||
+            retained.ValueKind != JsonValueKind.Object)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        if (retained.TryGetProperty("subject", out var subject) && subject.ValueKind == JsonValueKind.Object)
+        {
+            PrintMemoryItemElement(subject);
+        }
+
+        Console.WriteLine($"RETAINED archive={JsonValueText(retained, "archiveResourceId")} archiveRevision={JsonValueText(retained, "archiveRevision")} subjectRevision={JsonValueText(retained, "subjectRevision")}");
+        return 0;
+    }
+
+    private static async Task<int> LifecycleTransitionAsync(CommandOptions options, string transitionOperation)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--expected-revision", "--input-file");
+        var controlPipe = ControlPipe(options);
+        var subjectId = options.Required("--resource-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(subjectId))
+        {
+            return Usage();
+        }
+
+        if (!long.TryParse(options.Required("--expected-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var expectedRevision) ||
+            expectedRevision < 1)
+        {
+            return Usage();
+        }
+
+        var inputPath = options.Optional("--input-file");
+        byte[]? content = inputPath is null ? null : await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        try
+        {
+            if (content is { Length: <= 0 or > 1024 * 1024 })
+            {
+                Console.Error.WriteLine("ERROR invalid_lifecycle_size");
+                return 4;
+            }
+
+            var result = await InvokeOwnerAsync(controlPipe,
+                new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, transitionOperation,
+                    ResourceId: subjectId,
+                    ContentBase64: content is null ? null : Convert.ToBase64String(content),
+                    ResourceRevision: expectedRevision)).ConfigureAwait(false);
+            var expectedStatus = LifecycleStatusName(transitionOperation);
+            if (!result.Success || !HasStatus(result.Reply, expectedStatus))
+            {
+                WriteServiceError(result);
+                return 4;
+            }
+
+            var revision = result.Reply.TryGetProperty("resourceRevision", out var value) ? value.GetInt64() : 0;
+            PrintLifecycle(result.Reply);
+            Console.WriteLine($"LIFECYCLE stored revision={revision}");
+            return 0;
+        }
+        finally
+        {
+            if (content is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(content);
+            }
+        }
+    }
+
+    private static string LifecycleStatusName(string transitionOperation) => transitionOperation switch
+    {
+        ServiceRequestHandler.LifecyclePublishOperation => "lifecycle_published",
+        ServiceRequestHandler.LifecycleRejectProposalOperation => "lifecycle_rejected",
+        ServiceRequestHandler.LifecycleWithdrawOperation => "lifecycle_withdrawn",
+        ServiceRequestHandler.LifecycleReProposeOperation => "lifecycle_reproposed",
+        ServiceRequestHandler.LifecycleResolveQuestionOperation => "lifecycle_question_resolved",
+        ServiceRequestHandler.LifecycleReopenQuestionOperation => "lifecycle_question_reopened",
+        ServiceRequestHandler.LifecycleCompleteIntentionOperation => "lifecycle_intention_completed",
+        ServiceRequestHandler.LifecycleCancelIntentionOperation => "lifecycle_intention_cancelled",
+        ServiceRequestHandler.LifecycleSupersedeIntentionOperation => "lifecycle_intention_superseded",
+        ServiceRequestHandler.LifecycleNotifyOperation => "lifecycle_intention_notified",
+        ServiceRequestHandler.LifecycleAcknowledgeOperation => "lifecycle_intention_acknowledged",
+        ServiceRequestHandler.LifecycleSetValidityOperation => "lifecycle_validity_set",
+        _ => "lifecycle_revision_retained"
+    };
+
+    private static void PrintLifecycle(JsonElement reply)
+    {
+        if (!reply.TryGetProperty("lifecycle", out var record) || record.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        Console.WriteLine($"LIFECYCLE id={JsonValueText(record, "id")} subject={JsonValueText(record, "subjectResourceId")} subjectKind={JsonValueText(record, "subjectKind")} zone={JsonValueText(record, "zoneId")} revision={JsonValueText(record, "revision")}");
+        Console.WriteLine($"publication={JsonValueText(record, "publication")} question={OptionalText(record, "question")} intention={OptionalText(record, "intention")} supersededBy={OptionalText(record, "supersededBy")}");
+        Console.WriteLine($"notified={JsonFlagText(record, "notified")} notifiedUtc={OptionalText(record, "notifiedAtUtc")} acknowledged={JsonFlagText(record, "acknowledged")} acknowledgedUtc={OptionalText(record, "acknowledgedAtUtc")}");
+        Console.WriteLine($"occurred={LifecycleStampText(record, "occurred")} recorded={LifecycleStampText(record, "recorded")} validFrom={LifecycleStampText(record, "validFrom")} validUntil={LifecycleStampText(record, "validUntil")} reviewAfter={LifecycleStampText(record, "reviewAfter")}");
+        Console.WriteLine($"executor={JsonValueText(record, "executor")} method={JsonValueText(record, "creationMethod")} recordedUtc={JsonValueText(record, "recordedAtUtc")} reason={JsonValueText(record, "reason")}");
+        if (record.TryGetProperty("retainedRevisions", out var retained) && retained.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var entry in retained.EnumerateArray())
+            {
+                Console.WriteLine($"RETAINED revision={JsonValueText(entry, "subjectRevision")} archive={JsonValueText(entry, "archiveResourceId")} executor={JsonValueText(entry, "executor")} recordedUtc={JsonValueText(entry, "recordedAtUtc")}");
+            }
+        }
+
+        if (record.TryGetProperty("history", out var history) && history.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var change in history.EnumerateArray())
+            {
+                Console.WriteLine($"HISTORY aspect={JsonValueText(change, "aspect")} act={JsonValueText(change, "act")} from={JsonValueText(change, "fromState")} to={JsonValueText(change, "toState")} executor={JsonValueText(change, "executor")} recordedUtc={JsonValueText(change, "recordedAtUtc")} rationale={OptionalText(change, "rationale")} replacement={OptionalText(change, "replacementResourceId")}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// One temporal stamp as it is actually known: unknown, an exact instant
+    /// with its preserved zone, or the wall-clock fields at the recorded
+    /// precision. A coarse stamp never prints a fabricated date.
+    /// </summary>
+    private static string LifecycleStampText(JsonElement record, string name)
+    {
+        if (!record.TryGetProperty(name, out var stamp) || stamp.ValueKind != JsonValueKind.Object)
+        {
+            return "none";
+        }
+
+        var precision = JsonValueText(stamp, "precision");
+        if (string.Equals(precision, "unknown", StringComparison.Ordinal))
+        {
+            return "unknown";
+        }
+
+        var zone = stamp.TryGetProperty("timeZoneOffsetMinutes", out var offsetValue) &&
+            offsetValue.ValueKind == JsonValueKind.Number
+            ? LifecycleZoneText(offsetValue.GetInt32())
+            : "unknown";
+        if (string.Equals(precision, "exact", StringComparison.Ordinal))
+        {
+            return $"exact:{JsonValueText(stamp, "instantUtc")}@{zone}";
+        }
+
+        var year = JsonValueText(stamp, "localYear");
+        if (string.Equals(precision, "day", StringComparison.Ordinal))
+        {
+            return $"day:{year}-{JsonValueText(stamp, "localMonth")}-{JsonValueText(stamp, "localDay")}@{zone}";
+        }
+
+        if (string.Equals(precision, "month", StringComparison.Ordinal))
+        {
+            return $"month:{year}-{JsonValueText(stamp, "localMonth")}@{zone}";
+        }
+
+        if (string.Equals(precision, "quarter", StringComparison.Ordinal))
+        {
+            return $"quarter:{year}-Q{JsonValueText(stamp, "localQuarter")}@{zone}";
+        }
+
+        return $"year:{year}@{zone}";
+    }
+
+    private static string LifecycleZoneText(int offsetMinutes)
+    {
+        var absolute = Math.Abs(offsetMinutes);
+        var sign = offsetMinutes < 0 ? "-" : "+";
+        return sign + (absolute / 60).ToString("00", CultureInfo.InvariantCulture) + ":" +
+            (absolute % 60).ToString("00", CultureInfo.InvariantCulture);
+    }
 
     private static async Task<int> ProvisionAsync(CommandOptions options)
     {
@@ -1656,6 +1948,31 @@ internal static class OwnerControlCli
     private static string JsonValueText(JsonElement value, string property) =>
         value.TryGetProperty(property, out var item) ? item.ToString() : "unknown";
 
+    /// <summary>
+    /// Optional string fields (a question state that does not apply, a missing
+    /// rationale, a supersession pointer) print as <c>none</c> instead of an
+    /// empty value.
+    /// </summary>
+    private static string OptionalText(JsonElement value, string property)
+    {
+        if (!value.TryGetProperty(property, out var item) || item.ValueKind == JsonValueKind.Null)
+        {
+            return "none";
+        }
+
+        var text = item.ToString();
+        return string.IsNullOrEmpty(text) ? "none" : text;
+    }
+
+    /// <summary>
+    /// Boolean markers print in the wire's lowercase form so owner output and
+    /// served JSON never disagree about a notification or acknowledgement.
+    /// </summary>
+    private static string JsonFlagText(JsonElement value, string property) =>
+        value.TryGetProperty(property, out var item) && item.ValueKind == JsonValueKind.True ? "true"
+        : value.TryGetProperty(property, out var falseItem) && falseItem.ValueKind == JsonValueKind.False ? "false"
+        : "unknown";
+
     private static int Migrate(CommandOptions options)
     {
         options.RequireOnly("--config");
@@ -2085,7 +2402,7 @@ internal static class OwnerControlCli
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|re…");
+        Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|lifecycle-create|lifecycle-read|lifecycle-retained-read --resource-revision|lifecycle-publish --expected-revision|lifecycle-reject --expected-revision|lifecycle-withdraw --expected-revision|lifecycle-repropose --expected-revision|lifecycle-question-resolve --expected-revision|lifecycle-question-reopen --expected-revision|lifecycle-intention-complete --expected-revision|lifecycle-intention-cancel --expected-revision|lifecycle-intention-supersede --expected-revision|lifecycle-intention-notify --expected-revision|lifecycle-intention-acknowledge --expected-revision|lifecycle-validity-set --expected-revision|lifecycle-retain --expected-revision|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read}; lifecycle --resource-id is the subject item ID; relation/lifecycle transitions need --expected-revision and an optional --input-file draft");
         return 2;
     }
 

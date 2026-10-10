@@ -125,6 +125,16 @@ public sealed class MemoryItemService
 
         MemoryItemValidator.ValidateDraft(draft, resourceId, zoneId);
 
+        // R12: a revise keeps the attribution of what it revises. An
+        // AI-written or tool-observed record cannot be turned into
+        // user-written or user-verified by saving it, so its author, creation
+        // method, and evidence level are immutable for everyone but the
+        // original speaker. Only the user's own statements grow evidence.
+        if (expectedRevision >= 1)
+        {
+            PreserveAttribution(draft, resourceId, store);
+        }
+
         // S2-T3: citations that name a registered source revision (or a span)
         // are checked against the live registry before commit, so an anchor
         // can never point at a revision the vault does not hold. Unregistered
@@ -251,6 +261,51 @@ public sealed class MemoryItemService
             if (liveRevision.Value != claimedRevision)
             {
                 throw new ArgumentException("A citation anchor must name the live registered source revision.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// S2-T5 attribution preservation: the stored record of the revision being
+    /// replaced decides what a revise may claim about authorship, creation, and
+    /// verification. The check reads the live stored envelope, so it is the
+    /// record itself that is protected rather than a request field.
+    /// </summary>
+    private static void PreserveAttribution(MemoryItemDraft draft, string resourceId, IManagedResourceStore store)
+    {
+        byte[]? raw = null;
+        try
+        {
+            raw = store.ReadContent(resourceId, null);
+            var stored = MemoryEnvelopeCodec.DecodeStored(raw);
+            if (stored.Author == SpeakerRole.User)
+            {
+                // The user's own statement may be revised freely, including
+                // growing its evidence.
+                return;
+            }
+
+            if (draft.Author != stored.Author ||
+                draft.CreationMethod != stored.CreationMethod ||
+                draft.Evidence != stored.Evidence)
+            {
+                throw new ArgumentException(
+                    "An AI-written, tool-observed, or external record keeps its author, creation method, and evidence level; saving it never makes it user-written or user-verified.");
+            }
+        }
+        catch (ArgumentException)
+        {
+            throw;
+        }
+        catch (IOException ex)
+        {
+            throw new ArgumentException("The memory item is unavailable for the revision.", ex);
+        }
+        finally
+        {
+            if (raw is { Length: > 0 })
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(raw);
             }
         }
     }

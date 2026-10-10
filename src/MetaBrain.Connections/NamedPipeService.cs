@@ -167,7 +167,23 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.RelationRelinkOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.RelationReadOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.AgentLinkCreateOperation, StringComparison.Ordinal) ||
-                    string.Equals(request.Operation, ServiceRequestHandler.AgentRelationReadOperation, StringComparison.Ordinal);
+                    string.Equals(request.Operation, ServiceRequestHandler.AgentRelationReadOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.LifecycleCreateOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.LifecycleReadOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.LifecycleRetainedRevisionReadOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.LifecyclePublishOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.LifecycleRejectProposalOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.LifecycleWithdrawOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.LifecycleReProposeOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.LifecycleResolveQuestionOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.LifecycleReopenQuestionOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.LifecycleCompleteIntentionOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.LifecycleCancelIntentionOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.LifecycleSupersedeIntentionOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.LifecycleNotifyOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.LifecycleAcknowledgeOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.LifecycleSetValidityOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.LifecycleRetainRevisionOperation, StringComparison.Ordinal);
                 using var operation = needsVaultOperation ? _vault.TryBeginOperation() : null;
                 // Application creates the access context: owner channel gets owner authority,
                 // while the agent channel receives a placeholder agent identity that carries

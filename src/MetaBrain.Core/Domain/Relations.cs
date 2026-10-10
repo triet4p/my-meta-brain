@@ -421,7 +421,7 @@ public static class RelationValidator
 
     private static void ValidateEndpoint(RelationEndpoint endpoint)
     {
-        if (!DomainIdentifiers.IsNonRelationIdentifier(endpoint.ResourceId))
+        if (!DomainIdentifiers.IsDomainIdentifier(endpoint.ResourceId))
         {
             throw new ArgumentException("A relation endpoint must be an opaque memory item or registered source identifier.");
         }
