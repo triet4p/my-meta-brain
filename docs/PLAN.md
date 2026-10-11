@@ -40,7 +40,7 @@ S1-T9 [behavioral evidence A3](../artifacts/sprint-1/reviews/S1-T9-S1T9-REVIEW-2
 | Sprint | Trạng thái | Task range | Gate |
 | --- | --- | --- | --- |
 | 1 | Complete — CR01 replacement M1 | S1-T1 retained; S1-T2–T9 [x] and doc correction committed | Task evidence/checkpoints PASS; final differential deep A2 PASS |
-| 2 | In progress — S2-T6 continuation | S2-T1–T5 [x]; S2-T6 [~]; S2-T7 next sequentially | Fresh T6 evidence/checkpoint required; final deep pending |
+| 2 | In progress — S2-T7 evidence review pending | S2-T1–T6 [x]; S2-T7 [~] | Source recovered; corrected runtime/budget evidence delivered; fresh evidence PASS, checkpoint and final deep required |
 | 3 | Not started | S3-T1…S3-T6 | Pending |
 | 4 | Not started | S4-T1…S4-T7 | Pending |
 | 5 | Not started | S5-T1…S5-T7 | Pending |
@@ -55,6 +55,8 @@ Owner resumes and explicitly authorizes S2-T5 recovery without the cancelled att
 S2-T5 accepted evidence/checkpoint complete: commit `58e2bedb48a6e9be79ee23f1607b461d568ed5af`, matching PASS snapshot and checkpoint in [Sprint 2 gate record](sprint-plans/sprint-2.md#gate-record), no push. S2-T6 `S2T6-IMPL-20261009-A1` / planned `S2T6CollectionsA1`, fresh Gold `opencode-go/muse-spark-1.3-contributor:xhigh`, non-blocking, organization/scope/catalog integration; quota/provider-applied effort unknown. Both plans' post-T5 Main status edits/current orchestration are expressly T6-owned review/checkpoint carryover. T7 waits T6 gate.
 
 Owner resumes S2-T6 from saved handoff. Fresh `S2T6-IMPL-20261009-A2` / planned agent `S2T6CollectionsA2`, `gold-task` (Gold), effective `opencode-go/muse-spark-1.3-contributor:xhigh`, non-blocking; permission-filtered organization/catalog integration and remaining real-service proof. Predecessor A1 remains cancelled; [handoff](../artifacts/sprint-2/task-6.md) and `history://S2T6CollectionsA1` must be read directly by successor. Base `58e2bedb48a6e9be79ee23f1607b461d568ed5af`; Main-only status carryover/pause/resume edits in both plans are expressly T6-owned for reviewed checkpoint. Quota/provider-applied effort unknown, no advisor, no push/Sprint 3.
+
+S2-T6 accepted fresh evidence/checkpoint complete: commit `56ee0ea76e2831e688a51392a29ee27e0357e249`, matching corrected tamper-fixture proof, frozen PASS and checkpoint in [Sprint 2 gate record](sprint-plans/sprint-2.md#gate-record), no push. S2-T7 full-route `S2T7-IMPL-20261011-A1` / planned `S2T7PrivateIndexA1`, Gold `opencode-go/muse-spark-1.3-contributor:xhigh`, non-blocking, SQLite confidentiality/rebuild/concurrency integration; quota/provider-applied effort unknown. Both plans' post-T6 Main status carryover/current orchestration expressly T7-owned reviewed checkpoint scope. Integrated Sprint 2 runtime gate is required before final differential deep; no Sprint 3 launch.
 
 ## Completed Sprints
 

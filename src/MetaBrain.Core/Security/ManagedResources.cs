@@ -108,6 +108,17 @@ public interface IManagedResourceStore : IManagedResourceReader
             ValidateRegistration(resource.ResourceId, resource.Revision);
         }
     }
+
+    /// <summary>
+    /// Reads a bounded batch of canonical envelopes. Every (ID, revision) still
+    /// passes the same per-resource decrypt, AEAD binding, and revision gate as
+    /// <see cref="IManagedResourceReader.ReadContent"/>; the batch only overlaps
+    /// independent reads inside the operation that authorized them, and is
+    /// deliberately bounded so never more than the batch's plaintext is resident
+    /// at once (never a whole vault). Implementations honor the token so the
+    /// caller's lock/cancel boundary bounds the work.
+    /// </summary>
+    byte[][] ReadBatch(IReadOnlyList<ScopeResourceRevision> batch, int maxDegreeOfParallelism, CancellationToken cancellationToken);
 }
 
 /// <summary>

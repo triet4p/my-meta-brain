@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using MetaBrain.Core.Index;
 using MetaBrain.Core.Security;
 
 namespace MetaBrain.Application;
@@ -194,6 +195,37 @@ public sealed record LifecycleRevisionWire(
     long SubjectRevision,
     MemoryItemWire Subject);
 
+/// <summary>
+/// One materialized private-index row, projected from the canonical encrypted
+/// envelope. No body, title, locator, embedding or grant metadata crosses the
+/// wire: the row carries identity, revision, zone scope, the record's own
+/// state, and the exact canonical IDs it references.
+/// </summary>
+public sealed record PrivateIndexRowWire(
+    string ResourceId,
+    string ZoneId,
+    long Revision,
+    int CanonicalSchemaVersion,
+    string RecordKind,
+    string State,
+    string[] LinkedResourceIds);
+
+/// <summary>
+/// Owner-only private-index state. <see cref="Rows"/> is a bounded sample of
+/// the materialized generation (<see cref="RowCount"/> is the true total) so a
+/// large vault cannot grow a pipe reply without limit; <see cref="Stale"/>
+/// reports whether the materialized generation still equals the live canonical
+/// resource/revision set, and <see cref="CanonicalMoved"/> reports a rebuild
+/// that failed closed instead of publishing an unprovable generation.
+/// </summary>
+public sealed record PrivateIndexWire(
+    int SchemaVersion,
+    string CanonicalDigest,
+    int RowCount,
+    bool Stale,
+    bool CanonicalMoved,
+    PrivateIndexRowWire[] Rows);
+
 public sealed record ServiceReply(
     int ProtocolVersion,
     string? Status,
@@ -229,12 +261,14 @@ public sealed record ServiceReply(
     RegisteredSourceWire? Source = null,
     RelationWire? Relation = null,
     LifecycleWire? Lifecycle = null,
-    LifecycleRevisionWire? RetainedRevision = null);
+    LifecycleRevisionWire? RetainedRevision = null,
+    PrivateIndexWire? PrivateIndex = null);
 
 
 public sealed class ServiceRequestHandler
 {
     public const int CurrentProtocolVersion = 1;
+    public const int MaximumIndexRows = 512;
     public const string ResourceReadOperation = "resource.read";
     public const string SourceReadOperation = "source.read";
     public const string ResourceWriteOperation = "resource.write";
@@ -294,6 +328,8 @@ public sealed class ServiceRequestHandler
     public const string LifecycleAcknowledgeOperation = "lifecycle.intention.acknowledge";
     public const string LifecycleSetValidityOperation = "lifecycle.validity.set";
     public const string LifecycleRetainRevisionOperation = "lifecycle.retain";
+    public const string OwnerIndexStatusOperation = "owner.index.status";
+    public const string OwnerIndexRebuildOperation = "owner.index.rebuild";
 
     /// <summary>
     /// Owner-grantable agent operation that authorizes creating one link
@@ -309,6 +345,9 @@ public sealed class ServiceRequestHandler
     private readonly AgentSessionAuthority _agentSessions;
     private readonly OwnerCatalogAuthority _ownerCatalog;
     private readonly ICatalogProjectionStore? _projections;
+    private readonly PrivateIndexAuthority _privateIndex;
+    private readonly IPrivateIndexStore? _privateIndexStore;
+    private PrivateIndexSnapshot? _privateIndexMaterialized;
 
     public ServiceRequestHandler(
         GrantAuthority grantAuthority,
@@ -316,7 +355,8 @@ public sealed class ServiceRequestHandler
         OwnerScopeGrantAuthority ownerScopeGrants,
         AgentSessionAuthority? agentSessions = null,
         OwnerCatalogAuthority? ownerCatalog = null,
-        ICatalogProjectionStore? projections = null)
+        ICatalogProjectionStore? projections = null,
+        IPrivateIndexStore? privateIndex = null)
     {
         _grantAuthority = grantAuthority ?? throw new ArgumentNullException(nameof(grantAuthority));
         _vault = vault ?? throw new ArgumentNullException(nameof(vault));
@@ -324,12 +364,15 @@ public sealed class ServiceRequestHandler
         _agentSessions = agentSessions ?? new AgentSessionAuthority();
         _ownerCatalog = ownerCatalog ?? new OwnerCatalogAuthority();
         _projections = projections;
+        _privateIndex = new PrivateIndexAuthority();
+        _privateIndexStore = privateIndex;
     }
 
     public async Task<ServiceReply> HandleAsync(
         AuthenticatedContext context,
         ServiceRequest request,
-        IVaultOperation? operation)
+        IVaultOperation? operation,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(request);
@@ -445,6 +488,10 @@ public sealed class ServiceRequestHandler
                 return Error("unlock_denied");
             }
 
+            // A new unlock starts a new index generation: the previous
+            // materialization described a previous unlocked epoch and must not
+            // be served after the vault is locked and reopened.
+            ResetPrivateIndex();
             return new ServiceReply(CurrentProtocolVersion, "unlocked", "owner", null, VaultState: _vault.State);
         }
 
@@ -454,6 +501,7 @@ public sealed class ServiceRequestHandler
             _ownerScopeGrants.ClearPreviews();
             _ownerScopeGrants.ClearRequestPreviews();
             _agentSessions.ClearSessions();
+            ResetPrivateIndex();
             return new ServiceReply(CurrentProtocolVersion, "locked", "owner", null, VaultState: _vault.State);
         }
 
@@ -524,6 +572,16 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, OwnerSessionListOperation, StringComparison.Ordinal))
         {
             return HandleOwnerSessionList(request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerIndexStatusOperation, StringComparison.Ordinal))
+        {
+            return HandleIndexStatus(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerIndexRebuildOperation, StringComparison.Ordinal))
+        {
+            return HandleIndexRebuild(context, request, operation, cancellationToken);
         }
 
         if (string.Equals(request.Operation, OwnerSessionRevokeOperation, StringComparison.Ordinal))
@@ -2905,6 +2963,193 @@ public sealed class ServiceRequestHandler
 
     private static long CurrentEpoch(IVaultOperation operation) =>
         operation.LoadScopeGrantState().UnlockEpoch;
+
+    /// <summary>
+    /// Owner-only reconciliation read: fingerprints the live canonical
+    /// resource/revision set and reports whether the materialized generation
+    /// still describes it. No canonical body is decrypted here, and no agent
+    /// channel operation names the index, so the index can never widen a
+    /// grant or become an existence oracle.
+    /// </summary>
+    private ServiceReply HandleIndexStatus(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasPrivateIndexExtras(request))
+        {
+            return Error("invalid_request");
+        }
+
+        if (_privateIndexStore is null)
+        {
+            return Error("index_unavailable");
+        }
+
+        try
+        {
+            var liveDigest = _privateIndex.Evaluate(operation);
+            var materialized = _privateIndexMaterialized;
+            if (materialized is null)
+            {
+                return new ServiceReply(
+                    CurrentProtocolVersion,
+                    "index_status",
+                    "owner",
+                    null,
+                    PrivateIndex: new PrivateIndexWire(
+                        0,
+                        liveDigest,
+                        0,
+                        Stale: false,
+                        CanonicalMoved: false,
+                        Array.Empty<PrivateIndexRowWire>()));
+            }
+
+            var stale = !string.Equals(materialized.CanonicalDigest, liveDigest, StringComparison.Ordinal);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                stale ? "index_stale" : "index_status",
+                "owner",
+                null,
+                PrivateIndex: new PrivateIndexWire(
+                    materialized.SchemaVersion,
+                    materialized.CanonicalDigest,
+                    materialized.RowCount,
+                    stale,
+                    CanonicalMoved: false,
+                    ProjectRows(materialized.Rows)));
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            return Error("index_unavailable");
+        }
+    }
+
+    /// <summary>
+    /// Owner-only full materialization from canonical. The canonical envelope
+    /// is never written by this operation, so the file stays the only truth;
+    /// a canonical set that moves throughout every rebuild attempt publishes
+    /// no generation at all instead of a stale projection.
+    /// </summary>
+    private ServiceReply HandleIndexRebuild(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation, CancellationToken cancellationToken)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasPrivateIndexExtras(request))
+        {
+            return Error("invalid_request");
+        }
+
+        if (_privateIndexStore is null)
+        {
+            return Error("index_unavailable");
+        }
+
+        try
+        {
+            var outcome = _privateIndex.Rebuild(_privateIndexStore, operation, cancellationToken);
+            if (outcome.Snapshot is null)
+            {
+                return Error(outcome.CanonicalMoved ? "index_canonical_moved" : "index_unavailable");
+            }
+
+            _privateIndexMaterialized = outcome.Snapshot;
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "index_rebuilt",
+                "owner",
+                null,
+                PrivateIndex: new PrivateIndexWire(
+                    outcome.Snapshot.SchemaVersion,
+                    outcome.Snapshot.CanonicalDigest,
+                    outcome.Snapshot.RowCount,
+                    Stale: false,
+                    CanonicalMoved: false,
+                    ProjectRows(outcome.Snapshot.Rows)));
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // A requested lock cancels the in-flight rebuild at its batch
+                // boundary and no generation is published. This is not the
+                // request's own timeout (that token stays live and propagates
+                // to the pipe layer as request_timeout), so the cancelled
+                // rebuild fails closed under its own status.
+                return Error("index_rebuild_cancelled");
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+            {
+                return Error("index_unavailable");
+            }
+    }
+
+    /// <summary>
+    /// Projects materialized rows for the owner wire reply. The reply carries at
+    /// most <see cref="MaximumIndexRows"/> rows so a large vault cannot grow an
+    /// unbounded pipe message; the materialized generation itself is never
+    /// truncated. Record kinds use the same camelCase wire token as every other
+    /// enumeration on this surface.
+    /// </summary>
+    private static PrivateIndexRowWire[] ProjectRows(PrivateIndexRow[] rows) =>
+        rows.Take(MaximumIndexRows).Select(row => new PrivateIndexRowWire(
+                row.ResourceId,
+                row.ZoneId,
+                row.Revision,
+                row.CanonicalSchemaVersion,
+                ToWireToken(row.RecordKind.ToString()),
+                row.State,
+                row.LinkedResourceIds))
+            .ToArray();
+
+    private void ResetPrivateIndex()
+    {
+        if (_privateIndexStore is null)
+        {
+            return;
+        }
+
+        try
+        {
+            // Drops every materialized row and releases the in-memory engine,
+            // so no private derived data outlives the unlocked epoch.
+            _privateIndexStore.Reset();
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or ObjectDisposedException)
+        {
+            // The engine is disposable; a failed reset leaves nothing addressable.
+        }
+
+        _privateIndexMaterialized = null;
+    }
+
+    /// <summary>
+    /// The index operations take no request fields at all: the canonical set is
+    /// the input, so a body- or filter-steered request fails closed instead of
+    /// selecting what gets materialized.
+    /// </summary>
+    private static bool HasPrivateIndexExtras(ServiceRequest request) =>
+        request.ResourceId is not null || request.ZoneId is not null ||
+        request.ResourceIds is not null || request.ResourceRevision is not null ||
+        request.CollectionId is not null || request.Query is not null ||
+        request.SessionId is not null || request.CatalogId is not null ||
+        request.Label is not null || request.Description is not null ||
+        request.Token is not null || request.SessionToken is not null ||
+        request.ContentBase64 is not null || request.Operations is not null;
 
     private static bool HasOwnerOnlyFields(
         ServiceRequest request,

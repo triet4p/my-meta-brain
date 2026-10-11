@@ -31,6 +31,17 @@ internal sealed class EncryptedVaultStore
     private const int LegacyScopeGrantSchemaVersion = 2;
     private const int KdfIterations = 600_000;
     private const int MaximumEnvelopeBytes = 4 * 1024 * 1024;
+    // The manifest is the one private file whose size scales with the resource
+    // count: ValidateManifest admits up to 100,000 descriptors (each with a
+    // resource ID and zone ID of up to 128 characters plus a storage name),
+    // whose serialized size needs a dedicated bound. The shared 4 MiB envelope
+    // cap fits resource envelopes (<= 1 MiB plaintext) but silently made the
+    // validator's own 100,000-resource ceiling unreachable: a full-size
+    // manifest could never be read back, so unlock failed closed. These bounds
+    // sit ~2x above the 100,000-descriptor worst case, exactly like the
+    // scope-grant and catalog plaintext/envelope pairs above.
+    private const int MaximumManifestBytes = 64 * 1024 * 1024;
+    private const int MaximumManifestEnvelopeBytes = 96 * 1024 * 1024;
     private const int MaximumScopeGrantBytes = 4 * 1024 * 1024;
     private const int MaximumScopeGrantEnvelopeBytes = 6 * 1024 * 1024;
     private const int MaximumCatalogBytes = 512 * 1024;
@@ -507,13 +518,85 @@ internal sealed class EncryptedVaultStore
         {
             throw;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or CryptographicException or ArgumentException or FormatException or OverflowException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or CryptographicException or ArgumentException or FormatException)
         {
             throw new ManagedResourceUnavailableException();
         }
         finally
         {
             CryptographicOperations.ZeroMemory(aad);
+        }
+    }
+
+    /// <summary>
+    /// Reads a bounded batch of envelopes from an already-authorized unlocked
+    /// lease. Each element goes through <see cref="ReadResource"/> unchanged, so
+    /// every file keeps its per-read reparse/ACL check, AEAD binding, and exact
+    /// revision gate; this only overlaps independent reads. Bounded degree and an
+    /// initial-failure zeroization keep no plaintext alive past the batch.
+    /// </summary>
+    public byte[][] ReadBatch(
+        VaultManifest manifest,
+        byte[] dataKey,
+        IReadOnlyList<ScopeResourceRevision> batch,
+        int maxDegreeOfParallelism,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        ArgumentNullException.ThrowIfNull(dataKey);
+        ArgumentNullException.ThrowIfNull(batch);
+        var results = new byte[batch.Count][];
+        var degree = Math.Clamp(maxDegreeOfParallelism, 1, 16);
+        if (degree <= 1 || batch.Count <= 1)
+        {
+            for (var i = 0; i < batch.Count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                results[i] = ReadResource(manifest, dataKey, batch[i].ResourceId, batch[i].Revision);
+            }
+
+            return results;
+        }
+
+        try
+        {
+            Parallel.For(
+                0,
+                batch.Count,
+                new ParallelOptions { MaxDegreeOfParallelism = degree, CancellationToken = cancellationToken },
+                i => results[i] = ReadResource(manifest, dataKey, batch[i].ResourceId, batch[i].Revision));
+            return results;
+        }
+        catch (Exception ex)
+        {
+            foreach (var result in results)
+            {
+                if (result is not null)
+                {
+                    CryptographicOperations.ZeroMemory(result);
+                }
+            }
+
+            // A tampered/unreadable envelope must fail closed through the exact
+            // same ManagedResourceUnavailableException as a serial read so the
+            // rebuild's reconcile/fail-closed path is preserved; Parallel.For may
+            // otherwise wrap it (or the sole inner failure) in an
+            // AggregateException, which is unwrapped here to the fail-closed type.
+            if (ex is ManagedResourceUnavailableException)
+            {
+                throw;
+            }
+
+            if (ex is AggregateException aggregate)
+            {
+                var unavailable = aggregate.InnerExceptions.OfType<ManagedResourceUnavailableException>().FirstOrDefault();
+                if (unavailable is not null)
+                {
+                    throw unavailable;
+                }
+            }
+
+            throw;
         }
     }
 
@@ -580,23 +663,36 @@ internal sealed class EncryptedVaultStore
     }
     private VaultManifest ReadManifest(string vaultId, ReadOnlySpan<byte> dataKey)
     {
-        var json = ProtectedFile.ReadPrivateFile(_manifestPath, _ownerSid, MaximumEnvelopeBytes).Text;
-        var envelope = JsonSerializer.Deserialize<EncryptedPayload>(json, JsonOptions)
-            ?? throw new InvalidDataException("Invalid encrypted vault manifest.");
-        var aad = ResourceAssociatedData(vaultId, "manifest", CurrentManifestSchemaVersion, 1);
-        var plaintext = DecryptPayload(
-            envelope, dataKey, aad, CurrentManifestSchemaVersion, 1, MaximumEnvelopeBytes);
+        // The manifest is the one private file that grows with the resource
+        // count (a full 100,000-descriptor manifest is ~15 MB plaintext), so it
+        // is read as bytes and parsed straight from them: reading it as text
+        // first would materialize a UTF-16 copy twice the file size plus the
+        // reader's growth buffer, and that allocation stays committed in the
+        // unlocked process for the rest of the epoch.
+        var raw = ProtectedFile.ReadPrivateBytes(_manifestPath, _ownerSid, MaximumManifestEnvelopeBytes);
         try
         {
-            var manifest = JsonSerializer.Deserialize<VaultManifest>(plaintext, JsonOptions)
+            var envelope = JsonSerializer.Deserialize<EncryptedPayload>(raw, JsonOptions)
                 ?? throw new InvalidDataException("Invalid encrypted vault manifest.");
-            ValidateManifest(manifest, vaultId);
-            return manifest;
+            var aad = ResourceAssociatedData(vaultId, "manifest", CurrentManifestSchemaVersion, 1);
+            var plaintext = DecryptPayload(
+                envelope, dataKey, aad, CurrentManifestSchemaVersion, 1, MaximumManifestBytes);
+            try
+            {
+                var manifest = JsonSerializer.Deserialize<VaultManifest>(plaintext, JsonOptions)
+                    ?? throw new InvalidDataException("Invalid encrypted vault manifest.");
+                ValidateManifest(manifest, vaultId);
+                return manifest;
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(plaintext);
+                CryptographicOperations.ZeroMemory(aad);
+            }
         }
         finally
         {
-            CryptographicOperations.ZeroMemory(plaintext);
-            CryptographicOperations.ZeroMemory(aad);
+            CryptographicOperations.ZeroMemory(raw);
         }
     }
 

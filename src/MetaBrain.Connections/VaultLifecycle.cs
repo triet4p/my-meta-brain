@@ -13,6 +13,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
     private int _activeOperations;
     private bool _locking;
     private TaskCompletionSource? _operationsDrained;
+    private CancellationTokenSource? _lockCancellation;
 
     public VaultLifecycle(EncryptedVaultStore store)
     {
@@ -104,6 +105,19 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
             }
 
             _locking = true;
+            // A requested lock stops in-flight index-rebuild reads at their next
+            // batch boundary instead of letting them run to completion: the
+            // signal is observed by VaultLifecycle.ReadBatch (the only batch
+            // path, used exclusively by the index rebuild), so the drain that
+            // follows clears the key after only the bounded active I/O
+            // finishes. Single reads, writes, and every non-index operation keep
+            // their existing drain-only semantics.
+            lock (_contentGate)
+            {
+                _lockCancellation ??= new CancellationTokenSource();
+                _lockCancellation.Cancel();
+            }
+
             if (_activeOperations == 0)
             {
                 ClearUnlockedState();
@@ -248,6 +262,47 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
         }
     }
 
+    /// <summary>
+    /// Reads a bounded batch of envelopes concurrently inside the current
+    /// unlocked lease. The immutable manifest/dataKey references are snapshotted
+    /// once under the content gate (guarding the locked state exactly like
+    /// <see cref="ReadContent"/>), then the stateless per-file reads are
+    /// overlapped; the batch is bounded so no more than the batch plaintext is
+    /// resident. This stays inside the operation that authorized it, so lock's
+    /// drain and key-clear boundaries are unchanged; the shared key is never
+    /// zeroed here (it belongs to the lifecycle and survives until lock).
+    /// When a lock has been requested while a rebuild is in flight, the
+    /// request-token is linked with the lock signal so the rebuild stops at
+    /// this batch boundary and the drain that clears the key is bounded by the
+    /// active I/O instead of the whole remaining vault.
+    /// </summary>
+    public byte[][] ReadBatch(IReadOnlyList<ScopeResourceRevision> batch, int maxDegreeOfParallelism, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(batch);
+        VaultManifest manifest;
+        byte[] key;
+        CancellationTokenSource? lockCancellation;
+        lock (_contentGate)
+        {
+            if (_manifest is null || _dataKey is null)
+            {
+                throw new ManagedResourceUnavailableException();
+            }
+
+            manifest = _manifest;
+            key = _dataKey;
+            lockCancellation = _lockCancellation;
+        }
+
+        if (lockCancellation is null)
+        {
+            return _store.ReadBatch(manifest, key, batch, maxDegreeOfParallelism, cancellationToken);
+        }
+
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lockCancellation.Token);
+        return _store.ReadBatch(manifest, key, batch, maxDegreeOfParallelism, linked.Token);
+    }
+
     private void ValidateRegistration(string resourceId, long? expectedRevision = null)
     {
         lock (_contentGate)
@@ -351,6 +406,17 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
 
         _manifest = null;
         _locking = false;
+        // The lock signal belongs to this locked epoch: the drain that reached
+        // this point has already stopped the in-flight batch reads, and no
+        // operation remains (lock waits for _activeOperations == 0), so the
+        // source can be reset for the next unlock epoch.
+        lock (_contentGate)
+        {
+            var lockCancellation = _lockCancellation;
+            _lockCancellation = null;
+            lockCancellation?.Dispose();
+        }
+
         var drained = _operationsDrained;
         _operationsDrained = null;
         drained?.TrySetResult();
@@ -373,6 +439,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
             GetOwner().UpdateCatalogState(update);
         public bool TryGetZone(string resourceId, out string? zoneId) => GetOwner().TryGetZone(resourceId, out zoneId);
         public byte[] ReadContent(string resourceId, long? expectedRevision = null) => GetOwner().ReadContent(resourceId, expectedRevision);
+        public byte[][] ReadBatch(IReadOnlyList<ScopeResourceRevision> batch, int maxDegreeOfParallelism, CancellationToken cancellationToken) => GetOwner().ReadBatch(batch, maxDegreeOfParallelism, cancellationToken);
         public void ValidateRegistration(string resourceId, long? expectedRevision = null) => GetOwner().ValidateRegistration(resourceId, expectedRevision);
         public long WriteContent(string resourceId, string zoneId, byte[] content) => GetOwner().WriteContent(resourceId, zoneId, content);
         public long WriteContent(string resourceId, string zoneId, byte[] content, long expectedRevision) => GetOwner().WriteContent(resourceId, zoneId, content, expectedRevision);

@@ -36,7 +36,8 @@ public sealed class RelationService
     /// <summary>
     /// Guard rail for the transitive review propagation worklist. The chain is
     /// bounded and each resource is expanded at most once, so this only stops
-    /// pathological growth; a rebuildable relation index is S2-T7 work.
+    /// pathological growth; the rebuildable private index (S2-T7) reads the
+    /// relation state this service canonicalizes instead of duplicating it.
     /// </summary>
     private const int MaximumPropagationSteps = 4096;
 

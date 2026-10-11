@@ -80,6 +80,8 @@ internal static class OwnerControlCli
                 "agent-collection-view" => await AgentCollectionViewAsync(options).ConfigureAwait(false),
                 "redeem" => await RedeemAsync(options).ConfigureAwait(false),
                 "sessions" => await ListSessionsAsync(options).ConfigureAwait(false),
+                "index-status" => await IndexStatusAsync(options).ConfigureAwait(false),
+                "index-rebuild" => await IndexRebuildAsync(options).ConfigureAwait(false),
                 "revoke-session" => await RevokeSessionAsync(options).ConfigureAwait(false),
                 "authorize" => await AuthorizeAsync(options).ConfigureAwait(false),
                 "migrate" => Migrate(options),
@@ -2230,6 +2232,88 @@ internal static class OwnerControlCli
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// Owner private-index reconciliation status. Prints the materialized
+    /// generation's fingerprint, row count and whether it still describes the
+    /// live canonical set; nothing is materialized by this command.
+    /// </summary>
+    private static async Task<int> IndexStatusAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerIndexStatusOperation)).ConfigureAwait(false);
+        if (!result.Success ||
+            (!HasStatus(result.Reply, "index_status") && !HasStatus(result.Reply, "index_stale")) ||
+            !result.Reply.TryGetProperty("privateIndex", out var index) ||
+            index.ValueKind != JsonValueKind.Object)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        var digest = JsonValueText(index, "canonicalDigest");
+        var rows = index.TryGetProperty("rowCount", out var rowCount) && rowCount.ValueKind == JsonValueKind.Number
+            ? rowCount.GetInt64()
+            : 0;
+        var stale = index.TryGetProperty("stale", out var staleValue) && staleValue.ValueKind == JsonValueKind.True;
+        Console.WriteLine($"INDEX status schema={JsonValueText(index, "schemaVersion")} rows={rows.ToString(CultureInfo.InvariantCulture)} stale={(stale ? "yes" : "no")} digest={digest}");
+        PrintIndexRows(index);
+        return 0;
+    }
+
+    /// <summary>
+    /// Owner private-index materialization from canonical. Prints the new
+    /// generation and its rows so the owner can compare the index against the
+    /// canonical reads without the index ever becoming an authority.
+    /// </summary>
+    private static async Task<int> IndexRebuildAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerIndexRebuildOperation)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "index_rebuilt") ||
+            !result.Reply.TryGetProperty("privateIndex", out var index) ||
+            index.ValueKind != JsonValueKind.Object)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        var digest = JsonValueText(index, "canonicalDigest");
+        var rows = index.TryGetProperty("rowCount", out var rowCount) && rowCount.ValueKind == JsonValueKind.Number
+            ? rowCount.GetInt64()
+            : 0;
+        Console.WriteLine($"INDEX rebuilt schema={JsonValueText(index, "schemaVersion")} rows={rows.ToString(CultureInfo.InvariantCulture)} digest={digest}");
+        PrintIndexRows(index);
+        return 0;
+    }
+
+    /// <summary>
+    /// Prints one materialized row per line. Only canonical identity,
+    /// revision, zone scope, record state and referenced IDs are printed;
+    /// no body, title, locator or embedding is available to print.
+    /// </summary>
+    private static void PrintIndexRows(JsonElement index)
+    {
+        if (!index.TryGetProperty("rows", out var rows) || rows.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        foreach (var row in rows.EnumerateArray())
+        {
+            var linked = row.TryGetProperty("linkedResourceIds", out var linkedIds) && linkedIds.ValueKind == JsonValueKind.Array
+                ? string.Join(",", linkedIds.EnumerateArray().Select(value => value.GetString()))
+                : string.Empty;
+            Console.WriteLine(
+                $"INDEX ROW id={JsonValueText(row, "resourceId")} zone={JsonValueText(row, "zoneId")} " +
+                $"revision={JsonValueText(row, "revision")} kind={JsonValueText(row, "recordKind")} " +
+                $"state={JsonValueText(row, "state")} links={linked}");
+        }
     }
 
     private static async Task<int> RevokeSessionAsync(CommandOptions options)

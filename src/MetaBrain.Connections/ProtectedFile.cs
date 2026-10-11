@@ -15,6 +15,48 @@ internal static class ProtectedFile
 
     public static PrivateFileContent ReadPrivateFile(string path, string serviceSid, long maximumLength)
     {
+        var ownerSid = AssertPrivateFileAccess(path, serviceSid);
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        if (stream.Length <= 0 || stream.Length > maximumLength)
+        {
+            throw new InvalidDataException("Invalid service settings size.");
+        }
+
+        using var reader = new StreamReader(stream, new System.Text.UTF8Encoding(false, true));
+        return new PrivateFileContent(reader.ReadToEnd(), ownerSid);
+    }
+
+    /// <summary>
+    /// Same restricted-ACL boundary as <see cref="ReadPrivateFile"/>, returning
+    /// the raw file bytes instead of a decoded string. Reading a private file as
+    /// bytes matters at size: a multi-megabyte manifest read as text first
+    /// materializes a UTF-16 string twice the file size (plus the reader's
+    /// growth buffer) before the JSON is even parsed, which is allocation the
+    /// unlocked process never gets back. The bytes feed the JSON reader
+    /// directly, so no intermediate text exists at all.
+    /// </summary>
+    public static byte[] ReadPrivateBytes(string path, string serviceSid, long maximumLength)
+    {
+        AssertPrivateFileAccess(path, serviceSid);
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        if (stream.Length <= 0 || stream.Length > maximumLength)
+        {
+            throw new InvalidDataException("Invalid service settings size.");
+        }
+
+        var bytes = new byte[stream.Length];
+        stream.ReadExactly(bytes);
+        return bytes;
+    }
+
+    /// <summary>
+    /// The one ACL boundary every private read goes through: the file and its
+    /// directory must exist as regular (non-reparse) paths, both must carry a
+    /// protected ACL, and only the owner/service principals plus the file's own
+    /// owner may read. Returns the file owner SID for callers that report it.
+    /// </summary>
+    private static string AssertPrivateFileAccess(string path, string serviceSid)
+    {
         var file = new FileInfo(path);
         if (!file.Exists || (file.Attributes & (FileAttributes.ReparsePoint | FileAttributes.Directory)) != 0)
         {
@@ -42,15 +84,7 @@ internal static class ProtectedFile
             ?? throw new InvalidDataException("The service settings directory has no owner.");
         var directoryTrusted = new HashSet<string>(trusted, StringComparer.Ordinal) { directoryOwner.Value };
         AssertRestrictedAcl(directorySecurity, directoryTrusted);
-
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-        if (stream.Length <= 0 || stream.Length > maximumLength)
-        {
-            throw new InvalidDataException("Invalid service settings size.");
-        }
-
-        using var reader = new StreamReader(stream, new System.Text.UTF8Encoding(false, true));
-        return new PrivateFileContent(reader.ReadToEnd(), fileOwner.Value);
+        return fileOwner.Value;
     }
 
     private static void AssertRestrictedAcl(FileSystemSecurity security, HashSet<string> trustedSids)

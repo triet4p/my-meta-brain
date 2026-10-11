@@ -24,9 +24,10 @@ public sealed record SourceSpan(long Start, long End);
 /// sources live in <see cref="Relations"/>; lifecycle (S2-T5) is delivered,
 /// and owner collection membership plus the permission-filtered agent
 /// collection view (S2-T6, see <see cref="CollectionViewAuthority"/>) are a
-/// projection of the frozen grant snapshot rather than registry data, so the
-/// private index (S2-T7) alone stays pending and none of them is represented
-/// here.
+/// projection of the frozen grant snapshot rather than registry data, and the
+/// private index (S2-T7, see <see cref="Index.PrivateIndexRow"/>) is a
+/// derived projection of these canonical envelopes; none of them is
+/// represented here.
 /// </summary>
 public sealed record RegisteredSourceDraft(
     string? Title,

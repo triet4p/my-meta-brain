@@ -12,9 +12,17 @@ internal sealed class NamedPipeService
     private static readonly JsonSerializerOptions InputOptions = new() { PropertyNameCaseInsensitive = true };
     private static readonly JsonSerializerOptions OutputOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(10);
+    // The frozen D008 budget allows a cold 100,000-record rebuild to take up to
+    // 20 minutes, so the rebuild request cannot share the general 10-second
+    // request bound: a compliant rebuild would be cut off before it could ever
+    // finish. This bound sits above the frozen budget and applies to that one
+    // operation only; every other request keeps the 10-second guard, and the
+    // rebuild still has to complete inside the frozen budget to pass.
+    private static readonly TimeSpan IndexRebuildTimeout = TimeSpan.FromMinutes(25);
     private readonly ServiceSettings _settings;
     private readonly ServiceRequestHandler _handler;
     private readonly VaultLifecycle _vault;
+    private readonly SqlitePrivateIndexStore _privateIndex;
 
     public NamedPipeService(ServiceSettings settings)
     {
@@ -22,7 +30,9 @@ internal sealed class NamedPipeService
         var store = new EncryptedVaultStore(settings.VaultDirectoryPath, settings.OwnerSid);
         _vault = new VaultLifecycle(store);
         var authority = new GrantAuthority(new InMemoryGrantStore());
-        _handler = new ServiceRequestHandler(authority, _vault, new OwnerScopeGrantAuthority(), projections: new FileCatalogProjectionStore(store));
+        _privateIndex = new SqlitePrivateIndexStore();
+        _handler = new ServiceRequestHandler(authority, _vault, new OwnerScopeGrantAuthority(),
+            projections: new FileCatalogProjectionStore(store), privateIndex: _privateIndex);
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -40,6 +50,7 @@ internal sealed class NamedPipeService
         {
             await _vault.LockAsync().ConfigureAwait(false);
             _vault.Dispose();
+            _privateIndex.Dispose();
         }
     }
 
@@ -127,6 +138,11 @@ internal sealed class NamedPipeService
                     return;
                 }
 
+                if (string.Equals(request.Operation, ServiceRequestHandler.OwnerIndexRebuildOperation, StringComparison.Ordinal))
+                {
+                    timeout.CancelAfter(IndexRebuildTimeout);
+                }
+
                 var needsVaultOperation =
                     string.Equals(request.Operation, ServiceRequestHandler.ResourceReadOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.ResourceWriteOperation, StringComparison.Ordinal) ||
@@ -184,7 +200,9 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.LifecycleNotifyOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.LifecycleAcknowledgeOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.LifecycleSetValidityOperation, StringComparison.Ordinal) ||
-                    string.Equals(request.Operation, ServiceRequestHandler.LifecycleRetainRevisionOperation, StringComparison.Ordinal);
+                    string.Equals(request.Operation, ServiceRequestHandler.LifecycleRetainRevisionOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerIndexStatusOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerIndexRebuildOperation, StringComparison.Ordinal);
                 using var operation = needsVaultOperation ? _vault.TryBeginOperation() : null;
                 // Application creates the access context: owner channel gets owner authority,
                 // while the agent channel receives a placeholder agent identity that carries
@@ -192,7 +210,7 @@ internal sealed class NamedPipeService
                 var context = channel == PrincipalKind.Owner
                     ? AuthenticatedContext.ForOwner()
                     : AuthenticatedContext.ForAgent("agent", "pending");
-                var reply = await _handler.HandleAsync(context, request, operation).ConfigureAwait(false);
+                var reply = await _handler.HandleAsync(context, request, operation, timeout.Token).ConfigureAwait(false);
                 await writer.WriteLineAsync(JsonSerializer.Serialize(reply, OutputOptions).AsMemory(), timeout.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (timeout.IsCancellationRequested)
