@@ -32,12 +32,14 @@ internal sealed class NamedPipeService
         _vault = new VaultLifecycle(store);
         var authority = new GrantAuthority(new InMemoryGrantStore());
         _privateIndex = new SqlitePrivateIndexStore();
-        // S3-T1: the registry starts empty (Codex/OMP parsers attach in
-        // S3-T2/S3-T3); the enrolled-source reader is the only source-byte
-        // boundary the coordinator is allowed to use.
+        // S3-T1: the enrolled-source reader is the only source-byte boundary
+        // the coordinator is allowed to use. S3-T2: the shipped service
+        // registers the real Codex session parser, so an enrolled Codex
+        // session is interpreted by the same coordinator contract that refused
+        // unregistered formats in T1.
         _handler = new ServiceRequestHandler(authority, _vault, new OwnerScopeGrantAuthority(),
             projections: new FileCatalogProjectionStore(store), privateIndex: _privateIndex,
-            sourceNormalizers: sourceNormalizers ?? new SourceNormalizerRegistry(),
+            sourceNormalizers: sourceNormalizers ?? SourceNormalizerFactory.CreateShipped(),
             sourceReader: new EnrolledSourceFileReader());
     }
 

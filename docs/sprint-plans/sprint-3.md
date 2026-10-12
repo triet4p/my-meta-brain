@@ -6,7 +6,7 @@ Tiếp nhận Codex/OMP và ghi chú research vào cùng core mà không sửa s
 
 ## Status and Dependencies
 
-- Status: In progress — S3-P0 documentation synchronization PASS và checkpoint complete; S3-T1 đang triển khai. M2 complete, owner xác nhận mọi thay đổi Sprint 2 đã commit. Private-source ingestion chỉ bắt đầu với owner unlock, source allowlist và mẫu được duyệt; locked không private ingestion/refresh.
+- Status: In progress — owner chỉ cho phép thực hiện S3-T2 và đã cho phép chọn Codex sample từ bất cứ project nào; S3-P0 và S3-T1 verification/evidence/checkpoints complete, S3-T3–T6 chưa dispatch, final differential pending. M2 complete, owner xác nhận mọi thay đổi Sprint 2 đã commit. Private-source ingestion chỉ bắt đầu với owner unlock, source allowlist và mẫu được duyệt; locked không private ingestion/refresh.
 - [Global plan](../PLAN.md), [specification](../META-BRAIN.md), [requirements](../REQUIREMENTS.md).
 - Requirements: R16–R19; bảo toàn R04, R06, R10–R12, R33, R36.
 
@@ -32,15 +32,17 @@ Workflow: full route cho S3-P0 và S3-T1–T6 theo project gates. Mỗi task có
 
 ### Capture Tasks
 
-- [~] **S3-T1 — Source enrollment và incremental ingestion coordinator.** Requirements: R16, R17, R18.
+- [x] **S3-T1 — Source enrollment và incremental ingestion coordinator.** Requirements: R16, R17, R18.
     - Scope: allowlist/mapping, encrypted checkpoint/quarantine, idempotence/version dispatch và lock-aware coordinator; không parsing format ở đây.
     - Acceptance: không scan mọi profile; unknown/mixed source không mở transcript; restart/reimport không duplicate, replace/truncate không nối sai generation; unsupported báo rõ. Persisted metadata/events encrypted, locked dừng read/import và resume sau unlock không mất checkpoint.
     - Evidence: owner enroll/revoke một fixture source, incremental restart/replace/partial-read scenarios qua coordinator thật; original bytes và metadata không bị ghi lại.
+    - Outcome: coordinator real-surface smoke accepted; no shipped Codex/OMP normalizers yet. [Worker evidence](../../artifacts/sprint-3/task-1.md), [durable worker handoff](../../artifacts/sprint-3/handoffs/S3-T1-S3T1-IMPL-20261012-A1.md), [evidence PASS and carrier erratum](../../artifacts/sprint-3/reviews/S3-T1-S3T1-REVIEW-20261012-A1.md), [frozen manifest](../../artifacts/sprint-3/reviews/S3-T1-S3T1-REVIEW-20261012-A1.manifest.json), [checkpoint with all-23-path proof](../../artifacts/sprint-3/checkpoints/S3-T1-S3T1-CHECKPOINT-20261012-A1.md); commit `f70cc44aa000144d2aedff48bba9229b2f550537`, no push.
 
-- [ ] **S3-T2 — Adapter Codex JSONL read-only.** Requirements: R16, R17.
+- [~] **S3-T2 — Adapter Codex JSONL read-only.** Requirements: R16, R17.
     - Scope: parse các schema Codex thực được phát hiện từ mẫu owner cho phép; không giả định mọi version cùng format.
     - Acceptance: giữ user/assistant/tool attribution, timestamps, session identity và source spans; append/partial tail/resume đúng; tool result không thành user statement; event không hiểu được báo/giữ trạng thái rõ, không silently drop.
     - Evidence: ingest ít nhất một session Codex thật được cho phép cùng fixtures boundary; so source trước/sau; truy xuất đúng đoạn chứng cứ. Báo schema/version đã hỗ trợ.
+    - Source consent: blocker project-match đã được owner gỡ bằng explicit approval cho bất cứ project nào; T2 chỉ chọn một completed Codex session để schema discovery và encrypted/private ingest. Verification/evidence/checkpoint vẫn pending, không coi timeout auto-selection trước đó là consent.
 
 - [ ] **S3-T3 — Adapter OMP JSONL read-only.** Requirements: R16, R17.
     - Scope: parse schema OMP thực; dùng coordinator chung, không copy pipeline riêng.
@@ -70,12 +72,12 @@ Nhập session Codex/OMP thật được phép và research khi unlocked; append
 
 Cần owner allowlist, không coi nhu cầu sản phẩm là quyền đọc mọi file .codex/.omp. Format không hỗ trợ là lỗi có chẩn đoán, không “best effort success” mất events. Chính sách nguồn không rõ không tự đưa vào shared-engineering.
 
-Owner source consent cho T2/T3: Codex chỉ metadata tối đa 10 session JSONL mới nhất và headers để chọn đúng Meta Brain, sau đó nội dung một completed session của project; OMP chỉ một completed session trong thư mục sessions riêng của Meta Brain. Không đọc OMP project khác hoặc Codex transcript project khác ngoài header chọn mẫu, không whole-profile scan/copy/migration. Chỉ read-only originals, import thử nghiệm encrypted/private, không provider egress hoặc raw transcript trong artifacts; cụ thể các allowed roots theo approval trong routing/consent chat, không public runtime locators/filenames.
+Owner source consent cho T2/T3: T2 Codex được owner cho phép chọn từ bất cứ project nào; giữ phạm vi tối thiểu metadata tối đa 10 candidate mới nhất và đọc body đúng một completed session được chọn, ưu tiên candidate đã xác định. T3 OMP giữ consent trước: chỉ một completed session trong thư mục sessions riêng của Meta Brain, không đọc OMP project khác. Không whole-profile scan/copy/migration; chỉ read-only originals, import thử nghiệm encrypted/private, không provider egress hoặc raw transcript trong artifacts. Allowed roots theo approval trong routing/consent chat; không public runtime locators/filenames.
 
 Runtime process ownership: từ owner steer hiện hành, mỗi Codex/OMP process worker tự start phải có exact handle/job hoặc PID kèm start time/identity; dùng xong end đúng process đã chứng minh ownership, kiểm tra PID reuse nếu stop bằng PID. Không kill theo process name/broad match hoặc dọn process cũ/pre-existing khi không chắc ownership. Worker giữ actual launch/cleanup evidence trong artifact; không suy delivery receipt thành cleanup proof.
 
-Owner yêu cầu pause sau S3-T1: tiếp tục T1 đến đầy đủ verification, evidence PASS và separate Bronze checkpoint, rồi dừng trước S3-T2; không dispatch downstream task hoặc final deep. Main lưu durable pause/handoff state và outcome links tại boundary đã nghiệm thu; chỉ resume chuỗi khi owner yêu cầu tiếp tục.
+Owner pause sau S3-T1 đã được thực hiện tại boundary nghiệm thu. Owner hiện chỉ cho phép resume S3-T2 đến verification, evidence PASS và separate Bronze checkpoint, rồi dừng; không dispatch S3-T3–T6 hoặc final deep. [Main pause handoff](../../artifacts/sprint-3/handoffs/MAIN-S3-after-T1-20261012.md) giữ lịch sử boundary và source consent.
 
 ## Gate Record
 
-S3-P0 evidence PASS và exact-snapshot checkpoint complete, commit `835e440373a9f228e1d296b8952a9dea6072f9e6`; records linked above. S3-T1 in progress; product capture/runtime gate, remaining task reviews/checkpoints và final differential pending. Chưa có private session ingestion nào được nghiệm thu cho Sprint 3.
+S3-P0 và S3-T1 evidence/checkpoints complete; latest commit `f70cc44aa000144d2aedff48bba9229b2f550537` matches the reviewed snapshot, including all-path post-commit content/mode proof and documented Git line-ending normalization. Reviewer report hash-table transcription corrected by append-only carrier erratum; immutable manifest unchanged. S3-T2 resumed theo owner, verification/evidence/checkpoint pending; S3-T3–T6 và final sprint gate chưa được phép dispatch. [Main pause handoff](../../artifacts/sprint-3/handoffs/MAIN-S3-after-T1-20261012.md). Main plan/status carryover được đưa vào scope review/checkpoint S3-T2 nếu xác nhận wholly-owned; no push.

@@ -8,7 +8,7 @@
 4. [Architecture decision log](.agents/memory/decisions.md).
 5. Relevant shared rules/skills dưới đây; đọc nội dung thật, không chỉ dựa vào tên hoặc bản tóm tắt.
 
-Owner-approved CR01/D016 (2026-10-01) thay baseline bằng encrypted personal vault, approved catalog và single-use token/scoped sessions. S1-CLEAN đã xóa obsolete AppContainer/agent/proof source và qua evidence gate. Sprint 1/M1 replacement complete; Sprint 2/M2 complete (owner-confirmed committed); Sprint 3 In progress (S3-P0 complete; S3-T1 source enrollment/ingestion coordinator delivered, worker evidence pending review); Sprint 4–8 Not started; old fixture PASS chỉ lịch sử. Không tự implementation khi user chỉ yêu cầu tài liệu.
+Owner-approved CR01/D016 (2026-10-01) thay baseline bằng encrypted personal vault, approved catalog và single-use token/scoped sessions. S1-CLEAN đã xóa obsolete AppContainer/agent/proof source và qua evidence gate. Sprint 1/M1 replacement complete; Sprint 2/M2 complete (owner-confirmed committed); Sprint 3 In progress (S3-P0 complete; S3-T1 source enrollment/ingestion coordinator accepted with evidence/checkpoint; S3-T2 Codex session JSONL read-only adapter delivered, worker evidence pending review); Sprint 4–8 Not started; old fixture PASS chỉ lịch sử. Không tự implementation khi user chỉ yêu cầu tài liệu.
 
 ## Product Invariants
 
@@ -20,6 +20,7 @@ Owner-approved CR01/D016 (2026-10-01) thay baseline bằng encrypted personal va
 - Zone là boundary quyền, collection là tổ chức, level là mức trừu tượng. Link/membership/hierarchy không tự sinh quyền; tầng cao không tự đúng hơn.
 - Giữ authorship, executor, câu hỏi/giả thuyết/tổng hợp, nguồn và mức bằng chứng riêng. AI output không được đổi nhãn thành user belief khi được lưu.
 - Session .codex/.omp giữ nguyên, import read-only từ allowlist. Không scan/copy/migrate toàn bộ profile vì tiện. Snapshot chỉ opt-in; missing source phải nói rõ.
+- Codex session JSONL (format `codex.session.jsonl` v1) parse read-only qua coordinator S3-T1: attribution chỉ từ khai báo của nguồn (chỉ `message` role `user` là user; tool call thuộc assistant, tool output thuộc tool), mỗi record tạo đúng một event reference-only, record/payload type chưa quan sát hoặc không khớp upstream definition bị từ chối tường minh tại đúng offset — không silent drop, không giả valid, không tool output thành user statement.
 - Canonical encrypted file-first, human-readable sau unlock/explicit export; private index rebuildable, không dual truth. Revision conflict, crash recovery, key/recovery và migrations là chức năng thật, không reset dữ liệu để né cutover.
 - Synthesis liên vùng restrictive mặc định; chỉ owner declassify có preview. Không đưa nội dung/metadata/citation private ra ngoài quyền.
 - Local không đồng nghĩa không egress. Grant phải bao phủ provider/model context; không gọi cloud trên nguồn chưa được cho phép.
