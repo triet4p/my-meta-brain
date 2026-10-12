@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using MetaBrain.Core.Domain;
 using MetaBrain.Core.Index;
 using MetaBrain.Core.Security;
 
@@ -40,7 +41,10 @@ public sealed record ServiceRequest(
     string? AgentId = null,
     string? AgentContext = null,
     string? DisclosureContext = null,
-    string? RequestId = null);
+    string? RequestId = null,
+    string? SourceLocator = null,
+    string? SourceFormat = null,
+    int? SourceFormatVersion = null);
 
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
@@ -211,6 +215,39 @@ public sealed record PrivateIndexRowWire(
     string[] LinkedResourceIds);
 
 /// <summary>
+/// Owner-facing view of one enrollment: mapping, declared format/version for
+/// dispatch, generation and life state. The private locator is deliberately
+/// absent from the wire: the owner supplied it, and it stays inside the
+/// encrypted state.
+/// </summary>
+public sealed record SourceEnrollmentWire(
+    string SourceId,
+    string ZoneId,
+    string Format,
+    int FormatVersion,
+    long Generation,
+    string Life,
+    long AnchorLength,
+    DateTimeOffset EnrolledAtUtc,
+    DateTimeOffset? RevokedAtUtc,
+    SourceQuarantineWire? Quarantine);
+
+public sealed record SourceQuarantineWire(string Reason, string Detail, DateTimeOffset RecordedAtUtc);
+
+/// <summary>
+/// Persisted checkpoint summary for the current generation. No event body,
+/// attribution or span crosses this wire; the owner sees counts and offsets,
+/// and content stays in the encrypted journal.
+/// </summary>
+public sealed record SourceIngestionWire(
+    string SourceId,
+    long JournalRevision,
+    long ConsumedOffset,
+    int EventCount,
+    int DiagnosticCount,
+    DateTimeOffset? LastIngestAtUtc);
+
+/// <summary>
 /// Owner-only private-index state. <see cref="Rows"/> is a bounded sample of
 /// the materialized generation (<see cref="RowCount"/> is the true total) so a
 /// large vault cannot grow a pipe reply without limit; <see cref="Stale"/>
@@ -262,7 +299,9 @@ public sealed record ServiceReply(
     RelationWire? Relation = null,
     LifecycleWire? Lifecycle = null,
     LifecycleRevisionWire? RetainedRevision = null,
-    PrivateIndexWire? PrivateIndex = null);
+    PrivateIndexWire? PrivateIndex = null,
+    SourceEnrollmentWire? SourceEnrollment = null,
+    SourceIngestionWire? SourceIngestion = null);
 
 
 public sealed class ServiceRequestHandler
@@ -330,6 +369,10 @@ public sealed class ServiceRequestHandler
     public const string LifecycleRetainRevisionOperation = "lifecycle.retain";
     public const string OwnerIndexStatusOperation = "owner.index.status";
     public const string OwnerIndexRebuildOperation = "owner.index.rebuild";
+    public const string SourceEnrollOperation = "source.enroll";
+    public const string SourceRevokeOperation = "source.revoke";
+    public const string SourceStatusOperation = "source.status";
+    public const string SourceIngestOperation = "source.ingest";
 
     /// <summary>
     /// Owner-grantable agent operation that authorizes creating one link
@@ -347,6 +390,7 @@ public sealed class ServiceRequestHandler
     private readonly ICatalogProjectionStore? _projections;
     private readonly PrivateIndexAuthority _privateIndex;
     private readonly IPrivateIndexStore? _privateIndexStore;
+    private readonly SourceIngestionCoordinator? _sourceIngestion;
     private PrivateIndexSnapshot? _privateIndexMaterialized;
 
     public ServiceRequestHandler(
@@ -356,7 +400,9 @@ public sealed class ServiceRequestHandler
         AgentSessionAuthority? agentSessions = null,
         OwnerCatalogAuthority? ownerCatalog = null,
         ICatalogProjectionStore? projections = null,
-        IPrivateIndexStore? privateIndex = null)
+        IPrivateIndexStore? privateIndex = null,
+        SourceNormalizerRegistry? sourceNormalizers = null,
+        ISourceSnapshotReader? sourceReader = null)
     {
         _grantAuthority = grantAuthority ?? throw new ArgumentNullException(nameof(grantAuthority));
         _vault = vault ?? throw new ArgumentNullException(nameof(vault));
@@ -366,6 +412,15 @@ public sealed class ServiceRequestHandler
         _projections = projections;
         _privateIndex = new PrivateIndexAuthority();
         _privateIndexStore = privateIndex;
+        // S3-T1 source enrollment/ingestion. The registry ships empty (real
+        // Codex/OMP parsers attach in S3-T2/S3-T3); without both a registry
+        // and a reader the owner operations fail closed instead of serving a
+        // coordinator that cannot honor its explicit-diagnostics contract.
+        if (sourceNormalizers is not null && sourceReader is not null)
+        {
+            _sourceIngestion = new SourceIngestionCoordinator(
+                new SourceEnrollmentAuthority(), sourceNormalizers, sourceReader);
+        }
     }
 
     public async Task<ServiceReply> HandleAsync(
@@ -582,6 +637,14 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, OwnerIndexRebuildOperation, StringComparison.Ordinal))
         {
             return HandleIndexRebuild(context, request, operation, cancellationToken);
+        }
+
+        if (string.Equals(request.Operation, SourceEnrollOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceRevokeOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceStatusOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceIngestOperation, StringComparison.Ordinal))
+        {
+            return HandleSourceIngestionCommand(context, request, operation, cancellationToken);
         }
 
         if (string.Equals(request.Operation, OwnerSessionRevokeOperation, StringComparison.Ordinal))
@@ -1009,6 +1072,242 @@ public sealed class ServiceRequestHandler
             return Error("forbidden");
         }
     }
+
+    /// <summary>
+    /// S3-T1 owner source enrollment and incremental ingestion coordinator:
+    /// enroll, revoke, status and ingest. Every path is owner-only and needs an
+    /// unlocked operation; the agent channel never reaches these operations
+    /// (the transport allowlist refuses them), so no agent can enroll a
+    /// source, trigger ingestion or mint any grant. Enrollments change no
+    /// grant state: the coordinator writes only the encrypted enrollment
+    /// state and per-generation journals, so an approved snapshot stays
+    /// frozen and no source API authority widens item grants.
+    /// </summary>
+    private ServiceReply HandleSourceIngestionCommand(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation,
+        CancellationToken cancellationToken)
+    {
+        if (_sourceIngestion is null)
+        {
+            return Error("source_ingest_unavailable");
+        }
+
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (string.Equals(request.Operation, SourceEnrollOperation, StringComparison.Ordinal))
+        {
+            if (HasSourceEnrollExtras(request) ||
+                string.IsNullOrEmpty(request.ResourceId) || string.IsNullOrEmpty(request.ZoneId) ||
+                string.IsNullOrEmpty(request.SourceLocator) || string.IsNullOrEmpty(request.SourceFormat) ||
+                request.SourceFormatVersion is not { } formatVersion || formatVersion < 1)
+            {
+                return Error("invalid_request");
+            }
+
+            try
+            {
+                var enrolled = _sourceIngestion.Enroll(context, request.ResourceId, request.ZoneId,
+                    request.SourceLocator, request.SourceFormat, formatVersion, operation);
+                return new ServiceReply(CurrentProtocolVersion, "source_enrolled", "owner", null,
+                    SourceEnrollment: ToSourceEnrollmentWire(enrolled, SourceEnrollmentLife.Enrolled, null));
+            }
+            catch (ArgumentException)
+            {
+                return Error("invalid_request");
+            }
+            catch (SourceOperationException ex)
+            {
+                return Error(ex.Code);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Error("forbidden");
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException)
+            {
+                return Error("source_state_unavailable");
+            }
+        }
+
+        if (string.Equals(request.Operation, SourceRevokeOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceStatusOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceIngestOperation, StringComparison.Ordinal))
+        {
+            if (HasSourceCommandExtras(request) || string.IsNullOrEmpty(request.ResourceId))
+            {
+                return Error("invalid_request");
+            }
+
+            try
+            {
+                if (string.Equals(request.Operation, SourceRevokeOperation, StringComparison.Ordinal))
+                {
+                    var revoked = _sourceIngestion.Revoke(context, request.ResourceId, operation);
+                    return new ServiceReply(CurrentProtocolVersion, "source_revoked", "owner", null,
+                        SourceEnrollment: ToSourceEnrollmentWire(revoked, SourceEnrollmentLife.Revoked, null));
+                }
+
+                if (string.Equals(request.Operation, SourceStatusOperation, StringComparison.Ordinal))
+                {
+                    var status = _sourceIngestion.Status(context, request.ResourceId, operation);
+                    return new ServiceReply(CurrentProtocolVersion, "source_status", "owner", null,
+                        SourceEnrollment: ToSourceEnrollmentWire(status),
+                        SourceIngestion: new SourceIngestionWire(
+                            status.SourceId,
+                            status.JournalRevision,
+                            status.ConsumedOffset,
+                            status.EventCount,
+                            status.DiagnosticCount,
+                            status.LastIngestAtUtc));
+                }
+
+                var outcome = _sourceIngestion.Ingest(context, request.ResourceId, operation, cancellationToken);
+                // Completed runs (advanced/idle/partial/unsupported diagnostics)
+                // reply with a status; refusals and failure modes reply with an
+                // explicit error code, matching the service's error convention.
+                var outcomeStatus = outcome.Kind switch
+                {
+                    SourceIngestionOutcomeKind.Advanced => "ingest_advanced",
+                    SourceIngestionOutcomeKind.Idle => "ingest_idle",
+                    SourceIngestionOutcomeKind.PartialPending => "ingest_partial_pending",
+                    SourceIngestionOutcomeKind.UnsupportedFormat => "ingest_unsupported_format",
+                    SourceIngestionOutcomeKind.UnsupportedRecord => "ingest_unsupported_record",
+                    SourceIngestionOutcomeKind.NotEnrolled => "source_not_enrolled",
+                    SourceIngestionOutcomeKind.Revoked => "source_revoked",
+                    SourceIngestionOutcomeKind.MixedQuarantined => "source_mixed_quarantined",
+                    SourceIngestionOutcomeKind.GenerationChanged => "source_generation_changed",
+                    SourceIngestionOutcomeKind.SourceUnreadable => "source_unreadable",
+                    SourceIngestionOutcomeKind.SourceTooLarge => "source_too_large",
+                    SourceIngestionOutcomeKind.JournalLimit => "source_journal_limit",
+                    SourceIngestionOutcomeKind.JournalConflict => "source_journal_conflict",
+                    _ => "source_ingest_rejected"
+                };
+
+                // The reply names the enrolled format/version beside the
+                // outcome, so an unsupported dispatch carries its reason
+                // without any source content.
+                SourceEnrollmentWire? enrollmentWire = null;
+                SourceIngestionWire? journalWire = null;
+                try
+                {
+                    var current = _sourceIngestion.Status(context, request.ResourceId, operation);
+                    enrollmentWire = ToSourceEnrollmentWire(current);
+                    journalWire = new SourceIngestionWire(
+                        current.SourceId,
+                        current.JournalRevision,
+                        current.ConsumedOffset,
+                        current.EventCount,
+                        current.DiagnosticCount,
+                        current.LastIngestAtUtc);
+                }
+                catch (SourceOperationException)
+                {
+                    // The source is no longer enrolled (revoked concurrently):
+                    // the ingest outcome already names the refusal.
+                }
+
+                if (outcome.Kind is SourceIngestionOutcomeKind.NotEnrolled or
+                    SourceIngestionOutcomeKind.Revoked or
+                    SourceIngestionOutcomeKind.MixedQuarantined or
+                    SourceIngestionOutcomeKind.GenerationChanged or
+                    SourceIngestionOutcomeKind.SourceUnreadable or
+                    SourceIngestionOutcomeKind.SourceTooLarge or
+                    SourceIngestionOutcomeKind.JournalLimit or
+                    SourceIngestionOutcomeKind.JournalConflict)
+                {
+                    return Error(outcomeStatus);
+                }
+
+                return new ServiceReply(CurrentProtocolVersion, outcomeStatus, "owner", null,
+                    SourceEnrollment: enrollmentWire, SourceIngestion: journalWire);
+            }
+            catch (ArgumentException)
+            {
+                return Error("invalid_request");
+            }
+            catch (SourceOperationException ex)
+            {
+                return Error(ex.Code);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Error("forbidden");
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException)
+            {
+                return Error("source_state_unavailable");
+            }
+        }
+
+        return Error("invalid_request");
+    }
+
+    private static SourceEnrollmentWire ToSourceEnrollmentWire(SourceEnrollmentStatus status) => new(
+        status.SourceId,
+        status.ZoneId,
+        status.Format,
+        status.FormatVersion,
+        status.Generation,
+        status.Life switch
+        {
+            SourceEnrollmentLife.Revoked => "revoked",
+            SourceEnrollmentLife.Quarantined => "quarantined",
+            _ => "enrolled"
+        },
+        status.AnchorLength,
+        status.EnrolledAtUtc,
+        status.RevokedAtUtc,
+        status.Quarantine is { } quarantine
+            ? new SourceQuarantineWire(
+                quarantine.Reason switch
+                {
+                    SourceQuarantineReason.GenerationTruncated => "generation_truncated",
+                    SourceQuarantineReason.GenerationReplaced => "generation_replaced",
+                    _ => "mixed_locator"
+                },
+                quarantine.Detail,
+                quarantine.RecordedAtUtc)
+            : null);
+
+    private static SourceEnrollmentWire ToSourceEnrollmentWire(
+        EnrolledSource enrolled,
+        SourceEnrollmentLife life,
+        SourceQuarantineRecord? quarantine) => new(
+        enrolled.SourceId,
+        enrolled.ZoneId,
+        enrolled.Format,
+        enrolled.FormatVersion,
+        enrolled.Generation,
+        life switch
+        {
+            SourceEnrollmentLife.Revoked => "revoked",
+            SourceEnrollmentLife.Quarantined => "quarantined",
+            _ => "enrolled"
+        },
+        enrolled.AnchorLength,
+        enrolled.EnrolledAtUtc,
+        enrolled.RevokedAtUtc,
+        quarantine is null
+            ? null
+            : new SourceQuarantineWire(
+                quarantine.Reason switch
+                {
+                    SourceQuarantineReason.GenerationTruncated => "generation_truncated",
+                    SourceQuarantineReason.GenerationReplaced => "generation_replaced",
+                    _ => "mixed_locator"
+                },
+                quarantine.Detail,
+                quarantine.RecordedAtUtc));
 
     /// <summary>
     /// S2-T4 owner relation store: create-only over the shared encrypted
@@ -3207,6 +3506,56 @@ public sealed class ServiceRequestHandler
         request.Purpose is not null || request.AgentId is not null ||
         request.AgentContext is not null || request.DisclosureContext is not null ||
         request.RequestId is not null || request.ZoneId is not null;
+
+    /// <summary>
+    /// S3-T1 enrollment carries only the source ID, zone, locator, format and
+    /// format version. Every other field — credentials, content, scope,
+    /// session, catalog, cost and request fields — is refused, so a body can
+    /// never steer enrollment toward another zone or reuse a token flow.
+    /// </summary>
+    private static bool HasSourceEnrollExtras(ServiceRequest request) =>
+        request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ContentBase64 is not null || request.ResourceIds is not null ||
+        request.Operations is not null || request.DestinationResourceIds is not null ||
+        request.ExpiresAtUtc is not null || request.Provider is not null ||
+        request.Model is not null || request.MaximumCostUsd is not null ||
+        request.PreviewId is not null || request.CollectionId is not null ||
+        request.Token is not null || request.SessionToken is not null ||
+        request.SessionId is not null || request.AccessOperation is not null ||
+        request.ResourceRevision is not null || request.DestinationResourceId is not null ||
+        request.DestinationRevision is not null || request.EstimatedCostUsd is not null ||
+        request.InputTokens is not null || request.OutputTokens is not null ||
+        request.CatalogId is not null || request.Label is not null ||
+        request.Description is not null || request.Query is not null ||
+        request.CatalogIds is not null || request.Purpose is not null ||
+        request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null;
+
+    /// <summary>
+    /// S3-T1 revoke/status/ingest carry only the source ID: the zone,
+    /// locator, format and version come from the encrypted enrollment state,
+    /// so a request body can never re-map or re-point a source.
+    /// </summary>
+    private static bool HasSourceCommandExtras(ServiceRequest request) =>
+        request.ZoneId is not null || request.Passphrase is not null ||
+        request.RecoveryCode is not null || request.ContentBase64 is not null ||
+        request.ResourceIds is not null || request.Operations is not null ||
+        request.DestinationResourceIds is not null || request.ExpiresAtUtc is not null ||
+        request.Provider is not null || request.Model is not null ||
+        request.MaximumCostUsd is not null || request.PreviewId is not null ||
+        request.CollectionId is not null || request.Token is not null ||
+        request.SessionToken is not null || request.SessionId is not null ||
+        request.AccessOperation is not null || request.ResourceRevision is not null ||
+        request.DestinationResourceId is not null || request.DestinationRevision is not null ||
+        request.EstimatedCostUsd is not null || request.InputTokens is not null ||
+        request.OutputTokens is not null || request.CatalogId is not null ||
+        request.Label is not null || request.Description is not null ||
+        request.Query is not null || request.CatalogIds is not null ||
+        request.Purpose is not null || request.AgentId is not null ||
+        request.AgentContext is not null || request.DisclosureContext is not null ||
+        request.RequestId is not null || request.SourceLocator is not null ||
+        request.SourceFormat is not null || request.SourceFormatVersion is not null;
+
     private static bool HasAgentAccessRequestFields(ServiceRequest request, bool forStatus) =>
         request.ZoneId is not null ||
         request.Passphrase is not null || request.RecoveryCode is not null ||

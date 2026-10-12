@@ -598,6 +598,15 @@ internal static class DomainIdentifiers
     /// </summary>
     public const string ArchiveIdPrefix = "arc-";
 
+    /// <summary>
+    /// Reserved resource-ID prefix for an S3-T1 source-ingestion journal: the
+    /// durable per-source (checkpoint, normalized events) pair. Journals are
+    /// derived ingestion state, and the reserved prefix keeps them enumerable
+    /// from the encrypted manifest while preventing an item or registered
+    /// source ID from colliding with one.
+    /// </summary>
+    public const string IngestIdPrefix = "ingest-";
+
     public static bool IsSafeIdentifier(string? value)
     {
         if (string.IsNullOrEmpty(value) || value.Length > 128 || !IsAsciiAlphaNumeric(value[0]))
@@ -628,13 +637,15 @@ internal static class DomainIdentifiers
 
     /// <summary>
     /// An identifier that names a memory item or a registered source: never a
-    /// relation, a lifecycle record, or a retained revision.
+    /// relation, a lifecycle record, a retained revision, or an ingestion
+    /// journal.
     /// </summary>
     public static bool IsDomainIdentifier(string? value) =>
         IsSafeIdentifier(value) &&
         !value!.StartsWith(RelationIdPrefix, StringComparison.Ordinal) &&
         !value.StartsWith(LifecycleIdPrefix, StringComparison.Ordinal) &&
-        !value.StartsWith(ArchiveIdPrefix, StringComparison.Ordinal);
+        !value.StartsWith(ArchiveIdPrefix, StringComparison.Ordinal) &&
+        !value.StartsWith(IngestIdPrefix, StringComparison.Ordinal);
 
     /// <summary>
     /// Lifecycle record ID derived from its subject: the ID is never chosen by

@@ -1,3 +1,11 @@
+using System.Runtime.CompilerServices;
+
+// S3-T1: the smoke project is the repository's permanent regression suite; it
+// hosts the real service stack in-process to prove the valid incremental path
+// with a nonshipping synthetic normalizer (no test code ships in the product
+// binaries).
+[assembly: InternalsVisibleTo("MetaBrain.S1T4.Smoke")]
+
 namespace MetaBrain.Connections;
 
 internal static class Program
@@ -62,7 +70,7 @@ internal static class Program
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Commands: serve-console --config <owner-settings>; serve-service --config <owner-settings>; agent-mcp --agent-pipe <name> (scoped reads return the approved body in memory, no output file); owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|lifecycle-create|lifecycle-read|lifecycle-retained-read|lifecycle-publish|lifecycle-reject|lifecycle-withdraw|lifecycle-repropose|lifecycle-question-resolve|lifecycle-question-reopen|lifecycle-intention-complete|lifecycle-intention-cancel|lifecycle-intention-supersede|lifecycle-intention-notify|lifecycle-intention-acknowledge|lifecycle-validity-set|lifecycle-retain|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|catalog-query|agent-catalog-list|request|request-status|request-preview|request-approve|request-reject|session|agent-collection-view|redeem|sessions|revoke-session|authorize|index-status|index-rebuild|migrate}");
+        Console.Error.WriteLine("Commands: serve-console --config <owner-settings>; serve-service --config <owner-settings>; agent-mcp --agent-pipe <name> (scoped reads return the approved body in memory, no output file); owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|source-enroll --source-id --zone-id --format --format-version --input-file|source-revoke --source-id|source-status --source-id|source-ingest --source-id|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|lifecycle-create|lifecycle-read|lifecycle-retained-read|lifecycle-publish|lifecycle-reject|lifecycle-withdraw|lifecycle-repropose|lifecycle-question-resolve|lifecycle-question-reopen|lifecycle-intention-complete|lifecycle-intention-cancel|lifecycle-intention-supersede|lifecycle-intention-notify|lifecycle-intention-acknowledge|lifecycle-validity-set|lifecycle-retain|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|catalog-query|agent-catalog-list|request|request-status|request-preview|request-approve|request-reject|session|agent-collection-view|redeem|sessions|revoke-session|authorize|index-status|index-rebuild|migrate}");
         return 2;
     }
 }

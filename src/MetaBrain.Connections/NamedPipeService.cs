@@ -3,6 +3,7 @@ using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using MetaBrain.Application;
+using MetaBrain.Core.Domain;
 using MetaBrain.Core.Security;
 
 namespace MetaBrain.Connections;
@@ -24,15 +25,20 @@ internal sealed class NamedPipeService
     private readonly VaultLifecycle _vault;
     private readonly SqlitePrivateIndexStore _privateIndex;
 
-    public NamedPipeService(ServiceSettings settings)
+    public NamedPipeService(ServiceSettings settings, SourceNormalizerRegistry? sourceNormalizers = null)
     {
         _settings = settings;
         var store = new EncryptedVaultStore(settings.VaultDirectoryPath, settings.OwnerSid);
         _vault = new VaultLifecycle(store);
         var authority = new GrantAuthority(new InMemoryGrantStore());
         _privateIndex = new SqlitePrivateIndexStore();
+        // S3-T1: the registry starts empty (Codex/OMP parsers attach in
+        // S3-T2/S3-T3); the enrolled-source reader is the only source-byte
+        // boundary the coordinator is allowed to use.
         _handler = new ServiceRequestHandler(authority, _vault, new OwnerScopeGrantAuthority(),
-            projections: new FileCatalogProjectionStore(store), privateIndex: _privateIndex);
+            projections: new FileCatalogProjectionStore(store), privateIndex: _privateIndex,
+            sourceNormalizers: sourceNormalizers ?? new SourceNormalizerRegistry(),
+            sourceReader: new EnrolledSourceFileReader());
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -202,7 +208,11 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.LifecycleSetValidityOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.LifecycleRetainRevisionOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerIndexStatusOperation, StringComparison.Ordinal) ||
-                    string.Equals(request.Operation, ServiceRequestHandler.OwnerIndexRebuildOperation, StringComparison.Ordinal);
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerIndexRebuildOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceEnrollOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceRevokeOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceStatusOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceIngestOperation, StringComparison.Ordinal);
                 using var operation = needsVaultOperation ? _vault.TryBeginOperation() : null;
                 // Application creates the access context: owner channel gets owner authority,
                 // while the agent channel receives a placeholder agent identity that carries

@@ -34,6 +34,10 @@ internal static class OwnerControlCli
                 "source-create" => await SourceCreateAsync(options).ConfigureAwait(false),
                 "source-revise" => await SourceReviseAsync(options).ConfigureAwait(false),
                 "source-read" => await SourceReadAsync(options).ConfigureAwait(false),
+                "source-enroll" => await SourceEnrollAsync(options).ConfigureAwait(false),
+                "source-revoke" => await SourceRevokeAsync(options).ConfigureAwait(false),
+                "source-status" => await SourceStatusAsync(options).ConfigureAwait(false),
+                "source-ingest" => await SourceIngestAsync(options).ConfigureAwait(false),
                 "relation-create" => await RelationCreateAsync(options).ConfigureAwait(false),
                 "relation-accept" => await RelationAcceptAsync(options).ConfigureAwait(false),
                 "relation-reject" => await RelationRejectAsync(options).ConfigureAwait(false),
@@ -621,6 +625,195 @@ internal static class OwnerControlCli
         }
 
         Console.WriteLine($"locator={JsonValueText(source, "locator")} version={JsonValueText(source, "version")}");
+    }
+
+    private const int MaximumSourceEnrollmentRequestBytes = 8 * 1024;
+
+    /// <summary>
+    /// Reads the enrollment request file. The private locator travels in a
+    /// file, never in command arguments, and is never echoed: the enrollment
+    /// reply names the mapping without the locator.
+    /// </summary>
+    private static async Task<string> ReadSourceEnrollmentLocatorAsync(string path)
+    {
+        var content = await File.ReadAllBytesAsync(path).ConfigureAwait(false);
+        try
+        {
+            if (content.Length is <= 0 or > MaximumSourceEnrollmentRequestBytes)
+            {
+                throw new ArgumentException("The source enrollment request file is invalid.");
+            }
+
+            return ParseSourceEnrollmentLocator(content);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(content);
+        }
+    }
+
+    private static string ParseSourceEnrollmentLocator(byte[] content)
+    {
+        string? locator;
+        try
+        {
+            using var document = JsonDocument.Parse(content);
+            locator = document.RootElement.TryGetProperty("locator", out var value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
+        }
+        catch (JsonException ex)
+        {
+            throw new ArgumentException("The source enrollment request file is invalid.", ex);
+        }
+
+        if (string.IsNullOrWhiteSpace(locator) || locator.Any(char.IsControl) || locator.Length > 4096)
+        {
+            throw new ArgumentException("The source enrollment request file is invalid.");
+        }
+
+        return locator;
+    }
+
+    private static async Task<int> SourceEnrollAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--source-id", "--zone-id", "--format", "--format-version", "--input-file");
+        var controlPipe = ControlPipe(options);
+        var sourceId = options.Required("--source-id");
+        var zoneId = options.Required("--zone-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(sourceId) || !ServiceSettingsLoader.IsSafeIdentifier(zoneId))
+        {
+            return Usage();
+        }
+
+        var format = options.Required("--format");
+        if (!long.TryParse(options.Required("--format-version"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var formatVersion) ||
+            formatVersion is < 1 or > 1_000_000)
+        {
+            return Usage();
+        }
+
+        var locator = await ReadSourceEnrollmentLocatorAsync(options.Required("--input-file")).ConfigureAwait(false);
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.SourceEnrollOperation,
+                ResourceId: sourceId, ZoneId: zoneId, SourceLocator: locator, SourceFormat: format,
+                SourceFormatVersion: (int)formatVersion)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "source_enrolled"))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        PrintSourceEnrollment(result.Reply);
+        return 0;
+    }
+
+    private static async Task<int> SourceRevokeAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--source-id");
+        var controlPipe = ControlPipe(options);
+        var sourceId = options.Required("--source-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(sourceId))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.SourceRevokeOperation,
+                ResourceId: sourceId)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "source_revoked"))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        PrintSourceEnrollment(result.Reply);
+        return 0;
+    }
+
+    private static async Task<int> SourceStatusAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--source-id");
+        var controlPipe = ControlPipe(options);
+        var sourceId = options.Required("--source-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(sourceId))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.SourceStatusOperation,
+                ResourceId: sourceId)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "source_status"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintSourceEnrollment(result.Reply);
+        PrintSourceIngestion(result.Reply);
+        return 0;
+    }
+
+    private static async Task<int> SourceIngestAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--source-id");
+        var controlPipe = ControlPipe(options);
+        var sourceId = options.Required("--source-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(sourceId))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.SourceIngestOperation,
+                ResourceId: sourceId)).ConfigureAwait(false);
+        if (!result.Success || !HasIngestResult(result.Reply))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        Console.WriteLine($"SOURCE INGEST status={JsonValueText(result.Reply, "status")}");
+        PrintSourceEnrollment(result.Reply);
+        PrintSourceIngestion(result.Reply);
+        return 0;
+    }
+
+    /// <summary>
+    /// A successful ingest reply carries a status; every refusal (not
+    /// enrolled, revoked, quarantined, generation change, unreadable, limits)
+    /// is an error reply and must surface as a failing command.
+    /// </summary>
+    private static bool HasIngestResult(JsonElement reply) =>
+        reply.ValueKind == JsonValueKind.Object &&
+        reply.TryGetProperty("status", out var status) &&
+        status.ValueKind == JsonValueKind.String &&
+        !string.IsNullOrEmpty(status.GetString()) &&
+        !(reply.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String);
+
+    private static void PrintSourceEnrollment(JsonElement reply)
+    {
+        if (!reply.TryGetProperty("sourceEnrollment", out var enrollment) || enrollment.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        Console.WriteLine($"SOURCE id={JsonValueText(enrollment, "sourceId")} zone={JsonValueText(enrollment, "zoneId")} format={JsonValueText(enrollment, "format")} version={JsonValueText(enrollment, "formatVersion")} generation={JsonValueText(enrollment, "generation")} life={JsonValueText(enrollment, "life")} anchorLength={JsonValueText(enrollment, "anchorLength")} enrolledUtc={JsonValueText(enrollment, "enrolledAtUtc")}");
+        if (enrollment.TryGetProperty("quarantine", out var quarantine) && quarantine.ValueKind == JsonValueKind.Object)
+        {
+            Console.WriteLine($"quarantine={JsonValueText(quarantine, "reason")} detail={JsonValueText(quarantine, "detail")} recordedUtc={JsonValueText(quarantine, "recordedAtUtc")}");
+        }
+    }
+
+    private static void PrintSourceIngestion(JsonElement reply)
+    {
+        if (!reply.TryGetProperty("sourceIngestion", out var journal) || journal.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        Console.WriteLine($"checkpoint consumedOffset={JsonValueText(journal, "consumedOffset")} journalRevision={JsonValueText(journal, "journalRevision")} events={JsonValueText(journal, "eventCount")} diagnostics={JsonValueText(journal, "diagnosticCount")} lastIngestUtc={JsonValueText(journal, "lastIngestUtc")}");
     }
 
     private static async Task<int> RelationCreateAsync(CommandOptions options)
@@ -2550,7 +2743,7 @@ internal static class OwnerControlCli
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|lifecycle-create|lifecycle-read|lifecycle-retained-read --resource-revision|lifecycle-publish --expected-revision|lifecycle-reject --expected-revision|lifecycle-withdraw --expected-revision|lifecycle-repropose --expected-revision|lifecycle-question-resolve --expected-revision|lifecycle-question-reopen --expected-revision|lifecycle-intention-complete --expected-revision|lifecycle-intention-cancel --expected-revision|lifecycle-intention-supersede --expected-revision|lifecycle-intention-notify --expected-revision|lifecycle-intention-acknowledge --expected-revision|lifecycle-validity-set --expected-revision|lifecycle-retain --expected-revision|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read|agent-collection-view}; lifecycle --resource-id is the subject item ID; relation/lifecycle transitions need --expected-revision and an optional --input-file draft");
+        Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|source-enroll --source-id --zone-id --format --format-version --input-file|source-revoke --source-id|source-status --source-id|source-ingest --source-id|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|lifecycle-create|lifecycle-read|lifecycle-retained-read --resource-revision|lifecycle-publish --expected-revision|lifecycle-reject --expected-revision|lifecycle-withdraw --expected-revision|lifecycle-repropose --expected-revision|lifecycle-question-resolve --expected-revision|lifecycle-question-reopen --expected-revision|lifecycle-intention-complete --expected-revision|lifecycle-intention-cancel --expected-revision|lifecycle-intention-supersede --expected-revision|lifecycle-intention-notify --expected-revision|lifecycle-intention-acknowledge --expected-revision|lifecycle-validity-set --expected-revision|lifecycle-retain --expected-revision|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read|agent-collection-view}; lifecycle --resource-id is the subject item ID; relation/lifecycle transitions need --expected-revision and an optional --input-file draft; source-enroll's --input-file is a JSON object holding the private locator ({\"locator\": \"C:/exact/path\"}), never a command argument");
         return 2;
     }
 

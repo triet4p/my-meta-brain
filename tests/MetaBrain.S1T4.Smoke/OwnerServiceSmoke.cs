@@ -1331,7 +1331,7 @@ internal sealed class SmokeFixture : IDisposable
         DeleteOwnedRoot(Root);
     }
 
-    private static void SetRestrictedDirectoryAcl(string path, SecurityIdentifier ownerSid)
+    internal static void SetRestrictedDirectoryAcl(string path, SecurityIdentifier ownerSid)
     {
         var security = new DirectorySecurity();
         security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
@@ -1346,7 +1346,7 @@ internal sealed class SmokeFixture : IDisposable
         System.IO.FileSystemAclExtensions.SetAccessControl(new DirectoryInfo(path), security);
     }
 
-    private static void SetRestrictedFileAcl(string path, SecurityIdentifier ownerSid)
+    internal static void SetRestrictedFileAcl(string path, SecurityIdentifier ownerSid)
     {
         var security = new FileSecurity();
         security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);

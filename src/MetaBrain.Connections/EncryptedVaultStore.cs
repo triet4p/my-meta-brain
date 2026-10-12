@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
+using MetaBrain.Core.Domain;
 using MetaBrain.Core.Security;
 
 namespace MetaBrain.Connections;
@@ -46,6 +47,8 @@ internal sealed class EncryptedVaultStore
     private const int MaximumScopeGrantEnvelopeBytes = 6 * 1024 * 1024;
     private const int MaximumCatalogBytes = 512 * 1024;
     private const int MaximumCatalogEnvelopeBytes = 768 * 1024;
+    private const int MaximumSourceEnrollmentBytes = SourceIngestionLimits.MaximumSourceStateBytes;
+    private const int MaximumSourceEnrollmentEnvelopeBytes = SourceIngestionLimits.MaximumSourceStateBytes + (256 * 1024);
     private const int MaximumProjectionBytes = 1024 * 1024;
     private const int MaximumResourceBytes = 1024 * 1024;
     private const int KeyBytes = 32;
@@ -69,6 +72,7 @@ internal sealed class EncryptedVaultStore
     private readonly string _resourcesPath;
     private readonly string _scopeGrantsPath;
     private readonly string _catalogPath;
+    private readonly string _sourceEnrollmentPath;
     private readonly string _projectionPath;
 
     private sealed record KeyWrapper(int KdfIterations, string Salt, string Nonce, string Ciphertext, string Tag);
@@ -90,6 +94,7 @@ internal sealed class EncryptedVaultStore
         _resourcesPath = Path.Combine(_root, "resources");
         _scopeGrantsPath = Path.Combine(_root, "scope-grants.enc");
         _catalogPath = Path.Combine(_root, "owner-catalog.enc");
+        _sourceEnrollmentPath = Path.Combine(_root, "source-enrollment.enc");
         _projectionPath = Path.Combine(_serviceDirectory, "published-catalog.json");
     }
 
@@ -402,6 +407,98 @@ internal sealed class EncryptedVaultStore
             var envelope = EncryptPayload(plaintext, dataKey, associatedData);
             envelopeBytes = JsonSerializer.SerializeToUtf8Bytes(envelope, JsonOptions);
             AtomicWrite(_catalogPath, envelopeBytes);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(plaintext);
+            CryptographicOperations.ZeroMemory(associatedData);
+            if (envelopeBytes is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(envelopeBytes);
+            }
+        }
+    }
+
+    /// <summary>
+    /// S3-T1 owner source enrollment state (allowlist + quarantine). Same
+    /// dedicated-file pattern as the scope-grant and catalog states: bound to
+    /// the vault and schema, written atomically, never a resource envelope and
+    /// never part of the approved catalog.
+    /// </summary>
+    public SourceEnrollmentState LoadSourceEnrollmentState(VaultManifest manifest, ReadOnlySpan<byte> dataKey)
+    {
+        FileAttributes attributes;
+        try
+        {
+            attributes = File.GetAttributes(_sourceEnrollmentPath);
+        }
+        catch (FileNotFoundException)
+        {
+            return SourceEnrollmentState.Empty;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return SourceEnrollmentState.Empty;
+        }
+
+        if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+        {
+            throw new InvalidDataException("The encrypted source enrollment state must be a regular file.");
+        }
+
+        byte[]? associatedData = null;
+        byte[]? plaintext = null;
+        try
+        {
+            var json = ProtectedFile.ReadPrivateFile(_sourceEnrollmentPath, _ownerSid, MaximumSourceEnrollmentEnvelopeBytes).Text;
+            var envelope = JsonSerializer.Deserialize<EncryptedPayload>(json, JsonOptions)
+                ?? throw new InvalidDataException("Invalid encrypted source enrollment envelope.");
+            associatedData = ResourceAssociatedData(
+                manifest.VaultId, "source-enrollment", SourceEnrollmentState.CurrentSchemaVersion, 1);
+            plaintext = DecryptPayload(
+                envelope, dataKey, associatedData, SourceEnrollmentState.CurrentSchemaVersion, 1, MaximumSourceEnrollmentBytes);
+            return JsonSerializer.Deserialize<SourceEnrollmentState>(plaintext, JsonOptions)
+                ?? throw new InvalidDataException("Invalid encrypted source enrollment state.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or
+                                   CryptographicException or ArgumentException or FormatException or OverflowException)
+        {
+            throw new InvalidDataException("The encrypted source enrollment state is unavailable.", ex);
+        }
+        finally
+        {
+            if (associatedData is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(associatedData);
+            }
+
+            if (plaintext is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(plaintext);
+            }
+        }
+    }
+
+    public void SaveSourceEnrollmentState(
+        VaultManifest manifest,
+        ReadOnlySpan<byte> dataKey,
+        SourceEnrollmentState state)
+    {
+        var plaintext = JsonSerializer.SerializeToUtf8Bytes(state, JsonOptions);
+        if (plaintext.Length is <= 0 or > MaximumSourceEnrollmentBytes)
+        {
+            CryptographicOperations.ZeroMemory(plaintext);
+            throw new InvalidDataException("The source enrollment state exceeds its storage limit.");
+        }
+
+        var associatedData = ResourceAssociatedData(
+            manifest.VaultId, "source-enrollment", SourceEnrollmentState.CurrentSchemaVersion, 1);
+        byte[]? envelopeBytes = null;
+        try
+        {
+            var envelope = EncryptPayload(plaintext, dataKey, associatedData);
+            envelopeBytes = JsonSerializer.SerializeToUtf8Bytes(envelope, JsonOptions);
+            AtomicWrite(_sourceEnrollmentPath, envelopeBytes);
         }
         finally
         {

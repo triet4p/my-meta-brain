@@ -249,7 +249,7 @@ internal sealed class ManagedResourceFileReader : IManagedResourceReader
         }
     }
 
-    private static string ResolveFinalPath(Microsoft.Win32.SafeHandles.SafeFileHandle handle)
+    internal static string ResolveFinalPath(Microsoft.Win32.SafeHandles.SafeFileHandle handle)
     {
         if (handle.IsInvalid)
         {
@@ -305,7 +305,7 @@ internal sealed class ManagedResourceFileReader : IManagedResourceReader
     private static bool IsAsciiAlphaNumeric(char value) =>
         value is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9';
 
-    private static class NativeMethods
+    internal static class NativeMethods
     {
         [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
         internal static extern uint GetFinalPathNameByHandle(

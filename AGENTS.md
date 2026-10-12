@@ -8,7 +8,7 @@
 4. [Architecture decision log](.agents/memory/decisions.md).
 5. Relevant shared rules/skills dưới đây; đọc nội dung thật, không chỉ dựa vào tên hoặc bản tóm tắt.
 
-Owner-approved CR01/D016 (2026-10-01) thay baseline bằng encrypted personal vault, approved catalog và single-use token/scoped sessions. S1-CLEAN đã xóa obsolete AppContainer/agent/proof source và qua evidence gate. Sprint 1/M1 replacement complete; Sprint 2/M2 complete (owner-confirmed committed); Sprint 3 Preparing (S3-P0 documentation prerequisite); Sprint 4–8 Not started; old fixture PASS chỉ lịch sử. Không tự implementation khi user chỉ yêu cầu tài liệu.
+Owner-approved CR01/D016 (2026-10-01) thay baseline bằng encrypted personal vault, approved catalog và single-use token/scoped sessions. S1-CLEAN đã xóa obsolete AppContainer/agent/proof source và qua evidence gate. Sprint 1/M1 replacement complete; Sprint 2/M2 complete (owner-confirmed committed); Sprint 3 In progress (S3-P0 complete; S3-T1 source enrollment/ingestion coordinator delivered, worker evidence pending review); Sprint 4–8 Not started; old fixture PASS chỉ lịch sử. Không tự implementation khi user chỉ yêu cầu tài liệu.
 
 ## Product Invariants
 
