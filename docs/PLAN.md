@@ -8,7 +8,7 @@
 
 Meta Brain là bộ nhớ thứ hai local-first cho owner, encrypted personal vault với key user kiểm soát. Agents chạy bình thường, khám phá owner-published catalog, request memory và đổi token một lần lấy scoped session qua MCP; không sandbox hoặc bảo mật lại original agent sessions. Provenance, durability, owner control và selective synthesis giữ nguyên.
 
-- Baseline: 2026-09-28; owner-approved CR01/D016 ngày 2026-10-01 thay security model. Replacement Sprint 1/M1 complete: S1-T1 retained, S1-T2–T9 evidence/checkpoints PASS, documentation correction PASS/checkpoint `911c12a0f157e7d176587528a0a32b52c8345407`, final differential deep `S1-DEEP-20261007-A2` PASS with no actionable findings. Walkthrough consent does not change product/S6/secret policies. Sprint 2: S2-T1–T4 complete, S2-T5–T7 pending; Sprints 3–8 Not started. Old AppContainer PASS historical only; no production acceptance or new push authorization.
+- Baseline: 2026-09-28; owner-approved CR01/D016 ngày 2026-10-01 thay security model. Replacement Sprint 1/M1 complete: S1-T1 retained, S1-T2–T9 evidence/checkpoints PASS, documentation correction PASS/checkpoint `911c12a0f157e7d176587528a0a32b52c8345407`, final differential deep `S1-DEEP-20261007-A2` PASS with no actionable findings. Walkthrough consent does not change product/S6/secret policies. Sprint 2/M2 complete: S2-T1–T7 accepted evidence/checkpoints and final differential `S2-DEEP-20261012-A1` PASS with no actionable findings; Sprints 3–8 Not started. Old AppContainer PASS historical only; no production acceptance or new push authorization.
 - Đặc tả: [META-BRAIN](META-BRAIN.md).
 - Hợp đồng yêu cầu và change control: [REQUIREMENTS](REQUIREMENTS.md).
 - Hướng dẫn agent: [AGENTS](../AGENTS.md).
@@ -23,7 +23,7 @@ Mỗi chặng có một sprint plan chi tiết. Hoàn thành chặng không đ�
 | Milestone | Kết quả bắt buộc | Phụ thuộc | Sprint |
 | --- | --- | --- | --- |
 | [x] M1 — Encrypted vault và scoped sharing | User key/unlock/lock; ciphertext/tamper proof; approved catalog/request review; single-use token/session/scope/revoke thật trên normal Codex/OMP | Không; CR01 replacement complete | [Sprint 1](sprint-plans/sprint-1.md) |
-| [ ] M2 — Durable encrypted core | Item/source/zone/revision/relations/lifecycle canonical mã hóa; protected index rebuild/crash recovery | Replacement M1 | [Sprint 2](sprint-plans/sprint-2.md) |
+| [x] M2 — Durable encrypted core | Item/source/zone/revision/relations/lifecycle canonical mã hóa; protected index rebuild/crash recovery | Replacement M1 | [Sprint 2](sprint-plans/sprint-2.md) |
 | [ ] M3 — Faithful encrypted capture | Read-only allowlisted Codex/OMP sources, encrypted import/cache/snapshot và lock-aware refresh | M2 | [Sprint 3](sprint-plans/sprint-3.md) |
 | [ ] M4 — Scoped agent memory access | Catalog/request/token + retrieval/evidence/brief/proposal/link qua MCP clients bình thường | M3 | [Sprint 4](sprint-plans/sprint-4.md) |
 | [ ] M5 — Owner workbench | Unlock/recovery UI, library/review/relations, catalog publication/request approval/token/session console | M4 | [Sprint 5](sprint-plans/sprint-5.md) |
@@ -40,7 +40,7 @@ S1-T9 [behavioral evidence A3](../artifacts/sprint-1/reviews/S1-T9-S1T9-REVIEW-2
 | Sprint | Trạng thái | Task range | Gate |
 | --- | --- | --- | --- |
 | 1 | Complete — CR01 replacement M1 | S1-T1 retained; S1-T2–T9 [x] and doc correction committed | Task evidence/checkpoints PASS; final differential deep A2 PASS |
-| 2 | In progress — S2-T7 evidence review pending | S2-T1–T6 [x]; S2-T7 [~] | Source recovered; corrected runtime/budget evidence delivered; fresh evidence PASS, checkpoint and final deep required |
+| 2 | Complete — M2 | S2-T1–T7 [x] | Task evidence/checkpoints PASS; final differential `S2-DEEP-20261012-A1` PASS; latest product commit `e4e7c5f5` |
 | 3 | Not started | S3-T1…S3-T6 | Pending |
 | 4 | Not started | S4-T1…S4-T7 | Pending |
 | 5 | Not started | S5-T1…S5-T7 | Pending |
@@ -61,6 +61,8 @@ S2-T6 accepted fresh evidence/checkpoint complete: commit `56ee0ea76e2831e688a51
 ## Completed Sprints
 
 Sprint 1 replacement/M1 complete under CR01: accepted task evidence/checkpoints and final differential `S1-DEEP-20261007-A2` PASS, recorded in [Sprint 1](sprint-plans/sprint-1.md). Old-baseline sandbox gates remain historical only.
+
+Sprint 2/M2 complete: all seven task evidence/checkpoints accepted, latest product commit `e4e7c5f5accebbda6f39d6dfbfb349a51fe80442`; [final differential review](../artifacts/sprint-2/reviews/sprint-2-S2-DEEP-20261012-A1.md) **PASS**, zero actionable findings. [Sprint 2](sprint-plans/sprint-2.md) retains exact evidence/checkpoint references, adverse observations and unexercised downstream limits. Final Main status-only plan updates remain uncommitted; no push or Sprint 3 launch authorized here.
 
 ## Planning and Execution Contract
 
