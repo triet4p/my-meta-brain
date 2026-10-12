@@ -6,7 +6,7 @@ Tiếp nhận Codex/OMP và ghi chú research vào cùng core mà không sửa s
 
 ## Status and Dependencies
 
-- Status: Not started — CR01 updated. Entry: Sprint 2 encrypted core PASS; owner unlock, source allowlist và mẫu được duyệt. Locked không private ingestion/refresh.
+- Status: Preparing — owner yêu cầu bắt đầu Sprint 3 và xác nhận mọi thay đổi Sprint 2 đã commit. M2 complete; S3-P0 đồng bộ tài liệu phải PASS review/checkpoint trước S3-T1. Private-source ingestion chỉ bắt đầu với owner unlock, source allowlist và mẫu được duyệt; locked không private ingestion/refresh.
 - [Global plan](../PLAN.md), [specification](../META-BRAIN.md), [requirements](../REQUIREMENTS.md).
 - Requirements: R16–R19; bảo toàn R04, R06, R10–R12, R33, R36.
 
@@ -17,6 +17,19 @@ Adapters normalized events/source refs, không publish/mint grant hoặc map quy
 ## Atomic Tasks
 
 Status legend: [ ] pending / [~] in progress / [x] done. OMP role selection, evidence review, record ownership, and exact-snapshot checkpoints follow the [canonical execution contract](../PLAN.md#planning-and-execution-contract). Worker artifact for S3-T<M>: `artifacts/sprint-3/task-<M>.md`; reviewers and checkpoint executors own their separate records under the sprint artifact tree.
+
+Workflow: full route cho S3-P0 và S3-T1–T6 theo project gates. Mỗi task có worker verification, fresh evidence review và separate Bronze-only exact-snapshot checkpoint trước task kế tiếp; worker không commit. Final differential deep review được giao cho rủi ro tương tác coordinator/adapters/checkpoints/lock/source preservation sau tất cả task gates/checkpoints. Không shared checkpoint batch, không push. Role do owner chọn hoặc Main chọn trong scoped authority; quota unknown. Records chỉ ghi role và work IDs, không model/provider/selector/effort; coordination/handoffs không ghi vào plan.
+
+### Prerequisite — Documentation State Synchronization
+
+- [~] **S3-P0 — Đồng bộ trạng thái tài liệu trước capture implementation.**
+    - Scope: current status/entry-gate prose trong specification, requirements, AGENTS, README và các tài liệu liên quan thực sự stale; Main quản lý PLAN và sprint plans. Đồng bộ Sprint 1/M1 và Sprint 2/M2 complete, Sprint 2 đã commit theo owner, Sprint 3 preparing; Sprint 4–8 vẫn not started.
+    - Acceptance: không còn current-state claim replacement gates Pending/Sprint 2 not started/owner-only plaintext-only; accepted evidence/checkpoints/final reviews và nonblocking limits được giữ đúng. Current workflow dùng explicit Bronze/Silver/Gold, role-only reporting, reviewer-owned manifest và Bronze-only checkpoint; giữ nguyên project-required gates, R01–R40, CR01, budgets, source consent và task order.
+    - History: không rewrite append-only decision/artifact records hoặc historical gate narratives; stale historical trạng thái được phân biệt với current status. Không product/source changes, fake runtime PASS, product changelog entry hoặc rereun Sprint 2 checks.
+    - Verification: targeted documentation/current-state/link checks và independent evidence review; reviewer freezes exact eligible snapshot, fresh Bronze checkpoint chỉ wholly-owned reviewed paths. Main plan changes cho prerequisite thuộc S3-P0 scope; worker không chỉnh plans.
+    - Records: `artifacts/sprint-3/task-P0.md`, separate reviewer report/manifest và checkpoint dưới `artifacts/sprint-3/`.
+
+### Capture Tasks
 
 - [ ] **S3-T1 — Source enrollment và incremental ingestion coordinator.** Requirements: R16, R17, R18.
     - Scope: allowlist/mapping, encrypted checkpoint/quarantine, idempotence/version dispatch và lock-aware coordinator; không parsing format ở đây.
@@ -58,4 +71,4 @@ Cần owner allowlist, không coi nhu cầu sản phẩm là quyền đọc mọ
 
 ## Gate Record
 
-Pending. Chưa có session riêng tư nào được nhập bởi tác vụ planning này.
+Pending. Owner đã yêu cầu bắt đầu Sprint 3; documentation prerequisite đang chuẩn bị. Chưa có task verification, review/checkpoint hoặc private session ingestion nào được nghiệm thu cho Sprint 3.

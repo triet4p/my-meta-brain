@@ -171,7 +171,7 @@ dotnet run --project tests/MetaBrain.S1T4.Smoke/MetaBrain.S1T4.Smoke.csproj
 The project follows a phased milestone roadmap defined in [`docs/PLAN.md`](docs/PLAN.md):
 
 - [x] **Milestone 1 (M1) — Encrypted Vault & Scoped Sharing (Sprint 1):** User-controlled key lifecycle, authenticated ciphertext, owner-approved catalog publication, single-use token issuance/redemption, and in-memory scoped reads verified with official Codex and OMP clients.
-- [ ] **Milestone 2 (M2) — Durable Encrypted Core (Sprint 2):** Canonical encrypted item/source/zone/revision models, relations, and rebuildable protected index.
+- [x] **Milestone 2 (M2) — Durable Encrypted Core (Sprint 2):** Canonical encrypted item/source/zone/revision models, relations, and rebuildable protected index.
 - [ ] **Milestone 3 (M3) — Faithful Encrypted Capture (Sprint 3):** Read-only allowlisted transcript ingestion from Codex/OMP sessions, encrypted caching, and lock-aware refresh.
 - [ ] **Milestone 4 (M4) — Scoped Agent Memory Access (Sprint 4):** Rich retrieval, evidence briefs, proposals, and linking over MCP.
 - [ ] **Milestone 5 (M5) — Owner Workbench (Sprint 5):** Desktop UI (WPF) for unlock, review, catalog curation, and token handoffs.
