@@ -6,7 +6,7 @@ Tiếp nhận Codex/OMP và ghi chú research vào cùng core mà không sửa s
 
 ## Status and Dependencies
 
-- Status: In progress — owner tiếp tục chỉ S3-T5 với Silver; S3-P0 và S3-T1–T4 verification/evidence/checkpoints complete, S3-T5 đang triển khai, S3-T6/final differential chưa dispatch. Historical T3 forced stop/missing A1 handoff được giữ trong records. M2 complete, owner xác nhận mọi thay đổi Sprint 2 đã commit. Private-source ingestion chỉ bắt đầu với owner unlock, source allowlist và mẫu được duyệt; locked không private ingestion/refresh.
+- Status: In progress — owner tiếp tục S3-T6; S3-P0 và S3-T1–T5 verification/evidence/checkpoints complete. S3-T6 full-route verification/review/checkpoint pending; final differential chưa dispatch. Historical T3 forced stop/missing A1 handoff được giữ trong records. M2 complete, owner xác nhận mọi thay đổi Sprint 2 đã commit. Private-source ingestion chỉ bắt đầu với owner unlock, source allowlist và mẫu được duyệt; locked không private ingestion/refresh.
 - [Global plan](../PLAN.md), [specification](../META-BRAIN.md), [requirements](../REQUIREMENTS.md).
 - Requirements: R16–R19; bảo toàn R04, R06, R10–R12, R33, R36.
 
@@ -57,16 +57,19 @@ Workflow: full route cho S3-P0 và S3-T1–T6 theo project gates. Mỗi task có
     - Evidence: ghi chú Việt–Anh có claim, question và link; lưu/read/restart qua service; không tự tải URL hoặc nói đã đọc paper.
     - Outcome: owner `research.capture`/`research.read` và CLI `research-capture`/`research-read` accepted qua real service/restart/lock; [worker evidence](../../artifacts/sprint-3/task-4.md), [handoff](../../artifacts/sprint-3/handoffs/S3-T4-S3T4-IMPL-20261012-A1.md), [evidence PASS](../../artifacts/sprint-3/reviews/S3-T4-S3T4-REVIEW-20261012-A1.md), [frozen manifest](../../artifacts/sprint-3/reviews/S3-T4-S3T4-REVIEW-20261012-A1.manifest.json), [all-14-path checkpoint](../../artifacts/sprint-3/checkpoints/S3-T4-S3T4-CHECKPOINT-20261012-A1.md); commit `94077a3ffb2bcf2ebe04e9bc21671963b865aac1`, no push. Manual Roslyn/no SDK; raw-body oversize/nonUTC date rejection chưa runtime-exercised, UI ngoài T4.
 
-- [~] **S3-T5 — Source availability tracking và selected preservation.** Requirements: R18, R29.
+- [x] **S3-T5 — Source availability tracking và selected preservation.** Requirements: R18, R29.
     - Scope: detect moved/missing/changed source và snapshot opt-in; không tự migrate nguồn.
     - Acceptance: reference-only; preservation owner scope/retention và encrypted snapshot, original không migrate/xóa. Source changed/missing đánh dấu đúng; snapshot/source API scope riêng; không theo path mới chưa xác minh; no raw content/key trong logs/temp.
     - Evidence: remove/move/change fixture, truy xuất reference và selected snapshot dưới quyền khác nhau; bảo toàn lineage và không báo bằng chứng cũ là current verified.
     - Execution: owner đổi riêng S3-T5 sang `silver-task`; full route với worker verification, fresh evidence review và separate Bronze-only exact-snapshot checkpoint. Worker không commit, không push; giữ nguyên acceptance/consent.
+    - Outcome: exact-locator digest availability, owner-verified relocation và selected encrypted snapshot/retention/purge accepted qua real service/scoped API; [worker evidence](../../artifacts/sprint-3/task-5.md), [handoff](../../artifacts/sprint-3/handoffs/S3-T5-S3T5-IMPL-20261012-A1.md), [evidence PASS](../../artifacts/sprint-3/reviews/S3-T5-S3T5-REVIEW-20261012-A1.md), [frozen manifest](../../artifacts/sprint-3/reviews/S3-T5-S3T5-REVIEW-20261012-A1.manifest.json), [all-23-path checkpoint](../../artifacts/sprint-3/checkpoints/S3-T5-S3T5-CHECKPOINT-20261012-A1.md); commit `fdddef37f0256e6a080b790dc0cfe4ee67b22c9e`, no push. Synthetic-only/manual Roslyn/no SDK/CS1701; không crash fault-injection, historical T1 history unavailable được ghi rõ.
 
-- [ ] **S3-T6 — Owner ingestion operations và safe background refresh.** Requirements: R16, R17, R18, R19, R36.
+- [~] **S3-T6 — Owner ingestion operations và safe background refresh.** Requirements: R16, R17, R18, R19, R36.
     - Scope: CLI/API status, pause/resume/re-enroll và incremental refresh cho allowlist; không extraction LLM.
     - Acceptance: user thấy nguồn/checkpoint/errors/cache scope; tắt nguồn hoặc lock ngừng đọc, refresh chỉ opt-in khi unlocked; unlock resume checkpoint không duplicates. Encrypted diagnostics không chứa transcript/secret thừa; không dùng autonomous unlock/key lưu plaintext.
     - Evidence: owner walkthrough cả hai runtime sources và research note, pause/append/resume/restart; không poll private filesystem ngoài allowlist; docs phản ánh cách dùng thật.
+    - Execution: `gold-task` theo lựa chọn owner cho T6; full route với actual runtime verification, fresh evidence review/frozen manifest và separate Bronze-only exact-snapshot checkpoint tại task boundary. Worker không commit/push; final sprint differential giữ gate riêng sau task checkpoint.
+    - Gate: [initial evidence FAIL](../../artifacts/sprint-3/reviews/S3-T6-S3T6-REVIEW-20261013-A1.md): thiếu actual opt-in background refresh/job cancellation và owner cache scope. Fresh correction và fresh review bắt buộc; chưa authorize checkpoint, không giảm acceptance thành manual-only refresh.
 
 ## Sprint Acceptance Gate
 
@@ -80,8 +83,8 @@ Owner source consent cho T2/T3: T2 Codex được owner cho phép chọn từ b�
 
 Runtime process ownership: từ owner steer hiện hành, mỗi Codex/OMP process worker tự start phải có exact handle/job hoặc PID kèm start time/identity; dùng xong end đúng process đã chứng minh ownership, kiểm tra PID reuse nếu stop bằng PID. Không kill theo process name/broad match hoặc dọn process cũ/pre-existing khi không chắc ownership. Worker giữ actual launch/cleanup evidence trong artifact; không suy delivery receipt thành cleanup proof.
 
-Owner tiếp tục chỉ S3-T5 sau accepted S3-T4 boundary và đổi worker sang Silver; không dispatch S3-T6/final deep. [Main handoff trước T5](../../artifacts/sprint-3/state/MAIN-S3-T4-20261012.md) giữ accepted gate/ownership pointers; prior init/rewrite request đã rút lại, không tạo scope bổ sung.
+S3-T5 Silver worker verification, independent evidence PASS và separate Bronze checkpoint complete; owner tiếp tục riêng S3-T6. [Main supervision/handoff](../../artifacts/sprint-3/state/MAIN-S3-T5-20261012.md) giữ accepted boundary; [boundary trước T5](../../artifacts/sprint-3/state/MAIN-S3-T4-20261012.md) giữ historical context. Final differential chưa dispatch.
 
 ## Gate Record
 
-S3-P0 và S3-T1–T4 evidence/checkpoints complete; latest checkpoint `94077a3ffb2bcf2ebe04e9bc21671963b865aac1`, parent `cbdfad986b241098fff2ef154131ccff4561b433`. S3-T4 [evidence PASS](../../artifacts/sprint-3/reviews/S3-T4-S3T4-REVIEW-20261012-A1.md) và [all-14-path checkpoint](../../artifacts/sprint-3/checkpoints/S3-T4-S3T4-CHECKPOINT-20261012-A1.md) match frozen reviewed snapshot; normalization erratum/verification limits nằm trong records của owners. S3-T5 giữ [~] tới matching evidence/checkpoint success; S3-T6/final sprint gate pending. Main completion-only carryover sau T4 và current T5 status thuộc Main, eligible cho T5 reviewed checkpoint nếu whole-path ownership xác minh; không push authorization.
+S3-P0 và S3-T1–T5 evidence/checkpoints complete; latest checkpoint `fdddef37f0256e6a080b790dc0cfe4ee67b22c9e`, parent `94077a3ffb2bcf2ebe04e9bc21671963b865aac1`. S3-T5 [evidence PASS](../../artifacts/sprint-3/reviews/S3-T5-S3T5-REVIEW-20261012-A1.md) và [all-23-path checkpoint](../../artifacts/sprint-3/checkpoints/S3-T5-S3T5-CHECKPOINT-20261012-A1.md) match frozen reviewed snapshot; exclusion wording clarification/verification limits nằm trong records của owners. S3-T6/final sprint gate pending. Final Main completion-only plan edits sau checkpoint chưa commit; không product drift hoặc push authorization.

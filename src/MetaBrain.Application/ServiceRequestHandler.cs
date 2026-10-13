@@ -248,7 +248,12 @@ public sealed record SourceEnrollmentWire(
     string Availability,
     DateTimeOffset? AvailabilityObservedAtUtc,
     DateTimeOffset? RelocatedAtUtc,
-    long? SourceReferenceRevision);
+    long? SourceReferenceRevision,
+    DateTimeOffset? PausedAtUtc = null,
+    bool RefreshOptIn = false,
+    long JournalCiphertextBytes = 0,
+    long SnapshotCiphertextBytes = 0,
+    long SnapshotRevision = 0);
 
 public sealed record SourceQuarantineWire(string Reason, string Detail, DateTimeOffset RecordedAtUtc);
 
@@ -264,6 +269,19 @@ public sealed record SourceIngestionWire(
     int EventCount,
     int DiagnosticCount,
     DateTimeOffset? LastIngestAtUtc);
+
+/// <summary>
+/// One S3-T6 refresh entry: the source, its refresh status, the checkpoint
+/// movement of that pass and the diagnostic code when one stopped the run.
+/// No transcript content, locator or secret crosses this wire (R36).
+/// </summary>
+public sealed record SourceRefreshWire(
+    string SourceId,
+    string Status,
+    long ConsumedOffset,
+    int EventsAdded,
+    int DiagnosticsAdded,
+    string? DiagnosticCode);
 public sealed record SourceSnapshotWire(
     string Id,
     string ZoneId,
@@ -340,6 +358,8 @@ public sealed record ServiceReply(
     PrivateIndexWire? PrivateIndex = null,
     SourceEnrollmentWire? SourceEnrollment = null,
     SourceIngestionWire? SourceIngestion = null,
+    SourceEnrollmentWire[]? SourceEnrollments = null,
+    SourceRefreshWire[]? SourceRefresh = null,
     SourceSnapshotWire? SourceSnapshot = null,
     SourceSnapshotDescriptorWire[]? SourceSnapshots = null);
 
@@ -416,6 +436,12 @@ public sealed class ServiceRequestHandler
     public const string SourceStatusOperation = "source.status";
     public const string SourceIngestOperation = "source.ingest";
     public const string SourceRelocateOperation = "source.relocate";
+    public const string SourcePauseOperation = "source.pause";
+    public const string SourceResumeOperation = "source.resume";
+    public const string SourceRefreshOptInOperation = "source.refresh.optin";
+    public const string SourceRefreshOptOutOperation = "source.refresh.optout";
+    public const string SourceListOperation = "source.list";
+    public const string SourceRefreshOperation = "source.refresh";
     public const string SourceSnapshotPreserveOperation = "source.snapshot.preserve";
     public const string SourceSnapshotListOperation = "source.snapshot.list";
     public const string SourceSnapshotRetainOperation = "source.snapshot.retain";
@@ -699,7 +725,13 @@ public sealed class ServiceRequestHandler
             string.Equals(request.Operation, SourceRelocateOperation, StringComparison.Ordinal) ||
             string.Equals(request.Operation, SourceRevokeOperation, StringComparison.Ordinal) ||
             string.Equals(request.Operation, SourceStatusOperation, StringComparison.Ordinal) ||
-            string.Equals(request.Operation, SourceIngestOperation, StringComparison.Ordinal))
+            string.Equals(request.Operation, SourceIngestOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourcePauseOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceResumeOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceRefreshOptInOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceRefreshOptOutOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceListOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceRefreshOperation, StringComparison.Ordinal))
         {
             return HandleSourceIngestionCommand(context, request, operation, cancellationToken);
         }
@@ -1309,14 +1341,16 @@ public sealed class ServiceRequestHandler
     }
 
     /// <summary>
-    /// S3-T1 owner source enrollment and incremental ingestion coordinator:
-    /// enroll, revoke, status and ingest. Every path is owner-only and needs an
-    /// unlocked operation; the agent channel never reaches these operations
-    /// (the transport allowlist refuses them), so no agent can enroll a
-    /// source, trigger ingestion or mint any grant. Enrollments change no
-    /// grant state: the coordinator writes only the encrypted enrollment
-    /// state and per-generation journals, so an approved snapshot stays
-    /// frozen and no source API authority widens item grants.
+    /// Owner source enrollment and incremental ingestion coordinator (S3-T1
+    /// plus S3-T6 operations): enroll, revoke, status, ingest, relocate,
+    /// pause, resume, refresh opt-in/opt-out, allowlist listing and safe
+    /// incremental refresh. Every path is owner-only and needs an unlocked
+    /// operation; the agent channel never reaches these operations (the
+    /// transport allowlist refuses them), so no agent can enroll a source,
+    /// trigger ingestion or mint any grant. Enrollments change no grant
+    /// state: the coordinator writes only the encrypted enrollment state and
+    /// per-generation journals, so an approved snapshot stays frozen and no
+    /// source API authority widens item grants.
     /// </summary>
     private ServiceReply HandleSourceIngestionCommand(
         AuthenticatedContext context,
@@ -1453,6 +1487,7 @@ public sealed class ServiceRequestHandler
                     SourceIngestionOutcomeKind.UnsupportedRecord => "ingest_unsupported_record",
                     SourceIngestionOutcomeKind.NotEnrolled => "source_not_enrolled",
                     SourceIngestionOutcomeKind.Revoked => "source_revoked",
+                    SourceIngestionOutcomeKind.Paused => "source_paused",
                     SourceIngestionOutcomeKind.MixedQuarantined => "source_mixed_quarantined",
                     SourceIngestionOutcomeKind.GenerationChanged => "source_generation_changed",
                     SourceIngestionOutcomeKind.SourceMissing => "source_missing",
@@ -1488,6 +1523,7 @@ public sealed class ServiceRequestHandler
 
                 if (outcome.Kind is SourceIngestionOutcomeKind.NotEnrolled or
                     SourceIngestionOutcomeKind.Revoked or
+                    SourceIngestionOutcomeKind.Paused or
                     SourceIngestionOutcomeKind.MixedQuarantined or
                     SourceIngestionOutcomeKind.GenerationChanged or
                     SourceIngestionOutcomeKind.SourceUnreadable or
@@ -1520,6 +1556,117 @@ public sealed class ServiceRequestHandler
             }
         }
 
+        if (string.Equals(request.Operation, SourcePauseOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceResumeOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceRefreshOptInOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceRefreshOptOutOperation, StringComparison.Ordinal))
+        {
+            if (HasSourceCommandExtras(request) || string.IsNullOrEmpty(request.ResourceId))
+            {
+                return Error("invalid_request");
+            }
+
+            try
+            {
+                if (string.Equals(request.Operation, SourcePauseOperation, StringComparison.Ordinal))
+                {
+                    var paused = _sourceIngestion.Pause(context, request.ResourceId, operation);
+                    return new ServiceReply(CurrentProtocolVersion, "source_paused", "owner", null,
+                        SourceEnrollment: ToSourceEnrollmentWire(paused, SourceEnrollmentLife.Paused, null));
+                }
+
+                if (string.Equals(request.Operation, SourceResumeOperation, StringComparison.Ordinal))
+                {
+                    var resumed = _sourceIngestion.Resume(context, request.ResourceId, operation);
+                    var status = _sourceIngestion.Status(context, request.ResourceId, operation);
+                    return new ServiceReply(CurrentProtocolVersion, "source_resumed", "owner", null,
+                        SourceEnrollment: ToSourceEnrollmentWire(status),
+                        SourceIngestion: new SourceIngestionWire(
+                            status.SourceId,
+                            status.JournalRevision,
+                            status.ConsumedOffset,
+                            status.EventCount,
+                            status.DiagnosticCount,
+                            status.LastIngestAtUtc));
+                }
+
+                var optIn = string.Equals(request.Operation, SourceRefreshOptInOperation, StringComparison.Ordinal);
+                var updated = _sourceIngestion.SetRefreshOptIn(context, request.ResourceId, optIn, operation);
+                var current = _sourceIngestion.Status(context, request.ResourceId, operation);
+                return new ServiceReply(CurrentProtocolVersion,
+                    optIn ? "source_refresh_opted_in" : "source_refresh_opted_out", "owner", null,
+                    SourceEnrollment: ToSourceEnrollmentWire(current),
+                    SourceIngestion: new SourceIngestionWire(
+                        current.SourceId,
+                        current.JournalRevision,
+                        current.ConsumedOffset,
+                        current.EventCount,
+                        current.DiagnosticCount,
+                        current.LastIngestAtUtc));
+            }
+            catch (ArgumentException)
+            {
+                return Error("invalid_request");
+            }
+            catch (SourceOperationException ex)
+            {
+                return Error(ex.Code);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Error("forbidden");
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException)
+            {
+                return Error("source_state_unavailable");
+            }
+        }
+
+        if (string.Equals(request.Operation, SourceListOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceRefreshOperation, StringComparison.Ordinal))
+        {
+            if (HasSourceCommandExtras(request) || request.ResourceId is not null)
+            {
+                return Error("invalid_request");
+            }
+
+            try
+            {
+                if (string.Equals(request.Operation, SourceListOperation, StringComparison.Ordinal))
+                {
+                    var enrollments = _sourceIngestion.List(context, operation)
+                        .Select(ToSourceEnrollmentWire)
+                        .ToArray();
+                    return new ServiceReply(CurrentProtocolVersion, "sources_listed", "owner", null,
+                        SourceEnrollments: enrollments);
+                }
+
+                var results = _sourceIngestion.Refresh(context, operation, cancellationToken)
+                    .Select(result => new SourceRefreshWire(
+                        result.SourceId, result.Status, result.ConsumedOffset,
+                        result.EventsAdded, result.DiagnosticsAdded, result.DiagnosticCode))
+                    .ToArray();
+                return new ServiceReply(CurrentProtocolVersion, "sources_refreshed", "owner", null,
+                    SourceRefresh: results);
+            }
+            catch (ArgumentException)
+            {
+                return Error("invalid_request");
+            }
+            catch (SourceOperationException ex)
+            {
+                return Error(ex.Code);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Error("forbidden");
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException)
+            {
+                return Error("source_state_unavailable");
+            }
+        }
+
         return Error("invalid_request");
     }
 
@@ -1533,6 +1680,7 @@ public sealed class ServiceRequestHandler
         {
             SourceEnrollmentLife.Revoked => "revoked",
             SourceEnrollmentLife.Quarantined => "quarantined",
+            SourceEnrollmentLife.Paused => "paused",
             _ => "enrolled"
         },
         status.AnchorLength,
@@ -1552,7 +1700,12 @@ public sealed class ServiceRequestHandler
         ToWireToken(status.Availability.ToString()),
         status.AvailabilityObservedAtUtc,
         status.RelocatedAtUtc,
-        status.SourceReferenceRevision);
+        status.SourceReferenceRevision,
+        status.PausedAtUtc,
+        status.RefreshOptIn,
+        status.JournalCiphertextBytes,
+        status.SnapshotCiphertextBytes,
+        status.SnapshotRevision);
 
     private static SourceEnrollmentWire ToSourceEnrollmentWire(
         EnrolledSource enrolled,
@@ -1567,6 +1720,7 @@ public sealed class ServiceRequestHandler
         {
             SourceEnrollmentLife.Revoked => "revoked",
             SourceEnrollmentLife.Quarantined => "quarantined",
+            SourceEnrollmentLife.Paused => "paused",
             _ => "enrolled"
         },
         enrolled.AnchorLength,
@@ -1586,7 +1740,9 @@ public sealed class ServiceRequestHandler
         ToWireToken(SourceAvailabilityObservation.NotChecked.ToString()),
         null,
         enrolled.RelocatedAtUtc,
-        null);
+        null,
+        enrolled.PausedAtUtc,
+        enrolled.RefreshOptIn);
 
     private ServiceReply HandleSourceSnapshotCommand(
         AuthenticatedContext context,

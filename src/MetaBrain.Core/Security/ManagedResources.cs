@@ -125,6 +125,14 @@ public interface IManagedResourceStore : IManagedResourceReader
 /// Owner-controlled vault lifecycle. Acquired operations remain valid until
 /// disposed; lock prevents new operations and completes only after all existing
 /// operations have drained.
+/// <para>
+/// S3-T6 safe background refresh: the service links its owner-opt-in background
+/// refresh loop to a lock-epoch cancellation signal. A requested lock cancels the
+/// in-flight refresh reads at the next per-source boundary instead of letting a
+/// multi-source pass run to completion while the owner already asked for the vault
+/// to stop private work. Single request/reply reads keep their existing drain-only
+/// semantics; only the bounded background refresh loop observes this signal.
+/// </para>
 /// </summary>
 public interface IVaultLifecycle
 {
@@ -133,6 +141,21 @@ public interface IVaultLifecycle
     bool Unlock(string credential, bool useRecoveryCode);
     Task LockAsync();
     IVaultOperation? TryBeginOperation();
+    /// <summary>
+    /// Cancellation signal for the current unlocked epoch. The token is cancelled
+    /// when <see cref="LockAsync"/> is requested and reset on the next successful
+    /// unlock. The safe background refresh loop links this signal with its own
+    /// pause/disable cessation so an in-flight refresh pass stops at the next
+    /// per-source boundary when the vault locks.
+    /// </summary>
+    CancellationToken RefreshCancellation { get; }
+    /// <summary>
+    /// Monotonic lock-epoch counter: it advances on every successful unlock and on
+    /// every completed lock. The background refresh loop records the epoch it started
+    /// in and stops when the live epoch no longer matches, so a restarted or
+    /// re-locked vault can never keep a stale loop reading with an old lease.
+    /// </summary>
+    long LockEpoch { get; }
 }
 
 /// <summary>

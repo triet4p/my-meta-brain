@@ -19,7 +19,8 @@ public enum SourceIngestionOutcomeKind
     SourceTooLarge = 11,
     JournalLimit = 12,
     JournalConflict = 13,
-    SourceMissing = 14
+    SourceMissing = 14,
+    Paused = 15
 }
 
 /// <summary>
@@ -35,17 +36,35 @@ public sealed record SourceIngestionOutcome(
     int DiagnosticsAdded,
     string? DiagnosticCode = null);
 
+/// <summary>
+/// One entry of an S3-T6 safe incremental refresh pass over the owner
+/// allowlist. Opted-in active sources carry their ingest outcome; every
+/// skipped source names its exact skip reason with zero checkpoint movement
+/// and no source read. No transcript content, locator or secret crosses this
+/// record (R36).
+/// </summary>
+public sealed record SourceRefreshResult(
+    string SourceId,
+    string Status,
+    long ConsumedOffset,
+    int EventsAdded,
+    int DiagnosticsAdded,
+    string? DiagnosticCode = null);
+
 public enum SourceEnrollmentLife
 {
     Enrolled = 1,
     Revoked = 2,
-    Quarantined = 3
+    Quarantined = 3,
+    Paused = 4
 }
 
 /// <summary>
-/// Owner-visible enrollment status: the mapping, enrollment/quarantine life
-/// state, persisted checkpoint summary, exact-locator availability observation
-/// and the live registered-source metadata revision after any availability sync.
+/// Owner-visible enrollment status: the mapping, enrollment/quarantine/pause
+/// life state, persisted checkpoint summary, exact-locator availability
+/// observation and the live registered-source metadata revision after any
+/// availability sync. S3-T6 adds the owner pause state and the safe
+/// background-refresh opt-in; both are owner-encrypted metadata only.
 /// </summary>
 public sealed record SourceEnrollmentStatus(
     string SourceId,
@@ -66,7 +85,12 @@ public sealed record SourceEnrollmentStatus(
     SourceAvailabilityObservation Availability,
     DateTimeOffset? AvailabilityObservedAtUtc,
     DateTimeOffset? RelocatedAtUtc,
-    long? SourceReferenceRevision);
+    long? SourceReferenceRevision,
+    DateTimeOffset? PausedAtUtc = null,
+    bool RefreshOptIn = false,
+    long JournalCiphertextBytes = 0,
+    long SnapshotCiphertextBytes = 0,
+    long SnapshotRevision = 0);
 
 /// <summary>
 /// S3-T1 source enrollment and incremental ingestion coordinator.
@@ -211,9 +235,12 @@ public sealed class SourceIngestionCoordinator
         _enrollments.Revoke(owner, sourceId, persistence);
 
     /// <summary>
-    /// Probes only the exact enrolled locator for an active mapping. A changed
-    /// observation updates a matching registered reference's availability
-    /// under its live revision; no source search or background refresh is performed.
+    /// Probes only the exact enrolled locator for an active, unpaused
+    /// mapping. A changed observation updates a matching registered
+    /// reference's availability under its live revision; a paused, revoked
+    /// or quarantined source reports its life state with no read and no
+    /// availability probe. No source search or autonomous background refresh
+    /// is performed here.
     /// </summary>
     public SourceEnrollmentStatus Status(
         AuthenticatedContext owner,
@@ -230,7 +257,9 @@ public sealed class SourceIngestionCoordinator
             ? SourceEnrollmentLife.Revoked
             : quarantine is not null
                 ? SourceEnrollmentLife.Quarantined
-                : SourceEnrollmentLife.Enrolled;
+                : enrollment.PausedAtUtc is not null
+                    ? SourceEnrollmentLife.Paused
+                    : SourceEnrollmentLife.Enrolled;
         var observedAt = life == SourceEnrollmentLife.Enrolled ? DateTimeOffset.UtcNow : (DateTimeOffset?)null;
         var availability = observedAt is null
             ? SourceAvailabilityObservation.NotChecked
@@ -238,6 +267,7 @@ public sealed class SourceIngestionCoordinator
         var sourceReferenceRevision = observedAt is null
             ? (long?)null
             : UpdateRegisteredAvailability(owner, enrollment, availability, operation);
+        var (journalBytes, snapshotBytes, snapshotRevision) = ReadCacheScope(operation, enrollment);
         return new SourceEnrollmentStatus(
             enrollment.SourceId,
             enrollment.ZoneId,
@@ -257,7 +287,12 @@ public sealed class SourceIngestionCoordinator
             availability,
             observedAt,
             enrollment.RelocatedAtUtc,
-            sourceReferenceRevision);
+            sourceReferenceRevision,
+            enrollment.PausedAtUtc,
+            enrollment.RefreshOptIn,
+            journalBytes,
+            snapshotBytes,
+            snapshotRevision);
     }
 
     private SourceAvailabilityObservation ObserveAvailability(EnrolledSource enrollment)
@@ -376,7 +411,7 @@ public sealed class SourceIngestionCoordinator
         ArgumentNullException.ThrowIfNull(operation);
 
         // State gates resolve from encrypted state only; the locator is not
-        // touched for an unknown, revoked or quarantined source.
+        // touched for an unknown, revoked, paused or quarantined source.
         var state = SourceEnrollmentAuthority.ValidateAndNormalizeState(operation.LoadSourceEnrollmentState());
         var enrollment = SourceEnrollmentAuthority.FindEnrollment(state, sourceId);
         if (enrollment is null)
@@ -387,6 +422,11 @@ public sealed class SourceIngestionCoordinator
         if (enrollment.RevokedAtUtc is not null)
         {
             return new SourceIngestionOutcome(SourceIngestionOutcomeKind.Revoked, 0, 0, 0);
+        }
+
+        if (enrollment.PausedAtUtc is not null)
+        {
+            return new SourceIngestionOutcome(SourceIngestionOutcomeKind.Paused, 0, 0, 0);
         }
 
         if (SourceEnrollmentAuthority.FindQuarantine(state, sourceId) is not null)
@@ -415,8 +455,8 @@ public sealed class SourceIngestionCoordinator
         var diagnostics = journal is null
             ? new List<SourceIngestionDiagnostic>()
             : journal.Diagnostics.ToList();
+        var snapshot = _reader.TryReadSnapshot(enrollment.Locator, cancellationToken);
 
-        var snapshot = _reader.TryReadSnapshot(enrollment.Locator);
         if (snapshot.Status != SourceSnapshotStatus.Snapshot || snapshot.Content is not { Length: > 0 } content)
         {
             return new SourceIngestionOutcome(
@@ -608,8 +648,178 @@ public sealed class SourceIngestionCoordinator
         }
     }
 
+    public EnrolledSource Pause(
+        AuthenticatedContext owner,
+        string sourceId,
+        ISourceEnrollmentPersistence persistence) =>
+        _enrollments.Pause(owner, sourceId, persistence);
+
+    public EnrolledSource Resume(
+        AuthenticatedContext owner,
+        string sourceId,
+        ISourceEnrollmentPersistence persistence) =>
+        _enrollments.Resume(owner, sourceId, persistence);
+
+    public EnrolledSource SetRefreshOptIn(
+        AuthenticatedContext owner,
+        string sourceId,
+        bool optIn,
+        ISourceEnrollmentPersistence persistence) =>
+        _enrollments.SetRefreshOptIn(owner, sourceId, optIn, persistence);
+
+    public IReadOnlyList<SourceEnrollmentStatus> List(
+        AuthenticatedContext owner,
+        IVaultOperation operation)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        ArgumentNullException.ThrowIfNull(operation);
+        var state = SourceEnrollmentAuthority.ValidateAndNormalizeState(operation.LoadSourceEnrollmentState());
+        var result = new List<SourceEnrollmentStatus>(state.Enrollments.Length);
+        foreach (var enrollment in state.Enrollments.OrderBy(candidate => candidate.SourceId, StringComparer.Ordinal))
+        {
+            var quarantine = SourceEnrollmentAuthority.FindQuarantine(state, enrollment.SourceId);
+            var life = enrollment.RevokedAtUtc is not null
+                ? SourceEnrollmentLife.Revoked
+                : quarantine is not null
+                    ? SourceEnrollmentLife.Quarantined
+                    : enrollment.PausedAtUtc is not null
+                        ? SourceEnrollmentLife.Paused
+                        : SourceEnrollmentLife.Enrolled;
+            // S3-T6 allowlist listing never opens a transcript: it reports
+            // only encrypted enrollment metadata plus the persisted
+            // checkpoint summary for each source. S3-T6-A2 adds the actual
+            // encrypted cache scope (journal/snapshot ciphertext sizes and
+            // snapshot revision) resolved from the live manifest; listing still
+            // opens no transcript.
+            var (revision, journal) = ReadJournal(operation, enrollment);
+            var (journalBytes, snapshotBytes, snapshotRevision) = ReadCacheScope(operation, enrollment);
+            result.Add(new SourceEnrollmentStatus(
+                enrollment.SourceId,
+                enrollment.ZoneId,
+                enrollment.Format,
+                enrollment.FormatVersion,
+                enrollment.Generation,
+                life,
+                enrollment.AnchorLength,
+                enrollment.EnrolledAtUtc,
+                enrollment.RevokedAtUtc,
+                quarantine,
+                revision,
+                journal?.ConsumedOffset ?? 0,
+                journal?.Events.Length ?? 0,
+                journal?.Diagnostics.Length ?? 0,
+                journal?.LastIngestAtUtc,
+                SourceAvailabilityObservation.NotChecked,
+                null,
+                enrollment.RelocatedAtUtc,
+                null,
+                enrollment.PausedAtUtc,
+                enrollment.RefreshOptIn,
+                journalBytes,
+                snapshotBytes,
+                snapshotRevision));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// S3-T6 safe incremental background refresh over the owner allowlist.
+    /// Each enrolled source is visited once, in source-ID order, with only
+    /// its exact enrolled locator ever opened: an opted-in, active source
+    /// runs one idempotent incremental ingest from its persisted checkpoint;
+    /// every other source reports its skip reason without any read. There is
+    /// no filesystem polling, no directory listing, no timer, no autonomous
+    /// unlock and no plaintext key: the caller already holds an unlocked
+    /// vault operation, and lock/restart still deny every refresh read.
+    /// </summary>
+    public IReadOnlyList<SourceRefreshResult> Refresh(
+        AuthenticatedContext owner,
+        IVaultOperation operation,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        ArgumentNullException.ThrowIfNull(operation);
+        // S3-T6-A2 live-state revalidation: the pass re-reads the encrypted
+        // enrollment state before every source, so an owner pause/opt-out/revoke
+        // that lands mid-pass stops that source's read at its own boundary
+        // instead of acting on a stale snapshot taken at pass start.
+        var results = new List<SourceRefreshResult>();
+        foreach (var enrollment in ListEnrolledInOrder(operation))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var live = RefreshLiveEnrollment(operation, enrollment.SourceId);
+            if (live is null)
+            {
+                results.Add(new SourceRefreshResult(enrollment.SourceId, "source_not_enrolled", 0, 0, 0, null));
+                continue;
+            }
+
+            if (live.RevokedAtUtc is not null)
+            {
+                results.Add(new SourceRefreshResult(live.SourceId, "skipped_revoked", 0, 0, 0, null));
+                continue;
+            }
+
+            if (live.PausedAtUtc is not null)
+            {
+                results.Add(new SourceRefreshResult(live.SourceId, "skipped_paused", 0, 0, 0, null));
+                continue;
+            }
+
+            var liveState = SourceEnrollmentAuthority.ValidateAndNormalizeState(operation.LoadSourceEnrollmentState());
+            if (SourceEnrollmentAuthority.FindQuarantine(liveState, live.SourceId) is not null)
+            {
+                results.Add(new SourceRefreshResult(live.SourceId, "skipped_quarantined", 0, 0, 0, null));
+                continue;
+            }
+
+            if (!live.RefreshOptIn)
+            {
+                results.Add(new SourceRefreshResult(live.SourceId, "skipped_not_opted_in", 0, 0, 0, null));
+                continue;
+            }
+
+            var outcome = Ingest(owner, live.SourceId, operation, cancellationToken);
+            var status = outcome.Kind switch
+            {
+                SourceIngestionOutcomeKind.Advanced => "ingest_advanced",
+                SourceIngestionOutcomeKind.Idle => "ingest_idle",
+                SourceIngestionOutcomeKind.PartialPending => "ingest_partial_pending",
+                SourceIngestionOutcomeKind.UnsupportedFormat => "ingest_unsupported_format",
+                SourceIngestionOutcomeKind.UnsupportedRecord => "ingest_unsupported_record",
+                SourceIngestionOutcomeKind.NotEnrolled => "source_not_enrolled",
+                SourceIngestionOutcomeKind.Revoked => "source_revoked",
+                SourceIngestionOutcomeKind.MixedQuarantined => "source_mixed_quarantined",
+                SourceIngestionOutcomeKind.GenerationChanged => "source_generation_changed",
+                SourceIngestionOutcomeKind.SourceMissing => "source_missing",
+                SourceIngestionOutcomeKind.SourceUnreadable => "source_unreadable",
+                SourceIngestionOutcomeKind.SourceTooLarge => "source_too_large",
+                SourceIngestionOutcomeKind.JournalLimit => "source_journal_limit",
+                SourceIngestionOutcomeKind.JournalConflict => "source_journal_conflict",
+                SourceIngestionOutcomeKind.Paused => "source_paused",
+                _ => "source_ingest_rejected"
+            };
+            results.Add(new SourceRefreshResult(
+                live.SourceId, status, outcome.ConsumedOffset, outcome.EventsAdded, outcome.DiagnosticsAdded, outcome.DiagnosticCode));
+        }
+
+        return results;
+    }
+
     private static bool IsDiagnostic(string value) =>
         SourceEnrollmentGrammar.IsDiagnosticCode(value);
+    private static IReadOnlyList<EnrolledSource> ListEnrolledInOrder(IVaultOperation operation)
+    {
+        var state = SourceEnrollmentAuthority.ValidateAndNormalizeState(operation.LoadSourceEnrollmentState());
+        return state.Enrollments.OrderBy(candidate => candidate.SourceId, StringComparer.Ordinal).ToArray();
+    }
+
+    private static EnrolledSource? RefreshLiveEnrollment(IVaultOperation operation, string sourceId)
+    {
+        var state = SourceEnrollmentAuthority.ValidateAndNormalizeState(operation.LoadSourceEnrollmentState());
+        return SourceEnrollmentAuthority.FindEnrollment(state, sourceId);
+    }
 
     private void RecordQuarantine(
         AuthenticatedContext owner,
@@ -629,6 +839,61 @@ public sealed class SourceIngestionCoordinator
                ?? throw new SourceOperationException("source_not_enrolled");
     }
 
+    /// <summary>
+    /// S3-T6-A2 owner cache scope: the actual encrypted cache/snapshot resources
+    /// backing one enrolled source generation. The journal ciphertext revision and
+    /// the selected snapshot ciphertext revision (when the owner preserved one)
+    /// are resolved from the live encrypted manifest — never from enrollment
+    /// metadata, never from a locator, and never from plaintext sizes. Sizes are
+    /// the encrypted ciphertext lengths observed through the authorized operation,
+    /// so the owner sees the real vault footprint without any private content,
+    /// locator or key crossing the boundary.
+    /// </summary>
+    private static (long JournalCiphertextBytes, long SnapshotCiphertextBytes, long SnapshotRevision) ReadCacheScope(
+        IVaultOperation operation,
+        EnrolledSource enrollment)
+    {
+        var journalId = SourceIngestionIds.JournalIdFor(enrollment.SourceId, enrollment.Generation);
+        var snapshotId = SourceSnapshotIds.For(enrollment.SourceId, enrollment.Generation);
+        long journalBytes = 0;
+        long snapshotBytes = 0;
+        long snapshotRevision = 0;
+        foreach (var resource in operation.ListResources())
+        {
+            if (string.Equals(resource.ResourceId, journalId, StringComparison.Ordinal))
+            {
+                journalBytes = ReadCiphertextLength(operation, journalId, resource.Revision);
+            }
+            else if (string.Equals(resource.ResourceId, snapshotId, StringComparison.Ordinal))
+            {
+                snapshotRevision = resource.Revision;
+                snapshotBytes = ReadCiphertextLength(operation, snapshotId, resource.Revision);
+            }
+        }
+
+        return (journalBytes, snapshotBytes, snapshotRevision);
+    }
+
+    private static long ReadCiphertextLength(IVaultOperation operation, string resourceId, long revision)
+    {
+        byte[]? raw = null;
+        try
+        {
+            raw = operation.ReadContent(resourceId, revision);
+            return raw.LongLength;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            return 0;
+        }
+        finally
+        {
+            if (raw is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(raw);
+            }
+        }
+    }
     /// <summary>
     /// Reads this generation's journal through the authorized operation. An
     /// unreadable, malformed or identity-mismatched journal fails closed: a

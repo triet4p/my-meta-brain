@@ -128,6 +128,13 @@ internal sealed class S3T2CodexCoordinatorHarness : IDisposable
                 ServiceRequestHandler.SourceRevokeOperation or
                 ServiceRequestHandler.SourceStatusOperation or
                 ServiceRequestHandler.SourceIngestOperation or
+                ServiceRequestHandler.SourceRelocateOperation or
+                ServiceRequestHandler.SourcePauseOperation or
+                ServiceRequestHandler.SourceResumeOperation or
+                ServiceRequestHandler.SourceRefreshOptInOperation or
+                ServiceRequestHandler.SourceRefreshOptOutOperation or
+                ServiceRequestHandler.SourceListOperation or
+                ServiceRequestHandler.SourceRefreshOperation or
                 ServiceRequestHandler.OwnerIndexRebuildOperation;
         var operation = needsOperation ? Lifecycle.TryBeginOperation() : null;
         try

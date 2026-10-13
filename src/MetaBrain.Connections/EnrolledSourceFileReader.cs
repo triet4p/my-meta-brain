@@ -19,7 +19,10 @@ namespace MetaBrain.Connections;
 /// </summary>
 internal sealed class EnrolledSourceFileReader : ISourceSnapshotReader
 {
-    public SourceSnapshotResult TryReadSnapshot(string locator)
+    public SourceSnapshotResult TryReadSnapshot(string locator) =>
+        TryReadSnapshot(locator, CancellationToken.None);
+
+    public SourceSnapshotResult TryReadSnapshot(string locator, CancellationToken cancellationToken)
     {
         if (!SourceEnrollmentGrammar.IsLocator(locator))
         {
@@ -95,6 +98,11 @@ internal sealed class EnrolledSourceFileReader : ISourceSnapshotReader
                 var offset = 0;
                 while (offset < buffer.Length)
                 {
+                    // S3-T6 active-read cessation: the requested lock/pause signal
+                    // is observed while the snapshot bytes stream, so an in-flight
+                    // read stops mid-file (its partial bytes are zeroed and no
+                    // checkpoint moves) instead of only refusing the next call.
+                    cancellationToken.ThrowIfCancellationRequested();
                     var read = stream.Read(buffer, offset, buffer.Length - offset);
                     if (read == 0)
                     {

@@ -24,6 +24,7 @@ internal sealed class NamedPipeService
     private readonly ServiceRequestHandler _handler;
     private readonly VaultLifecycle _vault;
     private readonly SqlitePrivateIndexStore _privateIndex;
+    private readonly SourceRefreshBackgroundService _backgroundRefresh;
 
     public NamedPipeService(ServiceSettings settings, SourceNormalizerRegistry? sourceNormalizers = null)
     {
@@ -41,6 +42,7 @@ internal sealed class NamedPipeService
             projections: new FileCatalogProjectionStore(store), privateIndex: _privateIndex,
             sourceNormalizers: sourceNormalizers ?? SourceNormalizerFactory.CreateShipped(),
             sourceReader: new EnrolledSourceFileReader());
+        _backgroundRefresh = new SourceRefreshBackgroundService(_handler, _vault);
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -52,7 +54,8 @@ internal sealed class NamedPipeService
         {
             await Task.WhenAll(
                 ListenAsync(ownerListener, PrincipalKind.Owner, WindowsPipeServer.Create, cancellationToken),
-                ListenAsync(agentListener, PrincipalKind.Agent, WindowsPipeServer.CreateAgent, cancellationToken)).ConfigureAwait(false);
+                ListenAsync(agentListener, PrincipalKind.Agent, WindowsPipeServer.CreateAgent, cancellationToken),
+                _backgroundRefresh.RunAsync(cancellationToken)).ConfigureAwait(false);
         }
         finally
         {
@@ -217,6 +220,12 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.SourceStatusOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceIngestOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceRelocateOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourcePauseOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceResumeOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceRefreshOptInOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceRefreshOptOutOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceListOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceRefreshOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceSnapshotPreserveOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceSnapshotListOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceSnapshotReadOperation, StringComparison.Ordinal) ||
@@ -225,14 +234,36 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.ResearchCaptureOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.ResearchReadOperation, StringComparison.Ordinal);
                 using var operation = needsVaultOperation ? _vault.TryBeginOperation() : null;
-                // Application creates the access context: owner channel gets owner authority,
-                // while the agent channel receives a placeholder agent identity that carries
-                // no scope. Session authority comes from the redeemed bearer, never the body.
-                var context = channel == PrincipalKind.Owner
-                    ? AuthenticatedContext.ForOwner()
-                    : AuthenticatedContext.ForAgent("agent", "pending");
-                var reply = await _handler.HandleAsync(context, request, operation, timeout.Token).ConfigureAwait(false);
-                await writer.WriteLineAsync(JsonSerializer.Serialize(reply, OutputOptions).AsMemory(), timeout.Token).ConfigureAwait(false);
+                if (needsVaultOperation && operation is not null)
+                {
+                    // Owner request/reply traffic wins over the background pass: wait
+                    // out (not alongside) an in-flight background refresh so two
+                    // leases never race on the same journal revision. The wait is
+                    // bounded by the 10-second request guard through the linked
+                    // timeout token; the background pass itself observes the same
+                    // lock-cancellation signal, so a requested lock still stops it
+                    // promptly instead of blocking the owner.
+                    await BackgroundRefreshGate.WaitAsync(timeout.Token).ConfigureAwait(false);
+                }
+
+                try
+                {
+                    // Application creates the access context: owner channel gets owner authority,
+                    // while the agent channel receives a placeholder agent identity that carries
+                    // no scope. Session authority comes from the redeemed bearer, never the body.
+                    var context = channel == PrincipalKind.Owner
+                        ? AuthenticatedContext.ForOwner()
+                        : AuthenticatedContext.ForAgent("agent", "pending");
+                    var reply = await _handler.HandleAsync(context, request, operation, timeout.Token).ConfigureAwait(false);
+                    await writer.WriteLineAsync(JsonSerializer.Serialize(reply, OutputOptions).AsMemory(), timeout.Token).ConfigureAwait(false);
+                }
+                finally
+                {
+                    if (needsVaultOperation && operation is not null)
+                    {
+                        BackgroundRefreshGate.Release();
+                    }
+                }
             }
             catch (OperationCanceledException) when (timeout.IsCancellationRequested)
             {

@@ -47,6 +47,11 @@ public sealed class SourceSnapshotService
             throw new SourceOperationException("source_revoked");
         }
 
+        if (enrollment.PausedAtUtc is not null)
+        {
+            throw new SourceOperationException("source_paused");
+        }
+
         if (SourceEnrollmentAuthority.FindQuarantine(enrollmentState, sourceId) is not null)
         {
             throw new SourceOperationException("source_quarantined");

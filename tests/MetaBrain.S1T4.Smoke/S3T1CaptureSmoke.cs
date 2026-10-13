@@ -854,6 +854,13 @@ internal sealed class S3T1CoordinatorHarness : IDisposable
                 ServiceRequestHandler.SourceRevokeOperation or
                 ServiceRequestHandler.SourceStatusOperation or
                 ServiceRequestHandler.SourceIngestOperation or
+                ServiceRequestHandler.SourceRelocateOperation or
+                ServiceRequestHandler.SourcePauseOperation or
+                ServiceRequestHandler.SourceResumeOperation or
+                ServiceRequestHandler.SourceRefreshOptInOperation or
+                ServiceRequestHandler.SourceRefreshOptOutOperation or
+                ServiceRequestHandler.SourceListOperation or
+                ServiceRequestHandler.SourceRefreshOperation or
                 ServiceRequestHandler.OwnerScopePreviewOperation or
                 ServiceRequestHandler.OwnerScopeIssueOperation or
                 ServiceRequestHandler.OwnerScopeListOperation or

@@ -14,6 +14,8 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
     private bool _locking;
     private TaskCompletionSource? _operationsDrained;
     private CancellationTokenSource? _lockCancellation;
+    private CancellationTokenSource _refreshCancellation = new();
+    private long _lockEpoch;
 
     public VaultLifecycle(EncryptedVaultStore store)
     {
@@ -51,6 +53,8 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
             _dataKey = material.DataKey;
             _manifest = material.Manifest;
             recoveryCode = material.RecoveryCode;
+            ResetRefreshSignalLocked();
+            _lockEpoch++;
             return true;
         }
     }
@@ -85,6 +89,8 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
                 // no half-published state across restarts.
                 _store.ReconcileUnpublished(manifest);
                 BumpUnlockEpochLocked();
+                ResetRefreshSignalLocked();
+                _lockEpoch++;
                 return true;
             }
             catch
@@ -111,12 +117,17 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
             // path, used exclusively by the index rebuild), so the drain that
             // follows clears the key after only the bounded active I/O
             // finishes. Single reads, writes, and every non-index operation keep
-            // their existing drain-only semantics.
+            // their existing drain-only semantics. S3-T6 extends the same
+            // requested-lock signal to the owner-opt-in background refresh loop:
+            // cancelling the refresh signal stops an in-flight refresh pass at
+            // its next per-source boundary; the refresh loop observes no other
+            // lock state and holds no plaintext across the boundary.
             lock (_contentGate)
             {
                 _lockCancellation ??= new CancellationTokenSource();
                 _lockCancellation.Cancel();
             }
+            _refreshCancellation.Cancel();
 
             if (_activeOperations == 0)
             {
@@ -140,6 +151,28 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
 
             _activeOperations++;
             return new Operation(this);
+        }
+    }
+
+    public CancellationToken RefreshCancellation
+    {
+        get
+        {
+            lock (_stateGate)
+            {
+                return _refreshCancellation.Token;
+            }
+        }
+    }
+
+    public long LockEpoch
+    {
+        get
+        {
+            lock (_stateGate)
+            {
+                return _lockEpoch;
+            }
         }
     }
 
@@ -446,7 +479,11 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
         // The lock signal belongs to this locked epoch: the drain that reached
         // this point has already stopped the in-flight batch reads, and no
         // operation remains (lock waits for _activeOperations == 0), so the
-        // source can be reset for the next unlock epoch.
+        // source can be reset for the next unlock epoch. S3-T6 keeps the
+        // refresh-cancellation signal cancelled across the locked epoch: it is
+        // reset only on the next successful provision/unlock, so a background
+        // refresh loop that sampled the old token can never resume reading
+        // with a stale lease after the key is cleared.
         lock (_contentGate)
         {
             var lockCancellation = _lockCancellation;
@@ -454,9 +491,17 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
             lockCancellation?.Dispose();
         }
 
+        _lockEpoch++;
         var drained = _operationsDrained;
         _operationsDrained = null;
         drained?.TrySetResult();
+    }
+
+    private void ResetRefreshSignalLocked()
+    {
+        var previous = _refreshCancellation;
+        _refreshCancellation = new CancellationTokenSource();
+        previous.Dispose();
     }
 
     private sealed class Operation : IVaultOperation

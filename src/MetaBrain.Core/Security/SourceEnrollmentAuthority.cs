@@ -126,7 +126,9 @@ public sealed record EnrolledSource(
     string AnchorDigest,
     DateTimeOffset EnrolledAtUtc,
     DateTimeOffset? RevokedAtUtc,
-    DateTimeOffset? RelocatedAtUtc = null);
+    DateTimeOffset? RelocatedAtUtc = null,
+    DateTimeOffset? PausedAtUtc = null,
+    bool RefreshOptIn = false);
 
 public enum SourceQuarantineReason
 {
@@ -225,6 +227,21 @@ public sealed record SourceSnapshotResult(SourceSnapshotStatus Status, byte[]? C
 public interface ISourceSnapshotReader
 {
     SourceSnapshotResult TryReadSnapshot(string locator);
+    /// <summary>
+    /// S3-T6 cancellable variant of the same exact-locator bounded read. The default
+    /// implementation runs the synchronous read and then observes the token, which
+    /// preserves the existing boundary for readers that cannot interrupt the OS open;
+    /// the shipped file reader overrides this to poll the token while the snapshot
+    /// bytes stream, so a requested lock/pause stops an actually active read instead
+    /// of only refusing the next call. No directory is ever listed and no path is
+    /// ever derived from cwd or a request body on either path.
+    /// </summary>
+    SourceSnapshotResult TryReadSnapshot(string locator, CancellationToken cancellationToken)
+    {
+        var result = TryReadSnapshot(locator);
+        cancellationToken.ThrowIfCancellationRequested();
+        return result;
+    }
 }
 
 /// <summary>
@@ -466,6 +483,157 @@ public sealed class SourceEnrollmentAuthority
             return (state with { Enrollments = enrollments }, revoked);
         });
     }
+    /// <summary>
+    /// S3-T6 owner ingestion pause: an explicit per-source stop that keeps the
+    /// enrollment and its checkpoint but refuses status/ingest/refresh reads
+    /// until the owner resumes. Pause never deletes state and never widens
+    /// any grant; it only adds a fail-closed life gate checked before any
+    /// source read.
+    /// </summary>
+    public EnrolledSource Pause(
+        AuthenticatedContext actor,
+        string sourceId,
+        ISourceEnrollmentPersistence persistence)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(persistence);
+        EnsureOwner(actor);
+        if (!DomainIdentifiers.IsDomainIdentifier(sourceId))
+        {
+            throw new ArgumentException("The source ID must be an opaque safe identifier.");
+        }
+
+        return persistence.UpdateSourceEnrollmentState(state =>
+        {
+            var validated = ValidateAndNormalizeState(state);
+            var index = Array.FindIndex(validated.Enrollments, candidate =>
+                string.Equals(candidate.SourceId, sourceId, StringComparison.Ordinal));
+            if (index < 0)
+            {
+                throw new SourceOperationException("source_not_enrolled");
+            }
+
+            var current = validated.Enrollments[index];
+            if (current.RevokedAtUtc is not null)
+            {
+                throw new SourceOperationException("source_revoked");
+            }
+
+            if (FindQuarantine(validated, sourceId) is not null)
+            {
+                throw new SourceOperationException("source_quarantined");
+            }
+
+            if (current.PausedAtUtc is not null)
+            {
+                throw new SourceOperationException("source_already_paused");
+            }
+
+            var paused = current with { PausedAtUtc = DateTimeOffset.UtcNow };
+            var enrollments = validated.Enrollments
+                .Select((candidate, position) => position == index ? paused : candidate)
+                .ToArray();
+            return (state with { Enrollments = enrollments }, paused);
+        });
+    }
+
+    /// <summary>
+    /// S3-T6 owner ingestion resume: clears an explicit pause without
+    /// touching the generation, anchor, checkpoint or refresh opt-in. Resume
+    /// after unlock continues from the persisted checkpoint, so no duplicate
+    /// events are produced.
+    /// </summary>
+    public EnrolledSource Resume(
+        AuthenticatedContext actor,
+        string sourceId,
+        ISourceEnrollmentPersistence persistence)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(persistence);
+        EnsureOwner(actor);
+        if (!DomainIdentifiers.IsDomainIdentifier(sourceId))
+        {
+            throw new ArgumentException("The source ID must be an opaque safe identifier.");
+        }
+
+        return persistence.UpdateSourceEnrollmentState(state =>
+        {
+            var validated = ValidateAndNormalizeState(state);
+            var index = Array.FindIndex(validated.Enrollments, candidate =>
+                string.Equals(candidate.SourceId, sourceId, StringComparison.Ordinal));
+            if (index < 0)
+            {
+                throw new SourceOperationException("source_not_enrolled");
+            }
+
+            var current = validated.Enrollments[index];
+            if (current.RevokedAtUtc is not null)
+            {
+                throw new SourceOperationException("source_revoked");
+            }
+
+            if (current.PausedAtUtc is null)
+            {
+                throw new SourceOperationException("source_not_paused");
+            }
+
+            var resumed = current with { PausedAtUtc = null };
+            var enrollments = validated.Enrollments
+                .Select((candidate, position) => position == index ? resumed : candidate)
+                .ToArray();
+            return (state with { Enrollments = enrollments }, resumed);
+        });
+    }
+
+    /// <summary>
+    /// S3-T6 safe opt-in background refresh consent: incremental refresh runs
+    /// only for sources the owner explicitly opted in, only while unlocked,
+    /// and only from the exact enrolled locator. Opt-out is an explicit owner
+    /// act with the same revision-safe encrypted state write.
+    /// </summary>
+    public EnrolledSource SetRefreshOptIn(
+        AuthenticatedContext actor,
+        string sourceId,
+        bool optIn,
+        ISourceEnrollmentPersistence persistence)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(persistence);
+        EnsureOwner(actor);
+        if (!DomainIdentifiers.IsDomainIdentifier(sourceId))
+        {
+            throw new ArgumentException("The source ID must be an opaque safe identifier.");
+        }
+
+        return persistence.UpdateSourceEnrollmentState(state =>
+        {
+            var validated = ValidateAndNormalizeState(state);
+            var index = Array.FindIndex(validated.Enrollments, candidate =>
+                string.Equals(candidate.SourceId, sourceId, StringComparison.Ordinal));
+            if (index < 0)
+            {
+                throw new SourceOperationException("source_not_enrolled");
+            }
+
+            var current = validated.Enrollments[index];
+            if (current.RevokedAtUtc is not null)
+            {
+                throw new SourceOperationException("source_revoked");
+            }
+
+            if (current.RefreshOptIn == optIn)
+            {
+                return (state, current);
+            }
+
+            var updated = current with { RefreshOptIn = optIn };
+            var enrollments = validated.Enrollments
+                .Select((candidate, position) => position == index ? updated : candidate)
+                .ToArray();
+            return (state with { Enrollments = enrollments }, updated);
+        });
+    }
+
 
     public SourceQuarantineRecord Quarantine(
         AuthenticatedContext actor,
@@ -603,6 +771,11 @@ public sealed class SourceEnrollmentAuthority
             (relocatedAtUtc.Offset != TimeSpan.Zero || relocatedAtUtc < enrollment.EnrolledAtUtc))
         {
             throw new InvalidDataException("The source enrollment relocation time is invalid.");
+        }
+        if (enrollment.PausedAtUtc is { } pausedAtUtc &&
+            (pausedAtUtc.Offset != TimeSpan.Zero || pausedAtUtc < enrollment.EnrolledAtUtc))
+        {
+            throw new InvalidDataException("The source enrollment pause time is invalid.");
         }
 
     }

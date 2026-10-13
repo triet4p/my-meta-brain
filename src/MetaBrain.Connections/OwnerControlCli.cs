@@ -40,6 +40,12 @@ internal static class OwnerControlCli
                 "source-status" => await SourceStatusAsync(options).ConfigureAwait(false),
                 "source-ingest" => await SourceIngestAsync(options).ConfigureAwait(false),
                 "source-relocate" => await SourceRelocateAsync(options).ConfigureAwait(false),
+                "source-pause" => await SourcePauseAsync(options).ConfigureAwait(false),
+                "source-resume" => await SourceResumeAsync(options).ConfigureAwait(false),
+                "source-refresh-optin" => await SourceRefreshOptInAsync(options, optIn: true).ConfigureAwait(false),
+                "source-refresh-optout" => await SourceRefreshOptInAsync(options, optIn: false).ConfigureAwait(false),
+                "source-list" => await SourceListAsync(options).ConfigureAwait(false),
+                "source-refresh" => await SourceRefreshAsync(options).ConfigureAwait(false),
                 "source-snapshot-list" => await SourceSnapshotListAsync(options).ConfigureAwait(false),
                 "source-snapshot-preserve" => await SourceSnapshotPreserveAsync(options).ConfigureAwait(false),
                 "source-snapshot-read" => await SourceSnapshotReadAsync(options).ConfigureAwait(false),
@@ -971,6 +977,153 @@ internal static class OwnerControlCli
         return 0;
     }
 
+    /// <summary>
+    /// S3-T6 owner ingestion pause: an explicit per-source stop. The reply
+    /// carries the paused life state; no transcript is opened and no
+    /// checkpoint moves.
+    /// </summary>
+    private static async Task<int> SourcePauseAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--source-id");
+        var controlPipe = ControlPipe(options);
+        var sourceId = options.Required("--source-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(sourceId))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.SourcePauseOperation,
+                ResourceId: sourceId)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "source_paused"))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        PrintSourceEnrollment(result.Reply);
+        return 0;
+    }
+
+    /// <summary>
+    /// S3-T6 owner ingestion resume: clears an explicit pause and reports the
+    /// persisted checkpoint the next ingest continues from. Resume after
+    /// unlock never duplicates already accepted events.
+    /// </summary>
+    private static async Task<int> SourceResumeAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--source-id");
+        var controlPipe = ControlPipe(options);
+        var sourceId = options.Required("--source-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(sourceId))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.SourceResumeOperation,
+                ResourceId: sourceId)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "source_resumed"))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        PrintSourceEnrollment(result.Reply);
+        PrintSourceIngestion(result.Reply);
+        return 0;
+    }
+
+    /// <summary>
+    /// S3-T6 safe refresh opt-in/opt-out: one explicit owner consent flag per
+    /// source. Refresh runs only for opted-in sources while unlocked; the
+    /// reply names the updated consent beside the persisted checkpoint.
+    /// </summary>
+    private static async Task<int> SourceRefreshOptInAsync(CommandOptions options, bool optIn)
+    {
+        options.RequireOnly("--control-pipe", "--source-id");
+        var controlPipe = ControlPipe(options);
+        var sourceId = options.Required("--source-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(sourceId))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                optIn ? ServiceRequestHandler.SourceRefreshOptInOperation : ServiceRequestHandler.SourceRefreshOptOutOperation,
+                ResourceId: sourceId)).ConfigureAwait(false);
+        var expected = optIn ? "source_refresh_opted_in" : "source_refresh_opted_out";
+        if (!result.Success || !HasStatus(result.Reply, expected))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        PrintSourceEnrollment(result.Reply);
+        PrintSourceIngestion(result.Reply);
+        return 0;
+    }
+
+    /// <summary>
+    /// S3-T6 owner allowlist listing: every enrolled source with its life,
+    /// checkpoint and refresh consent. Listing never opens a transcript.
+    /// </summary>
+    private static async Task<int> SourceListAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceListOperation)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "sources_listed") ||
+            !result.Reply.TryGetProperty("sourceEnrollments", out var enrollments) ||
+            enrollments.ValueKind != JsonValueKind.Array)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        foreach (var enrollment in enrollments.EnumerateArray())
+        {
+            Console.WriteLine($"SOURCE id={JsonValueText(enrollment, "sourceId")} zone={JsonValueText(enrollment, "zoneId")} format={JsonValueText(enrollment, "format")} version={JsonValueText(enrollment, "formatVersion")} generation={JsonValueText(enrollment, "generation")} life={JsonValueText(enrollment, "life")} availability={JsonValueText(enrollment, "availability")} pausedUtc={JsonValueText(enrollment, "pausedAtUtc")} refreshOptIn={JsonFlagText(enrollment, "refreshOptIn")} sourceReferenceRevision={JsonValueText(enrollment, "sourceReferenceRevision")} journalCiphertextBytes={JsonValueText(enrollment, "journalCiphertextBytes")} snapshotCiphertextBytes={JsonValueText(enrollment, "snapshotCiphertextBytes")} snapshotRevision={JsonValueText(enrollment, "snapshotRevision")}");
+        }
+
+        Console.WriteLine($"SOURCES count={enrollments.GetArrayLength()}");
+        return 0;
+    }
+
+    /// <summary>
+    /// S3-T6-A2 owner refresh: one explicit idempotent pass over the owner
+    /// allowlist plus the continuous owner-opt-in background loop. Only opted-in,
+    /// active sources are ingested from their persisted checkpoints; every skipped
+    /// source names its reason with no read. The background loop runs the same pass
+    /// periodically while unlocked without a manual command; lock/pause/disable
+    /// stop the in-flight pass at its next per-source boundary, and unlock/restart
+    /// resume from persisted checkpoints without duplicates.
+    /// </summary>
+    private static async Task<int> SourceRefreshAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceRefreshOperation)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "sources_refreshed") ||
+            !result.Reply.TryGetProperty("sourceRefresh", out var entries) ||
+            entries.ValueKind != JsonValueKind.Array)
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        foreach (var entry in entries.EnumerateArray())
+        {
+            Console.WriteLine($"REFRESH source={JsonValueText(entry, "sourceId")} status={JsonValueText(entry, "status")} consumedOffset={JsonValueText(entry, "consumedOffset")} eventsAdded={JsonValueText(entry, "eventsAdded")} diagnosticsAdded={JsonValueText(entry, "diagnosticsAdded")} diagnostic={JsonValueText(entry, "diagnosticCode")}");
+        }
+
+        Console.WriteLine($"REFRESH count={entries.GetArrayLength()}");
+        return 0;
+    }
+
     private static async Task<int> SourceSnapshotListAsync(CommandOptions options)
     {
         options.RequireOnly("--control-pipe", "--source-id");
@@ -1177,7 +1330,7 @@ internal static class OwnerControlCli
             return;
         }
 
-        Console.WriteLine($"SOURCE id={JsonValueText(enrollment, "sourceId")} zone={JsonValueText(enrollment, "zoneId")} format={JsonValueText(enrollment, "format")} version={JsonValueText(enrollment, "formatVersion")} generation={JsonValueText(enrollment, "generation")} life={JsonValueText(enrollment, "life")} availability={JsonValueText(enrollment, "availability")} observedUtc={JsonValueText(enrollment, "availabilityObservedAtUtc")} sourceReferenceRevision={JsonValueText(enrollment, "sourceReferenceRevision")} anchorLength={JsonValueText(enrollment, "anchorLength")} enrolledUtc={JsonValueText(enrollment, "enrolledAtUtc")} relocatedUtc={JsonValueText(enrollment, "relocatedAtUtc")}");
+        Console.WriteLine($"SOURCE id={JsonValueText(enrollment, "sourceId")} zone={JsonValueText(enrollment, "zoneId")} format={JsonValueText(enrollment, "format")} version={JsonValueText(enrollment, "formatVersion")} generation={JsonValueText(enrollment, "generation")} life={JsonValueText(enrollment, "life")} availability={JsonValueText(enrollment, "availability")} observedUtc={JsonValueText(enrollment, "availabilityObservedAtUtc")} sourceReferenceRevision={JsonValueText(enrollment, "sourceReferenceRevision")} anchorLength={JsonValueText(enrollment, "anchorLength")} enrolledUtc={JsonValueText(enrollment, "enrolledAtUtc")} relocatedUtc={JsonValueText(enrollment, "relocatedAtUtc")} pausedUtc={JsonValueText(enrollment, "pausedAtUtc")} refreshOptIn={JsonFlagText(enrollment, "refreshOptIn")} journalCiphertextBytes={JsonValueText(enrollment, "journalCiphertextBytes")} snapshotCiphertextBytes={JsonValueText(enrollment, "snapshotCiphertextBytes")} snapshotRevision={JsonValueText(enrollment, "snapshotRevision")}");
         if (enrollment.TryGetProperty("quarantine", out var quarantine) && quarantine.ValueKind == JsonValueKind.Object)
         {
             Console.WriteLine($"quarantine={JsonValueText(quarantine, "reason")} detail={JsonValueText(quarantine, "detail")} recordedUtc={JsonValueText(quarantine, "recordedAtUtc")}");
@@ -3121,7 +3274,7 @@ internal static class OwnerControlCli
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|source-enroll --source-id --zone-id --format --format-version --input-file|source-relocate --source-id --source-generation --input-file|source-revoke --source-id|source-status --source-id|source-ingest --source-id|source-snapshot-list --source-id|source-snapshot-preserve --source-id --source-revision --retain-until-utc|source-snapshot-read --snapshot-id --snapshot-revision --output-file|source-snapshot-retain --snapshot-id --expected-revision --retain-until-utc|source-snapshot-purge --snapshot-id --expected-revision|research-capture --resource-id --zone-id --input-file [--title --source-url --source-author --source-date]|research-read --resource-id [--resource-revision --output-file]|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|lifecycle-create|lifecycle-read|lifecycle-retained-read --resource-revision|lifecycle-publish --expected-revision|lifecycle-reject --expected-revision|lifecycle-withdraw --expected-revision|lifecycle-repropose --expected-revision|lifecycle-question-resolve --expected-revision|lifecycle-question-reopen --expected-revision|lifecycle-intention-complete --expected-revision|lifecycle-intention-cancel --expected-revision|lifecycle-intention-supersede --expected-revision|lifecycle-intention-notify --expected-revision|lifecycle-intention-acknowledge --expected-revision|lifecycle-validity-set --expected-revision|lifecycle-retain --expected-revision|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read|agent-collection-view}; lifecycle --resource-id is the subject item ID; relation/lifecycle transitions need --expected-revision and an optional --input-file draft; source-enroll and source-relocate --input-file are JSON objects holding the private locator ({\"locator\": \"C:/exact/path\"}), never a command argument; source-snapshot-read requires an explicit --output-file export");
+        Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|source-enroll --source-id --zone-id --format --format-version --input-file|source-relocate --source-id --source-generation --input-file|source-revoke --source-id|source-status --source-id|source-ingest --source-id|source-pause --source-id|source-resume --source-id|source-refresh-optin --source-id|source-refresh-optout --source-id|source-list|source-refresh|source-snapshot-list --source-id|source-snapshot-preserve --source-id --source-revision --retain-until-utc|source-snapshot-read --snapshot-id --snapshot-revision --output-file|source-snapshot-retain --snapshot-id --expected-revision --retain-until-utc|source-snapshot-purge --snapshot-id --expected-revision|research-capture --resource-id --zone-id --input-file [--title --source-url --source-author --source-date]|research-read --resource-id [--resource-revision --output-file]|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|lifecycle-create|lifecycle-read|lifecycle-retained-read --resource-revision|lifecycle-publish --expected-revision|lifecycle-reject --expected-revision|lifecycle-withdraw --expected-revision|lifecycle-repropose --expected-revision|lifecycle-question-resolve --expected-revision|lifecycle-question-reopen --expected-revision|lifecycle-intention-complete --expected-revision|lifecycle-intention-cancel --expected-revision|lifecycle-intention-supersede --expected-revision|lifecycle-intention-notify --expected-revision|lifecycle-intention-acknowledge --expected-revision|lifecycle-validity-set --expected-revision|lifecycle-retain --expected-revision|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read|agent-collection-view}; lifecycle --resource-id is the subject item ID; relation/lifecycle transitions need --expected-revision and an optional --input-file draft; source-enroll and source-relocate --input-file are JSON objects holding the private locator ({\"locator\": \"C:/exact/path\"}), never a command argument; source-snapshot-read requires an explicit --output-file export");
         return 2;
     }
 
