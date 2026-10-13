@@ -47,12 +47,17 @@ internal sealed class EnrolledSourceFileReader : ISourceSnapshotReader
                 bufferSize: 8192,
                 FileOptions.SequentialScan);
         }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            // Only the exact enrolled path is probed: this outcome says that
+            // path is missing, not that the source was found elsewhere.
+            return new SourceSnapshotResult(SourceSnapshotStatus.Missing);
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
                                    System.Security.SecurityException or ArgumentException or NotSupportedException)
         {
-            // A writer holding the file (typical for a live session), a
-            // missing path and an ACL denial are one explicit status: the
-            // coordinator refuses the run and never treats it as empty.
+            // A writer holding the file (typical for a live session), an ACL
+            // denial, or an unstable handle is unreadable, not missing.
             return new SourceSnapshotResult(SourceSnapshotStatus.Unreadable);
         }
 

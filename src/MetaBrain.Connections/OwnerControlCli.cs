@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using MetaBrain.Application;
+using MetaBrain.Core.Domain;
 
 namespace MetaBrain.Connections;
 
@@ -38,6 +39,12 @@ internal static class OwnerControlCli
                 "source-revoke" => await SourceRevokeAsync(options).ConfigureAwait(false),
                 "source-status" => await SourceStatusAsync(options).ConfigureAwait(false),
                 "source-ingest" => await SourceIngestAsync(options).ConfigureAwait(false),
+                "source-relocate" => await SourceRelocateAsync(options).ConfigureAwait(false),
+                "source-snapshot-list" => await SourceSnapshotListAsync(options).ConfigureAwait(false),
+                "source-snapshot-preserve" => await SourceSnapshotPreserveAsync(options).ConfigureAwait(false),
+                "source-snapshot-read" => await SourceSnapshotReadAsync(options).ConfigureAwait(false),
+                "source-snapshot-retain" => await SourceSnapshotRetainAsync(options).ConfigureAwait(false),
+                "source-snapshot-purge" => await SourceSnapshotPurgeAsync(options).ConfigureAwait(false),
                 "research-capture" => await ResearchCaptureAsync(options).ConfigureAwait(false),
                 "research-read" => await ResearchReadAsync(options).ConfigureAwait(false),
                 "relation-create" => await RelationCreateAsync(options).ConfigureAwait(false),
@@ -190,6 +197,9 @@ internal static class OwnerControlCli
         }
 
         string sessionToken;
+        var agentOperation = accessOperation == "source.read"
+            ? ServiceRequestHandler.AgentSourceReadOperation
+            : ServiceRequestHandler.AgentResourceReadOperation;
         try
         {
             sessionToken = AgentSessionFile.Read(sessionPath);
@@ -203,7 +213,7 @@ internal static class OwnerControlCli
         var result = await InvokeAgentAsync(agentPipe,
             new ServiceRequest(
                 ServiceRequestHandler.CurrentProtocolVersion,
-                ServiceRequestHandler.AgentResourceReadOperation,
+                agentOperation,
                 ResourceId: resourceId,
                 SessionToken: sessionToken,
                 AccessOperation: accessOperation,
@@ -212,6 +222,17 @@ internal static class OwnerControlCli
         {
             WriteServiceError(result);
             return 3;
+        }
+        if (accessOperation == "source.read")
+        {
+            if (!HasStatus(result.Reply, "source"))
+            {
+                WriteServiceError(result);
+                return 4;
+            }
+
+            PrintRegisteredSource(result.Reply);
+            return 0;
         }
 
         if (!HasStatus(result.Reply, "content") ||
@@ -847,6 +868,37 @@ internal static class OwnerControlCli
         return 0;
     }
 
+    /// <summary>
+    /// The owner names one candidate path through a private request file.
+    /// The service adopts it only if its whole-file length and digest match
+    /// the enrolled generation; no alternate path is searched or followed.
+    /// </summary>
+    private static async Task<int> SourceRelocateAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--source-id", "--source-generation", "--input-file");
+        var controlPipe = ControlPipe(options);
+        var sourceId = options.Required("--source-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(sourceId) ||
+            !long.TryParse(options.Required("--source-generation"), NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out var generation) || generation < 1)
+        {
+            return Usage();
+        }
+
+        var locator = await ReadSourceEnrollmentLocatorAsync(options.Required("--input-file")).ConfigureAwait(false);
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.SourceRelocateOperation,
+                ResourceId: sourceId, SourceLocator: locator, SourceGeneration: generation)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "source_relocated"))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        PrintSourceEnrollment(result.Reply);
+        return 0;
+    }
+
     private static async Task<int> SourceRevokeAsync(CommandOptions options)
     {
         options.RequireOnly("--control-pipe", "--source-id");
@@ -919,6 +971,193 @@ internal static class OwnerControlCli
         return 0;
     }
 
+    private static async Task<int> SourceSnapshotListAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--source-id");
+        var controlPipe = ControlPipe(options);
+        var sourceId = options.Required("--source-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(sourceId))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceSnapshotListOperation, ResourceId: sourceId)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "source_snapshots"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        var snapshots = result.Reply.TryGetProperty("sourceSnapshots", out var values) &&
+            values.ValueKind == JsonValueKind.Array
+                ? values.EnumerateArray().ToArray()
+                : Array.Empty<JsonElement>();
+        foreach (var snapshot in snapshots)
+        {
+            Console.WriteLine($"SOURCE SNAPSHOT id={JsonValueText(snapshot, "id")} zone={JsonValueText(snapshot, "zoneId")} revision={JsonValueText(snapshot, "revision")} generation={JsonValueText(snapshot, "generation")}");
+        }
+
+        Console.WriteLine($"SOURCE SNAPSHOTS source={sourceId} count={snapshots.Length}");
+        return 0;
+    }
+
+    private static async Task<int> SourceSnapshotPreserveAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--source-id", "--source-revision", "--retain-until-utc");
+        var controlPipe = ControlPipe(options);
+        var sourceId = options.Required("--source-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(sourceId) ||
+            !long.TryParse(options.Required("--source-revision"), NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out var sourceRevision) || sourceRevision < 1 ||
+            !TryParseExplicitUtc(options.Required("--retain-until-utc"), out var retainUntilUtc))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceSnapshotPreserveOperation,
+                ResourceId: sourceId,
+                ResourceRevision: sourceRevision,
+                SnapshotRetainUntilUtc: retainUntilUtc)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "source_snapshot_preserved"))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        PrintSourceSnapshot(result.Reply);
+        return 0;
+    }
+
+    /// <summary>
+    /// Snapshot content leaves the service only when the owner names an
+    /// explicit export file. No default stdout body or temporary plaintext
+    /// file is created.
+    /// </summary>
+    private static async Task<int> SourceSnapshotReadAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--snapshot-id", "--snapshot-revision", "--output-file");
+        var controlPipe = ControlPipe(options);
+        var snapshotId = options.Required("--snapshot-id");
+        var outputFile = options.Required("--output-file");
+        if (!SourceSnapshotIds.IsSnapshotId(snapshotId) ||
+            !long.TryParse(options.Required("--snapshot-revision"), NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out var revision) || revision < 1)
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceSnapshotReadOperation,
+                ResourceId: snapshotId, ResourceRevision: revision)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "source_snapshot") ||
+            !result.Reply.TryGetProperty("sourceSnapshot", out var snapshot) ||
+            !snapshot.TryGetProperty("contentBase64", out var content) ||
+            content.ValueKind != JsonValueKind.String)
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        var bytes = Convert.FromBase64String(content.GetString() ?? string.Empty);
+        try
+        {
+            await using var output = new FileStream(outputFile, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            await output.WriteAsync(bytes).ConfigureAwait(false);
+            await output.FlushAsync().ConfigureAwait(false);
+            PrintSourceSnapshot(result.Reply);
+            Console.WriteLine($"SOURCE SNAPSHOT exported id={snapshotId} revision={revision} bytes={bytes.Length}");
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(bytes);
+        }
+    }
+
+    private static async Task<int> SourceSnapshotRetainAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--snapshot-id", "--expected-revision", "--retain-until-utc");
+        var controlPipe = ControlPipe(options);
+        var snapshotId = options.Required("--snapshot-id");
+        if (!SourceSnapshotIds.IsSnapshotId(snapshotId) ||
+            !long.TryParse(options.Required("--expected-revision"), NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out var expectedRevision) || expectedRevision < 1 ||
+            !TryParseExplicitUtc(options.Required("--retain-until-utc"), out var retainUntilUtc))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceSnapshotRetainOperation,
+                ResourceId: snapshotId,
+                ResourceRevision: expectedRevision,
+                SnapshotRetainUntilUtc: retainUntilUtc)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "source_snapshot_retained"))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        PrintSourceSnapshot(result.Reply);
+        return 0;
+    }
+
+    private static async Task<int> SourceSnapshotPurgeAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--snapshot-id", "--expected-revision");
+        var controlPipe = ControlPipe(options);
+        var snapshotId = options.Required("--snapshot-id");
+        if (!SourceSnapshotIds.IsSnapshotId(snapshotId) ||
+            !long.TryParse(options.Required("--expected-revision"), NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out var expectedRevision) || expectedRevision < 1)
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceSnapshotPurgeOperation,
+                ResourceId: snapshotId, ResourceRevision: expectedRevision)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "source_snapshot_purged"))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        PrintSourceSnapshot(result.Reply);
+        return 0;
+    }
+
+    private static bool TryParseExplicitUtc(string value, out DateTimeOffset timestamp)
+    {
+        if (DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out timestamp) &&
+            timestamp.Offset == TimeSpan.Zero &&
+            (value.EndsWith('Z') || value.EndsWith("+00:00", StringComparison.Ordinal)))
+        {
+            return true;
+        }
+
+        timestamp = default;
+        return false;
+    }
+
+    private static void PrintSourceSnapshot(JsonElement reply)
+    {
+        if (!reply.TryGetProperty("sourceSnapshot", out var snapshot) ||
+            snapshot.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        Console.WriteLine($"SOURCE SNAPSHOT id={JsonValueText(snapshot, "id")} zone={JsonValueText(snapshot, "zoneId")} revision={JsonValueText(snapshot, "revision")} source={JsonValueText(snapshot, "sourceId")} sourceRevision={JsonValueText(snapshot, "sourceRevision")} generation={JsonValueText(snapshot, "sourceGeneration")} bytes={JsonValueText(snapshot, "sourceLength")} digest={JsonValueText(snapshot, "sourceDigest")} capturedUtc={JsonValueText(snapshot, "capturedAtUtc")} retainUntilUtc={JsonValueText(snapshot, "retainUntilUtc")} purged={JsonValueText(snapshot, "purged")}");
+    }
+
     /// <summary>
     /// A successful ingest reply carries a status; every refusal (not
     /// enrolled, revoked, quarantined, generation change, unreadable, limits)
@@ -938,7 +1177,7 @@ internal static class OwnerControlCli
             return;
         }
 
-        Console.WriteLine($"SOURCE id={JsonValueText(enrollment, "sourceId")} zone={JsonValueText(enrollment, "zoneId")} format={JsonValueText(enrollment, "format")} version={JsonValueText(enrollment, "formatVersion")} generation={JsonValueText(enrollment, "generation")} life={JsonValueText(enrollment, "life")} anchorLength={JsonValueText(enrollment, "anchorLength")} enrolledUtc={JsonValueText(enrollment, "enrolledAtUtc")}");
+        Console.WriteLine($"SOURCE id={JsonValueText(enrollment, "sourceId")} zone={JsonValueText(enrollment, "zoneId")} format={JsonValueText(enrollment, "format")} version={JsonValueText(enrollment, "formatVersion")} generation={JsonValueText(enrollment, "generation")} life={JsonValueText(enrollment, "life")} availability={JsonValueText(enrollment, "availability")} observedUtc={JsonValueText(enrollment, "availabilityObservedAtUtc")} sourceReferenceRevision={JsonValueText(enrollment, "sourceReferenceRevision")} anchorLength={JsonValueText(enrollment, "anchorLength")} enrolledUtc={JsonValueText(enrollment, "enrolledAtUtc")} relocatedUtc={JsonValueText(enrollment, "relocatedAtUtc")}");
         if (enrollment.TryGetProperty("quarantine", out var quarantine) && quarantine.ValueKind == JsonValueKind.Object)
         {
             Console.WriteLine($"quarantine={JsonValueText(quarantine, "reason")} detail={JsonValueText(quarantine, "detail")} recordedUtc={JsonValueText(quarantine, "recordedAtUtc")}");
@@ -2882,7 +3121,7 @@ internal static class OwnerControlCli
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|source-enroll --source-id --zone-id --format --format-version --input-file|source-revoke --source-id|source-status --source-id|source-ingest --source-id|research-capture --resource-id --zone-id --input-file [--title --source-url --source-author --source-date]|research-read --resource-id [--resource-revision --output-file]|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|lifecycle-create|lifecycle-read|lifecycle-retained-read --resource-revision|lifecycle-publish --expected-revision|lifecycle-reject --expected-revision|lifecycle-withdraw --expected-revision|lifecycle-repropose --expected-revision|lifecycle-question-resolve --expected-revision|lifecycle-question-reopen --expected-revision|lifecycle-intention-complete --expected-revision|lifecycle-intention-cancel --expected-revision|lifecycle-intention-supersede --expected-revision|lifecycle-intention-notify --expected-revision|lifecycle-intention-acknowledge --expected-revision|lifecycle-validity-set --expected-revision|lifecycle-retain --expected-revision|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read|agent-collection-view}; lifecycle --resource-id is the subject item ID; relation/lifecycle transitions need --expected-revision and an optional --input-file draft; source-enroll's --input-file is a JSON object holding the private locator ({\"locator\": \"C:/exact/path\"}), never a command argument");
+        Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|source-enroll --source-id --zone-id --format --format-version --input-file|source-relocate --source-id --source-generation --input-file|source-revoke --source-id|source-status --source-id|source-ingest --source-id|source-snapshot-list --source-id|source-snapshot-preserve --source-id --source-revision --retain-until-utc|source-snapshot-read --snapshot-id --snapshot-revision --output-file|source-snapshot-retain --snapshot-id --expected-revision --retain-until-utc|source-snapshot-purge --snapshot-id --expected-revision|research-capture --resource-id --zone-id --input-file [--title --source-url --source-author --source-date]|research-read --resource-id [--resource-revision --output-file]|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|lifecycle-create|lifecycle-read|lifecycle-retained-read --resource-revision|lifecycle-publish --expected-revision|lifecycle-reject --expected-revision|lifecycle-withdraw --expected-revision|lifecycle-repropose --expected-revision|lifecycle-question-resolve --expected-revision|lifecycle-question-reopen --expected-revision|lifecycle-intention-complete --expected-revision|lifecycle-intention-cancel --expected-revision|lifecycle-intention-supersede --expected-revision|lifecycle-intention-notify --expected-revision|lifecycle-intention-acknowledge --expected-revision|lifecycle-validity-set --expected-revision|lifecycle-retain --expected-revision|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read|agent-collection-view}; lifecycle --resource-id is the subject item ID; relation/lifecycle transitions need --expected-revision and an optional --input-file draft; source-enroll and source-relocate --input-file are JSON objects holding the private locator ({\"locator\": \"C:/exact/path\"}), never a command argument; source-snapshot-read requires an explicit --output-file export");
         return 2;
     }
 

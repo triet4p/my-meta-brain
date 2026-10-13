@@ -184,6 +184,7 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.SourceCreateOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceReviseOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceReadOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.AgentSourceSnapshotReadOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.AgentSourceReadOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.RelationCreateOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.RelationAcceptOperation, StringComparison.Ordinal) ||
@@ -215,6 +216,12 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.SourceRevokeOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceStatusOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceIngestOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceRelocateOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceSnapshotPreserveOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceSnapshotListOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceSnapshotReadOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceSnapshotRetainOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceSnapshotPurgeOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.ResearchCaptureOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.ResearchReadOperation, StringComparison.Ordinal);
                 using var operation = needsVaultOperation ? _vault.TryBeginOperation() : null;
@@ -253,6 +260,7 @@ internal sealed class NamedPipeService
                 !string.Equals(operation, ServiceRequestHandler.AgentLinkCreateOperation, StringComparison.Ordinal) &&
                 !string.Equals(operation, ServiceRequestHandler.AgentRelationReadOperation, StringComparison.Ordinal) &&
                 !string.Equals(operation, ServiceRequestHandler.AgentAccessRequestOperation, StringComparison.Ordinal) &&
+                !string.Equals(operation, ServiceRequestHandler.AgentSourceSnapshotReadOperation, StringComparison.Ordinal) &&
                 !string.Equals(operation, ServiceRequestHandler.AgentAccessRequestStatusOperation, StringComparison.Ordinal);
         }
 
@@ -263,6 +271,7 @@ internal sealed class NamedPipeService
             string.Equals(operation, ServiceRequestHandler.AgentMemoryReadOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentCollectionViewOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentSourceReadOperation, StringComparison.Ordinal) ||
+            string.Equals(operation, ServiceRequestHandler.AgentSourceSnapshotReadOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentLinkCreateOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentRelationReadOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentAccessRequestOperation, StringComparison.Ordinal) ||

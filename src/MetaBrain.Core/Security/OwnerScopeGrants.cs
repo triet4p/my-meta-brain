@@ -70,6 +70,7 @@ public sealed partial class OwnerScopeGrantAuthority
     {
         "resource.read",
         "source.read",
+        "source.snapshot.read",
         "memory.read",
         "relation.read",
         "proposal.create",
@@ -101,6 +102,7 @@ public sealed partial class OwnerScopeGrantAuthority
         var sourceSnapshot = NormalizeResources(resources, allowEmpty: false);
         var destinationSnapshot = NormalizeResources(destinationResources ?? Array.Empty<ScopeResourceRevision>(), allowEmpty: true);
         var operationSnapshot = NormalizeOperations(operations);
+        ValidateSnapshotOperationScope(sourceSnapshot, operationSnapshot);
         ValidateOperationScope(operationSnapshot, destinationSnapshot, egress);
         ValidateExpiry(expiresAtUtc);
 
@@ -149,6 +151,7 @@ public sealed partial class OwnerScopeGrantAuthority
                     ? resource
                     : throw new ArgumentException("An owner collection member is no longer managed.", nameof(collectionId)))
                 .ToArray();
+            ValidateSnapshotOperationScope(sourceSnapshot, operationSnapshot);
             return StorePreviewLocked(
                 state, sourceSnapshot, operationSnapshot, destinationSnapshot, expiresAtUtc, egress, collectionId);
         }
@@ -562,6 +565,21 @@ public sealed partial class OwnerScopeGrantAuthority
             throw new ArgumentException("Provider egress requires an explicit valid provider, model, and cost limit within the frozen per-job maximum.");
         }
     }
+    private static void ValidateSnapshotOperationScope(
+        IReadOnlyCollection<ScopeResourceRevision> resources,
+        IReadOnlyCollection<string> operations)
+    {
+        var snapshotRead = operations.Contains("source.snapshot.read", StringComparer.Ordinal);
+        var containsSnapshots = resources.Any(resource =>
+            MetaBrain.Core.Domain.SourceSnapshotIds.IsSnapshotId(resource.ResourceId));
+        if (snapshotRead != containsSnapshots ||
+            (snapshotRead && (operations.Count != 1 ||
+                resources.Any(resource => !MetaBrain.Core.Domain.SourceSnapshotIds.IsSnapshotId(resource.ResourceId)))))
+        {
+            throw new ArgumentException("Source snapshot grants require only snapshot IDs and the source.snapshot.read operation.");
+        }
+    }
+
 
     private static bool IsValidVerifier(string? verifier)
     {

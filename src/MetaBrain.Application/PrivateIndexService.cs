@@ -159,6 +159,37 @@ public sealed class PrivateIndexAuthority
         ArgumentNullException.ThrowIfNull(resource);
         ArgumentNullException.ThrowIfNull(content);
 
+        if (SourceSnapshotIds.IsSnapshotId(resource.ResourceId))
+        {
+            var snapshot = SourceSnapshotCodec.DecodeStored(content, resource.Revision);
+            try
+            {
+                if (!string.Equals(snapshot.Stored.Id, resource.ResourceId, StringComparison.Ordinal) ||
+                    !string.Equals(snapshot.Stored.ZoneId, resource.ZoneId, StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException("The preserved source snapshot identity does not match its manifest.");
+                }
+
+                var state = snapshot.Stored.Purged
+                    ? "purged"
+                    : snapshot.Stored.RetainUntilUtc <= DateTimeOffset.UtcNow
+                        ? "expired"
+                        : "retained";
+                return new PrivateIndexRow(
+                    resource.ResourceId,
+                    resource.ZoneId,
+                    resource.Revision,
+                    snapshot.Stored.SchemaVersion,
+                    PrivateIndexRecordKind.PreservedSourceSnapshot,
+                    state,
+                    new[] { snapshot.Stored.SourceId });
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(snapshot.Content);
+            }
+        }
+
         if (MemoryItemTryRead(content, out var memory) && memory is not null &&
             string.Equals(memory.Id, resource.ResourceId, StringComparison.Ordinal))
         {

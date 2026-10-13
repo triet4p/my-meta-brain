@@ -307,12 +307,19 @@ public sealed class AgentSessionAuthority
             return Deny("resource_unavailable", policyGeneration);
         }
 
+        var snapshotResource = MetaBrain.Core.Domain.SourceSnapshotIds.IsSnapshotId(request.ResourceId);
+        if (snapshotResource != string.Equals(request.Operation, "source.snapshot.read", StringComparison.Ordinal))
+        {
+            return Deny("resource_unavailable", policyGeneration);
+        }
+
         switch (request.Operation)
         {
             case "resource.read":
             case "source.read":
             case "memory.read":
             case "relation.read":
+            case "source.snapshot.read":
                 if (request.DestinationResourceId is not null || request.DestinationRevision is not null ||
                     HasEgressFields(request))
                 {

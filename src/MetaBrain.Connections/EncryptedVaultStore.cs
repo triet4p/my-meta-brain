@@ -31,16 +31,11 @@ internal sealed class EncryptedVaultStore
     private const int PreviousScopeGrantSchemaVersion = 3;
     private const int LegacyScopeGrantSchemaVersion = 2;
     private const int KdfIterations = 600_000;
-    private const int MaximumEnvelopeBytes = 4 * 1024 * 1024;
-    // The manifest is the one private file whose size scales with the resource
-    // count: ValidateManifest admits up to 100,000 descriptors (each with a
-    // resource ID and zone ID of up to 128 characters plus a storage name),
-    // whose serialized size needs a dedicated bound. The shared 4 MiB envelope
-    // cap fits resource envelopes (<= 1 MiB plaintext) but silently made the
-    // validator's own 100,000-resource ceiling unreachable: a full-size
-    // manifest could never be read back, so unlock failed closed. These bounds
-    // sit ~2x above the 100,000-descriptor worst case, exactly like the
-    // scope-grant and catalog plaintext/envelope pairs above.
+    private const int MaximumEnvelopeBytes = 24 * 1024 * 1024;
+    // The encrypted resource envelope accommodates the maximum selected source
+    // snapshot (16 MiB plus its bounded lineage header) after AEAD and
+    // JSON/base64 framing. The manifest has a separate bound because it scales
+    // with resource count.
     private const int MaximumManifestBytes = 64 * 1024 * 1024;
     private const int MaximumManifestEnvelopeBytes = 96 * 1024 * 1024;
     private const int MaximumScopeGrantBytes = 4 * 1024 * 1024;
@@ -50,7 +45,7 @@ internal sealed class EncryptedVaultStore
     private const int MaximumSourceEnrollmentBytes = SourceIngestionLimits.MaximumSourceStateBytes;
     private const int MaximumSourceEnrollmentEnvelopeBytes = SourceIngestionLimits.MaximumSourceStateBytes + (256 * 1024);
     private const int MaximumProjectionBytes = 1024 * 1024;
-    private const int MaximumResourceBytes = 1024 * 1024;
+    private const int MaximumResourceBytes = SourceSnapshotCodec.MaximumStoredBytes;
     private const int KeyBytes = 32;
     private const int SaltBytes = 16;
     private const int NonceBytes = 12;

@@ -48,8 +48,9 @@ public sealed record ServiceRequest(
     int? SourceFormatVersion = null,
     string? SourceTitle = null,
     string? SourceAuthor = null,
-    DateTimeOffset? SourceCapturedAtUtc = null);
-
+    DateTimeOffset? SourceCapturedAtUtc = null,
+    long? SourceGeneration = null,
+    DateTimeOffset? SnapshotRetainUntilUtc = null);
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
     ScopeResourceRevision[] Resources,
@@ -243,7 +244,11 @@ public sealed record SourceEnrollmentWire(
     long AnchorLength,
     DateTimeOffset EnrolledAtUtc,
     DateTimeOffset? RevokedAtUtc,
-    SourceQuarantineWire? Quarantine);
+    SourceQuarantineWire? Quarantine,
+    string Availability,
+    DateTimeOffset? AvailabilityObservedAtUtc,
+    DateTimeOffset? RelocatedAtUtc,
+    long? SourceReferenceRevision);
 
 public sealed record SourceQuarantineWire(string Reason, string Detail, DateTimeOffset RecordedAtUtc);
 
@@ -259,6 +264,26 @@ public sealed record SourceIngestionWire(
     int EventCount,
     int DiagnosticCount,
     DateTimeOffset? LastIngestAtUtc);
+public sealed record SourceSnapshotWire(
+    string Id,
+    string ZoneId,
+    long Revision,
+    string SourceId,
+    long SourceRevision,
+    long SourceGeneration,
+    long SourceLength,
+    string SourceDigest,
+    DateTimeOffset CapturedAtUtc,
+    DateTimeOffset RetainUntilUtc,
+    bool Purged,
+    string? ContentBase64);
+
+public sealed record SourceSnapshotDescriptorWire(
+    string Id,
+    string ZoneId,
+    long Revision,
+    long Generation);
+
 
 /// <summary>
 /// Owner-only private-index state. <see cref="Rows"/> is a bounded sample of
@@ -314,7 +339,9 @@ public sealed record ServiceReply(
     LifecycleRevisionWire? RetainedRevision = null,
     PrivateIndexWire? PrivateIndex = null,
     SourceEnrollmentWire? SourceEnrollment = null,
-    SourceIngestionWire? SourceIngestion = null);
+    SourceIngestionWire? SourceIngestion = null,
+    SourceSnapshotWire? SourceSnapshot = null,
+    SourceSnapshotDescriptorWire[]? SourceSnapshots = null);
 
 
 public sealed class ServiceRequestHandler
@@ -356,6 +383,8 @@ public sealed class ServiceRequestHandler
     public const string SourceCreateOperation = "source.create";
     public const string SourceReviseOperation = "source.revise";
     public const string AgentSourceReadOperation = "agent.source.read";
+    public const string AgentSourceSnapshotReadOperation = "agent.source.snapshot.read";
+    public const string SourceSnapshotReadOperation = "source.snapshot.read";
     public const string RelationCreateOperation = "relation.create";
     public const string RelationAcceptOperation = "relation.accept";
     public const string RelationRejectOperation = "relation.reject";
@@ -386,6 +415,11 @@ public sealed class ServiceRequestHandler
     public const string SourceRevokeOperation = "source.revoke";
     public const string SourceStatusOperation = "source.status";
     public const string SourceIngestOperation = "source.ingest";
+    public const string SourceRelocateOperation = "source.relocate";
+    public const string SourceSnapshotPreserveOperation = "source.snapshot.preserve";
+    public const string SourceSnapshotListOperation = "source.snapshot.list";
+    public const string SourceSnapshotRetainOperation = "source.snapshot.retain";
+    public const string SourceSnapshotPurgeOperation = "source.snapshot.purge";
     public const string ResearchCaptureOperation = "research.capture";
     public const string ResearchReadOperation = "research.read";
 
@@ -406,6 +440,8 @@ public sealed class ServiceRequestHandler
     private readonly PrivateIndexAuthority _privateIndex;
     private readonly IPrivateIndexStore? _privateIndexStore;
     private readonly SourceIngestionCoordinator? _sourceIngestion;
+    private readonly ISourceSnapshotReader? _sourceReader;
+    private readonly SourceSnapshotService _sourceSnapshots = new();
     private PrivateIndexSnapshot? _privateIndexMaterialized;
 
     public ServiceRequestHandler(
@@ -427,6 +463,7 @@ public sealed class ServiceRequestHandler
         _projections = projections;
         _privateIndex = new PrivateIndexAuthority();
         _privateIndexStore = privateIndex;
+        _sourceReader = sourceReader;
         // S3-T1 source enrollment/ingestion. The registry ships empty (real
         // Codex/OMP parsers attach in S3-T2/S3-T3); without both a registry
         // and a reader the owner operations fail closed instead of serving a
@@ -487,6 +524,10 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, AgentSourceReadOperation, StringComparison.Ordinal))
         {
             return HandleAgentSourceRead(context, request, operation);
+        }
+        if (string.Equals(request.Operation, AgentSourceSnapshotReadOperation, StringComparison.Ordinal))
+        {
+            return HandleAgentSourceSnapshotRead(context, request, operation);
         }
         if (string.Equals(request.Operation, AgentLinkCreateOperation, StringComparison.Ordinal))
         {
@@ -655,11 +696,20 @@ public sealed class ServiceRequestHandler
         }
 
         if (string.Equals(request.Operation, SourceEnrollOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceRelocateOperation, StringComparison.Ordinal) ||
             string.Equals(request.Operation, SourceRevokeOperation, StringComparison.Ordinal) ||
             string.Equals(request.Operation, SourceStatusOperation, StringComparison.Ordinal) ||
             string.Equals(request.Operation, SourceIngestOperation, StringComparison.Ordinal))
         {
             return HandleSourceIngestionCommand(context, request, operation, cancellationToken);
+        }
+        if (string.Equals(request.Operation, SourceSnapshotPreserveOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceSnapshotListOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceSnapshotReadOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceSnapshotRetainOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceSnapshotPurgeOperation, StringComparison.Ordinal))
+        {
+            return HandleSourceSnapshotCommand(context, request, operation);
         }
 
         if (string.Equals(request.Operation, OwnerSessionRevokeOperation, StringComparison.Ordinal))
@@ -1324,6 +1374,40 @@ public sealed class ServiceRequestHandler
             }
         }
 
+        if (string.Equals(request.Operation, SourceRelocateOperation, StringComparison.Ordinal))
+        {
+            if (HasSourceCommandExtras(request, allowRelocationFields: true) ||
+                string.IsNullOrEmpty(request.ResourceId) || string.IsNullOrEmpty(request.SourceLocator) ||
+                request.SourceGeneration is not { } generation || generation < 1)
+            {
+                return Error("invalid_request");
+            }
+
+            try
+            {
+                var relocated = _sourceIngestion.Relocate(context, request.ResourceId,
+                    request.SourceLocator, generation, operation);
+                return new ServiceReply(CurrentProtocolVersion, "source_relocated", "owner", null,
+                    SourceEnrollment: ToSourceEnrollmentWire(relocated, SourceEnrollmentLife.Enrolled, null));
+            }
+            catch (ArgumentException)
+            {
+                return Error("invalid_request");
+            }
+            catch (SourceOperationException ex)
+            {
+                return Error(ex.Code);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Error("forbidden");
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException)
+            {
+                return Error("source_state_unavailable");
+            }
+        }
+
         if (string.Equals(request.Operation, SourceRevokeOperation, StringComparison.Ordinal) ||
             string.Equals(request.Operation, SourceStatusOperation, StringComparison.Ordinal) ||
             string.Equals(request.Operation, SourceIngestOperation, StringComparison.Ordinal))
@@ -1371,6 +1455,7 @@ public sealed class ServiceRequestHandler
                     SourceIngestionOutcomeKind.Revoked => "source_revoked",
                     SourceIngestionOutcomeKind.MixedQuarantined => "source_mixed_quarantined",
                     SourceIngestionOutcomeKind.GenerationChanged => "source_generation_changed",
+                    SourceIngestionOutcomeKind.SourceMissing => "source_missing",
                     SourceIngestionOutcomeKind.SourceUnreadable => "source_unreadable",
                     SourceIngestionOutcomeKind.SourceTooLarge => "source_too_large",
                     SourceIngestionOutcomeKind.JournalLimit => "source_journal_limit",
@@ -1406,6 +1491,7 @@ public sealed class ServiceRequestHandler
                     SourceIngestionOutcomeKind.MixedQuarantined or
                     SourceIngestionOutcomeKind.GenerationChanged or
                     SourceIngestionOutcomeKind.SourceUnreadable or
+                    SourceIngestionOutcomeKind.SourceMissing or
                     SourceIngestionOutcomeKind.SourceTooLarge or
                     SourceIngestionOutcomeKind.JournalLimit or
                     SourceIngestionOutcomeKind.JournalConflict)
@@ -1462,7 +1548,11 @@ public sealed class ServiceRequestHandler
                 },
                 quarantine.Detail,
                 quarantine.RecordedAtUtc)
-            : null);
+            : null,
+        ToWireToken(status.Availability.ToString()),
+        status.AvailabilityObservedAtUtc,
+        status.RelocatedAtUtc,
+        status.SourceReferenceRevision);
 
     private static SourceEnrollmentWire ToSourceEnrollmentWire(
         EnrolledSource enrolled,
@@ -1492,7 +1582,156 @@ public sealed class ServiceRequestHandler
                     _ => "mixed_locator"
                 },
                 quarantine.Detail,
-                quarantine.RecordedAtUtc));
+                quarantine.RecordedAtUtc),
+        ToWireToken(SourceAvailabilityObservation.NotChecked.ToString()),
+        null,
+        enrolled.RelocatedAtUtc,
+        null);
+
+    private ServiceReply HandleSourceSnapshotCommand(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        try
+        {
+            if (string.Equals(request.Operation, SourceSnapshotPreserveOperation, StringComparison.Ordinal))
+            {
+                if (_sourceReader is null)
+                {
+                    return Error("source_snapshot_unavailable");
+                }
+
+                if (HasContentReadExtras(request, allowSnapshotRetention: true) ||
+                    string.IsNullOrEmpty(request.ResourceId) ||
+                    request.ResourceRevision is not { } sourceRevision || sourceRevision < 1 ||
+                    request.SnapshotRetainUntilUtc is not { } retainUntilUtc)
+                {
+                    return Error("invalid_request");
+                }
+
+                var preserved = _sourceSnapshots.Preserve(context, request.ResourceId,
+                    sourceRevision, retainUntilUtc, operation, _sourceReader);
+                return new ServiceReply(CurrentProtocolVersion, "source_snapshot_preserved", "owner", null,
+                    ResourceRevision: preserved.Revision,
+                    SourceSnapshot: ToSourceSnapshotWire(preserved.Stored, preserved.Revision));
+            }
+
+            if (string.Equals(request.Operation, SourceSnapshotListOperation, StringComparison.Ordinal))
+            {
+                if (HasContentReadExtras(request) || request.ResourceRevision is not null ||
+                    string.IsNullOrEmpty(request.ResourceId))
+                {
+                    return Error("invalid_request");
+                }
+
+                var snapshots = _sourceSnapshots.List(context, request.ResourceId, operation)
+                    .Select(snapshot => new SourceSnapshotDescriptorWire(
+                        snapshot.Id, snapshot.ZoneId, snapshot.Revision, snapshot.Generation))
+                    .ToArray();
+                return new ServiceReply(CurrentProtocolVersion, "source_snapshots", "owner", null,
+                    SourceSnapshots: snapshots);
+            }
+
+            if (string.Equals(request.Operation, SourceSnapshotReadOperation, StringComparison.Ordinal))
+            {
+                if (HasContentReadExtras(request) || string.IsNullOrEmpty(request.ResourceId) ||
+                    request.ResourceRevision is not { } expectedRevision || expectedRevision < 1)
+                {
+                    return Error("invalid_request");
+                }
+
+                var snapshot = _sourceSnapshots.Read(request.ResourceId, expectedRevision, operation);
+                try
+                {
+                    return new ServiceReply(CurrentProtocolVersion, "source_snapshot", "owner", null,
+                        ResourceRevision: snapshot.Revision,
+                        SourceSnapshot: ToSourceSnapshotWire(
+                            snapshot.Stored, snapshot.Revision, Convert.ToBase64String(snapshot.Content)));
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(snapshot.Content);
+                }
+            }
+
+            if (string.Equals(request.Operation, SourceSnapshotRetainOperation, StringComparison.Ordinal))
+            {
+                if (HasContentReadExtras(request, allowSnapshotRetention: true) ||
+                    string.IsNullOrEmpty(request.ResourceId) ||
+                    request.ResourceRevision is not { } expectedRevision || expectedRevision < 1 ||
+                    request.SnapshotRetainUntilUtc is not { } retainUntilUtc)
+                {
+                    return Error("invalid_request");
+                }
+
+                var retained = _sourceSnapshots.Retain(context, request.ResourceId,
+                    expectedRevision, retainUntilUtc, operation);
+                return new ServiceReply(CurrentProtocolVersion, "source_snapshot_retained", "owner", null,
+                    ResourceRevision: retained.Revision,
+                    SourceSnapshot: ToSourceSnapshotWire(retained.Stored, retained.Revision));
+            }
+
+            if (string.Equals(request.Operation, SourceSnapshotPurgeOperation, StringComparison.Ordinal))
+            {
+                if (HasContentReadExtras(request) || string.IsNullOrEmpty(request.ResourceId) ||
+                    request.ResourceRevision is not { } expectedRevision || expectedRevision < 1)
+                {
+                    return Error("invalid_request");
+                }
+
+                var purged = _sourceSnapshots.Purge(context, request.ResourceId, expectedRevision, operation);
+                return new ServiceReply(CurrentProtocolVersion, "source_snapshot_purged", "owner", null,
+                    ResourceRevision: purged.Revision,
+                    SourceSnapshot: ToSourceSnapshotWire(purged.Stored, purged.Revision));
+            }
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (SourceOperationException ex)
+        {
+            return Error(ex.Code);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException)
+        {
+            return Error("source_snapshot_unavailable");
+        }
+
+        return Error("invalid_request");
+    }
+
+    private static SourceSnapshotWire ToSourceSnapshotWire(
+        StoredSourceSnapshot snapshot,
+        long revision,
+        string? contentBase64 = null) => new(
+        snapshot.Id,
+        snapshot.ZoneId,
+        revision,
+        snapshot.SourceId,
+        snapshot.SourceRevision,
+        snapshot.SourceGeneration,
+        snapshot.SourceLength,
+        snapshot.SourceDigest,
+        snapshot.CapturedAtUtc,
+        snapshot.RetainUntilUtc,
+        snapshot.Purged,
+        contentBase64);
 
     /// <summary>
     /// S2-T4 owner relation store: create-only over the shared encrypted
@@ -2224,6 +2463,81 @@ public sealed class ServiceRequestHandler
             }
         }
     }
+    /// <summary>
+    /// Scoped snapshot expansion uses the shared session authority with the
+    /// distinct source.snapshot.read operation, the snapshot's own resource ID
+    /// and its exact canonical revision. A source-reference or item grant can
+    /// never satisfy this request, and both policy and manifest are rechecked
+    /// before the encrypted snapshot bytes are returned.
+    /// </summary>
+    private ServiceReply HandleAgentSourceSnapshotRead(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Agent || operation is null ||
+            HasAgentResourceReadExtras(request) ||
+            request.AccessOperation is not SourceSnapshotReadOperation ||
+            request.ResourceId is null ||
+            request.ResourceRevision is not { } expectedRevision || expectedRevision < 1)
+        {
+            return ResourceDenied();
+        }
+
+        SourceSnapshot? snapshot = null;
+        try
+        {
+            var beforeRead = operation.LoadScopeGrantState();
+            var decision = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                beforeRead.UnlockEpoch,
+                beforeRead.PolicyGeneration,
+                new AgentAccessRequest(SourceSnapshotReadOperation, request.ResourceId, expectedRevision));
+            if (!decision.Allowed)
+            {
+                return ResourceDenied();
+            }
+
+            snapshot = _sourceSnapshots.Read(request.ResourceId, expectedRevision, operation);
+            if (!operation.TryGetZone(request.ResourceId, out var registeredZone) ||
+                !string.Equals(snapshot.Stored.ZoneId, registeredZone, StringComparison.Ordinal))
+            {
+                return ResourceDenied();
+            }
+
+            var beforeServe = operation.LoadScopeGrantState();
+            var recheck = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                beforeServe.UnlockEpoch,
+                beforeServe.PolicyGeneration,
+                new AgentAccessRequest(SourceSnapshotReadOperation, request.ResourceId, expectedRevision));
+            if (!recheck.Allowed)
+            {
+                return ResourceDenied();
+            }
+
+            operation.ValidateRegistration(request.ResourceId, expectedRevision);
+            return new ServiceReply(
+                CurrentProtocolVersion, "source_snapshot", null, null,
+                Decision: recheck,
+                PolicyGeneration: recheck.PolicyGeneration,
+                ResourceRevision: snapshot.Revision,
+                SourceSnapshot: ToSourceSnapshotWire(
+                    snapshot.Stored, snapshot.Revision, Convert.ToBase64String(snapshot.Content)));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return ResourceDenied();
+        }
+        finally
+        {
+            if (snapshot?.Content is { Length: > 0 } content)
+            {
+                CryptographicOperations.ZeroMemory(content);
+            }
+        }
+    }
+
 
     private static RegisteredSourceWire ToSourceWire(Core.Domain.RegisteredSource source) => new(
         source.Id,
@@ -2278,7 +2592,7 @@ public sealed class ServiceRequestHandler
 
     private ServiceReply HandleResourceRead(AuthenticatedContext context, string? resourceId, IVaultOperation? operation)
     {
-        if (operation is null)
+        if (operation is null || SourceSnapshotIds.IsSnapshotId(resourceId))
         {
             return ResourceDenied();
         }
@@ -2346,7 +2660,7 @@ public sealed class ServiceRequestHandler
     {
         if (context.Kind != PrincipalKind.Agent || operation is null ||
             HasAgentResourceReadExtras(request) ||
-            request.AccessOperation is not (ResourceReadOperation or SourceReadOperation))
+            request.AccessOperation is not ResourceReadOperation)
         {
             return ResourceDenied();
         }
@@ -2366,6 +2680,20 @@ public sealed class ServiceRequestHandler
             }
 
             snapshot = operation.ReadContent(request.ResourceId, request.ResourceRevision);
+            try
+            {
+                var registeredSource = RegisteredSourceCodec.DecodeStored(snapshot);
+                if (string.Equals(registeredSource.Id, request.ResourceId, StringComparison.Ordinal))
+                {
+                    return ResourceDenied();
+                }
+            }
+            catch (ArgumentException)
+            {
+                // Generic resources retain their explicit resource.read path;
+                // registered sources must use the metadata-only source API.
+            }
+
             var beforeServe = operation.LoadScopeGrantState();
             var recheck = _agentSessions.AuthorizeSession(
                 request.SessionToken,
@@ -2544,13 +2872,13 @@ public sealed class ServiceRequestHandler
 
     private ServiceReply HandleResourceWrite(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
     {
-        if (operation is null || string.IsNullOrEmpty(request.ResourceId) || string.IsNullOrEmpty(request.ZoneId) ||
-            request.ResourceRevision is not { } expectedRevision ||
+        if (operation is null || string.IsNullOrEmpty(request.ResourceId) ||
+            SourceSnapshotIds.IsSnapshotId(request.ResourceId) ||
+            string.IsNullOrEmpty(request.ZoneId) || request.ResourceRevision is not { } expectedRevision ||
             string.IsNullOrEmpty(request.ContentBase64))
         {
             return ResourceDenied();
         }
-
         byte[]? content = null;
         try
         {
@@ -3673,9 +4001,13 @@ public sealed class ServiceRequestHandler
         request.Description is not null || request.Query is not null ||
         request.CatalogIds is not null || request.Purpose is not null ||
         request.AgentId is not null || request.AgentContext is not null ||
-        request.DisclosureContext is not null || request.RequestId is not null;
+        request.DisclosureContext is not null || request.RequestId is not null ||
+        request.SourceLocator is not null || request.SourceFormat is not null ||
+        request.SourceFormatVersion is not null || request.SourceTitle is not null ||
+        request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
+        request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null;
 
-    private static bool HasContentReadExtras(ServiceRequest request) =>
+    private static bool HasContentReadExtras(ServiceRequest request, bool allowSnapshotRetention = false) =>
         request.Passphrase is not null || request.RecoveryCode is not null ||
         request.ContentBase64 is not null || request.ResourceIds is not null ||
         request.Operations is not null || request.DestinationResourceIds is not null ||
@@ -3691,7 +4023,12 @@ public sealed class ServiceRequestHandler
         request.Query is not null || request.CatalogIds is not null ||
         request.Purpose is not null || request.AgentId is not null ||
         request.AgentContext is not null || request.DisclosureContext is not null ||
-        request.RequestId is not null || request.ZoneId is not null;
+        request.RequestId is not null || request.ZoneId is not null ||
+        request.SourceLocator is not null || request.SourceFormat is not null ||
+        request.SourceFormatVersion is not null || request.SourceTitle is not null ||
+        request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
+        request.SourceGeneration is not null ||
+        (!allowSnapshotRetention && request.SnapshotRetainUntilUtc is not null);
 
     /// <summary>
     /// S3-T1 enrollment carries only the source ID, zone, locator, format and
@@ -3715,14 +4052,15 @@ public sealed class ServiceRequestHandler
         request.Description is not null || request.Query is not null ||
         request.CatalogIds is not null || request.Purpose is not null ||
         request.RequestId is not null || request.SourceTitle is not null ||
-        request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null;
+        request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
+        request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null;
 
     /// <summary>
     /// S3-T1 revoke/status/ingest carry only the source ID: the zone,
     /// locator, format and version come from the encrypted enrollment state,
     /// so a request body can never re-map or re-point a source.
     /// </summary>
-    private static bool HasSourceCommandExtras(ServiceRequest request) =>
+    private static bool HasSourceCommandExtras(ServiceRequest request, bool allowRelocationFields = false) =>
         request.ZoneId is not null || request.Passphrase is not null ||
         request.RecoveryCode is not null || request.ContentBase64 is not null ||
         request.ResourceIds is not null || request.Operations is not null ||
@@ -3739,10 +4077,11 @@ public sealed class ServiceRequestHandler
         request.Query is not null || request.CatalogIds is not null ||
         request.Purpose is not null || request.AgentId is not null ||
         request.AgentContext is not null || request.DisclosureContext is not null ||
-        request.RequestId is not null || request.SourceLocator is not null ||
+        request.RequestId is not null ||
+        (!allowRelocationFields && (request.SourceLocator is not null || request.SourceGeneration is not null)) ||
         request.SourceFormat is not null || request.SourceFormatVersion is not null ||
         request.SourceTitle is not null || request.SourceAuthor is not null ||
-        request.SourceCapturedAtUtc is not null;
+        request.SourceCapturedAtUtc is not null || request.SnapshotRetainUntilUtc is not null;
 
     /// <summary>
     /// S3-T4 capture carries only the source ID, zone, verbatim text, and the
@@ -3767,7 +4106,8 @@ public sealed class ServiceRequestHandler
         request.Purpose is not null || request.AgentId is not null ||
         request.AgentContext is not null || request.DisclosureContext is not null ||
         request.RequestId is not null || request.SourceFormat is not null ||
-        request.SourceFormatVersion is not null;
+        request.SourceFormatVersion is not null || request.SourceGeneration is not null ||
+        request.SnapshotRetainUntilUtc is not null;
 
     /// <summary>
     /// S3-T4 read carries only the source ID and the optional exact revision.
@@ -3793,7 +4133,8 @@ public sealed class ServiceRequestHandler
         request.DisclosureContext is not null || request.RequestId is not null ||
         request.SourceLocator is not null || request.SourceFormat is not null ||
         request.SourceFormatVersion is not null || request.SourceTitle is not null ||
-        request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null;
+        request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
+        request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null;
 
     private static bool HasAgentAccessRequestFields(ServiceRequest request, bool forStatus) =>
         request.ZoneId is not null ||
@@ -3832,7 +4173,11 @@ public sealed class ServiceRequestHandler
         request.Description is not null || request.Query is not null ||
         request.CatalogIds is not null || request.Purpose is not null ||
         request.AgentId is not null || request.AgentContext is not null ||
-        request.DisclosureContext is not null || request.RequestId is not null;
+        request.DisclosureContext is not null || request.RequestId is not null ||
+        request.SourceLocator is not null || request.SourceFormat is not null ||
+        request.SourceFormatVersion is not null || request.SourceTitle is not null ||
+        request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
+        request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null;
 
     /// <summary>
     /// The agent collection view carries only the session bearer. Every

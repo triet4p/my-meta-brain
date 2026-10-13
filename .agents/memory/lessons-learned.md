@@ -125,3 +125,10 @@
 **Root cause:** The output `.exe` is the generic native apphost launcher; its bytes depend on the build configuration/app name, not the compiled assembly, so unrelated builds produce the identical apphost hash. The actual code (including the concurrency fix) lives in `MetaBrain.Connections.dll` beside it.
 **Fix / workaround:** Record fingerprints on the assembly DLLs (Core/Application/Connections/Smoke) plus timestamps, and treat apphost hashes as non-identifying. This attempt recorded the final DLL set (after removing the throwaway builder and rebuilding) as the exact binary identity of every subsequent proof, so no proof ran on a substituted binary.
 **Watch out for:** Any "same binary as before?" comparison, checkpoint manifest, or release audit that hashes only apphost executables — it can neither detect nor prove a code change; always hash the managed assemblies actually loaded.
+
+## [2026-10-13] The Bash tool may target an unavailable WSL shell on a Windows workstation
+
+**Symptom:** Invoking the existing scratch build script through `functions.bash` failed with `execvpe(/bin/bash) failed: No such file or directory` on a Windows workstation, even though the Windows .NET runtime and Roslyn compiler were installed.
+**Root cause:** This tool's Bash route attempted to start `/bin/bash` in its WSL environment; no Bash binary was available there. This was an execution-environment mismatch, not a repository permission failure or missing Windows compiler.
+**Fix / workaround:** Run the Windows `csc.exe`/`dotnet.exe` executables directly with foreground `subprocess.run` through `functions.eval`, await each phase, and keep all outputs in the existing external scratch directory. Record explicitly that this is a manual compiler build, not an SDK `dotnet build`.
+**Watch out for:** A Windows-hosted task that calls `functions.bash` with Windows-drive paths may fail before the command starts if WSL Bash is absent; do not infer a permission block or claim the script ran. Use an actually available host process route and report the exact environment limit.

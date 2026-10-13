@@ -125,7 +125,8 @@ public sealed record EnrolledSource(
     long AnchorLength,
     string AnchorDigest,
     DateTimeOffset EnrolledAtUtc,
-    DateTimeOffset? RevokedAtUtc);
+    DateTimeOffset? RevokedAtUtc,
+    DateTimeOffset? RelocatedAtUtc = null);
 
 public enum SourceQuarantineReason
 {
@@ -201,7 +202,8 @@ public enum SourceSnapshotStatus
 {
     Snapshot = 1,
     Unreadable = 2,
-    TooLarge = 3
+    TooLarge = 3,
+    Missing = 4
 }
 
 /// <summary>
@@ -358,6 +360,73 @@ public sealed class SourceEnrollmentAuthority
                 .Where(record => !string.Equals(record.SourceId, sourceId, StringComparison.Ordinal))
                 .ToArray();
             return (state with { Enrollments = enrollments, Quarantine = quarantine }, next);
+        });
+    }
+    /// <summary>
+    /// Owner-confirmed relocation of the same enrolled generation. The
+    /// coordinator has already read the exact caller-supplied locator and
+    /// matched its full length and digest to the existing anchor; this method
+    /// only commits that verified mapping and never searches for a candidate.
+    /// </summary>
+    public EnrolledSource Relocate(
+        AuthenticatedContext actor,
+        string sourceId,
+        string expectedLocator,
+        string locator,
+        long expectedGeneration,
+        ISourceEnrollmentPersistence persistence)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(persistence);
+        EnsureOwner(actor);
+        if (!DomainIdentifiers.IsDomainIdentifier(sourceId) ||
+            expectedGeneration < 1 || !SourceEnrollmentGrammar.IsLocator(expectedLocator))
+        {
+            throw new ArgumentException("The source relocation identity is invalid.");
+        }
+
+        var normalizedLocator = SourceEnrollmentGrammar.NormalizeLocator(locator);
+        var now = DateTimeOffset.UtcNow;
+        return persistence.UpdateSourceEnrollmentState(state =>
+        {
+            var validated = ValidateAndNormalizeState(state);
+            var current = FindEnrollment(validated, sourceId)
+                ?? throw new SourceOperationException("source_not_enrolled");
+            if (current.RevokedAtUtc is not null)
+            {
+                throw new SourceOperationException("source_revoked");
+            }
+
+            if (current.Generation != expectedGeneration ||
+                !string.Equals(current.Locator, expectedLocator, StringComparison.OrdinalIgnoreCase) ||
+                FindQuarantine(validated, sourceId) is not null)
+            {
+                throw new SourceOperationException("source_relocation_conflict");
+            }
+
+            foreach (var other in validated.Enrollments)
+            {
+                if (other.RevokedAtUtc is null &&
+                    !string.Equals(other.SourceId, sourceId, StringComparison.Ordinal) &&
+                    string.Equals(other.Locator, normalizedLocator, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new SourceOperationException("source_locator_in_use");
+                }
+            }
+
+            if (string.Equals(current.Locator, normalizedLocator, StringComparison.OrdinalIgnoreCase))
+            {
+                return (state, current);
+            }
+
+            var relocated = current with { Locator = normalizedLocator, RelocatedAtUtc = now };
+            var enrollments = validated.Enrollments
+                .Select(candidate => string.Equals(candidate.SourceId, sourceId, StringComparison.Ordinal)
+                    ? relocated
+                    : candidate)
+                .OrderBy(candidate => candidate.SourceId, StringComparer.Ordinal)
+                .ToArray();
+            return (state with { Enrollments = enrollments }, relocated);
         });
     }
 
@@ -530,6 +599,12 @@ public sealed class SourceEnrollmentAuthority
                 throw new InvalidDataException("The source enrollment revocation time is invalid.");
             }
         }
+        if (enrollment.RelocatedAtUtc is { } relocatedAtUtc &&
+            (relocatedAtUtc.Offset != TimeSpan.Zero || relocatedAtUtc < enrollment.EnrolledAtUtc))
+        {
+            throw new InvalidDataException("The source enrollment relocation time is invalid.");
+        }
+
     }
 
     private static EnrolledSource Clone(EnrolledSource enrollment) => enrollment with { };

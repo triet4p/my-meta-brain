@@ -18,7 +18,8 @@ public enum SourceIngestionOutcomeKind
     SourceUnreadable = 10,
     SourceTooLarge = 11,
     JournalLimit = 12,
-    JournalConflict = 13
+    JournalConflict = 13,
+    SourceMissing = 14
 }
 
 /// <summary>
@@ -42,9 +43,9 @@ public enum SourceEnrollmentLife
 }
 
 /// <summary>
-/// Owner-visible enrollment status: the mapping, the enrollment/quarantine
-/// life state, and the persisted checkpoint summary for the current
-/// generation (zero when this generation has no journal yet).
+/// Owner-visible enrollment status: the mapping, enrollment/quarantine life
+/// state, persisted checkpoint summary, exact-locator availability observation
+/// and the live registered-source metadata revision after any availability sync.
 /// </summary>
 public sealed record SourceEnrollmentStatus(
     string SourceId,
@@ -61,7 +62,11 @@ public sealed record SourceEnrollmentStatus(
     long ConsumedOffset,
     int EventCount,
     int DiagnosticCount,
-    DateTimeOffset? LastIngestAtUtc);
+    DateTimeOffset? LastIngestAtUtc,
+    SourceAvailabilityObservation Availability,
+    DateTimeOffset? AvailabilityObservedAtUtc,
+    DateTimeOffset? RelocatedAtUtc,
+    long? SourceReferenceRevision);
 
 /// <summary>
 /// S3-T1 source enrollment and incremental ingestion coordinator.
@@ -122,7 +127,13 @@ public sealed class SourceIngestionCoordinator
         if (snapshot.Status != SourceSnapshotStatus.Snapshot || snapshot.Content is not { Length: > 0 })
         {
             throw new SourceOperationException(
-                snapshot.Status == SourceSnapshotStatus.TooLarge ? "source_too_large" : "source_locator_unreadable");
+                snapshot.Status switch
+                {
+                    SourceSnapshotStatus.TooLarge => "source_too_large",
+                    SourceSnapshotStatus.Missing => "source_missing",
+                    _ => "source_locator_unreadable"
+                });
+
         }
 
         try
@@ -136,6 +147,62 @@ public sealed class SourceIngestionCoordinator
             CryptographicOperations.ZeroMemory(snapshot.Content);
         }
     }
+    public EnrolledSource Relocate(
+        AuthenticatedContext owner,
+        string sourceId,
+        string locator,
+        long expectedGeneration,
+        IVaultOperation operation)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        ArgumentNullException.ThrowIfNull(operation);
+        var state = SourceEnrollmentAuthority.ValidateAndNormalizeState(operation.LoadSourceEnrollmentState());
+        var enrollment = SourceEnrollmentAuthority.FindEnrollment(state, sourceId)
+            ?? throw new SourceOperationException("source_not_enrolled");
+        if (enrollment.RevokedAtUtc is not null)
+        {
+            throw new SourceOperationException("source_revoked");
+        }
+
+        if (SourceEnrollmentAuthority.FindQuarantine(state, sourceId) is not null)
+        {
+            throw new SourceOperationException("source_quarantined");
+        }
+
+        if (enrollment.Generation != expectedGeneration)
+        {
+            throw new SourceOperationException("source_relocation_conflict");
+        }
+
+        var normalizedLocator = SourceEnrollmentGrammar.NormalizeLocator(locator);
+        var candidate = _reader.TryReadSnapshot(normalizedLocator);
+        if (candidate.Status != SourceSnapshotStatus.Snapshot || candidate.Content is not { Length: > 0 } content)
+        {
+            throw new SourceOperationException(candidate.Status switch
+            {
+                SourceSnapshotStatus.Missing => "source_relocation_missing",
+                SourceSnapshotStatus.TooLarge => "source_too_large",
+                _ => "source_locator_unreadable"
+            });
+        }
+
+        try
+        {
+            if (content.Length != enrollment.AnchorLength ||
+                !SourceFingerprint.Matches(enrollment.AnchorDigest, content))
+            {
+                throw new SourceOperationException("source_relocation_changed");
+            }
+
+            return _enrollments.Relocate(owner, sourceId, enrollment.Locator, normalizedLocator,
+                expectedGeneration, operation);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(content);
+        }
+    }
+
 
     public EnrolledSource Revoke(
         AuthenticatedContext owner,
@@ -143,6 +210,11 @@ public sealed class SourceIngestionCoordinator
         ISourceEnrollmentPersistence persistence) =>
         _enrollments.Revoke(owner, sourceId, persistence);
 
+    /// <summary>
+    /// Probes only the exact enrolled locator for an active mapping. A changed
+    /// observation updates a matching registered reference's availability
+    /// under its live revision; no source search or background refresh is performed.
+    /// </summary>
     public SourceEnrollmentStatus Status(
         AuthenticatedContext owner,
         string sourceId,
@@ -159,6 +231,13 @@ public sealed class SourceIngestionCoordinator
             : quarantine is not null
                 ? SourceEnrollmentLife.Quarantined
                 : SourceEnrollmentLife.Enrolled;
+        var observedAt = life == SourceEnrollmentLife.Enrolled ? DateTimeOffset.UtcNow : (DateTimeOffset?)null;
+        var availability = observedAt is null
+            ? SourceAvailabilityObservation.NotChecked
+            : ObserveAvailability(enrollment);
+        var sourceReferenceRevision = observedAt is null
+            ? (long?)null
+            : UpdateRegisteredAvailability(owner, enrollment, availability, operation);
         return new SourceEnrollmentStatus(
             enrollment.SourceId,
             enrollment.ZoneId,
@@ -174,8 +253,118 @@ public sealed class SourceIngestionCoordinator
             journal?.ConsumedOffset ?? 0,
             journal?.Events.Length ?? 0,
             journal?.Diagnostics.Length ?? 0,
-            journal?.LastIngestAtUtc);
+            journal?.LastIngestAtUtc,
+            availability,
+            observedAt,
+            enrollment.RelocatedAtUtc,
+            sourceReferenceRevision);
     }
+
+    private SourceAvailabilityObservation ObserveAvailability(EnrolledSource enrollment)
+    {
+        var snapshot = _reader.TryReadSnapshot(enrollment.Locator);
+        if (snapshot.Status != SourceSnapshotStatus.Snapshot || snapshot.Content is not { Length: > 0 } content)
+        {
+            return snapshot.Status switch
+            {
+                SourceSnapshotStatus.Missing => SourceAvailabilityObservation.Missing,
+                SourceSnapshotStatus.TooLarge => SourceAvailabilityObservation.TooLarge,
+                _ => SourceAvailabilityObservation.Unreadable
+            };
+        }
+
+        try
+        {
+            return content.Length == enrollment.AnchorLength &&
+                SourceFingerprint.Matches(enrollment.AnchorDigest, content)
+                ? SourceAvailabilityObservation.Available
+                : SourceAvailabilityObservation.Changed;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(content);
+        }
+    }
+    private static long? UpdateRegisteredAvailability(
+        AuthenticatedContext owner,
+        EnrolledSource enrollment,
+        SourceAvailabilityObservation observation,
+        IVaultOperation operation)
+    {
+        var liveRevision = SourceRegistryService.TryGetLiveRevision(operation, enrollment.SourceId);
+        if (liveRevision is null)
+        {
+            return null;
+        }
+
+        RegisteredSource source;
+        try
+        {
+            source = new SourceRegistryService().Read(owner, enrollment.SourceId, liveRevision, operation);
+        }
+        catch (ArgumentException)
+        {
+            // The enrollment can exist without a registered source reference.
+            return null;
+        }
+
+        if (source.Text is not null || source.Locator is null ||
+            !string.Equals(source.ZoneId, enrollment.ZoneId, StringComparison.Ordinal))
+        {
+            return source.Revision;
+        }
+
+        string sourceLocator;
+        try
+        {
+            sourceLocator = SourceEnrollmentGrammar.NormalizeLocator(source.Locator);
+        }
+        catch (ArgumentException)
+        {
+            return source.Revision;
+        }
+
+        var locatorChanged = !string.Equals(sourceLocator, enrollment.Locator, StringComparison.OrdinalIgnoreCase);
+        if (locatorChanged && enrollment.RelocatedAtUtc is null)
+        {
+            return source.Revision;
+        }
+
+        var availability = observation switch
+        {
+            SourceAvailabilityObservation.Available => SourceAvailability.Available,
+            SourceAvailabilityObservation.Changed or SourceAvailabilityObservation.Missing => SourceAvailability.Unavailable,
+            SourceAvailabilityObservation.Unreadable or SourceAvailabilityObservation.TooLarge => SourceAvailability.Unknown,
+            _ => source.Availability
+        };
+        if (source.Availability == availability && !locatorChanged)
+        {
+            return source.Revision;
+        }
+
+        var updatedAt = DateTimeOffset.UtcNow;
+        var registeredLocator = locatorChanged ? enrollment.Locator : source.Locator;
+        var draft = RegisteredSourceCodec.EncodeDraft(new RegisteredSourceDraft(
+            source.Title,
+            registeredLocator,
+            source.Version,
+            availability,
+            source.CreationMethod,
+            source.CapturedAtUtc,
+            updatedAt,
+            source.Author,
+            source.Text));
+        try
+        {
+            return new SourceRegistryService().Revise(
+                owner, source.Id, source.ZoneId, source.Revision, draft, operation).Revision;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(draft);
+        }
+    }
+
 
     public SourceIngestionOutcome Ingest(
         AuthenticatedContext owner,
@@ -231,9 +420,12 @@ public sealed class SourceIngestionCoordinator
         if (snapshot.Status != SourceSnapshotStatus.Snapshot || snapshot.Content is not { Length: > 0 } content)
         {
             return new SourceIngestionOutcome(
-                snapshot.Status == SourceSnapshotStatus.TooLarge
-                    ? SourceIngestionOutcomeKind.SourceTooLarge
-                    : SourceIngestionOutcomeKind.SourceUnreadable,
+                snapshot.Status switch
+                {
+                    SourceSnapshotStatus.Missing => SourceIngestionOutcomeKind.SourceMissing,
+                    SourceSnapshotStatus.TooLarge => SourceIngestionOutcomeKind.SourceTooLarge,
+                    _ => SourceIngestionOutcomeKind.SourceUnreadable
+                },
                 offset, 0, 0);
         }
 

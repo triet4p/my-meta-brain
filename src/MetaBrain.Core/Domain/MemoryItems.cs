@@ -606,6 +606,13 @@ internal static class DomainIdentifiers
     /// source ID from colliding with one.
     /// </summary>
     public const string IngestIdPrefix = "ingest-";
+    /// <summary>
+    /// Reserved resource-ID prefix for full encrypted source snapshots. The
+    /// snapshot API uses this prefix to keep snapshot bodies in a distinct
+    /// operation and namespace from source references and memory items.
+    /// </summary>
+    public const string SourceSnapshotIdPrefix = "snap-";
+
 
     public static bool IsSafeIdentifier(string? value)
     {
@@ -637,15 +644,16 @@ internal static class DomainIdentifiers
 
     /// <summary>
     /// An identifier that names a memory item or a registered source: never a
-    /// relation, a lifecycle record, a retained revision, or an ingestion
-    /// journal.
+    /// relation, lifecycle record, retained revision, ingestion journal, or
+    /// preserved source snapshot.
     /// </summary>
     public static bool IsDomainIdentifier(string? value) =>
         IsSafeIdentifier(value) &&
         !value!.StartsWith(RelationIdPrefix, StringComparison.Ordinal) &&
         !value.StartsWith(LifecycleIdPrefix, StringComparison.Ordinal) &&
         !value.StartsWith(ArchiveIdPrefix, StringComparison.Ordinal) &&
-        !value.StartsWith(IngestIdPrefix, StringComparison.Ordinal);
+        !value.StartsWith(IngestIdPrefix, StringComparison.Ordinal) &&
+        !value.StartsWith(SourceSnapshotIdPrefix, StringComparison.Ordinal);
 
     /// <summary>
     /// Lifecycle record ID derived from its subject: the ID is never chosen by
