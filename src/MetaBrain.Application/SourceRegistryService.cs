@@ -164,7 +164,9 @@ public sealed class SourceRegistryService
             draft.Version,
             draft.Availability!.Value,
             draft.CapturedAtUtc,
-            recordedAtUtc);
+            recordedAtUtc,
+            draft.Author,
+            draft.Text);
         var payload = RegisteredSourceCodec.EncodeStored(stored);
         try
         {
@@ -196,7 +198,9 @@ public sealed class SourceRegistryService
         stored.Version,
         stored.Availability,
         stored.CapturedAtUtc,
-        stored.RecordedAtUtc);
+        stored.RecordedAtUtc,
+        stored.Author,
+        stored.Text);
 
     private static long ResolveLiveRevision(IManagedResourceReader store, string sourceId)
     {

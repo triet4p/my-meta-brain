@@ -38,6 +38,8 @@ internal static class OwnerControlCli
                 "source-revoke" => await SourceRevokeAsync(options).ConfigureAwait(false),
                 "source-status" => await SourceStatusAsync(options).ConfigureAwait(false),
                 "source-ingest" => await SourceIngestAsync(options).ConfigureAwait(false),
+                "research-capture" => await ResearchCaptureAsync(options).ConfigureAwait(false),
+                "research-read" => await ResearchReadAsync(options).ConfigureAwait(false),
                 "relation-create" => await RelationCreateAsync(options).ConfigureAwait(false),
                 "relation-accept" => await RelationAcceptAsync(options).ConfigureAwait(false),
                 "relation-reject" => await RelationRejectAsync(options).ConfigureAwait(false),
@@ -618,13 +620,150 @@ internal static class OwnerControlCli
             return;
         }
 
-        Console.WriteLine($"SOURCE id={JsonValueText(source, "id")} zone={JsonValueText(source, "zoneId")} revision={JsonValueText(source, "revision")} executor={JsonValueText(source, "executor")} method={JsonValueText(source, "creationMethod")} availability={JsonValueText(source, "availability")}");
+        Console.WriteLine($"SOURCE id={JsonValueText(source, "id")} zone={JsonValueText(source, "zoneId")} revision={JsonValueText(source, "revision")} executor={JsonValueText(source, "executor")} method={JsonValueText(source, "creationMethod")} author={JsonValueText(source, "author")} availability={JsonValueText(source, "availability")}");
         if (source.TryGetProperty("title", out var title) && title.ValueKind == JsonValueKind.String)
         {
             Console.WriteLine($"title={title.GetString()}");
         }
 
+        if (source.TryGetProperty("capturedAtUtc", out var capturedAt) && capturedAt.ValueKind == JsonValueKind.String)
+        {
+            Console.WriteLine($"capturedUtc={capturedAt.GetString()}");
+        }
+
         Console.WriteLine($"locator={JsonValueText(source, "locator")} version={JsonValueText(source, "version")}");
+    }
+
+    /// <summary>
+    /// S3-T4 research capture: the verbatim unstructured text plus its zone is
+    /// persisted encrypted before any structuring job, with optional
+    /// owner-supplied title/URL/author/date. The text travels through a file,
+    /// is never echoed back, and a locked vault answers vault_locked without
+    /// writing anything. The date is parsed here so a malformed value fails
+    /// as usage instead of reaching the wire as invalid JSON.
+    /// </summary>
+    private static async Task<int> ResearchCaptureAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--zone-id", "--input-file",
+            "--title", "--source-url", "--source-author", "--source-date");
+        var controlPipe = ControlPipe(options);
+        var resourceId = options.Required("--resource-id");
+        var zoneId = options.Required("--zone-id");
+        var inputPath = options.Required("--input-file");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId) || !ServiceSettingsLoader.IsSafeIdentifier(zoneId))
+        {
+            return Usage();
+        }
+
+        DateTimeOffset? capturedAt = null;
+        if (options.Optional("--source-date") is { } dateText)
+        {
+            if (!DateTimeOffset.TryParse(dateText, CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsedDate) ||
+                parsedDate.Offset != TimeSpan.Zero)
+            {
+                return Usage();
+            }
+
+            capturedAt = parsedDate;
+        }
+
+        var text = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        try
+        {
+            if (text.Length is <= 0 or > 1024 * 1024)
+            {
+                Console.Error.WriteLine("ERROR invalid_research_size");
+                return 4;
+            }
+
+            var result = await InvokeOwnerAsync(controlPipe,
+                new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.ResearchCaptureOperation,
+                    resourceId, zoneId, ContentBase64: Convert.ToBase64String(text),
+                    SourceTitle: options.Optional("--title"),
+                    SourceLocator: options.Optional("--source-url"),
+                    SourceAuthor: options.Optional("--source-author"),
+                    SourceCapturedAtUtc: capturedAt)).ConfigureAwait(false);
+            if (!result.Success || !HasStatus(result.Reply, "research_captured"))
+            {
+                WriteServiceError(result);
+                return 4;
+            }
+
+            var revision = result.Reply.TryGetProperty("resourceRevision", out var value) ? value.GetInt64() : 0;
+            PrintRegisteredSource(result.Reply);
+            Console.WriteLine($"RESEARCH captured id={resourceId} revision={revision} textBytes={text.Length}");
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(text);
+        }
+    }
+
+    /// <summary>
+    /// S3-T4 research read: returns the exact captured text. With
+    /// --output-file the bytes are written to that file (create-only) and the
+    /// metadata is printed; without it the exact bytes stream on stdout like
+    /// the owner resource read. Errors stay on stderr with a failing exit.
+    /// </summary>
+    private static async Task<int> ResearchReadAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--resource-revision", "--output-file");
+        var controlPipe = ControlPipe(options);
+        var resourceId = options.Required("--resource-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId))
+        {
+            return Usage();
+        }
+
+        long? revision = null;
+        if (options.Optional("--resource-revision") is { } revisionText)
+        {
+            if (!long.TryParse(revisionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) || parsed < 1)
+            {
+                return Usage();
+            }
+
+            revision = parsed;
+        }
+
+        var outputFile = options.Optional("--output-file");
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.ResearchReadOperation,
+                ResourceId: resourceId, ResourceRevision: revision)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "research_note") ||
+            !result.Reply.TryGetProperty("contentBase64", out var content) ||
+            content.ValueKind != JsonValueKind.String)
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        var text = Convert.FromBase64String(content.GetString() ?? string.Empty);
+        try
+        {
+            if (outputFile is null)
+            {
+                var output = Console.OpenStandardOutput();
+                await output.WriteAsync(text).ConfigureAwait(false);
+                await output.FlushAsync().ConfigureAwait(false);
+            }
+            else
+            {
+                await using var output = new FileStream(outputFile, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                await output.WriteAsync(text).ConfigureAwait(false);
+                await output.FlushAsync().ConfigureAwait(false);
+                PrintRegisteredSource(result.Reply);
+                Console.WriteLine($"RESEARCH text id={resourceId} revision={JsonValueText(result.Reply, "resourceRevision")} bytes={text.Length}");
+            }
+
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(text);
+        }
     }
 
     private const int MaximumSourceEnrollmentRequestBytes = 8 * 1024;
@@ -2743,7 +2882,7 @@ internal static class OwnerControlCli
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|source-enroll --source-id --zone-id --format --format-version --input-file|source-revoke --source-id|source-status --source-id|source-ingest --source-id|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|lifecycle-create|lifecycle-read|lifecycle-retained-read --resource-revision|lifecycle-publish --expected-revision|lifecycle-reject --expected-revision|lifecycle-withdraw --expected-revision|lifecycle-repropose --expected-revision|lifecycle-question-resolve --expected-revision|lifecycle-question-reopen --expected-revision|lifecycle-intention-complete --expected-revision|lifecycle-intention-cancel --expected-revision|lifecycle-intention-supersede --expected-revision|lifecycle-intention-notify --expected-revision|lifecycle-intention-acknowledge --expected-revision|lifecycle-validity-set --expected-revision|lifecycle-retain --expected-revision|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read|agent-collection-view}; lifecycle --resource-id is the subject item ID; relation/lifecycle transitions need --expected-revision and an optional --input-file draft; source-enroll's --input-file is a JSON object holding the private locator ({\"locator\": \"C:/exact/path\"}), never a command argument");
+        Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|source-enroll --source-id --zone-id --format --format-version --input-file|source-revoke --source-id|source-status --source-id|source-ingest --source-id|research-capture --resource-id --zone-id --input-file [--title --source-url --source-author --source-date]|research-read --resource-id [--resource-revision --output-file]|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|lifecycle-create|lifecycle-read|lifecycle-retained-read --resource-revision|lifecycle-publish --expected-revision|lifecycle-reject --expected-revision|lifecycle-withdraw --expected-revision|lifecycle-repropose --expected-revision|lifecycle-question-resolve --expected-revision|lifecycle-question-reopen --expected-revision|lifecycle-intention-complete --expected-revision|lifecycle-intention-cancel --expected-revision|lifecycle-intention-supersede --expected-revision|lifecycle-intention-notify --expected-revision|lifecycle-intention-acknowledge --expected-revision|lifecycle-validity-set --expected-revision|lifecycle-retain --expected-revision|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read|agent-collection-view}; lifecycle --resource-id is the subject item ID; relation/lifecycle transitions need --expected-revision and an optional --input-file draft; source-enroll's --input-file is a JSON object holding the private locator ({\"locator\": \"C:/exact/path\"}), never a command argument");
         return 2;
     }
 

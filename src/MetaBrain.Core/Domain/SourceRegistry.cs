@@ -28,6 +28,18 @@ public sealed record SourceSpan(long Start, long End);
 /// private index (S2-T7, see <see cref="Index.PrivateIndexRow"/>) is a
 /// derived projection of these canonical envelopes; none of them is
 /// represented here.
+/// <para>
+/// S3-T4 adds the captured research note as one optional, additive field pair
+/// on this same record (never a parallel record family): when the owner
+/// captures unstructured research text, the verbatim text is persisted
+/// encrypted in <see cref="Text"/> and the owner-declared origin role in
+/// <see cref="Author"/>. A typed note has no original outside the vault, so
+/// this text is the source's primary content, not a copy of external data
+/// (the S2-T3 "no body" rule still holds for metadata-only registrations of
+/// external sources). Both fields are absent for every other registration and
+/// absent means unknown: nothing infers an author or content, and an ID
+/// missing from the live vault is still only "not registered".
+/// </para>
 /// </summary>
 public sealed record RegisteredSourceDraft(
     string? Title,
@@ -36,13 +48,17 @@ public sealed record RegisteredSourceDraft(
     SourceAvailability? Availability,
     CreationMethod? CreationMethod,
     DateTimeOffset? CapturedAtUtc,
-    DateTimeOffset? RecordedAtUtc);
+    DateTimeOffset? RecordedAtUtc,
+    SpeakerRole? Author = null,
+    string? Text = null);
 
 /// <summary>
 /// Server-persisted registered source (encrypted bytes). Identity comes from
 /// trusted request params, executor from the trusted context, revision from
-/// the vault descriptor. Registered sources keep only metadata and a private
-/// locator; no source body is ever stored at this layer.
+/// the vault descriptor. Registered sources of external material keep only
+/// metadata and a private locator; the S3-T4 captured research note
+/// additionally carries its verbatim text and declared author role, which are
+/// the note's own primary content.
 /// </summary>
 public sealed record StoredRegisteredSource(
     int SchemaVersion,
@@ -55,10 +71,15 @@ public sealed record StoredRegisteredSource(
     string? Version,
     SourceAvailability Availability,
     DateTimeOffset? CapturedAtUtc,
-    DateTimeOffset RecordedAtUtc);
+    DateTimeOffset RecordedAtUtc,
+    SpeakerRole? Author = null,
+    string? Text = null);
 
 /// <summary>
 /// Owner-facing read model: stored registered source plus the live revision.
+/// <see cref="Text"/> is the verbatim captured research text when the source
+/// is an S3-T4 captured note, and null for every metadata-only registration;
+/// it is owner-only content and never crosses the metadata source wire.
 /// </summary>
 public sealed record RegisteredSource(
     string Id,
@@ -72,7 +93,9 @@ public sealed record RegisteredSource(
     string? Version,
     SourceAvailability Availability,
     DateTimeOffset? CapturedAtUtc,
-    DateTimeOffset RecordedAtUtc);
+    DateTimeOffset RecordedAtUtc,
+    SpeakerRole? Author,
+    string? Text);
 
 public static class RegisteredSourceCodec
 {
@@ -81,12 +104,31 @@ public static class RegisteredSourceCodec
     public const int MaximumLocatorLength = 512;
     public const int MaximumVersionLength = 256;
 
+    /// <summary>
+    /// S3-T4 captured research text bound (mirrors the memory body bound). The
+    /// stored record keeps its own 1 MiB byte cap in <see cref="EncodeStored"/>,
+    /// which is what a text made of non-ASCII characters must also fit.
+    /// </summary>
+    public const int MaximumTextChars = 200_000;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         PropertyNameCaseInsensitive = true,
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
+
+    /// <summary>
+    /// Encodes a client-shaped draft (e.g. the S3-T4 capture service building
+    /// one from trusted request fields) so it can pass through the same
+    /// validated create path as a wire-supplied draft. The draft is validated
+    /// by the create path, not here.
+    /// </summary>
+    public static byte[] EncodeDraft(RegisteredSourceDraft draft)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+        return JsonSerializer.SerializeToUtf8Bytes(draft, JsonOptions);
+    }
 
     public static RegisteredSourceDraft DecodeDraft(byte[] json)
     {
@@ -182,6 +224,7 @@ public static class RegisteredSourceValidator
         ValidateLocator(draft.Locator);
         ValidateVersion(draft.Version);
         ValidateTimes(draft.CapturedAtUtc, draft.RecordedAtUtc);
+        ValidateCapturedText(draft.Author, draft.Text);
     }
 
     public static void ValidateStored(StoredRegisteredSource source)
@@ -220,6 +263,7 @@ public static class RegisteredSourceValidator
         ValidateTitle(source.Title);
         ValidateLocator(source.Locator);
         ValidateVersion(source.Version);
+        ValidateCapturedText(source.Author, source.Text);
 
         if (source.RecordedAtUtc.Offset != TimeSpan.Zero)
         {
@@ -273,6 +317,41 @@ public static class RegisteredSourceValidator
         if (version.Length is 0 or > RegisteredSourceCodec.MaximumVersionLength || version.Any(char.IsControl))
         {
             throw new ArgumentException("The source version must be 1-256 characters without control characters.");
+        }
+    }
+
+    /// <summary>
+    /// S3-T4: the captured research text and its declared origin role. Both are
+    /// optional as a pair of unknowns, but an author role without captured text
+    /// would attribute nothing, an explicitly declared role must be a known
+    /// one (unknown is omission, never an asserted value), and the text must be
+    /// bounded printable text like a memory body.
+    /// </summary>
+    private static void ValidateCapturedText(SpeakerRole? author, string? text)
+    {
+        if (author is null && text is null)
+        {
+            return;
+        }
+
+        if (text is null)
+        {
+            throw new ArgumentException("A captured source author requires the captured text it describes.");
+        }
+
+        if (author is not null && (!Enum.IsDefined(author.Value) || author.Value == SpeakerRole.Unknown))
+        {
+            throw new ArgumentException("The captured source author must be a known role; omission is the only unknown.");
+        }
+
+        if (string.IsNullOrWhiteSpace(text) || text.Length > RegisteredSourceCodec.MaximumTextChars)
+        {
+            throw new ArgumentException("The captured source text must be 1-200000 characters.");
+        }
+
+        if (text.Any(character => char.IsControl(character) && character is not '\n' and not '\r' and not '\t'))
+        {
+            throw new ArgumentException("The captured source text contains unsupported control characters.");
         }
     }
 

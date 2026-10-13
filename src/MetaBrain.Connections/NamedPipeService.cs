@@ -214,7 +214,9 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.SourceEnrollOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceRevokeOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceStatusOperation, StringComparison.Ordinal) ||
-                    string.Equals(request.Operation, ServiceRequestHandler.SourceIngestOperation, StringComparison.Ordinal);
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceIngestOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.ResearchCaptureOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.ResearchReadOperation, StringComparison.Ordinal);
                 using var operation = needsVaultOperation ? _vault.TryBeginOperation() : null;
                 // Application creates the access context: owner channel gets owner authority,
                 // while the agent channel receives a placeholder agent identity that carries

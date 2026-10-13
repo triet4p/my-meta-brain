@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 using MetaBrain.Core.Domain;
 using MetaBrain.Core.Index;
 using MetaBrain.Core.Security;
@@ -44,7 +45,10 @@ public sealed record ServiceRequest(
     string? RequestId = null,
     string? SourceLocator = null,
     string? SourceFormat = null,
-    int? SourceFormatVersion = null);
+    int? SourceFormatVersion = null,
+    string? SourceTitle = null,
+    string? SourceAuthor = null,
+    DateTimeOffset? SourceCapturedAtUtc = null);
 
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
@@ -92,6 +96,14 @@ public sealed record MemoryItemWire(
     DateTimeOffset RecordedAtUtc,
     Core.Domain.MemoryApplicability? Applicability);
 
+/// <summary>
+/// Registered source metadata as served to its granted audience. The wire
+/// carries the declared origin role (<see cref="RegisteredSourceWire.Author"/>,
+/// "unknown" when the registrant omitted it) but never the captured research
+/// text: note content stays owner-only on the research read surface, while
+/// this wire is the registry metadata contract shared by owner `source.read`
+/// and scoped `agent.source.read`.
+/// </summary>
 public sealed record RegisteredSourceWire(
     string Id,
     string ZoneId,
@@ -99,6 +111,7 @@ public sealed record RegisteredSourceWire(
     int SchemaVersion,
     string Executor,
     string CreationMethod,
+    string Author,
     string? Title,
     string? Locator,
     string? Version,
@@ -373,6 +386,8 @@ public sealed class ServiceRequestHandler
     public const string SourceRevokeOperation = "source.revoke";
     public const string SourceStatusOperation = "source.status";
     public const string SourceIngestOperation = "source.ingest";
+    public const string ResearchCaptureOperation = "research.capture";
+    public const string ResearchReadOperation = "research.read";
 
     /// <summary>
     /// Owner-grantable agent operation that authorizes creating one link
@@ -686,6 +701,16 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, SourceReadOperation, StringComparison.Ordinal))
         {
             return HandleSourceRead(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, ResearchCaptureOperation, StringComparison.Ordinal))
+        {
+            return HandleResearchCapture(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, ResearchReadOperation, StringComparison.Ordinal))
+        {
+            return HandleResearchRead(context, request, operation);
         }
 
         if (string.Equals(request.Operation, RelationCreateOperation, StringComparison.Ordinal))
@@ -1070,6 +1095,166 @@ public sealed class ServiceRequestHandler
         catch (UnauthorizedAccessException)
         {
             return Error("forbidden");
+        }
+    }
+
+    /// <summary>
+    /// S3-T4 owner research capture: the verbatim unstructured text plus its
+    /// zone (and optional owner-supplied title/URL/author role/source date)
+    /// is persisted as one encrypted registered source through the S2-T3
+    /// registry path before any structuring job could run. Owner-only and
+    /// unlocked-only: while locked the capture is refused with
+    /// <c>vault_locked</c> before anything is written, nothing reports saved,
+    /// and no plaintext draft lives anywhere. The reply carries the source
+    /// metadata wire and the stored revision — never the text back.
+    /// </summary>
+    private ServiceReply HandleResearchCapture(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasResearchCaptureExtras(request) || string.IsNullOrEmpty(request.ResourceId) ||
+            string.IsNullOrEmpty(request.ZoneId) || string.IsNullOrEmpty(request.ContentBase64))
+        {
+            return Error("invalid_request");
+        }
+
+        SpeakerRole? author = null;
+        if (request.SourceAuthor is { } authorToken)
+        {
+            if (!TryParseSourceAuthor(authorToken, out var parsed))
+            {
+                return Error("invalid_request");
+            }
+
+            author = parsed;
+        }
+
+        if (request.SourceCapturedAtUtc is { } capturedAt && capturedAt.Offset != TimeSpan.Zero)
+        {
+            return Error("invalid_request");
+        }
+
+        byte[]? text = null;
+        try
+        {
+            text = Convert.FromBase64String(request.ContentBase64);
+            var captured = new ResearchCaptureService().Capture(
+                context, request.ResourceId, request.ZoneId, text,
+                request.SourceTitle, request.SourceLocator, author, request.SourceCapturedAtUtc, operation);
+            return new ServiceReply(CurrentProtocolVersion, "research_captured", "owner", null,
+                ResourceRevision: captured.Revision, Source: ToSourceWire(captured));
+        }
+        catch (FormatException)
+        {
+            return Error("invalid_request");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        finally
+        {
+            if (text is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(text);
+            }
+        }
+    }
+
+    /// <summary>
+    /// S3-T4 owner research read: returns the live (or exact requested)
+    /// revision of one captured note and the verbatim text bytes. Owner-only
+    /// and unlocked-only; a metadata-only registration (no captured text)
+    /// answers <c>research_note_unavailable</c> instead of inventing content,
+    /// and the text never rides the metadata source wire.
+    /// </summary>
+    private ServiceReply HandleResearchRead(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasResearchReadExtras(request) || string.IsNullOrEmpty(request.ResourceId) ||
+            request.ResourceRevision is { } expectedRevision && expectedRevision < 1)
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var source = new ResearchCaptureService().Read(context, request.ResourceId, request.ResourceRevision, operation);
+            if (source.Text is null)
+            {
+                return Error("research_note_unavailable");
+            }
+
+            var text = Encoding.UTF8.GetBytes(source.Text);
+            try
+            {
+                return new ServiceReply(CurrentProtocolVersion, "research_note", "owner", null,
+                    ResourceRevision: source.Revision,
+                    Source: ToSourceWire(source),
+                    ContentBase64: Convert.ToBase64String(text),
+                    ContentType: "text/plain; charset=utf-8");
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(text);
+            }
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+    }
+
+    /// <summary>
+    /// Parses one owner-declared source author role token
+    /// (<c>user</c>/<c>assistant</c>/<c>tool</c>/<c>external</c>). Unknown is
+    /// never parsed from a token: omitting the field is the only way to leave
+    /// the author unknown, so an explicit value is always an assertion.
+    /// </summary>
+    private static bool TryParseSourceAuthor(string token, out SpeakerRole author)
+    {
+        switch (token)
+        {
+            case "user":
+                author = SpeakerRole.User;
+                return true;
+            case "assistant":
+                author = SpeakerRole.Assistant;
+                return true;
+            case "tool":
+                author = SpeakerRole.Tool;
+                return true;
+            case "external":
+                author = SpeakerRole.External;
+                return true;
+            default:
+                author = SpeakerRole.Unknown;
+                return false;
         }
     }
 
@@ -2047,6 +2232,7 @@ public sealed class ServiceRequestHandler
         source.SchemaVersion,
         ToWireToken(source.Executor.ToString()),
         ToWireToken(source.CreationMethod.ToString()),
+        source.Author is { } author ? ToWireToken(author.ToString()) : "unknown",
         source.Title,
         source.Locator,
         source.Version,
@@ -3528,8 +3714,8 @@ public sealed class ServiceRequestHandler
         request.CatalogId is not null || request.Label is not null ||
         request.Description is not null || request.Query is not null ||
         request.CatalogIds is not null || request.Purpose is not null ||
-        request.AgentId is not null || request.AgentContext is not null ||
-        request.DisclosureContext is not null || request.RequestId is not null;
+        request.RequestId is not null || request.SourceTitle is not null ||
+        request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null;
 
     /// <summary>
     /// S3-T1 revoke/status/ingest carry only the source ID: the zone,
@@ -3554,7 +3740,60 @@ public sealed class ServiceRequestHandler
         request.Purpose is not null || request.AgentId is not null ||
         request.AgentContext is not null || request.DisclosureContext is not null ||
         request.RequestId is not null || request.SourceLocator is not null ||
-        request.SourceFormat is not null || request.SourceFormatVersion is not null;
+        request.SourceFormat is not null || request.SourceFormatVersion is not null ||
+        request.SourceTitle is not null || request.SourceAuthor is not null ||
+        request.SourceCapturedAtUtc is not null;
+
+    /// <summary>
+    /// S3-T4 capture carries only the source ID, zone, verbatim text, and the
+    /// optional owner-supplied title/URL/author/date. Credentials, revisions,
+    /// scope, session, catalog, cost, enrollment and every other field are
+    /// refused, so a capture body can never touch another operation's state.
+    /// </summary>
+    private static bool HasResearchCaptureExtras(ServiceRequest request) =>
+        request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ResourceIds is not null || request.Operations is not null ||
+        request.DestinationResourceIds is not null || request.ExpiresAtUtc is not null ||
+        request.Provider is not null || request.Model is not null ||
+        request.MaximumCostUsd is not null || request.PreviewId is not null ||
+        request.CollectionId is not null || request.Token is not null ||
+        request.SessionToken is not null || request.SessionId is not null ||
+        request.AccessOperation is not null || request.ResourceRevision is not null ||
+        request.DestinationResourceId is not null || request.DestinationRevision is not null ||
+        request.EstimatedCostUsd is not null || request.InputTokens is not null ||
+        request.OutputTokens is not null || request.CatalogId is not null ||
+        request.Label is not null || request.Description is not null ||
+        request.Query is not null || request.CatalogIds is not null ||
+        request.Purpose is not null || request.AgentId is not null ||
+        request.AgentContext is not null || request.DisclosureContext is not null ||
+        request.RequestId is not null || request.SourceFormat is not null ||
+        request.SourceFormatVersion is not null;
+
+    /// <summary>
+    /// S3-T4 read carries only the source ID and the optional exact revision.
+    /// Content, zone, metadata, credentials, scope and session fields are
+    /// refused so a read body can never steer a write or another flow.
+    /// </summary>
+    private static bool HasResearchReadExtras(ServiceRequest request) =>
+        request.ZoneId is not null || request.Passphrase is not null ||
+        request.RecoveryCode is not null || request.ContentBase64 is not null ||
+        request.ResourceIds is not null || request.Operations is not null ||
+        request.DestinationResourceIds is not null || request.ExpiresAtUtc is not null ||
+        request.Provider is not null || request.Model is not null ||
+        request.MaximumCostUsd is not null || request.PreviewId is not null ||
+        request.CollectionId is not null || request.Token is not null ||
+        request.SessionToken is not null || request.SessionId is not null ||
+        request.AccessOperation is not null || request.DestinationResourceId is not null ||
+        request.DestinationRevision is not null || request.EstimatedCostUsd is not null ||
+        request.InputTokens is not null || request.OutputTokens is not null ||
+        request.CatalogId is not null || request.Label is not null ||
+        request.Description is not null || request.Query is not null ||
+        request.CatalogIds is not null || request.Purpose is not null ||
+        request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null ||
+        request.SourceLocator is not null || request.SourceFormat is not null ||
+        request.SourceFormatVersion is not null || request.SourceTitle is not null ||
+        request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null;
 
     private static bool HasAgentAccessRequestFields(ServiceRequest request, bool forStatus) =>
         request.ZoneId is not null ||
