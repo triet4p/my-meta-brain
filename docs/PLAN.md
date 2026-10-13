@@ -8,7 +8,7 @@
 
 Meta Brain là bộ nhớ thứ hai local-first cho owner, encrypted personal vault với key user kiểm soát. Agents chạy bình thường, khám phá owner-published catalog, request memory và đổi token một lần lấy scoped session qua MCP; không sandbox hoặc bảo mật lại original agent sessions. Provenance, durability, owner control và selective synthesis giữ nguyên.
 
-- Baseline: 2026-09-28; owner-approved CR01/D016 ngày 2026-10-01 thay security model. Replacement Sprint 1/M1 complete: S1-T1 retained, S1-T2–T9 evidence/checkpoints PASS, documentation correction PASS/checkpoint `911c12a0f157e7d176587528a0a32b52c8345407`, final differential deep `S1-DEEP-20261007-A2` PASS with no actionable findings. Walkthrough consent does not change product/S6/secret policies. Sprint 2/M2 complete: S2-T1–T7 accepted evidence/checkpoints and final differential `S2-DEEP-20261012-A1` PASS with no actionable findings; owner xác nhận mọi thay đổi Sprint 2 đã commit. Sprint 3 paused at owner request after S3-P0/S3-T1 accepted checkpoints; S3-T2–T6 pending, Sprints 4–8 Not started. Old AppContainer PASS historical only; no production acceptance or new push authorization.
+- Baseline: 2026-09-28; owner-approved CR01/D016 ngày 2026-10-01 thay security model. Replacement Sprint 1/M1 complete: S1-T1 retained, S1-T2–T9 evidence/checkpoints PASS, documentation correction PASS/checkpoint `911c12a0f157e7d176587528a0a32b52c8345407`, final differential deep `S1-DEEP-20261007-A2` PASS with no actionable findings. Walkthrough consent does not change product/S6/secret policies. Sprint 2/M2 complete: S2-T1–T7 accepted evidence/checkpoints and final differential `S2-DEEP-20261012-A1` PASS with no actionable findings; owner xác nhận mọi thay đổi Sprint 2 đã commit. Sprint 3 in progress sau owner resume S3-T3 recovery: S3-P0/S3-T1–T2 accepted checkpoints, S3-T3 giữ [~] tới full-route gates; S3-T4–T6 pending, Sprints 4–8 Not started. Old AppContainer PASS historical only; no production acceptance or new push authorization.
 - Đặc tả: [META-BRAIN](META-BRAIN.md).
 - Hợp đồng yêu cầu và change control: [REQUIREMENTS](REQUIREMENTS.md).
 - Hướng dẫn agent: [AGENTS](../AGENTS.md).
@@ -41,7 +41,7 @@ S1-T9 [behavioral evidence A3](../artifacts/sprint-1/reviews/S1-T9-S1T9-REVIEW-2
 | --- | --- | --- | --- |
 | 1 | Complete — CR01 replacement M1 | S1-T1 retained; S1-T2–T9 [x] and doc correction committed | Task evidence/checkpoints PASS; final differential deep A2 PASS |
 | 2 | Complete — M2 | S2-T1–T7 [x] | Task evidence/checkpoints PASS; final differential `S2-DEEP-20261012-A1` PASS; latest product commit `e4e7c5f5` |
-| 3 | Paused after S3-T1 — owner request | S3-P0/S3-T1 [x]; S3-T2…S3-T6 pending | [Accepted task records](sprint-plans/sprint-3.md#gate-record), latest checkpoint `f70cc44a`; remaining task/final gates pending |
+| 3 | In progress — S3-T3 recovery after owner resume | S3-P0/S3-T1–T2 [x]; S3-T3 [~]; S3-T4…S3-T6 pending | [Recovery and accepted records](sprint-plans/sprint-3.md#notes--blockers), latest checkpoint `33b17778`; S3-T3/remaining task/final gates pending |
 | 4 | Not started | S4-T1…S4-T7 | Pending |
 | 5 | Not started | S5-T1…S5-T7 | Pending |
 | 6 | Not started | S6-T1…S6-T7 | Pending |
