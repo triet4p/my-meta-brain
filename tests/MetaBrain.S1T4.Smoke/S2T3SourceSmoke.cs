@@ -221,8 +221,9 @@ internal static partial class OwnerServiceSmoke
                 "--resource-id", itemId).ConfigureAwait(false);
             Require(historicalRead.ExitCode == 0 &&
                     historicalRead.StandardOutput.Contains("revision=2", StringComparison.Ordinal) &&
-                    historicalRead.StandardOutput.Contains($"source id={sourceId}", StringComparison.Ordinal) &&
-                    historicalRead.StandardOutput.Contains("revision=1 span=0-4096", StringComparison.Ordinal),
+                    historicalRead.StandardOutput.Contains($"citation id={sourceId}", StringComparison.Ordinal) &&
+                    historicalRead.StandardOutput.Contains("revision=1 span=0-4096 status=superseded", StringComparison.Ordinal) &&
+                    historicalRead.StandardOutput.Contains("warning=citation_source_superseded", StringComparison.Ordinal),
                 "The linked item could not be read back with its historical citation anchor and span.");
             Console.WriteLine("PASS stale citation anchor rejected; stored anchor remains a truthful historical record");
 

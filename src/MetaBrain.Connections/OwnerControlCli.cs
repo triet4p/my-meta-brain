@@ -27,6 +27,9 @@ internal static class OwnerControlCli
                 "status" => await StatusAsync(options).ConfigureAwait(false),
                 "read" => await ReadAsync(options).ConfigureAwait(false),
                 "agent-read" => await AgentReadAsync(options).ConfigureAwait(false),
+                "agent-memory-read" => await AgentMemoryReadAsync(options).ConfigureAwait(false),
+                "agent-source-read" => await AgentSourceReadAsync(options).ConfigureAwait(false),
+                "agent-source-snapshot-read" => await AgentSourceSnapshotReadAsync(options).ConfigureAwait(false),
                 "write" => await WriteAsync(options).ConfigureAwait(false),
                 "memory-create" => await MemoryCreateAsync(options).ConfigureAwait(false),
                 "memory-revise" => await MemoryReviseAsync(options).ConfigureAwait(false),
@@ -267,6 +270,166 @@ internal static class OwnerControlCli
             CryptographicOperations.ZeroMemory(bytes);
         }
     }
+    /// <summary>
+    /// S4-T3 scoped item detail over the agent channel: the approved revision
+    /// is required and the item grant (memory.read) authorizes only this path.
+    /// The reply renders the exact approved snapshot body with its stored
+    /// citation anchors plus current/superseded/unknown availability warnings;
+    /// raw registry, snapshot, or relation content is never opened here, and a
+    /// source-only grant cannot read through this command.
+    /// </summary>
+    private static async Task<int> AgentMemoryReadAsync(CommandOptions options)
+    {
+        options.RequireOnly("--agent-pipe", "--session-file", "--resource-id", "--resource-revision");
+        var agentPipe = PipeName(options, "--agent-pipe");
+        var sessionPath = options.Required("--session-file");
+        var resourceId = options.Required("--resource-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId))
+        {
+            return Usage();
+        }
+
+        if (!long.TryParse(options.Required("--resource-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var resourceRevision) ||
+            resourceRevision < 1)
+        {
+            return Usage();
+        }
+
+        string sessionToken;
+        try
+        {
+            sessionToken = AgentSessionFile.Read(sessionPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Console.Error.WriteLine("ERROR session_unreadable");
+            return 3;
+        }
+
+        var result = await InvokeAgentAsync(agentPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.AgentMemoryReadOperation,
+                ResourceId: resourceId,
+                SessionToken: sessionToken,
+                AccessOperation: ServiceRequestHandler.MemoryReadOperation,
+                ResourceRevision: resourceRevision)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "memory"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintMemoryItem(result.Reply);
+        return 0;
+    }
+
+    /// <summary>
+    /// S4-T3 scoped source expansion over the agent channel: only an explicit
+    /// source.read grant on the exact source ID/revision authorizes this path.
+    /// An item-only grant (memory.read) denies here even when the item cites
+    /// the source, so readable detail never implies raw/source expansion.
+    /// </summary>
+    private static async Task<int> AgentSourceReadAsync(CommandOptions options)
+    {
+        options.RequireOnly("--agent-pipe", "--session-file", "--resource-id", "--resource-revision");
+        var agentPipe = PipeName(options, "--agent-pipe");
+        var sessionPath = options.Required("--session-file");
+        var resourceId = options.Required("--resource-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId))
+        {
+            return Usage();
+        }
+
+        if (!long.TryParse(options.Required("--resource-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var resourceRevision) ||
+            resourceRevision < 1)
+        {
+            return Usage();
+        }
+
+        string sessionToken;
+        try
+        {
+            sessionToken = AgentSessionFile.Read(sessionPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Console.Error.WriteLine("ERROR session_unreadable");
+            return 3;
+        }
+
+        var result = await InvokeAgentAsync(agentPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.AgentSourceReadOperation,
+                ResourceId: resourceId,
+                SessionToken: sessionToken,
+                AccessOperation: ServiceRequestHandler.SourceReadOperation,
+                ResourceRevision: resourceRevision)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "source"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintRegisteredSource(result.Reply);
+        return 0;
+    }
+
+    /// <summary>
+    /// S4-T3 scoped snapshot expansion over the agent channel: only an explicit
+    /// source.snapshot.read grant on the exact snapshot ID/revision authorizes
+    /// this path. Neither an item grant nor a source-reference grant satisfies
+    /// it, so preserved bytes are never reachable through detail alone.
+    /// </summary>
+    private static async Task<int> AgentSourceSnapshotReadAsync(CommandOptions options)
+    {
+        options.RequireOnly("--agent-pipe", "--session-file", "--snapshot-id", "--snapshot-revision");
+        var agentPipe = PipeName(options, "--agent-pipe");
+        var sessionPath = options.Required("--session-file");
+        var snapshotId = options.Required("--snapshot-id");
+        if (!SourceSnapshotIds.IsSnapshotId(snapshotId))
+        {
+            return Usage();
+        }
+
+        if (!long.TryParse(options.Required("--snapshot-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var snapshotRevision) ||
+            snapshotRevision < 1)
+        {
+            return Usage();
+        }
+
+        string sessionToken;
+        try
+        {
+            sessionToken = AgentSessionFile.Read(sessionPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Console.Error.WriteLine("ERROR session_unreadable");
+            return 3;
+        }
+
+        var result = await InvokeAgentAsync(agentPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.AgentSourceSnapshotReadOperation,
+                ResourceId: snapshotId,
+                SessionToken: sessionToken,
+                AccessOperation: ServiceRequestHandler.SourceSnapshotReadOperation,
+                ResourceRevision: snapshotRevision)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "source_snapshot") ||
+            !result.Reply.TryGetProperty("sourceSnapshot", out var snapshot) ||
+            snapshot.ValueKind != JsonValueKind.Object)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintSourceSnapshot(result.Reply);
+        return 0;
+    }
+
 
 
     private static async Task<int> WriteAsync(CommandOptions options)
@@ -495,7 +658,10 @@ internal static class OwnerControlCli
 
     /// <summary>
     /// Prints one memory item projection element, wherever it was served from
-    /// (a live read or a retained historical revision).
+    /// (a live read or a retained historical revision). Citations render the
+    /// stored anchors with their honest current/superseded/unknown status and
+    /// warnings; without a citations projection the stored sources still show
+    /// their anchors verbatim so older replies keep rendering.
     /// </summary>
     private static void PrintMemoryItemElement(JsonElement item)
     {
@@ -506,7 +672,18 @@ internal static class OwnerControlCli
         }
 
         Console.WriteLine($"body={JsonValueText(item, "body")}");
-        if (item.TryGetProperty("sources", out var sources) && sources.ValueKind == JsonValueKind.Array)
+        if (item.TryGetProperty("citations", out var citations) && citations.ValueKind == JsonValueKind.Array && citations.GetArrayLength() > 0)
+        {
+            foreach (var citation in citations.EnumerateArray())
+            {
+                var span = citation.TryGetProperty("span", out var spanValue) && spanValue.ValueKind == JsonValueKind.Object
+                    ? $"{JsonValueText(spanValue, "start")}-{JsonValueText(spanValue, "end")}"
+                    : "none";
+                Console.WriteLine(
+                    $"citation id={JsonValueText(citation, "sourceId")} revision={JsonValueText(citation, "sourceRevision")} span={span} status={JsonValueText(citation, "status")} availability={JsonValueText(citation, "availability")} warning={JsonValueText(citation, "warning")}");
+            }
+        }
+        else if (item.TryGetProperty("sources", out var sources) && sources.ValueKind == JsonValueKind.Array)
         {
             foreach (var source in sources.EnumerateArray())
             {
@@ -515,6 +692,17 @@ internal static class OwnerControlCli
                     : "none";
                 Console.WriteLine(
                     $"source id={JsonValueText(source, "sourceId")} locator={JsonValueText(source, "locator")} availability={JsonValueText(source, "availability")} revision={JsonValueText(source, "sourceRevision")} span={span}");
+            }
+        }
+
+        if (item.TryGetProperty("warnings", out var warnings) && warnings.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var warning in warnings.EnumerateArray())
+            {
+                if (warning.ValueKind == JsonValueKind.String)
+                {
+                    Console.WriteLine($"warning={warning.GetString()}");
+                }
             }
         }
     }

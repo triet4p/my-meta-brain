@@ -83,6 +83,15 @@ public sealed record OwnerAccessRequestSummary(
     string? ApprovedGrantId,
     DateTimeOffset? DecidedAtUtc);
 
+public sealed record MemoryCitationWire(
+    string? SourceId,
+    string? Locator,
+    string Availability,
+    long? SourceRevision,
+    Core.Domain.SourceSpan? Span,
+    string Status,
+    string? Warning);
+
 public sealed record MemoryItemWire(
     string Id,
     string ZoneId,
@@ -99,7 +108,9 @@ public sealed record MemoryItemWire(
     Core.Domain.MemorySourceReference[] Sources,
     DateTimeOffset? OccurredAtUtc,
     DateTimeOffset RecordedAtUtc,
-    Core.Domain.MemoryApplicability? Applicability);
+    Core.Domain.MemoryApplicability? Applicability,
+    MemoryCitationWire[]? Citations = null,
+    string[]? Warnings = null);
 /// <summary>
 /// One S4-T2 scoped search hit. Lean by design: the approved ID and revision
 /// (the T3 get-by-ID address), the kind, title, score and one short snippet,
@@ -974,7 +985,7 @@ public sealed class ServiceRequestHandler
             draft = Convert.FromBase64String(request.ContentBase64);
             var created = new MemoryItemService().Create(context, request.ResourceId, request.ZoneId, draft, operation);
             return new ServiceReply(CurrentProtocolVersion, "memory_created", "owner", null,
-                ResourceRevision: created.Revision, MemoryItem: ToMemoryWire(created));
+                ResourceRevision: created.Revision, MemoryItem: ToMemoryWire(created, operation));
         }
         catch (FormatException)
         {
@@ -1021,7 +1032,7 @@ public sealed class ServiceRequestHandler
             envelope = Convert.FromBase64String(request.ContentBase64);
             var imported = new MemoryItemService().Import(context, request.ResourceId, request.ZoneId, expectedRevision, envelope, operation);
             return new ServiceReply(CurrentProtocolVersion, "memory_imported", "owner", null,
-                ResourceRevision: imported.Revision, MemoryItem: ToMemoryWire(imported));
+                ResourceRevision: imported.Revision, MemoryItem: ToMemoryWire(imported, operation));
         }
         catch (FormatException)
         {
@@ -1067,7 +1078,7 @@ public sealed class ServiceRequestHandler
             draft = Convert.FromBase64String(request.ContentBase64);
             var revised = new MemoryItemService().Revise(context, request.ResourceId, request.ZoneId, expectedRevision, draft, operation);
             return new ServiceReply(CurrentProtocolVersion, "memory_revised", "owner", null,
-                ResourceRevision: revised.Revision, MemoryItem: ToMemoryWire(revised));
+                ResourceRevision: revised.Revision, MemoryItem: ToMemoryWire(revised, operation));
         }
         catch (FormatException)
         {
@@ -1102,7 +1113,7 @@ public sealed class ServiceRequestHandler
         {
             var item = new MemoryItemService().Read(context, request.ResourceId, request.ResourceRevision, operation);
             return new ServiceReply(CurrentProtocolVersion, "memory", "owner", null,
-                ResourceRevision: item.Revision, MemoryItem: ToMemoryWire(item));
+                ResourceRevision: item.Revision, MemoryItem: ToMemoryWire(item, operation));
         }
         catch (ArgumentException)
         {
@@ -2413,7 +2424,7 @@ public sealed class ServiceRequestHandler
                     retained.ArchiveResourceId,
                     retained.ArchiveRevision,
                     retained.Subject.Revision,
-                    ToMemoryWire(retained.Subject)));
+                    ToMemoryWire(retained.Subject, operation)));
         }
         catch (ArgumentException)
         {
@@ -2752,7 +2763,26 @@ public sealed class ServiceRequestHandler
         source.CapturedAtUtc,
         source.RecordedAtUtc);
 
-    private static MemoryItemWire ToMemoryWire(Core.Domain.MemoryItem item) => new(
+    private static MemoryItemWire ToMemoryWire(Core.Domain.MemoryItem item) => ToMemoryWire(item, null);
+
+    /// <summary>
+    /// S4-T3 item detail projection. The stored body and stored citation
+    /// anchors are served exactly as committed under the already-authorized
+    /// exact (ID, revision) address: anchors stay truthful historical records
+    /// and are never rewritten, re-anchored, or verified into current claims.
+    /// Each citation is projected against the live manifest with an honest
+    /// availability rendering: the stored availability is reported verbatim,
+    /// while the anchor status says whether the cited source revision is still
+    /// the live registered revision (current), was superseded by a newer
+    /// registered revision (superseded), or names no registered revision
+    /// (unknown). A superseded or unknown anchor carries a plain warning so a
+    /// changed, missing, or re-enrolled source can never be served silently as
+    /// verified provenance. Projection reads the encrypted manifest only; it
+    /// never decrypts registry content and never widens either grant, so an
+    /// item-only grant still cannot call the source API and a source-only
+    /// grant still cannot read items.
+    /// </summary>
+    private static MemoryItemWire ToMemoryWire(Core.Domain.MemoryItem item, IManagedResourceReader? manifest) => new(
         item.Id,
         item.ZoneId,
         item.Revision,
@@ -2768,7 +2798,92 @@ public sealed class ServiceRequestHandler
         item.Sources,
         item.OccurredAtUtc,
         item.RecordedAtUtc,
-        item.Applicability);
+        item.Applicability,
+        ProjectCitations(item.Sources, manifest),
+        ProjectCitationWarnings(item.Sources, manifest));
+
+    private static MemoryCitationWire[]? ProjectCitations(Core.Domain.MemorySourceReference[] sources, IManagedResourceReader? manifest)
+    {
+        if (sources is null || sources.Length == 0)
+        {
+            return null;
+        }
+
+        var projected = new MemoryCitationWire[sources.Length];
+        for (var index = 0; index < sources.Length; index++)
+        {
+            projected[index] = ProjectCitation(sources[index], manifest);
+        }
+
+        return projected;
+    }
+
+    private static MemoryCitationWire ProjectCitation(Core.Domain.MemorySourceReference source, IManagedResourceReader? manifest)
+    {
+        var availability = ToWireToken((source.Availability ?? Core.Domain.SourceAvailability.Unknown).ToString());
+        if (source.SourceId is null || source.SourceRevision is not { } claimed || claimed < 1 || manifest is null)
+        {
+            return new MemoryCitationWire(
+                source.SourceId, source.Locator, availability, source.SourceRevision, source.Span,
+                "unknown",
+                source.SourceId is null || source.SourceRevision is null
+                    ? null
+                    : "citation_source_unknown");
+        }
+
+        long? live;
+        try
+        {
+            live = SourceRegistryService.TryGetLiveRevision(manifest, source.SourceId);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new MemoryCitationWire(
+                source.SourceId, source.Locator, availability, source.SourceRevision, source.Span,
+                "unknown", "citation_source_unknown");
+        }
+
+        if (live is null)
+        {
+            return new MemoryCitationWire(
+                source.SourceId, source.Locator, availability, source.SourceRevision, source.Span,
+                "unknown", "citation_source_unknown");
+        }
+
+        return live.Value == claimed
+            ? new MemoryCitationWire(
+                source.SourceId, source.Locator, availability, source.SourceRevision, source.Span,
+                "current", null)
+            : new MemoryCitationWire(
+                source.SourceId, source.Locator, availability, source.SourceRevision, source.Span,
+                "superseded", "citation_source_superseded");
+    }
+
+    private static string[]? ProjectCitationWarnings(Core.Domain.MemorySourceReference[] sources, IManagedResourceReader? manifest)
+    {
+        if (sources is null || sources.Length == 0 || manifest is null)
+        {
+            return null;
+        }
+
+        string[]? warnings = null;
+        foreach (var source in sources)
+        {
+            var citation = ProjectCitation(source, manifest);
+            if (citation.Warning is null)
+            {
+                continue;
+            }
+
+            warnings ??= Array.Empty<string>();
+            if (!warnings.Contains(citation.Warning, StringComparer.Ordinal))
+            {
+                warnings = warnings.Append(citation.Warning).ToArray();
+            }
+        }
+
+        return warnings;
+    }
 
     private static string ToWireToken(string name)
     {
@@ -2923,6 +3038,19 @@ public sealed class ServiceRequestHandler
             }
         }
     }
+    /// <summary>
+    /// S4-T3 scoped item detail (get-by-ID). The session authority already
+    /// authorized the exact approved (memory.read, ID, revision) triple before
+    /// and after the encrypted read; rendering then projects the exact stored
+    /// snapshot bytes with their stored citation anchors plus honest
+    /// current/superseded/unknown availability warnings. The approved revision
+    /// is required (no live-revision fallback): a frozen grant can never drift
+    /// onto a newer canonical revision, and a superseded frozen revision fails
+    /// closed with the same generic denial as a guessed private ID instead of
+    /// serving the replacement body. Detail never opens registry, snapshot, or
+    /// relation content: citations render as stored anchors only, and an
+    /// item-only grant still cannot call the source or snapshot APIs.
+    /// </summary>
     private ServiceReply HandleAgentMemoryRead(
         AuthenticatedContext context,
         ServiceRequest request,
@@ -2930,7 +3058,9 @@ public sealed class ServiceRequestHandler
     {
         if (context.Kind != PrincipalKind.Agent || operation is null ||
             HasAgentResourceReadExtras(request) ||
-            request.AccessOperation is not "memory.read")
+            request.AccessOperation is not "memory.read" ||
+            request.ResourceId is null ||
+            request.ResourceRevision is not { } approvedRevision || approvedRevision < 1)
         {
             return ResourceDenied();
         }
@@ -2943,13 +3073,13 @@ public sealed class ServiceRequestHandler
                 request.SessionToken,
                 beforeRead.UnlockEpoch,
                 beforeRead.PolicyGeneration,
-                new AgentAccessRequest(request.AccessOperation, request.ResourceId, request.ResourceRevision));
-            if (!decision.Allowed || request.ResourceId is null)
+                new AgentAccessRequest(request.AccessOperation, request.ResourceId, approvedRevision));
+            if (!decision.Allowed)
             {
                 return ResourceDenied();
             }
 
-            snapshot = operation.ReadContent(request.ResourceId, request.ResourceRevision);
+            snapshot = operation.ReadContent(request.ResourceId, approvedRevision);
             Core.Domain.StoredMemoryEnvelope stored;
             try
             {
@@ -2965,14 +3095,14 @@ public sealed class ServiceRequestHandler
                 request.SessionToken,
                 beforeServe.UnlockEpoch,
                 beforeServe.PolicyGeneration,
-                new AgentAccessRequest(request.AccessOperation, request.ResourceId, request.ResourceRevision));
+                new AgentAccessRequest(request.AccessOperation, request.ResourceId, approvedRevision));
             if (!recheck.Allowed)
             {
                 return ResourceDenied();
             }
 
-            operation.ValidateRegistration(request.ResourceId, request.ResourceRevision);
-            var wire = ToMemoryWire(MemoryItemService.ToItem(stored, request.ResourceRevision ?? ResolveLiveResourceRevision(operation, request.ResourceId)));
+            operation.ValidateRegistration(request.ResourceId, approvedRevision);
+            var wire = ToMemoryWire(MemoryItemService.ToItem(stored, approvedRevision), operation);
             return new ServiceReply(
                 CurrentProtocolVersion, "memory", null, null,
                 Decision: recheck,

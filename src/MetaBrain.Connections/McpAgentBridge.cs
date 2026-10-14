@@ -214,6 +214,45 @@ internal static class McpAgentBridge
                     },
                     ["required"] = new JsonArray("sessionFile", "query"),
                     ["additionalProperties"] = false,
+                }),
+            Tool("metabrain_memory_read", "Read one approved memory item revision with stored citations and availability warnings (memory.read scope only; never opens source content).",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["sessionFile"] = new JsonObject { ["type"] = "string" },
+                        ["resourceId"] = new JsonObject { ["type"] = "string" },
+                        ["resourceRevision"] = new JsonObject { ["type"] = "string" },
+                    },
+                    ["required"] = new JsonArray("sessionFile", "resourceId", "resourceRevision"),
+                    ["additionalProperties"] = false,
+                }),
+            Tool("metabrain_source_read", "Read one approved registered-source revision (source.read scope only; an item grant cannot expand here).",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["sessionFile"] = new JsonObject { ["type"] = "string" },
+                        ["resourceId"] = new JsonObject { ["type"] = "string" },
+                        ["resourceRevision"] = new JsonObject { ["type"] = "string" },
+                    },
+                    ["required"] = new JsonArray("sessionFile", "resourceId", "resourceRevision"),
+                    ["additionalProperties"] = false,
+                }),
+            Tool("metabrain_source_snapshot_read", "Read one approved source-snapshot revision (source.snapshot.read scope only; item/source grants cannot expand here).",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["sessionFile"] = new JsonObject { ["type"] = "string" },
+                        ["snapshotId"] = new JsonObject { ["type"] = "string" },
+                        ["snapshotRevision"] = new JsonObject { ["type"] = "string" },
+                    },
+                    ["required"] = new JsonArray("sessionFile", "snapshotId", "snapshotRevision"),
+                    ["additionalProperties"] = false,
                 }));
     }
 
@@ -259,6 +298,27 @@ internal static class McpAgentBridge
             },
             "metabrain_authorize" => BuildAuthorizeArgs(agentPipe, args),
             "metabrain_memory_search" => BuildSearchArgs(agentPipe, args),
+            "metabrain_memory_read" => new[]
+            {
+                "owner", "agent-memory-read", "--agent-pipe", agentPipe,
+                "--session-file", RequiredArg(args, "sessionFile"),
+                "--resource-id", RequiredArg(args, "resourceId"),
+                "--resource-revision", RequiredArg(args, "resourceRevision"),
+            },
+            "metabrain_source_read" => new[]
+            {
+                "owner", "agent-source-read", "--agent-pipe", agentPipe,
+                "--session-file", RequiredArg(args, "sessionFile"),
+                "--resource-id", RequiredArg(args, "resourceId"),
+                "--resource-revision", RequiredArg(args, "resourceRevision"),
+            },
+            "metabrain_source_snapshot_read" => new[]
+            {
+                "owner", "agent-source-snapshot-read", "--agent-pipe", agentPipe,
+                "--session-file", RequiredArg(args, "sessionFile"),
+                "--snapshot-id", RequiredArg(args, "snapshotId"),
+                "--snapshot-revision", RequiredArg(args, "snapshotRevision"),
+            },
             _ => Array.Empty<string>(),
         };
 
