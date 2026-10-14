@@ -253,7 +253,10 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.ResearchCaptureOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.ResearchReadOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.FeedbackCreateOperation, StringComparison.Ordinal) ||
-                    string.Equals(request.Operation, ServiceRequestHandler.FeedbackReadOperation, StringComparison.Ordinal);
+                    string.Equals(request.Operation, ServiceRequestHandler.FeedbackReadOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.AgentProposeOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.ProposalReadOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.ProposalListOperation, StringComparison.Ordinal);
                 using var operation = needsVaultOperation ? _vault.TryBeginOperation() : null;
                 if (needsVaultOperation && operation is not null)
                 {
@@ -313,6 +316,7 @@ internal sealed class NamedPipeService
                 !string.Equals(operation, ServiceRequestHandler.AgentMemoryBriefOperation, StringComparison.Ordinal) &&
                 !string.Equals(operation, ServiceRequestHandler.AgentFeedbackOperation, StringComparison.Ordinal) &&
                 !string.Equals(operation, ServiceRequestHandler.AgentFeedbackReadOperation, StringComparison.Ordinal) &&
+                !string.Equals(operation, ServiceRequestHandler.AgentProposeOperation, StringComparison.Ordinal) &&
                 !string.Equals(operation, ServiceRequestHandler.AgentLinkCreateOperation, StringComparison.Ordinal) &&
                 !string.Equals(operation, ServiceRequestHandler.AgentRelationReadOperation, StringComparison.Ordinal) &&
                 !string.Equals(operation, ServiceRequestHandler.AgentAccessRequestOperation, StringComparison.Ordinal) &&
@@ -330,6 +334,7 @@ internal sealed class NamedPipeService
             string.Equals(operation, ServiceRequestHandler.AgentMemoryBriefOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentFeedbackOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentFeedbackReadOperation, StringComparison.Ordinal) ||
+            string.Equals(operation, ServiceRequestHandler.AgentProposeOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentCollectionViewOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentSourceReadOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentSourceSnapshotReadOperation, StringComparison.Ordinal) ||

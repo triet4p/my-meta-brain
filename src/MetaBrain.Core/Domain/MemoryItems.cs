@@ -261,6 +261,21 @@ public static class MemoryItemValidator
             throw new ArgumentException("The memory zone must be an opaque safe identifier.");
         }
 
+        ValidateProposedItem(draft);
+    }
+
+    /// <summary>
+    /// Content validation for one memory draft, shared by the canonical owner
+    /// write path and the S4-T5 proposal path: the same one memory-draft
+    /// policy validates a proposed item before it is recorded, so a proposal
+    /// can never carry content a canonical item could not. Identity (ID,
+    /// zone) is not checked here: a proposed item has no resource ID until an
+    /// owner publishes it.
+    /// </summary>
+    public static void ValidateProposedItem(MemoryItemDraft draft)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+
         if (draft.Kind is null || draft.Kind == MemoryKind.Unknown)
         {
             throw new ArgumentException("A known memory kind is required.");
@@ -563,13 +578,14 @@ public static class MemoryItemValidator
 /// <summary>
 /// One opaque-identifier grammar shared by every domain envelope so an ID
 /// can never carry path or traversal text. Identifiers are stable keys: they
-/// never derive from titles or paths (R10). Three namespaces are reserved for
+/// never derive from titles or paths (R10). Four namespaces are reserved for
 /// records that are not plain memory items or registered sources: typed
 /// relations (<see cref="RelationIdPrefix"/>), lifecycle records
-/// (<see cref="LifecycleIdPrefix"/>), and retained historical revisions
-/// (<see cref="ArchiveIdPrefix"/>). An item or a registered source ID in one
-/// of those namespaces would collide with its derived record, so they are
-/// refused here.
+/// (<see cref="LifecycleIdPrefix"/>), retained historical revisions
+/// (<see cref="ArchiveIdPrefix"/>), and S4-T5 proposals
+/// (<see cref="ProposalIdPrefix"/>). An item or a registered source ID in
+/// one of those namespaces would collide with its derived record, so they
+/// are refused here.
 /// </summary>
 internal static class DomainIdentifiers
 {
@@ -621,6 +637,19 @@ internal static class DomainIdentifiers
     /// </summary>
     public const string FeedbackIdPrefix = "fb-";
 
+    /// <summary>
+    /// Reserved resource-ID prefix for S4-T5 agent proposals. A proposal is
+    /// a pending owner-review write over its own canonical record beside
+    /// items, sources, and feedback: the reserved prefix keeps the inbox
+    /// enumerable from the encrypted manifest without decrypting an item or
+    /// source body, and the deterministic ID derivation in
+    /// <see cref="ProposalValidator.DeriveProposalId"/> keeps a repeated
+    /// operation on one stable record. Items and registered sources reject
+    /// the prefix so a memory or source ID can never be mistaken for a
+    /// proposal.
+    /// </summary>
+    public const string ProposalIdPrefix = "prop-";
+
 
     public static bool IsSafeIdentifier(string? value)
     {
@@ -652,10 +681,13 @@ internal static class DomainIdentifiers
 
     public static bool IsFeedbackId(string? value) =>
         value is not null && value.StartsWith(FeedbackIdPrefix, StringComparison.Ordinal) && IsSafeIdentifier(value);
+
+    public static bool IsProposalId(string? value) =>
+        value is not null && value.StartsWith(ProposalIdPrefix, StringComparison.Ordinal) && IsSafeIdentifier(value);
     /// <summary>
     /// An identifier that names a memory item or a registered source: never a
     /// relation, lifecycle record, retained revision, ingestion journal,
-    /// preserved source snapshot, or feedback record.
+    /// preserved source snapshot, feedback record, or proposal.
     /// </summary>
     public static bool IsDomainIdentifier(string? value) =>
         IsSafeIdentifier(value) &&
@@ -664,7 +696,8 @@ internal static class DomainIdentifiers
         !value.StartsWith(ArchiveIdPrefix, StringComparison.Ordinal) &&
         !value.StartsWith(IngestIdPrefix, StringComparison.Ordinal) &&
         !value.StartsWith(SourceSnapshotIdPrefix, StringComparison.Ordinal) &&
-        !value.StartsWith(FeedbackIdPrefix, StringComparison.Ordinal);
+        !value.StartsWith(FeedbackIdPrefix, StringComparison.Ordinal) &&
+        !value.StartsWith(ProposalIdPrefix, StringComparison.Ordinal);
 
     /// <summary>
     /// Lifecycle record ID derived from its subject: the ID is never chosen by

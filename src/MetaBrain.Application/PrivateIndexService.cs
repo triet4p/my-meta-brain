@@ -210,6 +210,31 @@ public sealed class PrivateIndexAuthority
             }
         }
 
+        if (ProposalTryRead(content, out var proposal) && proposal is not null &&
+            string.Equals(proposal.Id, resource.ResourceId, StringComparison.Ordinal))
+        {
+            // S4-T5 proposals are pending owner-review writes, never
+            // searchable content: they classify first, as their own kind, so
+            // no search document is built for them and no other record
+            // decoder can misread one. The linked IDs name the approved inbox
+            // destination and, for a revise proposal, the subject revision
+            // it pins.
+            var proposalLinked = new List<string>(2) { proposal.DestinationResourceId };
+            if (proposal.SubjectResourceId is not null)
+            {
+                proposalLinked.Add(proposal.SubjectResourceId);
+            }
+
+            return new PrivateIndexRow(
+                resource.ResourceId,
+                resource.ZoneId,
+                resource.Revision,
+                proposal.SchemaVersion,
+                PrivateIndexRecordKind.Proposal,
+                "pending",
+                LinkedIds(proposalLinked));
+        }
+
         if (MemoryItemTryRead(content, out var memory) && memory is not null &&
             string.Equals(memory.Id, resource.ResourceId, StringComparison.Ordinal))
         {
@@ -411,6 +436,20 @@ public sealed class PrivateIndexAuthority
         catch (ArgumentException)
         {
             feedback = null;
+            return false;
+        }
+    }
+
+    private static bool ProposalTryRead(byte[] content, out StoredProposal? proposal)
+    {
+        try
+        {
+            proposal = ProposalCodec.DecodeStored(content);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            proposal = null;
             return false;
         }
     }

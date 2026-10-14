@@ -294,6 +294,18 @@ internal static class McpAgentBridge
                     },
                     ["required"] = new JsonArray("sessionFile", "resourceId", "resourceRevision"),
                     ["additionalProperties"] = false,
+                }),
+            Tool("metabrain_propose", "Propose a create/revise memory item for owner review (proposal.create scope plus an approved inbox destination; pending only, never published, never user-confirmed).",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["sessionFile"] = new JsonObject { ["type"] = "string" },
+                        ["draft"] = new JsonObject { ["type"] = "string" },
+                    },
+                    ["required"] = new JsonArray("sessionFile", "draft"),
+                    ["additionalProperties"] = false,
                 }));
     }
 
@@ -369,6 +381,7 @@ internal static class McpAgentBridge
                 "--resource-id", RequiredArg(args, "resourceId"),
                 "--resource-revision", RequiredArg(args, "resourceRevision"),
             },
+            "metabrain_propose" => BuildProposeArgs(agentPipe, args),
             _ => Array.Empty<string>(),
         };
 
@@ -499,6 +512,33 @@ internal static class McpAgentBridge
         }
 
         return full.ToArray();
+    }
+
+    private static string[] BuildProposeArgs(string agentPipe, JsonObject args)
+    {
+        // S4-T5 agent proposal dispatch: the whole proposal draft (kind,
+        // idempotency key, approved inbox destination, revise subject with
+        // its revision precondition, and the proposed item content) rides as
+        // one draft file the existing agent-propose CLI reads, exactly like
+        // the feedback draft. The file lives under the process temp
+        // directory with a random name and never carries bearer material
+        // (the bridge already denied raw bearers above). The CLI owns the
+        // file lifetime; the bridge only passes the path. The service, not
+        // the bridge, authorizes the destination against the frozen scope.
+        var draftText = RequiredArg(args, "draft");
+        if (string.IsNullOrWhiteSpace(draftText) || draftText.Length > 1024 * 1024)
+        {
+            return new[] { "owner", "agent-propose", "--agent-pipe", agentPipe, "--session-file", RequiredArg(args, "sessionFile"), "--input-file", string.Empty };
+        }
+
+        var path = Path.Combine(Path.GetTempPath(), "metabrain-proposal-" + Guid.NewGuid().ToString("N") + ".json");
+        File.WriteAllText(path, draftText);
+        return new[]
+        {
+            "owner", "agent-propose", "--agent-pipe", agentPipe,
+            "--session-file", RequiredArg(args, "sessionFile"),
+            "--input-file", path,
+        };
     }
 
     private static string[] BuildFeedbackArgs(string agentPipe, JsonObject args)

@@ -33,6 +33,7 @@ internal static class OwnerControlCli
                 "agent-brief" => await AgentBriefAsync(options).ConfigureAwait(false),
                 "agent-feedback" => await AgentFeedbackAsync(options).ConfigureAwait(false),
                 "agent-feedback-read" => await AgentFeedbackReadAsync(options).ConfigureAwait(false),
+                "agent-propose" => await AgentProposeAsync(options).ConfigureAwait(false),
                 "write" => await WriteAsync(options).ConfigureAwait(false),
                 "memory-create" => await MemoryCreateAsync(options).ConfigureAwait(false),
                 "memory-revise" => await MemoryReviseAsync(options).ConfigureAwait(false),
@@ -40,6 +41,8 @@ internal static class OwnerControlCli
                 "memory-read" => await MemoryReadAsync(options).ConfigureAwait(false),
                 "feedback-create" => await FeedbackCreateAsync(options).ConfigureAwait(false),
                 "feedback-read" => await FeedbackReadAsync(options).ConfigureAwait(false),
+                "proposal-read" => await ProposalReadAsync(options).ConfigureAwait(false),
+                "proposal-list" => await ProposalListAsync(options).ConfigureAwait(false),
                 "source-create" => await SourceCreateAsync(options).ConfigureAwait(false),
                 "source-revise" => await SourceReviseAsync(options).ConfigureAwait(false),
                 "source-read" => await SourceReadAsync(options).ConfigureAwait(false),
@@ -745,6 +748,127 @@ internal static class OwnerControlCli
         if (feedback.TryGetProperty("note", out var note) && note.ValueKind == JsonValueKind.String)
         {
             Console.WriteLine($"note={note.GetString()}");
+        }
+    }
+
+    /// <summary>
+    /// S4-T5 owner proposal read: the stored pending proposal at the pinned
+    /// revision. The render names the inbox destination, the revise subject
+    /// and its exact revision precondition, the proposed item content with
+    /// its cited sources, the executor beside the declared authorship, and
+    /// the recorded user-confirmation claim (a claim, never evidence), so
+    /// the owner review surface sees exactly what the agent proposed.
+    /// </summary>
+    private static async Task<int> ProposalReadAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--resource-revision");
+        var controlPipe = ControlPipe(options);
+        var resourceId = options.Required("--resource-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId))
+        {
+            return Usage();
+        }
+
+        long? revision = null;
+        if (options.Optional("--resource-revision") is { } revisionText)
+        {
+            if (!long.TryParse(revisionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) || parsed < 1)
+            {
+                return Usage();
+            }
+
+            revision = parsed;
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.ProposalReadOperation,
+                ResourceId: resourceId, ResourceRevision: revision)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "proposal"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintProposal(result.Reply);
+        return 0;
+    }
+
+    /// <summary>
+    /// S4-T5 owner inbox listing: lean proposal identities from the
+    /// encrypted manifest (ID, live revision, owning zone). Pending content
+    /// stays on the exact proposal read.
+    /// </summary>
+    private static async Task<int> ProposalListAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var controlPipe = ControlPipe(options);
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.ProposalListOperation)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "proposals"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        if (!result.Reply.TryGetProperty("proposals", out var proposals) ||
+            proposals.ValueKind != JsonValueKind.Array ||
+            proposals.GetArrayLength() == 0)
+        {
+            Console.WriteLine("PROPOSALS none");
+            return 0;
+        }
+
+        foreach (var proposal in proposals.EnumerateArray())
+        {
+            Console.WriteLine($"PROPOSAL id={JsonValueText(proposal, "id")} revision={JsonValueText(proposal, "revision")} zone={JsonValueText(proposal, "zoneId")}");
+        }
+
+        return 0;
+    }
+
+    private static void PrintProposal(JsonElement reply)
+    {
+        if (!reply.TryGetProperty("proposal", out var proposal) || proposal.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        Console.WriteLine($"PROPOSAL id={JsonValueText(proposal, "id")} zone={JsonValueText(proposal, "zoneId")} revision={JsonValueText(proposal, "revision")} kind={JsonValueText(proposal, "kind")} destination={JsonValueText(proposal, "destinationResourceId")} destinationRevision={JsonValueText(proposal, "destinationRevision")} executor={JsonValueText(proposal, "executor")} recordedUtc={JsonValueText(proposal, "recordedAtUtc")} idempotencyKey={JsonValueText(proposal, "idempotencyKey")} userConfirmedClaim={JsonFlagText(proposal, "claimedUserConfirmed")}");
+        if (proposal.TryGetProperty("subjectResourceId", out var subject) && subject.ValueKind == JsonValueKind.String)
+        {
+            Console.WriteLine($"subject={subject.GetString()} subjectRevision={JsonValueText(proposal, "subjectRevision")}");
+        }
+
+        if (proposal.TryGetProperty("payloadHash", out var hash) && hash.ValueKind == JsonValueKind.String)
+        {
+            Console.WriteLine($"payloadHash={hash.GetString()}");
+        }
+
+        if (proposal.TryGetProperty("item", out var item) && item.ValueKind == JsonValueKind.Object)
+        {
+            Console.WriteLine($"ITEM kind={JsonValueText(item, "kind")} author={JsonValueText(item, "author")} executorDeclaredMethod={JsonValueText(item, "creationMethod")} evidence={JsonValueText(item, "evidence")} level={JsonValueText(item, "level")}");
+            if (item.TryGetProperty("title", out var title) && title.ValueKind == JsonValueKind.String)
+            {
+                Console.WriteLine($"title={title.GetString()}");
+            }
+
+            Console.WriteLine($"body={JsonValueText(item, "body")}");
+            Console.WriteLine($"time occurred={JsonValueText(item, "occurredAtUtc")} recorded={JsonValueText(item, "recordedAtUtc")}");
+            if (item.TryGetProperty("applicability", out var applicability) && applicability.ValueKind == JsonValueKind.Object)
+            {
+                Console.WriteLine($"applicability project={JsonValueText(applicability, "project")} environment={JsonValueText(applicability, "environment")} version={JsonValueText(applicability, "version")}");
+            }
+
+            if (item.TryGetProperty("sources", out var sources) && sources.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var source in sources.EnumerateArray())
+                {
+                    var span = source.TryGetProperty("span", out var spanValue) && spanValue.ValueKind == JsonValueKind.Object
+                        ? $"{JsonValueText(spanValue, "start")}-{JsonValueText(spanValue, "end")}"
+                        : "none";
+                    Console.WriteLine($"reference id={JsonValueText(source, "sourceId")} revision={JsonValueText(source, "sourceRevision")} span={span} availability={JsonValueText(source, "availability")}");
+                }
+            }
         }
     }
 
@@ -3521,6 +3645,64 @@ internal static class OwnerControlCli
         return 0;
     }
 
+    /// <summary>
+    /// S4-T5 agent proposal through one redeemed session. The draft names the
+    /// approved inbox destination, the idempotency key, the create/revise
+    /// kind, the revise subject with its exact revision precondition, and
+    /// the proposed item content; the service authorizes the destination
+    /// against the frozen scope before any byte is written. The reply echoes
+    /// the stored pending proposal only: nothing here publishes, and the
+    /// subject item is never written. Denials stay on stderr with a failing
+    /// exit.
+    /// </summary>
+    private static async Task<int> AgentProposeAsync(CommandOptions options)
+    {
+        options.RequireOnly("--agent-pipe", "--session-file", "--input-file");
+        var agentPipe = PipeName(options, "--agent-pipe");
+        var sessionPath = options.Required("--session-file");
+        var inputPath = options.Required("--input-file");
+        string sessionToken;
+        try
+        {
+            sessionToken = AgentSessionFile.Read(sessionPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Console.Error.WriteLine("ERROR session_unreadable");
+            return 3;
+        }
+
+        var content = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        try
+        {
+            if (content.Length is <= 0 or > 1024 * 1024)
+            {
+                Console.Error.WriteLine("ERROR invalid_proposal_size");
+                return 4;
+            }
+
+            var result = await InvokeAgentAsync(agentPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.AgentProposeOperation,
+                    SessionToken: sessionToken,
+                    AccessOperation: ServiceRequestHandler.ProposalCreateAccessOperation,
+                    ContentBase64: Convert.ToBase64String(content))).ConfigureAwait(false);
+            if (!result.Success || !HasStatus(result.Reply, "proposal_created"))
+            {
+                WriteServiceError(result);
+                return 3;
+            }
+
+            PrintProposal(result.Reply);
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(content);
+        }
+    }
+
     private static async Task<int> AgentCollectionViewAsync(CommandOptions options)
     {
         options.RequireOnly("--agent-pipe", "--session-file");
@@ -3917,7 +4099,7 @@ internal static class OwnerControlCli
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|agent-search --query [--offset --limit --kind --current]|source-enroll --source-id --zone-id --format --format-version --input-file|source-relocate --source-id --source-generation --input-file|source-revoke --source-id|source-status --source-id|source-ingest --source-id|source-pause --source-id|source-resume --source-id|source-refresh-optin --source-id|source-refresh-optout --source-id|source-list|source-refresh|source-snapshot-list --source-id|source-snapshot-preserve --source-id --source-revision --retain-until-utc|source-snapshot-read --snapshot-id --snapshot-revision --output-file|source-snapshot-retain --snapshot-id --expected-revision --retain-until-utc|source-snapshot-purge --snapshot-id --expected-revision|research-capture --resource-id --zone-id --input-file [--title --source-url --source-author --source-date]|research-read --resource-id [--resource-revision --output-file]|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|lifecycle-create|lifecycle-read|lifecycle-retained-read --resource-revision|lifecycle-publish --expected-revision|lifecycle-reject --expected-revision|lifecycle-withdraw --expected-revision|lifecycle-repropose --expected-revision|lifecycle-question-resolve --expected-revision|lifecycle-question-reopen --expected-revision|lifecycle-intention-complete --expected-revision|lifecycle-intention-cancel --expected-revision|lifecycle-intention-supersede --expected-revision|lifecycle-intention-notify --expected-revision|lifecycle-intention-acknowledge --expected-revision|lifecycle-validity-set --expected-revision|lifecycle-retain --expected-revision|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read|agent-collection-view|agent-search}; lifecycle --resource-id is the subject item ID; relation/lifecycle transitions need --expected-revision and an optional --input-file draft; source-enroll and source-relocate --input-file are JSON objects holding the private locator ({\"locator\": \"C:/exact/path\"}), never a command argument; source-snapshot-read requires an explicit --output-file export");
+        Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|agent-search --query [--offset --limit --kind --current]|source-enroll --source-id --zone-id --format --format-version --input-file|source-relocate --source-id --source-generation --input-file|source-revoke --source-id|source-status --source-id|source-ingest --source-id|source-pause --source-id|source-resume --source-id|source-refresh-optin --source-id|source-refresh-optout --source-id|source-list|source-refresh|source-snapshot-list --source-id|source-snapshot-preserve --source-id --source-revision --retain-until-utc|source-snapshot-read --snapshot-id --snapshot-revision --output-file|source-snapshot-retain --snapshot-id --expected-revision --retain-until-utc|source-snapshot-purge --snapshot-id --expected-revision|research-capture --resource-id --zone-id --input-file [--title --source-url --source-author --source-date]|research-read --resource-id [--resource-revision --output-file]|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|lifecycle-create|lifecycle-read|lifecycle-retained-read --resource-revision|lifecycle-publish --expected-revision|lifecycle-reject --expected-revision|lifecycle-withdraw --expected-revision|lifecycle-repropose --expected-revision|lifecycle-question-resolve --expected-revision|lifecycle-question-reopen --expected-revision|lifecycle-intention-complete --expected-revision|lifecycle-intention-cancel --expected-revision|lifecycle-intention-supersede --expected-revision|lifecycle-intention-notify --expected-revision|lifecycle-intention-acknowledge --expected-revision|lifecycle-validity-set --expected-revision|lifecycle-retain --expected-revision|proposal-read --resource-id [--resource-revision]|proposal-list|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read|agent-collection-view|agent-search|agent-brief|agent-feedback|agent-feedback-read|agent-propose}; lifecycle --resource-id is the subject item ID; relation/lifecycle transitions need --expected-revision and an optional --input-file draft; agent-propose --session-file --input-file carries one proposal draft JSON (kind create/revise, idempotencyKey, inbox destinationResourceId/destinationRevision, revise subjectResourceId/subjectRevision, proposed item draft) and never publishes; source-enroll and source-relocate --input-file are JSON objects holding the private locator ({\"locator\": \"C:/exact/path\"}), never a command argument; source-snapshot-read requires an explicit --output-file export");
         return 2;
     }
 

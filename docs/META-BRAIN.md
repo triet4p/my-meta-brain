@@ -225,6 +225,8 @@ Lưu source trước rồi mới chạy job; provider lỗi không làm mất gh
 4. Core validate schema, provenance, zone và trạng thái.
 5. Owner review/publish; policy tự động chỉ áp dụng phần owner đã cho phép.
 
+Implementation (S4-T5): agent gửi proposal qua `agent.propose` (grant operation `proposal.create`, `owner agent-propose`, `metabrain_propose` trên MCP bridge) và proposal chỉ là record pending `prop-` trên canonical encrypted store — không publish, không mutate subject item hay bất kỳ canonical record nào. Proposal cần operation được duyệt VÀ đích inbox riêng (destination scope trong cùng grant); service dẫn xuất ID từ (grant, destination, idempotency key) nên operation lặp lại trùng nội dung trả cùng một record, còn key trùng nội dung khác lỗi không mutate. Create proposal mang nội dung item đề xuất; revise proposal ghim subject item và đúng revision precondition — cả hai phải nằm trong frozen scope đã duyệt và subject phải tồn tại đúng revision đó (guessed/out-of-scope reference dùng chung một generic denial, không phải existence oracle). Executor, zone và recorded time do server stamp; body không thể mang evidence `userConfirmed` và claim `userConfirmed` chỉ được lưu thành claim. Đọc proposal là owner channel (`proposal-read`, `proposal-list`) để review; publish vẫn là hành động owner, không thuộc task này.
+
 Profile:
 
 - Coding: vấn đề, cách thử, bằng chứng kết quả, quyết định, điều kiện môi trường.

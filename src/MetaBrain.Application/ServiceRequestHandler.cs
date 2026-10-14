@@ -213,6 +213,56 @@ public sealed record FeedbackWire(
     DateTimeOffset RecordedAtUtc);
 
 /// <summary>
+/// The proposed item content inside one S4-T5 proposal, rendered exactly as
+/// the agent draft carried it: declared authorship, creation method, and
+/// evidence travel beside the executor the server trusted context stamped.
+/// A body field is never rewritten by the proposal surface.
+/// </summary>
+public sealed record ProposalItemWire(
+    string Kind,
+    string Author,
+    string CreationMethod,
+    string Evidence,
+    string Level,
+    string? Title,
+    string Body,
+    Core.Domain.MemorySourceReference[] Sources,
+    DateTimeOffset? OccurredAtUtc,
+    DateTimeOffset RecordedAtUtc,
+    Core.Domain.MemoryApplicability? Applicability);
+
+/// <summary>
+/// One S4-T5 pending proposal as served to its granted audience. A proposal
+/// is owner-review pending content: it names the approved inbox destination
+/// it landed in, the revise subject and exact revision precondition when it
+/// proposes a revision, the caller idempotency key, and the pinned content
+/// hash. The claimed user confirmation is a recorded claim (R09/R12): it
+/// never upgrades the declared evidence, the executor, or any belief.
+/// </summary>
+public sealed record ProposalWire(
+    string Id,
+    string ZoneId,
+    long Revision,
+    int SchemaVersion,
+    string Kind,
+    string DestinationResourceId,
+    long DestinationRevision,
+    string? SubjectResourceId,
+    long? SubjectRevision,
+    string IdempotencyKey,
+    string PayloadHash,
+    ProposalItemWire Item,
+    string Executor,
+    DateTimeOffset RecordedAtUtc,
+    bool ClaimedUserConfirmed);
+
+/// <summary>
+/// One lean inbox identity: the proposal ID, its live revision, and the
+/// owning zone from the encrypted manifest only, never the proposed body.
+/// </summary>
+public sealed record ProposalIdentityWire(string Id, long Revision, string ZoneId);
+
+/// <summary>
 /// Registered source metadata as served to its granted audience. The wire
 /// carries the declared origin role (<see cref="RegisteredSourceWire.Author"/>,
 /// "unknown" when the registrant omitted it) but never the captured research
@@ -469,6 +519,8 @@ public sealed record ServiceReply(
     MemorySearchPageWire? MemorySearch = null,
     MemoryBriefWire? MemoryBrief = null,
     FeedbackWire? Feedback = null,
+    ProposalWire? Proposal = null,
+    ProposalIdentityWire[]? Proposals = null,
     RegisteredSourceWire? Source = null,
     RelationWire? Relation = null,
     LifecycleWire? Lifecycle = null,
@@ -519,6 +571,10 @@ public sealed class ServiceRequestHandler
     public const string FeedbackCreateOperation = "feedback.create";
     public const string FeedbackReadOperation = "feedback.read";
     public const string AgentFeedbackReadOperation = "agent.feedback.read";
+    public const string AgentProposeOperation = "agent.propose";
+    public const string ProposalCreateAccessOperation = "proposal.create";
+    public const string ProposalReadOperation = "proposal.read";
+    public const string ProposalListOperation = "proposal.list";
     public const string AgentCollectionViewOperation = "agent.collection.view";
     public const string OwnerSessionListOperation = "owner.sessions";
     public const string OwnerSessionRevokeOperation = "owner.session.revoke";
@@ -688,6 +744,10 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, AgentFeedbackReadOperation, StringComparison.Ordinal))
         {
             return HandleAgentFeedbackRead(context, request, operation);
+        }
+        if (string.Equals(request.Operation, AgentProposeOperation, StringComparison.Ordinal))
+        {
+            return HandleAgentPropose(context, request, operation);
         }
         if (string.Equals(request.Operation, AgentSourceReadOperation, StringComparison.Ordinal))
         {
@@ -920,6 +980,14 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, FeedbackReadOperation, StringComparison.Ordinal))
         {
             return HandleFeedbackRead(context, request, operation);
+        }
+        if (string.Equals(request.Operation, ProposalReadOperation, StringComparison.Ordinal))
+        {
+            return HandleProposalRead(context, request, operation);
+        }
+        if (string.Equals(request.Operation, ProposalListOperation, StringComparison.Ordinal))
+        {
+            return HandleProposalList(context, request, operation);
         }
         if (string.Equals(request.Operation, SourceCreateOperation, StringComparison.Ordinal))
         {
@@ -1292,6 +1360,57 @@ public sealed class ServiceRequestHandler
         {
             return Error("forbidden");
         }
+    }
+
+    /// <summary>
+    /// S4-T5 owner proposal read: the stored pending proposal at the pinned
+    /// revision, exactly as the agent proposed it — destination, revise
+    /// subject and precondition, cited sources, declared authorship beside
+    /// the agent executor, and the recorded user-confirmation claim (a claim,
+    /// never evidence). The owner channel is the review surface; the agent
+    /// surface has no proposal read at all.
+    /// </summary>
+    private ServiceReply HandleProposalRead(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || operation is null || HasContentReadExtras(request) ||
+            string.IsNullOrEmpty(request.ResourceId))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var proposal = new ProposalService().Read(request.ResourceId, request.ResourceRevision, operation);
+            return new ServiceReply(CurrentProtocolVersion, "proposal", "owner", null,
+                ResourceRevision: proposal.Revision, Proposal: ToProposalWire(proposal));
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+    }
+
+    /// <summary>
+    /// S4-T5 owner inbox listing: lean proposal identities from the
+    /// encrypted manifest (ID, live revision, owning zone), never the
+    /// proposed body. Pending content becomes readable one proposal at a
+    /// time through <see cref="HandleProposalRead"/>.
+    /// </summary>
+    private ServiceReply HandleProposalList(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || operation is null || HasContentReadExtras(request))
+        {
+            return Error("invalid_request");
+        }
+
+        return new ServiceReply(CurrentProtocolVersion, "proposals", "owner", null,
+            Proposals: ProposalService.List(operation)
+                .Select(identity => new ProposalIdentityWire(identity.Id, identity.Revision, identity.ZoneId))
+                .ToArray());
     }
 
     /// <summary>
@@ -2930,6 +3049,44 @@ public sealed class ServiceRequestHandler
         ToWireToken(feedback.CreationMethod.ToString()),
         feedback.RecordedAtUtc);
 
+    private static ProposalWire ToProposalWire(Core.Domain.Proposal proposal) => new(
+        proposal.Id,
+        proposal.ZoneId,
+        proposal.Revision,
+        proposal.SchemaVersion,
+        ToWireToken(proposal.Kind.ToString()),
+        proposal.DestinationResourceId,
+        proposal.DestinationRevision,
+        proposal.SubjectResourceId,
+        proposal.SubjectRevision,
+        proposal.IdempotencyKey,
+        proposal.PayloadHash,
+        ToProposalItemWire(proposal.Item),
+        ToWireToken(proposal.Executor.ToString()),
+        proposal.RecordedAtUtc,
+        proposal.ClaimedUserConfirmed);
+
+    /// <summary>
+    /// Projects the proposed item content verbatim: declared kind, author,
+    /// creation method, evidence and level, title/body, stored source
+    /// references with their approved revisions and spans, times and
+    /// applicability. Nothing here upgrades, substitutes, or rewrites a
+    /// declared value — the executor beside it is what the trusted context
+    /// stamped.
+    /// </summary>
+    private static ProposalItemWire ToProposalItemWire(Core.Domain.MemoryItemDraft item) => new(
+        ToWireToken(item.Kind!.Value.ToString()),
+        ToWireToken(item.Author!.Value.ToString()),
+        ToWireToken(item.CreationMethod!.Value.ToString()),
+        ToWireToken(item.Evidence!.Value.ToString()),
+        ToWireToken(item.Level!.Value.ToString()),
+        item.Title,
+        item.Body ?? string.Empty,
+        Core.Domain.MemoryItemValidator.NormalizeSources(item.Sources),
+        item.OccurredAtUtc,
+        item.RecordedAtUtc ?? DateTimeOffset.MinValue,
+        item.Applicability);
+
     private static RegisteredSourceWire ToSourceWire(Core.Domain.RegisteredSource source) => new(
         source.Id,
         source.ZoneId,
@@ -3845,6 +4002,164 @@ public sealed class ServiceRequestHandler
             if (snapshot is { Length: > 0 })
             {
                 System.Security.Cryptography.CryptographicOperations.ZeroMemory(snapshot);
+            }
+        }
+    }
+
+    /// <summary>
+    /// S4-T5 scoped agent proposal inside the existing owner-approved
+    /// <c>proposal.create</c> grant: the session authority must hold the
+    /// operation plus the exact inbox destination at the pinned revision
+    /// (the draft can never supply its own permission). The proposal ID is
+    /// derived server-side from that approved destination and the caller's
+    /// idempotency key, the executor comes from the trusted context, and the
+    /// record is create-only: an identical replay returns the stored
+    /// proposal, a reuse of the same key with different content fails closed
+    /// without mutation, and no byte of the subject item or any other
+    /// canonical record is written here. The revise subject and every cited
+    /// source revision are re-checked against the frozen snapshot before the
+    /// write, so a guessed ID or an out-of-scope reference is the same
+    /// generic denial, never an existence signal. A claimed user
+    /// confirmation is stored as a claim only; it never upgrades evidence,
+    /// executor, or any belief (R09/R12).
+    /// </summary>
+    private ServiceReply HandleAgentPropose(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Agent || operation is null ||
+            HasAgentProposeExtras(request) ||
+            request.AccessOperation is not ProposalCreateAccessOperation ||
+            string.IsNullOrEmpty(request.ContentBase64))
+        {
+            return ResourceDenied();
+        }
+
+        byte[]? draft = null;
+        try
+        {
+            draft = Convert.FromBase64String(request.ContentBase64);
+            Core.Domain.ProposalDraft parsed;
+            try
+            {
+                parsed = Core.Domain.ProposalCodec.DecodeDraft(draft);
+            }
+            catch (ArgumentException)
+            {
+                return ResourceDenied();
+            }
+
+            if (string.IsNullOrEmpty(parsed.DestinationResourceId) || parsed.DestinationRevision is not > 0)
+            {
+                return ResourceDenied();
+            }
+
+            // Authorize the exact operation and the exact inbox destination
+            // against the frozen snapshot before any proposal data is read.
+            AgentAccessRequest Authorize() => new(
+                ProposalCreateAccessOperation,
+                ResourceId: null,
+                ResourceRevision: null,
+                DestinationResourceId: parsed.DestinationResourceId,
+                DestinationRevision: parsed.DestinationRevision);
+
+            var beforeWrite = operation.LoadScopeGrantState();
+            var decision = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                beforeWrite.UnlockEpoch,
+                beforeWrite.PolicyGeneration,
+                Authorize());
+            if (!decision.Allowed)
+            {
+                return ResourceDenied();
+            }
+
+            var lookup = _agentSessions.LookupSession(
+                request.SessionToken, beforeWrite.UnlockEpoch, beforeWrite.PolicyGeneration);
+            if (lookup.Status != AgentSessionLookupStatus.Valid || lookup.Session is null)
+            {
+                return ResourceDenied();
+            }
+
+            var session = lookup.Session;
+
+            // A revise proposal pins the subject item at the exact revision
+            // it would replace: both must already sit inside the frozen
+            // approved snapshot before the precondition is proven against
+            // the store.
+            if (parsed.Kind == Core.Domain.ProposalKind.Revise)
+            {
+                if (string.IsNullOrEmpty(parsed.SubjectResourceId) || parsed.SubjectRevision is not > 0 ||
+                    !IsInGrantScope(session.Resources, parsed.SubjectResourceId, parsed.SubjectRevision))
+                {
+                    return ResourceDenied();
+                }
+            }
+
+            // Every cited source revision must sit inside the frozen
+            // snapshot too: a reference the grant never approved is the same
+            // generic denial as a guessed one, so the surface is never an
+            // existence oracle.
+            if (parsed.Item?.Sources is { } citedSources)
+            {
+                foreach (var cited in citedSources)
+                {
+                    if (cited is null)
+                    {
+                        return ResourceDenied();
+                    }
+
+                    if (cited.SourceId is not null &&
+                        !IsInGrantScope(session.Resources, cited.SourceId, cited.SourceRevision))
+                    {
+                        return ResourceDenied();
+                    }
+                }
+            }
+
+            Core.Domain.Proposal created;
+            try
+            {
+                created = new ProposalService().CreateAgentProposal(context, session.GrantId, draft, operation);
+            }
+            catch (ArgumentException)
+            {
+                return ResourceDenied();
+            }
+
+            var beforeServe = operation.LoadScopeGrantState();
+            var recheck = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                beforeServe.UnlockEpoch,
+                beforeServe.PolicyGeneration,
+                Authorize());
+            if (!recheck.Allowed)
+            {
+                return ResourceDenied();
+            }
+
+            operation.ValidateRegistration(created.Id, created.Revision);
+            return new ServiceReply(
+                CurrentProtocolVersion, "proposal_created", null, null,
+                Decision: recheck,
+                PolicyGeneration: recheck.PolicyGeneration,
+                ResourceRevision: created.Revision,
+                Proposal: ToProposalWire(created));
+        }
+        catch (FormatException)
+        {
+            return ResourceDenied();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return ResourceDenied();
+        }
+        finally
+        {
+            if (draft is { Length: > 0 })
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(draft);
             }
         }
     }
@@ -5308,6 +5623,40 @@ public sealed class ServiceRequestHandler
     /// a draft can never steer the write toward another scope.
     /// </summary>
     private static bool HasAgentFeedbackExtras(ServiceRequest request) =>
+        request.ZoneId is not null ||
+        request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ResourceIds is not null || request.Operations is not null ||
+        request.DestinationResourceIds is not null || request.ExpiresAtUtc is not null ||
+        request.Provider is not null || request.Model is not null ||
+        request.MaximumCostUsd is not null || request.PreviewId is not null ||
+        request.CollectionId is not null || request.Token is not null ||
+        request.SessionId is not null ||
+        request.ResourceId is not null || request.ResourceRevision is not null ||
+        request.DestinationResourceId is not null || request.DestinationRevision is not null ||
+        request.EstimatedCostUsd is not null || request.InputTokens is not null ||
+        request.OutputTokens is not null || request.CatalogId is not null ||
+        request.Label is not null || request.Description is not null ||
+        request.CatalogIds is not null || request.Purpose is not null ||
+        request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null ||
+        request.Query is not null || request.SearchOffset is not null ||
+        request.SearchLimit is not null || request.SearchKind is not null ||
+        request.SearchCurrent is not null || request.BudgetChars is not null ||
+        request.SourceLocator is not null || request.SourceFormat is not null ||
+        request.SourceFormatVersion is not null || request.SourceTitle is not null ||
+        request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
+        request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null;
+
+    /// <summary>
+    /// Agent proposal carries only the session bearer, the access operation
+    /// name, and the proposal draft: identity, zone, scope, and egress
+    /// fields are never accepted from the agent envelope. The inbox
+    /// destination, the revise subject, and every cited revision travel
+    /// inside the base64 draft and are re-checked against the frozen
+    /// snapshot in the handler, so the envelope itself cannot steer the
+    /// write.
+    /// </summary>
+    private static bool HasAgentProposeExtras(ServiceRequest request) =>
         request.ZoneId is not null ||
         request.Passphrase is not null || request.RecoveryCode is not null ||
         request.ResourceIds is not null || request.Operations is not null ||
