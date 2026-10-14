@@ -38,6 +38,10 @@ public sealed record ServiceRequest(
     string? Description = null,
     string? Query = null,
     string[]? CatalogIds = null,
+    int? SearchOffset = null,
+    int? SearchLimit = null,
+    string? SearchKind = null,
+    string? SearchCurrent = null,
     string? Purpose = null,
     string? AgentId = null,
     string? AgentContext = null,
@@ -96,6 +100,37 @@ public sealed record MemoryItemWire(
     DateTimeOffset? OccurredAtUtc,
     DateTimeOffset RecordedAtUtc,
     Core.Domain.MemoryApplicability? Applicability);
+/// <summary>
+/// One S4-T2 scoped search hit. Lean by design: the approved ID and revision
+/// (the T3 get-by-ID address), the kind, title, score and one short snippet,
+/// plus the item's own occurred/recorded times and a stale flag for time
+/// filtering — never the full body, which stays on the get-by-ID path.
+/// </summary>
+public sealed record MemorySearchHitWire(
+    string Id,
+    long Revision,
+    string Kind,
+    string Title,
+    double Score,
+    string Snippet,
+    DateTimeOffset? OccurredAtUtc,
+    DateTimeOffset RecordedAtUtc,
+    bool Stale);
+
+/// <summary>
+/// One S4-T2 scoped search page over the session's frozen snapshot. Total is
+/// the matched count inside the approved scope only (never the vault size);
+/// pagination is a stable offset over the frozen ranked order, so later
+/// revisions cannot shift the page under the caller.
+/// </summary>
+public sealed record MemorySearchPageWire(
+    string Query,
+    int Total,
+    int Offset,
+    int Limit,
+    bool HasMore,
+    MemorySearchHitWire[] Hits);
+
 
 /// <summary>
 /// Registered source metadata as served to its granted audience. The wire
@@ -351,6 +386,7 @@ public sealed record ServiceReply(
     AgentCollectionView? CollectionView = null,
     string? RequestId = null,
     MemoryItemWire? MemoryItem = null,
+    MemorySearchPageWire? MemorySearch = null,
     RegisteredSourceWire? Source = null,
     RelationWire? Relation = null,
     LifecycleWire? Lifecycle = null,
@@ -393,6 +429,8 @@ public sealed class ServiceRequestHandler
     public const string AgentAccessAuthorizeOperation = "agent.access.authorize";
     public const string AgentResourceReadOperation = "agent.resource.read";
     public const string AgentMemoryReadOperation = "agent.memory.read";
+    public const string AgentMemorySearchOperation = "agent.memory.search";
+    public const string MemorySearchAccessOperation = "memory.search";
     public const string AgentCollectionViewOperation = "agent.collection.view";
     public const string OwnerSessionListOperation = "owner.sessions";
     public const string OwnerSessionRevokeOperation = "owner.session.revoke";
@@ -542,6 +580,10 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, AgentMemoryReadOperation, StringComparison.Ordinal))
         {
             return HandleAgentMemoryRead(context, request, operation);
+        }
+        if (string.Equals(request.Operation, AgentMemorySearchOperation, StringComparison.Ordinal))
+        {
+            return HandleAgentMemorySearch(context, request, operation, cancellationToken);
         }
         if (string.Equals(request.Operation, AgentCollectionViewOperation, StringComparison.Ordinal))
         {
@@ -2950,6 +2992,193 @@ public sealed class ServiceRequestHandler
             }
         }
     }
+    /// <summary>
+    /// S4-T2 scoped search over the protected private index, served only
+    /// inside one redeemed session's frozen approved snapshot. The grant must
+    /// carry the memory.search operation; the candidate set is the session's
+    /// own frozen (ID, revision) pairs filtered by the query inside the index
+    /// engine before any vault byte is opened. Only the served page is read
+    /// from the vault at the exact frozen revisions, each re-authorized
+    /// before and after the read with a final registration check, exactly
+    /// like the get-by-ID path. Lock, revoke, expiry and policy-generation
+    /// changes deny through the same session authority; a moved canonical
+    /// set fails closed with search_index_stale instead of a live scan.
+    /// Denials (unknown session, missing scope, unindexed generation,
+    /// guessed IDs, stale revisions) share one generic code so the reply is
+    /// never an existence oracle; totals count scope matches only.
+    /// </summary>
+    private ServiceReply HandleAgentMemorySearch(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation,
+        CancellationToken cancellationToken)
+    {
+        if (context.Kind != PrincipalKind.Agent || operation is null ||
+            HasAgentSearchExtras(request) ||
+            request.AccessOperation is not MemorySearchAccessOperation)
+        {
+            return ResourceDenied();
+        }
+
+        if (_privateIndexStore is null)
+        {
+            return ResourceDenied();
+        }
+
+        AgentSessionLookupResult lookup;
+        AgentSessionSnapshot session;
+        try
+        {
+            var state = operation.LoadScopeGrantState();
+            var precheck = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                state.UnlockEpoch,
+                state.PolicyGeneration,
+                new AgentAccessRequest(MemorySearchAccessOperation));
+            if (!precheck.Allowed)
+            {
+                return ResourceDenied();
+            }
+
+            lookup = _agentSessions.LookupSession(request.SessionToken, state.UnlockEpoch, state.PolicyGeneration);
+            if (lookup.Status != AgentSessionLookupStatus.Valid || lookup.Session is null)
+            {
+                return ResourceDenied();
+            }
+
+            session = lookup.Session;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            return ResourceDenied();
+        }
+
+        var materialized = _privateIndexMaterialized;
+        if (materialized is null)
+        {
+            return ResourceDenied();
+        }
+
+        try
+        {
+            var liveDigest = _privateIndex.Evaluate(operation);
+            if (!string.Equals(materialized.CanonicalDigest, liveDigest, StringComparison.Ordinal))
+            {
+                return new ServiceReply(CurrentProtocolVersion, "denied", null, "search_index_stale",
+                    Decision: new AuthorizationDecision(false, "search_index_stale", session.PolicyGeneration));
+            }
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            return ResourceDenied();
+        }
+
+        var offset = request.SearchOffset ?? 0;
+        var limit = request.SearchLimit ?? ScopedSearchAuthority.DefaultLimit;
+        if (offset < 0 || limit < 1 || limit > ScopedSearchAuthority.MaximumLimit)
+        {
+            return ResourceDenied();
+        }
+
+        var authority = new ScopedSearchAuthority();
+        var started = DateTimeOffset.UtcNow;
+        IReadOnlyList<ScopedSearchAuthority.ScoredHit> page;
+        int total;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            total = authority.Count(session, request.Query, request.SearchKind, request.SearchCurrent, materialized, _privateIndexStore, operation);
+            page = authority.Search(session, request.Query, request.SearchKind, request.SearchCurrent, offset, limit, materialized, _privateIndexStore, operation);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
+        {
+            return ResourceDenied();
+        }
+
+        try
+        {
+            var state = operation.LoadScopeGrantState();
+            var recheck = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                state.UnlockEpoch,
+                state.PolicyGeneration,
+                new AgentAccessRequest(MemorySearchAccessOperation));
+            if (!recheck.Allowed)
+            {
+                return ResourceDenied();
+            }
+
+            // No blanket ValidateRegistrationForAll: one moved resource must
+            // not deny the surviving scope. Each hit was already read at its
+            // exact frozen revision (revision-gated, fail-closed per hit),
+            // exactly like the get-by-ID path, and the recheck above covers
+            // revoke/lock/expiry/policy changes for the whole call.
+            var hits = page.Select(hit => ToSearchHitWire(hit, session)).ToArray();
+            var elapsed = DateTimeOffset.UtcNow - started;
+            _ = elapsed;
+            return new ServiceReply(
+                CurrentProtocolVersion, "memory_search", null, null,
+                Decision: recheck,
+                PolicyGeneration: recheck.PolicyGeneration,
+                MemorySearch: new MemorySearchPageWire(
+                    request.Query ?? string.Empty, total, offset, limit,
+                    offset + hits.Length < total, hits));
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            return ResourceDenied();
+        }
+    }
+
+    private static MemorySearchHitWire ToSearchHitWire(ScopedSearchAuthority.ScoredHit hit, AgentSessionSnapshot session)
+    {
+        var approved = session.Resources.FirstOrDefault(resource =>
+            string.Equals(resource.ResourceId, hit.ResourceId, StringComparison.Ordinal));
+        var frozenRevision = approved?.Revision ?? hit.Revision;
+        var snippet = BuildSnippet(hit.Item.Body, hit.Document.Tokens);
+        return new MemorySearchHitWire(
+            hit.ResourceId,
+            frozenRevision,
+            ToWireToken(hit.Item.Kind.ToString()),
+            hit.Item.Title ?? string.Empty,
+            Math.Round(hit.Score, 3),
+            snippet,
+            hit.Item.OccurredAtUtc,
+            hit.Item.RecordedAtUtc,
+            hit.Stale);
+    }
+
+    private static string BuildSnippet(string body, string[] documentTokens)
+    {
+        // One short window around the first index-token hit: enough to judge
+        // relevance, never the full body (full text stays on get-by-ID).
+        const int MaximumSnippetChars = 220;
+        if (string.IsNullOrEmpty(body))
+        {
+            return string.Empty;
+        }
+
+        var folded = SearchText.Normalize(body);
+        var best = 0;
+        foreach (var token in documentTokens)
+        {
+            var at = folded.IndexOf(token, StringComparison.Ordinal);
+            if (at >= 0 && (best == 0 || at < best))
+            {
+                best = at;
+            }
+        }
+
+        var start = Math.Max(0, best - 40);
+        var length = Math.Min(MaximumSnippetChars, body.Length - start);
+        var snippet = body.Substring(start, length);
+        return snippet.Length < body.Length ? snippet + "…" : snippet;
+    }
+
 
     /// <summary>
     /// Permission-filtered collection view for one redeemed agent session.
@@ -4341,6 +4570,36 @@ public sealed class ServiceRequestHandler
         request.SourceFormatVersion is not null || request.SourceTitle is not null ||
         request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
         request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null;
+    /// <summary>
+    /// S4-T2 scoped search carries only the session bearer, the access
+    /// operation name, the query text and its paging/kind/current filters.
+    /// Every identity, zone, scope, credential, catalog, egress and
+    /// content-draft field is refused, so a query can never steer the search
+    /// toward another scope or mint authority.
+    /// </summary>
+    private static bool HasAgentSearchExtras(ServiceRequest request) =>
+        request.ZoneId is not null ||
+        request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ContentBase64 is not null || request.ResourceIds is not null ||
+        request.Operations is not null || request.DestinationResourceIds is not null ||
+        request.ExpiresAtUtc is not null || request.Provider is not null ||
+        request.Model is not null || request.MaximumCostUsd is not null ||
+        request.PreviewId is not null || request.CollectionId is not null ||
+        request.Token is not null || request.SessionId is not null ||
+        request.ResourceId is not null || request.ResourceRevision is not null ||
+        request.DestinationResourceId is not null || request.DestinationRevision is not null ||
+        request.EstimatedCostUsd is not null || request.InputTokens is not null ||
+        request.OutputTokens is not null ||
+        request.CatalogId is not null || request.Label is not null ||
+        request.Description is not null ||
+        request.CatalogIds is not null || request.Purpose is not null ||
+        request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null ||
+        request.SourceLocator is not null || request.SourceFormat is not null ||
+        request.SourceFormatVersion is not null || request.SourceTitle is not null ||
+        request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
+        request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null;
+
 
     /// <summary>
     /// The agent collection view carries only the session bearer. Every

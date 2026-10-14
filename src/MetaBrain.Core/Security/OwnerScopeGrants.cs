@@ -72,6 +72,7 @@ public sealed partial class OwnerScopeGrantAuthority
         "source.read",
         "source.snapshot.read",
         "memory.read",
+        "memory.search",
         "relation.read",
         "proposal.create",
         "link.create",
@@ -565,6 +566,7 @@ public sealed partial class OwnerScopeGrantAuthority
             throw new ArgumentException("Provider egress requires an explicit valid provider, model, and cost limit within the frozen per-job maximum.");
         }
     }
+
     private static void ValidateSnapshotOperationScope(
         IReadOnlyCollection<ScopeResourceRevision> resources,
         IReadOnlyCollection<string> operations)
@@ -577,6 +579,25 @@ public sealed partial class OwnerScopeGrantAuthority
                 resources.Any(resource => !MetaBrain.Core.Domain.SourceSnapshotIds.IsSnapshotId(resource.ResourceId)))))
         {
             throw new ArgumentException("Source snapshot grants require only snapshot IDs and the source.snapshot.read operation.");
+        }
+
+        // S4-T2 scoped search runs over approved memory items only: snapshot
+        // resources and non-memory companions are refused, so a search grant
+        // can never widen into snapshot bytes. The search operation travels
+        // with memory.read (search then get-by-ID) but never with
+        // source.snapshot.read, proposal/link destinations, or egress.
+        if (operations.Contains("memory.search", StringComparer.Ordinal) &&
+            (containsSnapshots ||
+                resources.Any(resource => MetaBrain.Core.Domain.SourceSnapshotIds.IsSnapshotId(resource.ResourceId) ||
+                    resource.ResourceId.StartsWith("rel-", StringComparison.Ordinal) ||
+                    resource.ResourceId.StartsWith("lc-", StringComparison.Ordinal) ||
+                    resource.ResourceId.StartsWith("arc-", StringComparison.Ordinal) ||
+                    resource.ResourceId.StartsWith("ingest-", StringComparison.Ordinal) ||
+                    resource.ResourceId.StartsWith("snap-", StringComparison.Ordinal)) ||
+                operations.Any(operation => !string.Equals(operation, "memory.search", StringComparison.Ordinal) &&
+                    !string.Equals(operation, "memory.read", StringComparison.Ordinal))))
+        {
+            throw new ArgumentException("Scoped search grants require only memory item resources with memory read operations.");
         }
     }
 

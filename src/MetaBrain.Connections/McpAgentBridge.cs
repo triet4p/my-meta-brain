@@ -198,6 +198,22 @@ internal static class McpAgentBridge
                     },
                     ["required"] = new JsonArray("sessionFile", "operation"),
                     ["additionalProperties"] = false,
+                }),
+            Tool("metabrain_memory_search", "Search approved memory items by text (scoped lexical recall, lean hits only).",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["sessionFile"] = new JsonObject { ["type"] = "string" },
+                        ["query"] = new JsonObject { ["type"] = "string", ["maxLength"] = 256 },
+                        ["offset"] = new JsonObject { ["type"] = "string" },
+                        ["limit"] = new JsonObject { ["type"] = "string" },
+                        ["kind"] = new JsonObject { ["type"] = "string" },
+                        ["current"] = new JsonObject { ["type"] = "string" },
+                    },
+                    ["required"] = new JsonArray("sessionFile", "query"),
+                    ["additionalProperties"] = false,
                 }));
     }
 
@@ -242,6 +258,7 @@ internal static class McpAgentBridge
                 "--resource-revision", RequiredArg(args, "resourceRevision"),
             },
             "metabrain_authorize" => BuildAuthorizeArgs(agentPipe, args),
+            "metabrain_memory_search" => BuildSearchArgs(agentPipe, args),
             _ => Array.Empty<string>(),
         };
 
@@ -307,6 +324,34 @@ internal static class McpAgentBridge
         foreach (var (flag, key) in new[]
                  {
                      ("--resource-id", "resourceId"), ("--resource-revision", "resourceRevision"),
+                 })
+        {
+            if (args[key]?.GetValue<string>() is { } value && !string.IsNullOrWhiteSpace(value))
+            {
+                full.Add(flag);
+                full.Add(value);
+            }
+        }
+
+        return full.ToArray();
+    }
+
+    private static string[] BuildSearchArgs(string agentPipe, JsonObject args)
+    {
+        // S4-T2 scoped search dispatch: session path + query text plus
+        // optional paging/kind/current filters. The bridge never touches
+        // private bodies: the service scores the protected index and serves
+        // lean hits only.
+        var full = new List<string>
+        {
+            "owner", "agent-search", "--agent-pipe", agentPipe,
+            "--session-file", RequiredArg(args, "sessionFile"),
+            "--query", RequiredArg(args, "query"),
+        };
+        foreach (var (flag, key) in new[]
+                 {
+                     ("--offset", "offset"), ("--limit", "limit"),
+                     ("--kind", "kind"), ("--current", "current"),
                  })
         {
             if (args[key]?.GetValue<string>() is { } value && !string.IsNullOrWhiteSpace(value))

@@ -67,17 +67,37 @@ public sealed class PrivateIndexAuthority
                     var contents = reader.ReadBatch(batch, ReadBatchDegree, cancellationToken);
                     try
                     {
+                        var searchPlans = new List<(ScopeResourceRevision Resource, StoredMemoryEnvelope Envelope)>();
                         for (var j = 0; j < batch.Count; j++)
                         {
                             var content = contents[j];
                             try
                             {
-                                store.Insert(Classify(listed[start + j], content));
+                                var row = Classify(listed[start + j], content);
+                                store.Insert(row);
+                                // S4-T2: only live memory items become search
+                                // documents; every plan below re-validates the
+                                // decoded identity against its own descriptor.
+                                if (row.RecordKind == PrivateIndexRecordKind.MemoryItem &&
+                                    MemoryItemTryRead(content, out var memory) && memory is not null &&
+                                    string.Equals(memory.Id, listed[start + j].ResourceId, StringComparison.Ordinal))
+                                {
+                                    searchPlans.Add((listed[start + j], memory));
+                                }
                             }
                             finally
                             {
                                 CryptographicOperations.ZeroMemory(content);
                             }
+                        }
+
+                        // Lifecycle join for publication/currentness: one live
+                        // record per subject when present, read at its live
+                        // revision after the batch rows are stored.
+                        foreach (var plan in searchPlans)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            store.InsertSearchDocument(BuildSearchDocument(plan.Resource, plan.Envelope, reader));
                         }
                     }
                     finally
@@ -277,6 +297,65 @@ public sealed class PrivateIndexAuthority
             "unknown",
             Array.Empty<string>());
     }
+    /// <summary>
+    /// S4-T2 search document for one live memory item: normalized tokens from
+    /// the title, body and applicability plus the item's own occurred/recorded
+    /// instants, joined with the live lifecycle publication state (proposal by
+    /// default when no lifecycle record exists). Withdrawn and rejected items
+    /// stay indexed with their state so ranking can demote them; serving them
+    /// is the search handler's decision, never the index's.
+    /// </summary>
+    private static SearchIndexDocument BuildSearchDocument(
+        ScopeResourceRevision resource, StoredMemoryEnvelope memory, IManagedResourceStore reader)
+    {
+        var tokens = SearchText.TokenizeDocument(
+            memory.Title, memory.Body, memory.Applicability?.Project, memory.Applicability?.Environment, memory.Applicability?.Version);
+        var publication = "proposal";
+        try
+        {
+            var lifecycleId = "lc-" + memory.Id;
+            var live = reader.ListResources().FirstOrDefault(candidate =>
+                string.Equals(candidate.ResourceId, lifecycleId, StringComparison.Ordinal));
+            if (live is not null)
+            {
+                var raw = reader.ReadContent(lifecycleId, live.Revision);
+                try
+                {
+                    if (LifecycleTryRead(raw, out var lifecycle) && lifecycle is not null &&
+                        string.Equals(lifecycle.Id, lifecycleId, StringComparison.Ordinal) &&
+                        string.Equals(lifecycle.SubjectResourceId, memory.Id, StringComparison.Ordinal))
+                    {
+                        publication = StateName(lifecycle.Publication).ToLowerInvariant();
+                    }
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(raw);
+                }
+            }
+        }
+        catch (ManagedResourceUnavailableException)
+        {
+            // A lifecycle record that cannot be proven keeps the default: the
+            // memory row itself was already proven above.
+        }
+
+        const int MaximumTitleChars = 512;
+        var title = memory.Title ?? string.Empty;
+        return new SearchIndexDocument(
+            memory.Id,
+            resource.Revision,
+            StateName(memory.Kind),
+            title.Length <= MaximumTitleChars ? title : title[..MaximumTitleChars],
+            tokens.Take(PrivateIndexSchema.MaximumSearchTokens).OrderBy(token => token, StringComparer.Ordinal).ToArray(),
+            memory.OccurredAtUtc,
+            memory.RecordedAtUtc,
+            publication,
+            memory.Applicability?.Project ?? string.Empty,
+            memory.Applicability?.Environment ?? string.Empty,
+            memory.Applicability?.Version ?? string.Empty);
+    }
+
 
     private static bool MemoryItemTryRead(byte[] content, out StoredMemoryEnvelope? envelope)
     {

@@ -307,6 +307,15 @@ public sealed class AgentSessionAuthority
             return Deny("resource_unavailable", policyGeneration);
         }
 
+        // S4-T2 scoped search carries no resource address: the candidate set
+        // is the session's own frozen scope filtered by the query inside the
+        // handler, so snapshot-ID and scope checks below do not apply to it.
+        if (string.Equals(request.Operation, "memory.search", StringComparison.Ordinal))
+        {
+            return HasEgressFields(request) || request.DestinationResourceId is not null || request.DestinationRevision is not null
+                ? Deny("invalid_request", policyGeneration)
+                : Allow(policyGeneration);
+        }
         var snapshotResource = MetaBrain.Core.Domain.SourceSnapshotIds.IsSnapshotId(request.ResourceId);
         if (snapshotResource != string.Equals(request.Operation, "source.snapshot.read", StringComparison.Ordinal))
         {

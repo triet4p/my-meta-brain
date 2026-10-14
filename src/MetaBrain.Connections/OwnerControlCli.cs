@@ -89,6 +89,7 @@ internal static class OwnerControlCli
                 "catalog-withdraw" => await CatalogWithdrawAsync(options).ConfigureAwait(false),
                 "catalog-query" => await CatalogQueryAsync(options).ConfigureAwait(false),
                 "agent-catalog-list" => await AgentCatalogListAsync(options).ConfigureAwait(false),
+                "agent-search" => await AgentSearchAsync(options).ConfigureAwait(false),
                 "request" => await SubmitAccessRequestAsync(options).ConfigureAwait(false),
                 "request-status" => await AccessRequestStatusAsync(options).ConfigureAwait(false),
                 "requests" => await ListAccessRequestsAsync(options).ConfigureAwait(false),
@@ -2882,6 +2883,114 @@ internal static class OwnerControlCli
     /// resource IDs and revisions, never a member, title, count or collection
     /// name the session was not granted.
     /// </summary>
+
+    /// <summary>
+    /// S4-T2 scoped search over the protected private index through one
+    /// redeemed session. Prints one lean hit per line (approved ID, frozen
+    /// revision, kind, score, title, snippet, time, stale flag) plus a
+    /// scope-only total and hasMore marker; never a vault-wide count and
+    /// never a full body. Denials stay on stderr with a failing exit.
+    /// </summary>
+    private static async Task<int> AgentSearchAsync(CommandOptions options)
+    {
+        options.RequireOnly("--agent-pipe", "--session-file", "--query", "--offset", "--limit", "--kind", "--current");
+        var agentPipe = PipeName(options, "--agent-pipe");
+        var sessionPath = options.Required("--session-file");
+        var query = options.Required("--query");
+        if (string.IsNullOrWhiteSpace(query) || query.Length > 256)
+        {
+            return Usage();
+        }
+
+        int offset = 0;
+        if (options.Optional("--offset") is { } offsetText)
+        {
+            if (!int.TryParse(offsetText, NumberStyles.Integer, CultureInfo.InvariantCulture, out offset) || offset < 0 || offset > 10000)
+            {
+                return Usage();
+            }
+        }
+
+        int limit = 10;
+        if (options.Optional("--limit") is { } limitText)
+        {
+            if (!int.TryParse(limitText, NumberStyles.Integer, CultureInfo.InvariantCulture, out limit) || limit < 1 || limit > 50)
+            {
+                return Usage();
+            }
+        }
+
+        var kind = options.Optional("--kind");
+        if (kind is not null && (kind.Length == 0 || kind.Length > 32 || kind.Any(char.IsControl)))
+        {
+            return Usage();
+        }
+
+        var current = options.Optional("--current");
+        if (current is not null && !string.Equals(current, "current", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(current, "history", StringComparison.OrdinalIgnoreCase))
+        {
+            return Usage();
+        }
+
+        string sessionToken;
+        try
+        {
+            sessionToken = AgentSessionFile.Read(sessionPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Console.Error.WriteLine("ERROR session_unreadable");
+            return 3;
+        }
+
+        var result = await InvokeAgentAsync(agentPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.AgentMemorySearchOperation,
+                SessionToken: sessionToken,
+                AccessOperation: ServiceRequestHandler.MemorySearchAccessOperation,
+                Query: query,
+                SearchOffset: offset,
+                SearchLimit: limit,
+                SearchKind: kind,
+                SearchCurrent: current)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "memory_search") ||
+            !result.Reply.TryGetProperty("memorySearch", out var page) ||
+            page.ValueKind != JsonValueKind.Object)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintSearchPage(page);
+        return 0;
+    }
+
+    private static void PrintSearchPage(JsonElement page)
+    {
+        Console.WriteLine($"SEARCH query={JsonValueText(page, "query")} total={JsonValueText(page, "total")} offset={JsonValueText(page, "offset")} limit={JsonValueText(page, "limit")} hasMore={JsonFlagText(page, "hasMore")}");
+        if (!page.TryGetProperty("hits", out var hits) || hits.ValueKind != JsonValueKind.Array)
+        {
+            Console.WriteLine("SEARCH no_match");
+            return;
+        }
+
+        foreach (var hit in hits.EnumerateArray())
+        {
+            Console.WriteLine(
+                $"HIT id={JsonValueText(hit, "id")} revision={JsonValueText(hit, "revision")} kind={JsonValueText(hit, "kind")} " +
+                $"score={JsonValueText(hit, "score")} stale={JsonFlagText(hit, "stale")} title={JsonValueText(hit, "title")}");
+            Console.WriteLine($"snippet={JsonValueText(hit, "snippet")}");
+            Console.WriteLine($"time occurred={JsonValueText(hit, "occurredAtUtc")} recorded={JsonValueText(hit, "recordedAtUtc")}");
+        }
+
+        if (hits.GetArrayLength() == 0)
+        {
+            Console.WriteLine("SEARCH no_match");
+        }
+    }
+
     private static async Task<int> AgentCollectionViewAsync(CommandOptions options)
     {
         options.RequireOnly("--agent-pipe", "--session-file");
@@ -3278,7 +3387,7 @@ internal static class OwnerControlCli
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|source-enroll --source-id --zone-id --format --format-version --input-file|source-relocate --source-id --source-generation --input-file|source-revoke --source-id|source-status --source-id|source-ingest --source-id|source-pause --source-id|source-resume --source-id|source-refresh-optin --source-id|source-refresh-optout --source-id|source-list|source-refresh|source-snapshot-list --source-id|source-snapshot-preserve --source-id --source-revision --retain-until-utc|source-snapshot-read --snapshot-id --snapshot-revision --output-file|source-snapshot-retain --snapshot-id --expected-revision --retain-until-utc|source-snapshot-purge --snapshot-id --expected-revision|research-capture --resource-id --zone-id --input-file [--title --source-url --source-author --source-date]|research-read --resource-id [--resource-revision --output-file]|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|lifecycle-create|lifecycle-read|lifecycle-retained-read --resource-revision|lifecycle-publish --expected-revision|lifecycle-reject --expected-revision|lifecycle-withdraw --expected-revision|lifecycle-repropose --expected-revision|lifecycle-question-resolve --expected-revision|lifecycle-question-reopen --expected-revision|lifecycle-intention-complete --expected-revision|lifecycle-intention-cancel --expected-revision|lifecycle-intention-supersede --expected-revision|lifecycle-intention-notify --expected-revision|lifecycle-intention-acknowledge --expected-revision|lifecycle-validity-set --expected-revision|lifecycle-retain --expected-revision|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read|agent-collection-view}; lifecycle --resource-id is the subject item ID; relation/lifecycle transitions need --expected-revision and an optional --input-file draft; source-enroll and source-relocate --input-file are JSON objects holding the private locator ({\"locator\": \"C:/exact/path\"}), never a command argument; source-snapshot-read requires an explicit --output-file export");
+        Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|agent-search --query [--offset --limit --kind --current]|source-enroll --source-id --zone-id --format --format-version --input-file|source-relocate --source-id --source-generation --input-file|source-revoke --source-id|source-status --source-id|source-ingest --source-id|source-pause --source-id|source-resume --source-id|source-refresh-optin --source-id|source-refresh-optout --source-id|source-list|source-refresh|source-snapshot-list --source-id|source-snapshot-preserve --source-id --source-revision --retain-until-utc|source-snapshot-read --snapshot-id --snapshot-revision --output-file|source-snapshot-retain --snapshot-id --expected-revision --retain-until-utc|source-snapshot-purge --snapshot-id --expected-revision|research-capture --resource-id --zone-id --input-file [--title --source-url --source-author --source-date]|research-read --resource-id [--resource-revision --output-file]|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|lifecycle-create|lifecycle-read|lifecycle-retained-read --resource-revision|lifecycle-publish --expected-revision|lifecycle-reject --expected-revision|lifecycle-withdraw --expected-revision|lifecycle-repropose --expected-revision|lifecycle-question-resolve --expected-revision|lifecycle-question-reopen --expected-revision|lifecycle-intention-complete --expected-revision|lifecycle-intention-cancel --expected-revision|lifecycle-intention-supersede --expected-revision|lifecycle-intention-notify --expected-revision|lifecycle-intention-acknowledge --expected-revision|lifecycle-validity-set --expected-revision|lifecycle-retain --expected-revision|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read|agent-collection-view|agent-search}; lifecycle --resource-id is the subject item ID; relation/lifecycle transitions need --expected-revision and an optional --input-file draft; source-enroll and source-relocate --input-file are JSON objects holding the private locator ({\"locator\": \"C:/exact/path\"}), never a command argument; source-snapshot-read requires an explicit --output-file export");
         return 2;
     }
 

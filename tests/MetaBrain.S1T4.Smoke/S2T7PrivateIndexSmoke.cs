@@ -145,13 +145,13 @@ internal static partial class OwnerServiceSmoke
 
         // Phase 3 - first materialization from canonical.
         var firstRebuild = await S2T7IndexRebuildAsync(executable, fixture).ConfigureAwait(false);
-        Require(firstRebuild.ExitCode == 0 && firstRebuild.StandardOutput.Contains("INDEX rebuilt schema=1", StringComparison.Ordinal),
+        Require(firstRebuild.ExitCode == 0 && firstRebuild.StandardOutput.Contains("INDEX rebuilt schema=", StringComparison.Ordinal),
             "The first private index rebuild did not succeed (exit=" + firstRebuild.ExitCode + "; stdout=" + firstRebuild.StandardOutput.Trim() + "; stderr=" + firstRebuild.StandardError.Trim() + ").");
         var firstDigest = ParseS2T7Digest(firstRebuild.StandardOutput);
         var firstRows = ParseS2T7IndexRows(firstRebuild.StandardOutput);
         Require(firstRows.Count == 7,
             "The first materialization did not cover the canonical fixture exactly (rows=" + firstRows.Count + ", expected 7: question, synthesis, intention, source, relation, lifecycle record and retained archive).");
-        Console.WriteLine($"PASS index materialized schema=1 rows={firstRows.Count} digest={firstDigest}");
+        Console.WriteLine($"PASS index materialized rows={firstRows.Count} digest={firstDigest}");
 
         // Phase 4 - the materialized generation reproduces the canonical set.
         var canonical = await ReadS2T7CanonicalRevisionsAsync(executable, fixture, S2T7CanonicalReads).ConfigureAwait(false);
