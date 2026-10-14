@@ -2297,6 +2297,10 @@ internal static class OwnerControlCli
         options.RequireOnly(
             "--agent-pipe", "--catalog-ids", "--purpose", "--agent-id", "--agent-context",
             "--provider", "--model", "--disclosure-context", "--operations");
+        // S4-T1 T1-scope request path: only catalog IDs and purpose are
+        // mandatory (matching the MCP tool contract). Declared provider and
+        // model context travels when supplied so explicit provider-context
+        // egress consent stays visible end to end; absent fields stay absent.
         var agentPipe = PipeName(options, "--agent-pipe");
         var catalogIds = ParseIdentifiers(options.Required("--catalog-ids"));
         var purpose = options.Required("--purpose");

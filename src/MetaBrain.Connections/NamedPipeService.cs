@@ -94,7 +94,22 @@ internal sealed class NamedPipeService
                 {
                     if (connections[index].IsCompleted)
                     {
-                        await connections[index].ConfigureAwait(false);
+                        // A faulted handler must never kill this channel's listener:
+                        // observe (not rethrow) the failure and keep accepting.
+                        // Every expected failure already answers inline inside
+                        // HandleConnectionAsync; this is only the backstop so one
+                        // bad connection cannot wedge the owner channel while the
+                        // agent channel on the same process keeps serving.
+                        try
+                        {
+                            await connections[index].ConfigureAwait(false);
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            // Observed only: the failed connection already ended;
+                            // the listener keeps accepting on this channel.
+                        }
+
                         connections.RemoveAt(index);
                     }
                 }

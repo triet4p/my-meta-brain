@@ -5,14 +5,17 @@ using System.Text.Json.Nodes;
 namespace MetaBrain.Connections;
 
 /// <summary>
-/// Minimal stdio MCP bridge over the agent named pipe. Exposes only the
-/// agent-channel surface (catalog discovery, access requests/status, token
-/// redemption via explicit handoff path, session inspect, scoped reads);
-/// it never touches the vault, keys, owner operations, or token minting.
-/// Key/token material never enters MCP arguments, logs, or model context:
-/// the redeem tool takes only DPAPI handoff/session file paths and lets the
-/// existing owner CLI resolve them locally. Approved scoped-read bodies stream
-/// in memory through the MCP tool result; the bridge creates no output files.
+/// Minimal stdio MCP bridge over the agent named pipe (S4-T1 transport and
+/// capability dispatch). Exposes only the agent-channel surface (catalog
+/// discovery, access requests/status, token redemption via explicit handoff
+/// path, session inspect, scoped reads); it never touches the vault, keys,
+/// owner operations, or token minting. Capability negotiation honors the
+/// client's requested protocol version instead of forcing one revision; the
+/// initialize reply echoes a supported version the client offered. Key/token
+/// material never enters MCP arguments, logs, or model context: the redeem
+/// tool takes only DPAPI handoff/session file paths and lets the existing
+/// owner CLI resolve them locally. Approved scoped-read bodies stream in
+/// memory through the MCP tool result; the bridge creates no output files.
 /// </summary>
 internal static class McpAgentBridge
 {
@@ -80,7 +83,7 @@ internal static class McpAgentBridge
         {
             "initialize" => ResultEnvelope(id, new JsonObject
             {
-                ["protocolVersion"] = "2025-11-25",
+                ["protocolVersion"] = NegotiateProtocolVersion(rawParams),
                 ["serverInfo"] = new JsonObject { ["name"] = "metabrain-agent", ["version"] = "1.0.0" },
                 ["capabilities"] = new JsonObject { ["tools"] = new JsonObject { ["listChanged"] = false } },
             }),
@@ -89,6 +92,23 @@ internal static class McpAgentBridge
             "tools/list" => ResultEnvelope(id, new JsonObject { ["tools"] = ToolList() }),
             "tools/call" => await CallToolAsync(agentPipe, id, rawParams).ConfigureAwait(false),
             _ => ErrorEnvelope(id, -32601, "bridge_unknown_method"),
+        };
+    }
+
+    private static string NegotiateProtocolVersion(JsonObject? rawParams)
+    {
+        // S4-T1 transport dispatch: honor the client's offered protocol version
+        // when it is one this bridge supports, so normal official Codex/OMP
+        // clients initialize without a patched or forced revision. Unknown or
+        // absent offers fall back to the current documented revision.
+        var offered = rawParams?["protocolVersion"]?.GetValue<string>();
+        return offered switch
+        {
+            "2025-11-25" => "2025-11-25",
+            "2025-06-18" => "2025-06-18",
+            "2025-03-26" => "2025-03-26",
+            "2024-11-05" => "2024-11-05",
+            _ => "2025-11-25",
         };
     }
 
@@ -164,6 +184,20 @@ internal static class McpAgentBridge
                     },
                     ["required"] = new JsonArray("sessionFile", "operation", "resourceId", "resourceRevision"),
                     ["additionalProperties"] = false,
+                }),
+            Tool("metabrain_authorize", "Check whether a session handoff file authorizes one scoped operation (allow/deny decision only, no content).",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["sessionFile"] = new JsonObject { ["type"] = "string" },
+                        ["operation"] = new JsonObject { ["type"] = "string" },
+                        ["resourceId"] = new JsonObject { ["type"] = "string" },
+                        ["resourceRevision"] = new JsonObject { ["type"] = "string" },
+                    },
+                    ["required"] = new JsonArray("sessionFile", "operation"),
+                    ["additionalProperties"] = false,
                 }));
     }
 
@@ -207,6 +241,7 @@ internal static class McpAgentBridge
                 "--resource-id", RequiredArg(args, "resourceId"),
                 "--resource-revision", RequiredArg(args, "resourceRevision"),
             },
+            "metabrain_authorize" => BuildAuthorizeArgs(agentPipe, args),
             _ => Array.Empty<string>(),
         };
 
@@ -245,6 +280,33 @@ internal static class McpAgentBridge
                      ("--catalog-ids", "catalogIds"), ("--purpose", "purpose"), ("--operations", "operations"),
                      ("--agent-id", "agentId"), ("--agent-context", "agentContext"), ("--provider", "provider"),
                      ("--model", "model"), ("--disclosure-context", "disclosureContext"),
+                 })
+        {
+            if (args[key]?.GetValue<string>() is { } value && !string.IsNullOrWhiteSpace(value))
+            {
+                full.Add(flag);
+                full.Add(value);
+            }
+        }
+
+        return full.ToArray();
+    }
+
+    private static string[] BuildAuthorizeArgs(string agentPipe, JsonObject args)
+    {
+        // S4-T1 capability dispatch for the existing agent access-authorize
+        // API: decision only, never content. Optional resource fields are
+        // forwarded only when present; the service fail-closes on anything
+        // outside the session scope.
+        var full = new List<string>
+        {
+            "owner", "authorize", "--agent-pipe", agentPipe,
+            "--session-file", RequiredArg(args, "sessionFile"),
+            "--operation", RequiredArg(args, "operation"),
+        };
+        foreach (var (flag, key) in new[]
+                 {
+                     ("--resource-id", "resourceId"), ("--resource-revision", "resourceRevision"),
                  })
         {
             if (args[key]?.GetValue<string>() is { } value && !string.IsNullOrWhiteSpace(value))

@@ -3807,6 +3807,13 @@ public sealed class ServiceRequestHandler
         {
             return Error(ex.Code);
         }
+        catch (ArgumentException)
+        {
+            // Past-expiry or otherwise malformed approve input is a fail-closed
+            // deny that must stay a JSON reply: ValidateExpiry throws
+            // ArgumentException before any grant is stored, so nothing is minted.
+            return Error("request_invalid");
+        }
         catch (UnauthorizedAccessException)
         {
             return Error("forbidden");

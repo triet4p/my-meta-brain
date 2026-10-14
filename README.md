@@ -85,6 +85,7 @@ When running `MetaBrain.Connections agent-mcp --agent-pipe <pipe-name>`, the std
 | `metabrain_redeem` | Redeems an owner-approved DPAPI token handoff file into a local DPAPI session file. |
 | `metabrain_session_inspect` | Inspects metadata of an active session file without exposing secrets. |
 | `metabrain_scoped_read` | Retrieves approved resource revision content in memory (UTF-8 text or base64 binary). |
+| `metabrain_authorize` | Checks whether a session file authorizes one scoped operation (allow/deny decision only, no content). |
 
 ---
 
