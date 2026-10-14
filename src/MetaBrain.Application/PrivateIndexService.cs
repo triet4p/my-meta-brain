@@ -251,6 +251,22 @@ public sealed class PrivateIndexAuthority
                 Array.Empty<string>());
         }
 
+        if (FeedbackTryRead(content, out var feedback) && feedback is not null &&
+            string.Equals(feedback.Id, resource.ResourceId, StringComparison.Ordinal))
+        {
+            // S4-T4 feedback is canonical usage data, never searchable
+            // content: it classifies as its own kind so the row set stays
+            // truthful, but no search document is built for it below.
+            return new PrivateIndexRow(
+                resource.ResourceId,
+                resource.ZoneId,
+                resource.Revision,
+                feedback.SchemaVersion,
+                PrivateIndexRecordKind.Feedback,
+                StateName(feedback.Kind),
+                new[] { feedback.TargetResourceId });
+        }
+
         if (RelationTryRead(content, out var relation) && relation is not null &&
             string.Equals(relation.Id, resource.ResourceId, StringComparison.Ordinal))
         {
@@ -381,6 +397,20 @@ public sealed class PrivateIndexAuthority
         catch (ArgumentException)
         {
             source = null;
+            return false;
+        }
+    }
+
+    private static bool FeedbackTryRead(byte[] content, out StoredFeedback? feedback)
+    {
+        try
+        {
+            feedback = FeedbackCodec.DecodeStored(content);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            feedback = null;
             return false;
         }
     }

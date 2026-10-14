@@ -73,6 +73,9 @@ public sealed partial class OwnerScopeGrantAuthority
         "source.snapshot.read",
         "memory.read",
         "memory.search",
+        "memory.context",
+        "memory.feedback",
+        "feedback.read",
         "relation.read",
         "proposal.create",
         "link.create",
@@ -598,6 +601,54 @@ public sealed partial class OwnerScopeGrantAuthority
                     !string.Equals(operation, "memory.read", StringComparison.Ordinal))))
         {
             throw new ArgumentException("Scoped search grants require only memory item resources with memory read operations.");
+        }
+
+        // S4-T4 scoped brief runs over approved memory items only: the context
+        // operation travels with memory.read (brief then get-by-ID) but never
+        // with snapshot, feedback, proposal/link, or egress companions, so a
+        // brief grant can never widen into snapshot bytes or write authority.
+        if (operations.Contains("memory.context", StringComparer.Ordinal) &&
+            (containsSnapshots ||
+                resources.Any(resource => MetaBrain.Core.Domain.SourceSnapshotIds.IsSnapshotId(resource.ResourceId) ||
+                    resource.ResourceId.StartsWith("rel-", StringComparison.Ordinal) ||
+                    resource.ResourceId.StartsWith("lc-", StringComparison.Ordinal) ||
+                    resource.ResourceId.StartsWith("arc-", StringComparison.Ordinal) ||
+                    resource.ResourceId.StartsWith("ingest-", StringComparison.Ordinal) ||
+                    resource.ResourceId.StartsWith("snap-", StringComparison.Ordinal) ||
+                    resource.ResourceId.StartsWith("fb-", StringComparison.Ordinal)) ||
+                operations.Any(operation => !string.Equals(operation, "memory.context", StringComparison.Ordinal) &&
+                    !string.Equals(operation, "memory.read", StringComparison.Ordinal))))
+        {
+            throw new ArgumentException("Scoped brief grants require only memory item resources with memory read operations.");
+        }
+
+        // S4-T4 agent feedback targets the seen memory/source revisions only:
+        // the feedback operation travels alone (or with memory.read for the
+        // read-back leg), never with search/context/snapshot/proposal/link or
+        // egress companions, and never against feedback records themselves.
+        if (operations.Contains("memory.feedback", StringComparer.Ordinal) &&
+            (containsSnapshots ||
+                resources.Any(resource => MetaBrain.Core.Domain.SourceSnapshotIds.IsSnapshotId(resource.ResourceId) ||
+                    resource.ResourceId.StartsWith("rel-", StringComparison.Ordinal) ||
+                    resource.ResourceId.StartsWith("lc-", StringComparison.Ordinal) ||
+                    resource.ResourceId.StartsWith("arc-", StringComparison.Ordinal) ||
+                    resource.ResourceId.StartsWith("ingest-", StringComparison.Ordinal) ||
+                    resource.ResourceId.StartsWith("snap-", StringComparison.Ordinal) ||
+                    resource.ResourceId.StartsWith("fb-", StringComparison.Ordinal)) ||
+                operations.Any(operation => !string.Equals(operation, "memory.feedback", StringComparison.Ordinal) &&
+                    !string.Equals(operation, "memory.read", StringComparison.Ordinal) &&
+                    !string.Equals(operation, "source.read", StringComparison.Ordinal))))
+        {
+            throw new ArgumentException("Feedback grants require only memory item or registered source resources.");
+        }
+
+        // S4-T4 feedback reads open only feedback records: the read operation
+        // travels alone over fb- IDs, never with memory/source companions.
+        if (operations.Contains("feedback.read", StringComparer.Ordinal) &&
+            (operations.Count != 1 ||
+                resources.Any(resource => !resource.ResourceId.StartsWith("fb-", StringComparison.Ordinal))))
+        {
+            throw new ArgumentException("Feedback read grants require only feedback IDs and the feedback.read operation.");
         }
     }
 

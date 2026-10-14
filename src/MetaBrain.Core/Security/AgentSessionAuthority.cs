@@ -310,16 +310,25 @@ public sealed class AgentSessionAuthority
         // S4-T2 scoped search carries no resource address: the candidate set
         // is the session's own frozen scope filtered by the query inside the
         // handler, so snapshot-ID and scope checks below do not apply to it.
-        if (string.Equals(request.Operation, "memory.search", StringComparison.Ordinal))
+        // S4-T4 scoped brief behaves the same: no resource address, the
+        // selection is the frozen scope projected under the caller's budget.
+        if (string.Equals(request.Operation, "memory.search", StringComparison.Ordinal) ||
+            string.Equals(request.Operation, "memory.context", StringComparison.Ordinal))
         {
             return HasEgressFields(request) || request.DestinationResourceId is not null || request.DestinationRevision is not null
                 ? Deny("invalid_request", policyGeneration)
                 : Allow(policyGeneration);
         }
-        var snapshotResource = MetaBrain.Core.Domain.SourceSnapshotIds.IsSnapshotId(request.ResourceId);
-        if (snapshotResource != string.Equals(request.Operation, "source.snapshot.read", StringComparison.Ordinal))
+        // S4-T4 agent feedback carries no resource address either: the seen
+        // targets travel inside the feedback draft, authorized per target
+        // against the frozen scope inside the handler before any byte is
+        // written. The session operation check above already gates this path.
+        if (string.Equals(request.Operation, "memory.feedback", StringComparison.Ordinal))
         {
-            return Deny("resource_unavailable", policyGeneration);
+            return HasEgressFields(request) || request.DestinationResourceId is not null || request.DestinationRevision is not null ||
+                request.ResourceId is not null || request.ResourceRevision is not null
+                ? Deny("invalid_request", policyGeneration)
+                : Allow(policyGeneration);
         }
 
         switch (request.Operation)
@@ -328,6 +337,7 @@ public sealed class AgentSessionAuthority
             case "source.read":
             case "memory.read":
             case "relation.read":
+            case "feedback.read":
             case "source.snapshot.read":
                 if (request.DestinationResourceId is not null || request.DestinationRevision is not null ||
                     HasEgressFields(request))

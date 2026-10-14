@@ -42,6 +42,7 @@ public sealed record ServiceRequest(
     int? SearchLimit = null,
     string? SearchKind = null,
     string? SearchCurrent = null,
+    int? BudgetChars = null,
     string? Purpose = null,
     string? AgentId = null,
     string? AgentContext = null,
@@ -142,6 +143,74 @@ public sealed record MemorySearchPageWire(
     bool HasMore,
     MemorySearchHitWire[] Hits);
 
+/// One S4-T4 brief entry: the approved ID and frozen revision it was
+/// projected from, the bounded excerpt carried under the caller's budget, and
+/// the stored authorship/evidence/applicability/uncertainty signals. Never a
+/// synthesis and never an instruction: every field renders stored memory
+/// data as the grant already allowed it.
+/// </summary>
+public sealed record BriefEntryWire(
+    string Id,
+    long Revision,
+    string Kind,
+    string Author,
+    string Executor,
+    string CreationMethod,
+    string Evidence,
+    string Level,
+    string? Title,
+    string Excerpt,
+    bool Truncated,
+    DateTimeOffset? OccurredAtUtc,
+    DateTimeOffset RecordedAtUtc,
+    Core.Domain.MemoryApplicability? Applicability,
+    MemoryCitationWire[]? Citations,
+    string[]? Warnings);
+
+/// <summary>
+/// One honestly omitted scope member: an approved (ID, revision) pair left
+/// out of the brief with the reason it was not selected. Identity and reason
+/// only, never body text.
+/// </summary>
+public sealed record BriefOmissionWire(
+    string Id,
+    long Revision,
+    string Reason);
+
+/// <summary>
+/// One S4-T4 scoped brief: a short deterministic projection of the frozen
+/// approved snapshot under an explicit character budget, with typed entries,
+/// honest omissions, and an uncertainty ledger. Memory data for the caller
+/// to interpret, never system instructions.
+/// </summary>
+public sealed record MemoryBriefWire(
+    string Query,
+    string[] Selection,
+    int BudgetChars,
+    int UsedChars,
+    bool Truncated,
+    BriefEntryWire[] Entries,
+    BriefOmissionWire[] Omitted,
+    string[] Uncertain,
+    long PolicyGeneration);
+
+/// <summary>
+/// One S4-T4 stored feedback record as served to its granted audience.
+/// Feedback says how one seen revision behaved in use; it never upgrades
+/// evidence, verification, or confirmation and never rewrites beliefs.
+/// </summary>
+public sealed record FeedbackWire(
+    string Id,
+    string ZoneId,
+    long Revision,
+    int SchemaVersion,
+    string TargetResourceId,
+    long TargetRevision,
+    string Kind,
+    string? Note,
+    string Executor,
+    string CreationMethod,
+    DateTimeOffset RecordedAtUtc);
 
 /// <summary>
 /// Registered source metadata as served to its granted audience. The wire
@@ -398,6 +467,8 @@ public sealed record ServiceReply(
     string? RequestId = null,
     MemoryItemWire? MemoryItem = null,
     MemorySearchPageWire? MemorySearch = null,
+    MemoryBriefWire? MemoryBrief = null,
+    FeedbackWire? Feedback = null,
     RegisteredSourceWire? Source = null,
     RelationWire? Relation = null,
     LifecycleWire? Lifecycle = null,
@@ -409,7 +480,6 @@ public sealed record ServiceReply(
     SourceRefreshWire[]? SourceRefresh = null,
     SourceSnapshotWire? SourceSnapshot = null,
     SourceSnapshotDescriptorWire[]? SourceSnapshots = null);
-
 
 public sealed class ServiceRequestHandler
 {
@@ -442,6 +512,13 @@ public sealed class ServiceRequestHandler
     public const string AgentMemoryReadOperation = "agent.memory.read";
     public const string AgentMemorySearchOperation = "agent.memory.search";
     public const string MemorySearchAccessOperation = "memory.search";
+    public const string AgentMemoryBriefOperation = "agent.memory.brief";
+    public const string MemoryContextAccessOperation = "memory.context";
+    public const string AgentFeedbackOperation = "agent.feedback";
+    public const string MemoryFeedbackAccessOperation = "memory.feedback";
+    public const string FeedbackCreateOperation = "feedback.create";
+    public const string FeedbackReadOperation = "feedback.read";
+    public const string AgentFeedbackReadOperation = "agent.feedback.read";
     public const string AgentCollectionViewOperation = "agent.collection.view";
     public const string OwnerSessionListOperation = "owner.sessions";
     public const string OwnerSessionRevokeOperation = "owner.session.revoke";
@@ -596,9 +673,21 @@ public sealed class ServiceRequestHandler
         {
             return HandleAgentMemorySearch(context, request, operation, cancellationToken);
         }
+        if (string.Equals(request.Operation, AgentMemoryBriefOperation, StringComparison.Ordinal))
+        {
+            return HandleAgentMemoryBrief(context, request, operation);
+        }
         if (string.Equals(request.Operation, AgentCollectionViewOperation, StringComparison.Ordinal))
         {
             return HandleAgentCollectionView(context, request, operation);
+        }
+        if (string.Equals(request.Operation, AgentFeedbackOperation, StringComparison.Ordinal))
+        {
+            return HandleAgentFeedback(context, request, operation);
+        }
+        if (string.Equals(request.Operation, AgentFeedbackReadOperation, StringComparison.Ordinal))
+        {
+            return HandleAgentFeedbackRead(context, request, operation);
         }
         if (string.Equals(request.Operation, AgentSourceReadOperation, StringComparison.Ordinal))
         {
@@ -823,6 +912,15 @@ public sealed class ServiceRequestHandler
             return HandleMemoryRead(context, request, operation);
         }
 
+        if (string.Equals(request.Operation, FeedbackCreateOperation, StringComparison.Ordinal))
+        {
+            return HandleFeedbackCreate(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, FeedbackReadOperation, StringComparison.Ordinal))
+        {
+            return HandleFeedbackRead(context, request, operation);
+        }
         if (string.Equals(request.Operation, SourceCreateOperation, StringComparison.Ordinal))
         {
             return HandleSourceCreate(context, request, operation);
@@ -1114,6 +1212,77 @@ public sealed class ServiceRequestHandler
             var item = new MemoryItemService().Read(context, request.ResourceId, request.ResourceRevision, operation);
             return new ServiceReply(CurrentProtocolVersion, "memory", "owner", null,
                 ResourceRevision: item.Revision, MemoryItem: ToMemoryWire(item, operation));
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+    }
+
+    /// <summary>
+    /// S4-T4 owner feedback create: append-only over the shared encrypted
+    /// store. The target must exist at exactly the seen revision; the record
+    /// keeps that anchor as truthful history. Nothing here edits the target,
+    /// upgrades evidence, or rewrites beliefs.
+    /// </summary>
+    private ServiceReply HandleFeedbackCreate(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || operation is null || HasContentWriteExtras(request) ||
+            string.IsNullOrEmpty(request.ResourceId) || string.IsNullOrEmpty(request.ZoneId) ||
+            string.IsNullOrEmpty(request.ContentBase64))
+        {
+            return Error("invalid_request");
+        }
+
+        byte[]? draft = null;
+        try
+        {
+            draft = Convert.FromBase64String(request.ContentBase64);
+            var created = new FeedbackService().Create(context, request.ResourceId, request.ZoneId, draft, operation);
+            return new ServiceReply(CurrentProtocolVersion, "feedback_created", "owner", null,
+                ResourceRevision: created.Revision, Feedback: ToFeedbackWire(created));
+        }
+        catch (FormatException)
+        {
+            return Error("invalid_request");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        finally
+        {
+            if (draft is { Length: > 0 })
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(draft);
+            }
+        }
+    }
+
+    /// <summary>
+    /// S4-T4 owner feedback read: the stored record at the pinned revision.
+    /// </summary>
+    private ServiceReply HandleFeedbackRead(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || operation is null || HasContentReadExtras(request) ||
+            string.IsNullOrEmpty(request.ResourceId))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var feedback = new FeedbackService().Read(context, request.ResourceId, request.ResourceRevision, operation);
+            return new ServiceReply(CurrentProtocolVersion, "feedback", "owner", null,
+                ResourceRevision: feedback.Revision, Feedback: ToFeedbackWire(feedback));
         }
         catch (ArgumentException)
         {
@@ -2748,6 +2917,19 @@ public sealed class ServiceRequestHandler
     }
 
 
+    private static FeedbackWire ToFeedbackWire(Core.Domain.Feedback feedback) => new(
+        feedback.Id,
+        feedback.ZoneId,
+        feedback.Revision,
+        feedback.SchemaVersion,
+        feedback.TargetResourceId,
+        feedback.TargetRevision,
+        ToWireToken(feedback.Kind.ToString()),
+        feedback.Note,
+        ToWireToken(feedback.Executor.ToString()),
+        ToWireToken(feedback.CreationMethod.ToString()),
+        feedback.RecordedAtUtc);
+
     private static RegisteredSourceWire ToSourceWire(Core.Domain.RegisteredSource source) => new(
         source.Id,
         source.ZoneId,
@@ -3309,6 +3491,363 @@ public sealed class ServiceRequestHandler
         return snippet.Length < body.Length ? snippet + "…" : snippet;
     }
 
+    /// <summary>
+    /// S4-T4 scoped brief over the session's frozen approved snapshot. The
+    /// grant must carry the memory.context operation; the selection is the
+    /// session's own frozen (ID, revision) pairs projected under the caller's
+    /// character budget. Only memory items enter: protected namespaces
+    /// (relations, lifecycle, archives, journals, snapshots, feedback) are
+    /// excluded by construction. Each entry renders the exact frozen body
+    /// window with its stored citations plus the same manifest-only
+    /// current/superseded/unknown warnings as item detail; the reply adds
+    /// honest omissions and an uncertainty ledger so a small budget can never
+    /// silently turn partial context into a confident claim. Lock, revoke,
+    /// expiry and policy-generation changes deny through the same session
+    /// authority. The brief is memory data, never system instructions.
+    /// </summary>
+    private ServiceReply HandleAgentMemoryBrief(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Agent || operation is null ||
+            HasAgentBriefExtras(request) ||
+            request.AccessOperation is not MemoryContextAccessOperation)
+        {
+            return ResourceDenied();
+        }
+
+        var budget = request.BudgetChars ?? ScopedBriefAuthority.DefaultBudgetChars;
+        if (budget < ScopedBriefAuthority.MinimumBudgetChars || budget > ScopedBriefAuthority.MaximumBudgetChars)
+        {
+            return ResourceDenied();
+        }
+
+        AgentSessionSnapshot session;
+        try
+        {
+            var state = operation.LoadScopeGrantState();
+            var precheck = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                state.UnlockEpoch,
+                state.PolicyGeneration,
+                new AgentAccessRequest(MemoryContextAccessOperation));
+            if (!precheck.Allowed)
+            {
+                return ResourceDenied();
+            }
+
+            var lookup = _agentSessions.LookupSession(request.SessionToken, state.UnlockEpoch, state.PolicyGeneration);
+            if (lookup.Status != AgentSessionLookupStatus.Valid || lookup.Session is null)
+            {
+                return ResourceDenied();
+            }
+
+            session = lookup.Session;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            return ResourceDenied();
+        }
+
+        try
+        {
+            var approvedScope = session.Resources
+                .Where(resource => !IsProtectedBriefNamespace(resource.ResourceId))
+                .OrderBy(resource => resource.ResourceId, StringComparer.Ordinal)
+                .ToArray();
+            var liveRevisions = operation.ListResources().ToDictionary(
+                resource => resource.ResourceId, resource => resource.Revision, StringComparer.Ordinal);
+            var authority = new ScopedBriefAuthority();
+            var brief = authority.Build(
+                session,
+                request.Query,
+                budget,
+                approvedScope,
+                approved => ReadBriefItem(operation, approved),
+                (item, manifest) => (ProjectCitations(item.Sources, manifest), ProjectCitationWarnings(item.Sources, manifest)),
+                operation,
+                resourceId => liveRevisions.TryGetValue(resourceId, out var live) &&
+                    session.Resources.Any(resource =>
+                        string.Equals(resource.ResourceId, resourceId, StringComparison.Ordinal) && resource.Revision == live));
+            var state = operation.LoadScopeGrantState();
+            var recheck = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                state.UnlockEpoch,
+                state.PolicyGeneration,
+                new AgentAccessRequest(MemoryContextAccessOperation));
+            if (!recheck.Allowed)
+            {
+                return ResourceDenied();
+            }
+
+            return new ServiceReply(
+                CurrentProtocolVersion, "memory_brief", null, null,
+                Decision: recheck,
+                PolicyGeneration: recheck.PolicyGeneration,
+                MemoryBrief: brief with { PolicyGeneration = recheck.PolicyGeneration });
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
+        {
+            return ResourceDenied();
+        }
+    }
+
+    private static MemoryItem? ReadBriefItem(IVaultOperation operation, ScopeResourceRevision approved)
+    {
+        byte[]? raw = null;
+        try
+        {
+            raw = operation.ReadContent(approved.ResourceId, approved.Revision);
+            var stored = Core.Domain.MemoryEnvelopeCodec.DecodeStored(raw);
+            if (!string.Equals(stored.Id, approved.ResourceId, StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            return MemoryItemService.ToItem(stored, approved.Revision);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+        finally
+        {
+            if (raw is { Length: > 0 })
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(raw);
+            }
+        }
+    }
+
+    private static bool IsProtectedBriefNamespace(string resourceId) =>
+        resourceId.StartsWith("rel-", StringComparison.Ordinal) ||
+        resourceId.StartsWith("lc-", StringComparison.Ordinal) ||
+        resourceId.StartsWith("arc-", StringComparison.Ordinal) ||
+        resourceId.StartsWith("ingest-", StringComparison.Ordinal) ||
+        resourceId.StartsWith("snap-", StringComparison.Ordinal) ||
+        resourceId.StartsWith("fb-", StringComparison.Ordinal);
+
+    /// <summary>
+    /// S4-T4 agent feedback inside the owner-approved grant. The session must
+    /// carry the memory.feedback operation; the seen target named in the draft
+    /// must be inside the frozen scope at exactly the seen revision, or the
+    /// whole write denies generically. The record is append-only usage data:
+    /// it never edits the target, upgrades evidence, or rewrites beliefs.
+    /// </summary>
+    private ServiceReply HandleAgentFeedback(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Agent || operation is null ||
+            HasAgentFeedbackExtras(request) ||
+            request.AccessOperation is not MemoryFeedbackAccessOperation ||
+            string.IsNullOrEmpty(request.ContentBase64))
+        {
+            return ResourceDenied();
+        }
+
+        byte[]? draft = null;
+        try
+        {
+            draft = Convert.FromBase64String(request.ContentBase64);
+            Core.Domain.FeedbackDraft parsed;
+            try
+            {
+                parsed = Core.Domain.FeedbackCodec.DecodeDraft(draft);
+            }
+            catch (ArgumentException)
+            {
+                return ResourceDenied();
+            }
+
+            if (string.IsNullOrEmpty(parsed.TargetResourceId) || parsed.TargetRevision is not > 0)
+            {
+                return ResourceDenied();
+            }
+
+            var beforeWrite = operation.LoadScopeGrantState();
+            var decision = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                beforeWrite.UnlockEpoch,
+                beforeWrite.PolicyGeneration,
+                new AgentAccessRequest(MemoryFeedbackAccessOperation));
+            if (!decision.Allowed)
+            {
+                return ResourceDenied();
+            }
+
+            var lookup = _agentSessions.LookupSession(
+                request.SessionToken, beforeWrite.UnlockEpoch, beforeWrite.PolicyGeneration);
+            if (lookup.Status != AgentSessionLookupStatus.Valid || lookup.Session is null)
+            {
+                return ResourceDenied();
+            }
+
+            var session = lookup.Session;
+            var required = IsSourceTarget(operation, parsed.TargetResourceId)
+                ? SourceReadOperation
+                : MemoryReadOperation;
+            if (!session.Operations.Contains(required, StringComparer.Ordinal) ||
+                !IsInGrantScope(session.Resources, parsed.TargetResourceId, parsed.TargetRevision))
+            {
+                return ResourceDenied();
+            }
+
+            Core.Domain.Feedback created;
+            try
+            {
+                created = new FeedbackService().CreateAgentFeedback(context, draft, operation);
+            }
+            catch (ArgumentException)
+            {
+                return ResourceDenied();
+            }
+
+            var beforeServe = operation.LoadScopeGrantState();
+            var recheck = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                beforeServe.UnlockEpoch,
+                beforeServe.PolicyGeneration,
+                new AgentAccessRequest(MemoryFeedbackAccessOperation));
+            if (!recheck.Allowed)
+            {
+                return ResourceDenied();
+            }
+
+            operation.ValidateRegistration(created.Id, created.Revision);
+            return new ServiceReply(
+                CurrentProtocolVersion, "feedback_created", null, null,
+                Decision: recheck,
+                PolicyGeneration: recheck.PolicyGeneration,
+                ResourceRevision: created.Revision,
+                Feedback: ToFeedbackWire(created));
+        }
+        catch (FormatException)
+        {
+            return ResourceDenied();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return ResourceDenied();
+        }
+        finally
+        {
+            if (draft is { Length: > 0 })
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(draft);
+            }
+        }
+    }
+
+    private static bool IsSourceTarget(IVaultOperation operation, string targetResourceId)
+    {
+        byte[]? raw = null;
+        try
+        {
+            var live = operation.ListResources().FirstOrDefault(resource =>
+                string.Equals(resource.ResourceId, targetResourceId, StringComparison.Ordinal));
+            if (live is null)
+            {
+                return false;
+            }
+
+            raw = operation.ReadContent(targetResourceId, live.Revision);
+            _ = Core.Domain.RegisteredSourceCodec.DecodeStored(raw);
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+        finally
+        {
+            if (raw is { Length: > 0 })
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(raw);
+            }
+        }
+    }
+
+    /// <summary>
+    /// S4-T4 scoped feedback read: the session must hold feedback.read on the
+    /// exact feedback ID/revision. Item, source, and snapshot grants never
+    /// satisfy this path.
+    /// </summary>
+    private ServiceReply HandleAgentFeedbackRead(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Agent || operation is null ||
+            HasAgentResourceReadExtras(request) ||
+            request.AccessOperation is not FeedbackReadOperation ||
+            string.IsNullOrEmpty(request.ResourceId))
+        {
+            return ResourceDenied();
+        }
+
+        byte[]? snapshot = null;
+        try
+        {
+            var beforeRead = operation.LoadScopeGrantState();
+            var decision = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                beforeRead.UnlockEpoch,
+                beforeRead.PolicyGeneration,
+                new AgentAccessRequest(request.AccessOperation, request.ResourceId, request.ResourceRevision));
+            if (!decision.Allowed || request.ResourceId is null)
+            {
+                return ResourceDenied();
+            }
+
+            snapshot = operation.ReadContent(request.ResourceId, request.ResourceRevision);
+            Core.Domain.StoredFeedback stored;
+            try
+            {
+                stored = Core.Domain.FeedbackCodec.DecodeStored(snapshot);
+            }
+            catch (ArgumentException)
+            {
+                return ResourceDenied();
+            }
+
+            var beforeServe = operation.LoadScopeGrantState();
+            var recheck = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                beforeServe.UnlockEpoch,
+                beforeServe.PolicyGeneration,
+                new AgentAccessRequest(request.AccessOperation, request.ResourceId, request.ResourceRevision));
+            if (!recheck.Allowed)
+            {
+                return ResourceDenied();
+            }
+
+            operation.ValidateRegistration(request.ResourceId, request.ResourceRevision);
+            var liveRevision = operation.ListResources().FirstOrDefault(resource =>
+                string.Equals(resource.ResourceId, request.ResourceId, StringComparison.Ordinal))?.Revision
+                ?? throw new ManagedResourceUnavailableException();
+            var wire = ToFeedbackWire(FeedbackService.ToFeedback(stored, liveRevision));
+            return new ServiceReply(
+                CurrentProtocolVersion, "feedback", null, null,
+                Decision: recheck,
+                PolicyGeneration: recheck.PolicyGeneration,
+                ResourceRevision: wire.Revision,
+                Feedback: wire);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return ResourceDenied();
+        }
+        finally
+        {
+            if (snapshot is { Length: > 0 })
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(snapshot);
+            }
+        }
+    }
 
     /// <summary>
     /// Permission-filtered collection view for one redeemed agent session.
@@ -4730,6 +5269,68 @@ public sealed class ServiceRequestHandler
         request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
         request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null;
 
+    /// <summary>
+    /// S4-T4 scoped brief carries only the session bearer, the access
+    /// operation name, the query text, and the explicit character budget.
+    /// Every identity, zone, scope, credential, catalog, egress, and
+    /// content-draft field is refused, so a body can never steer the brief
+    /// toward another scope or mint authority.
+    /// </summary>
+    private static bool HasAgentBriefExtras(ServiceRequest request) =>
+        request.ZoneId is not null ||
+        request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ContentBase64 is not null || request.ResourceIds is not null ||
+        request.Operations is not null || request.DestinationResourceIds is not null ||
+        request.ExpiresAtUtc is not null || request.Provider is not null ||
+        request.Model is not null || request.MaximumCostUsd is not null ||
+        request.PreviewId is not null || request.CollectionId is not null ||
+        request.Token is not null || request.SessionId is not null ||
+        request.ResourceId is not null || request.ResourceRevision is not null ||
+        request.DestinationResourceId is not null || request.DestinationRevision is not null ||
+        request.EstimatedCostUsd is not null || request.InputTokens is not null ||
+        request.OutputTokens is not null ||
+        request.CatalogId is not null || request.Label is not null ||
+        request.Description is not null ||
+        request.CatalogIds is not null || request.Purpose is not null ||
+        request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null ||
+        request.SourceLocator is not null || request.SourceFormat is not null ||
+        request.SourceFormatVersion is not null || request.SourceTitle is not null ||
+        request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
+        request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null ||
+        request.SearchOffset is not null || request.SearchLimit is not null ||
+        request.SearchKind is not null || request.SearchCurrent is not null;
+
+    /// <summary>
+    /// S4-T4 agent feedback carries only the session bearer, the access
+    /// operation name, and the feedback draft. Identity, zone, scope,
+    /// credential, catalog, egress, query, and paging fields are refused, so
+    /// a draft can never steer the write toward another scope.
+    /// </summary>
+    private static bool HasAgentFeedbackExtras(ServiceRequest request) =>
+        request.ZoneId is not null ||
+        request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ResourceIds is not null || request.Operations is not null ||
+        request.DestinationResourceIds is not null || request.ExpiresAtUtc is not null ||
+        request.Provider is not null || request.Model is not null ||
+        request.MaximumCostUsd is not null || request.PreviewId is not null ||
+        request.CollectionId is not null || request.Token is not null ||
+        request.SessionId is not null ||
+        request.ResourceId is not null || request.ResourceRevision is not null ||
+        request.DestinationResourceId is not null || request.DestinationRevision is not null ||
+        request.EstimatedCostUsd is not null || request.InputTokens is not null ||
+        request.OutputTokens is not null || request.CatalogId is not null ||
+        request.Label is not null || request.Description is not null ||
+        request.CatalogIds is not null || request.Purpose is not null ||
+        request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null ||
+        request.Query is not null || request.SearchOffset is not null ||
+        request.SearchLimit is not null || request.SearchKind is not null ||
+        request.SearchCurrent is not null || request.BudgetChars is not null ||
+        request.SourceLocator is not null || request.SourceFormat is not null ||
+        request.SourceFormatVersion is not null || request.SourceTitle is not null ||
+        request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
+        request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null;
 
     /// <summary>
     /// The agent collection view carries only the session bearer. Every

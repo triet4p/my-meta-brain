@@ -15,7 +15,8 @@ public enum PrivateIndexRecordKind
     Relation = 3,
     Lifecycle = 4,
     RetainedRevision = 5,
-    PreservedSourceSnapshot = 6
+    PreservedSourceSnapshot = 6,
+    Feedback = 7
 }
 
 /// <summary>

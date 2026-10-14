@@ -19,21 +19,22 @@ internal static class Program
              string.Equals(args[0], "s2-t5", StringComparison.Ordinal) ||
              string.Equals(args[0], "s2-t6", StringComparison.Ordinal) ||
              string.Equals(args[0], "s2-t7", StringComparison.Ordinal) ||
-            string.Equals(args[0], "s3-t1", StringComparison.Ordinal) ||
-            string.Equals(args[0], "s3-t2", StringComparison.Ordinal) ||
-            string.Equals(args[0], "s3-t3", StringComparison.Ordinal) ||
-            string.Equals(args[0], "s3-t4", StringComparison.Ordinal) ||
-            string.Equals(args[0], "s3-t5", StringComparison.Ordinal) ||
-            string.Equals(args[0], "s3-t6", StringComparison.Ordinal) ||
-            string.Equals(args[0], "s4-t1", StringComparison.Ordinal) ||
-            string.Equals(args[0], "s4-t2", StringComparison.Ordinal) ||
-            string.Equals(args[0], "s4-t3", StringComparison.Ordinal))
+             string.Equals(args[0], "s3-t1", StringComparison.Ordinal) ||
+             string.Equals(args[0], "s3-t2", StringComparison.Ordinal) ||
+             string.Equals(args[0], "s3-t3", StringComparison.Ordinal) ||
+             string.Equals(args[0], "s3-t4", StringComparison.Ordinal) ||
+             string.Equals(args[0], "s3-t5", StringComparison.Ordinal) ||
+             string.Equals(args[0], "s3-t6", StringComparison.Ordinal) ||
+             string.Equals(args[0], "s4-t1", StringComparison.Ordinal) ||
+             string.Equals(args[0], "s4-t2", StringComparison.Ordinal) ||
+             string.Equals(args[0], "s4-t3", StringComparison.Ordinal) ||
+             string.Equals(args[0], "s4-t4", StringComparison.Ordinal))
             ? args[0]
             : null;
         var executable = scenario is not null ? args[1] : args.Length == 1 ? args[0] : null;
         if (executable is null || !File.Exists(executable))
         {
-            Console.Error.WriteLine("Usage: MetaBrain.S1T4.Smoke <MetaBrain.Connections.exe> | scope-issue|agent-session|s1-t5|s1-t6|s1-t7|s1-t8|s1-t9|s2-t1|s2-t2|s2-t3|s2-t4|s2-t5|s2-t6|s2-t7|s3-t1|s3-t2|s3-t3|s3-t4|s3-t5|s3-t6|s4-t1|s4-t2|s4-t3 <MetaBrain.Connections.exe>");
+            Console.Error.WriteLine("Usage: MetaBrain.S1T4.Smoke <MetaBrain.Connections.exe> | scope-issue|agent-session|s1-t5|s1-t6|s1-t7|s1-t8|s1-t9|s2-t1|s2-t2|s2-t3|s2-t4|s2-t5|s2-t6|s2-t7|s3-t1|s3-t2|s3-t3|s3-t4|s3-t5|s3-t6|s4-t1|s4-t2|s4-t3|s4-t4 <MetaBrain.Connections.exe>");
             return 2;
         }
 
@@ -105,6 +106,9 @@ internal static class Program
                 case "s4-t3":
                     await OwnerServiceSmoke.RunS4T3DetailAsync(fullPath).ConfigureAwait(false);
                     break;
+                case "s4-t4":
+                    await OwnerServiceSmoke.RunS4T4BriefAsync(fullPath).ConfigureAwait(false);
+                    break;
                 case "s4-t1":
                     await OwnerServiceSmoke.RunS4T1BridgeAsync(fullPath).ConfigureAwait(false);
                     break;
@@ -115,7 +119,6 @@ internal static class Program
                     await OwnerServiceSmoke.RunAsync(fullPath).ConfigureAwait(false);
                     break;
             }
-
             return 0;
         }
         catch (Exception ex)

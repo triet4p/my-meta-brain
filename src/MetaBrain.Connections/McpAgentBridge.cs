@@ -253,6 +253,47 @@ internal static class McpAgentBridge
                     },
                     ["required"] = new JsonArray("sessionFile", "snapshotId", "snapshotRevision"),
                     ["additionalProperties"] = false,
+                }),
+            Tool("metabrain_memory_brief", "Project a short scoped brief under a character budget (memory.context scope only; entries, omissions, uncertainty; never instructions).",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["sessionFile"] = new JsonObject { ["type"] = "string" },
+                        ["query"] = new JsonObject { ["type"] = "string", ["maxLength"] = 256 },
+                        ["budgetChars"] = new JsonObject { ["type"] = "string" },
+                    },
+                    ["required"] = new JsonArray("sessionFile"),
+                    ["additionalProperties"] = false,
+                }),
+            Tool("metabrain_memory_feedback", "Record useful/wrong/stale feedback on one seen revision (memory.feedback scope only; never upgrades verification).",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["sessionFile"] = new JsonObject { ["type"] = "string" },
+                        ["targetResourceId"] = new JsonObject { ["type"] = "string" },
+                        ["targetRevision"] = new JsonObject { ["type"] = "string" },
+                        ["kind"] = new JsonObject { ["type"] = "string" },
+                        ["note"] = new JsonObject { ["type"] = "string" },
+                    },
+                    ["required"] = new JsonArray("sessionFile", "targetResourceId", "targetRevision", "kind"),
+                    ["additionalProperties"] = false,
+                }),
+            Tool("metabrain_feedback_read", "Read one stored feedback record (feedback.read scope only; item/source grants cannot expand here).",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["sessionFile"] = new JsonObject { ["type"] = "string" },
+                        ["resourceId"] = new JsonObject { ["type"] = "string" },
+                        ["resourceRevision"] = new JsonObject { ["type"] = "string" },
+                    },
+                    ["required"] = new JsonArray("sessionFile", "resourceId", "resourceRevision"),
+                    ["additionalProperties"] = false,
                 }));
     }
 
@@ -318,6 +359,15 @@ internal static class McpAgentBridge
                 "--session-file", RequiredArg(args, "sessionFile"),
                 "--snapshot-id", RequiredArg(args, "snapshotId"),
                 "--snapshot-revision", RequiredArg(args, "snapshotRevision"),
+            },
+            "metabrain_memory_brief" => BuildBriefArgs(agentPipe, args),
+            "metabrain_memory_feedback" => BuildFeedbackArgs(agentPipe, args),
+            "metabrain_feedback_read" => new[]
+            {
+                "owner", "agent-feedback-read", "--agent-pipe", agentPipe,
+                "--session-file", RequiredArg(args, "sessionFile"),
+                "--resource-id", RequiredArg(args, "resourceId"),
+                "--resource-revision", RequiredArg(args, "resourceRevision"),
             },
             _ => Array.Empty<string>(),
         };
@@ -422,6 +472,71 @@ internal static class McpAgentBridge
         }
 
         return full.ToArray();
+    }
+
+    private static string[] BuildBriefArgs(string agentPipe, JsonObject args)
+    {
+        // S4-T4 scoped brief dispatch: session path plus query text and the
+        // explicit character budget. The bridge never touches private bodies:
+        // the service projects the frozen scope under the budget and serves
+        // entries, omissions, and uncertainty only.
+        var full = new List<string>
+        {
+            "owner", "agent-brief", "--agent-pipe", agentPipe,
+            "--session-file", RequiredArg(args, "sessionFile"),
+        };
+        if (args["query"]?.GetValue<string>() is { } query)
+        {
+            full.Add("--query");
+            full.Add(query);
+        }
+
+        if (args["budgetChars"]?.GetValue<string>() is { } budget &&
+            !string.IsNullOrWhiteSpace(budget))
+        {
+            full.Add("--budget-chars");
+            full.Add(budget);
+        }
+
+        return full.ToArray();
+    }
+
+    private static string[] BuildFeedbackArgs(string agentPipe, JsonObject args)
+    {
+        // S4-T4 agent feedback dispatch: the seen target, verdict, and note
+        // travel as one draft file the existing agent-feedback CLI reads. The
+        // file lives under the process temp directory with a random name and
+        // never carries bearer material (the bridge already denied raw bearers
+        // above). The CLI owns the file lifetime; the bridge only passes the
+        // path, exactly like handoff/session files.
+        var kind = RequiredArg(args, "kind");
+        var targetId = RequiredArg(args, "targetResourceId");
+        var targetRevisionText = RequiredArg(args, "targetRevision");
+        if (!long.TryParse(targetRevisionText, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var targetRevision))
+        {
+            return new[] { "owner", "agent-feedback", "--agent-pipe", agentPipe, "--session-file", RequiredArg(args, "sessionFile"), "--input-file", string.Empty };
+        }
+
+        var draft = new JsonObject
+        {
+            ["targetResourceId"] = targetId,
+            ["targetRevision"] = targetRevision,
+            ["kind"] = kind,
+            ["creationMethod"] = "directWrite",
+        };
+        if (args["note"]?.GetValue<string>() is { } note && !string.IsNullOrWhiteSpace(note))
+        {
+            draft["note"] = note;
+        }
+
+        var path = Path.Combine(Path.GetTempPath(), "metabrain-feedback-" + Guid.NewGuid().ToString("N") + ".json");
+        File.WriteAllText(path, draft.ToJsonString());
+        return new[]
+        {
+            "owner", "agent-feedback", "--agent-pipe", agentPipe,
+            "--session-file", RequiredArg(args, "sessionFile"),
+            "--input-file", path,
+        };
     }
 
     private static string RequiredArg(JsonObject args, string key) =>

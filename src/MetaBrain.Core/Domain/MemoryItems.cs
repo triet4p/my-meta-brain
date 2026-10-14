@@ -612,6 +612,14 @@ internal static class DomainIdentifiers
     /// operation and namespace from source references and memory items.
     /// </summary>
     public const string SourceSnapshotIdPrefix = "snap-";
+    /// <summary>
+    /// Reserved resource-ID prefix for S4-T4 agent/owner feedback records.
+    /// Feedback is canonical usage data beside items and sources, enumerable
+    /// from the encrypted manifest without decrypting item or source bodies.
+    /// Items and registered sources reject the prefix so a memory or source ID
+    /// can never be mistaken for a feedback record.
+    /// </summary>
+    public const string FeedbackIdPrefix = "fb-";
 
 
     public static bool IsSafeIdentifier(string? value)
@@ -642,10 +650,12 @@ internal static class DomainIdentifiers
     public static bool IsArchiveId(string? value) =>
         value is not null && value.StartsWith(ArchiveIdPrefix, StringComparison.Ordinal) && IsSafeIdentifier(value);
 
+    public static bool IsFeedbackId(string? value) =>
+        value is not null && value.StartsWith(FeedbackIdPrefix, StringComparison.Ordinal) && IsSafeIdentifier(value);
     /// <summary>
     /// An identifier that names a memory item or a registered source: never a
-    /// relation, lifecycle record, retained revision, ingestion journal, or
-    /// preserved source snapshot.
+    /// relation, lifecycle record, retained revision, ingestion journal,
+    /// preserved source snapshot, or feedback record.
     /// </summary>
     public static bool IsDomainIdentifier(string? value) =>
         IsSafeIdentifier(value) &&
@@ -653,7 +663,8 @@ internal static class DomainIdentifiers
         !value.StartsWith(LifecycleIdPrefix, StringComparison.Ordinal) &&
         !value.StartsWith(ArchiveIdPrefix, StringComparison.Ordinal) &&
         !value.StartsWith(IngestIdPrefix, StringComparison.Ordinal) &&
-        !value.StartsWith(SourceSnapshotIdPrefix, StringComparison.Ordinal);
+        !value.StartsWith(SourceSnapshotIdPrefix, StringComparison.Ordinal) &&
+        !value.StartsWith(FeedbackIdPrefix, StringComparison.Ordinal);
 
     /// <summary>
     /// Lifecycle record ID derived from its subject: the ID is never chosen by

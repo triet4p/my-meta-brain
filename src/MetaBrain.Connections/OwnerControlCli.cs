@@ -30,11 +30,16 @@ internal static class OwnerControlCli
                 "agent-memory-read" => await AgentMemoryReadAsync(options).ConfigureAwait(false),
                 "agent-source-read" => await AgentSourceReadAsync(options).ConfigureAwait(false),
                 "agent-source-snapshot-read" => await AgentSourceSnapshotReadAsync(options).ConfigureAwait(false),
+                "agent-brief" => await AgentBriefAsync(options).ConfigureAwait(false),
+                "agent-feedback" => await AgentFeedbackAsync(options).ConfigureAwait(false),
+                "agent-feedback-read" => await AgentFeedbackReadAsync(options).ConfigureAwait(false),
                 "write" => await WriteAsync(options).ConfigureAwait(false),
                 "memory-create" => await MemoryCreateAsync(options).ConfigureAwait(false),
                 "memory-revise" => await MemoryReviseAsync(options).ConfigureAwait(false),
                 "memory-import" => await MemoryImportAsync(options).ConfigureAwait(false),
                 "memory-read" => await MemoryReadAsync(options).ConfigureAwait(false),
+                "feedback-create" => await FeedbackCreateAsync(options).ConfigureAwait(false),
+                "feedback-read" => await FeedbackReadAsync(options).ConfigureAwait(false),
                 "source-create" => await SourceCreateAsync(options).ConfigureAwait(false),
                 "source-revise" => await SourceReviseAsync(options).ConfigureAwait(false),
                 "source-read" => await SourceReadAsync(options).ConfigureAwait(false),
@@ -93,6 +98,7 @@ internal static class OwnerControlCli
                 "catalog-query" => await CatalogQueryAsync(options).ConfigureAwait(false),
                 "agent-catalog-list" => await AgentCatalogListAsync(options).ConfigureAwait(false),
                 "agent-search" => await AgentSearchAsync(options).ConfigureAwait(false),
+                "agent-collection-view" => await AgentCollectionViewAsync(options).ConfigureAwait(false),
                 "request" => await SubmitAccessRequestAsync(options).ConfigureAwait(false),
                 "request-status" => await AccessRequestStatusAsync(options).ConfigureAwait(false),
                 "requests" => await ListAccessRequestsAsync(options).ConfigureAwait(false),
@@ -100,7 +106,6 @@ internal static class OwnerControlCli
                 "request-approve" => await ApproveAccessRequestAsync(options).ConfigureAwait(false),
                 "request-reject" => await RejectAccessRequestAsync(options).ConfigureAwait(false),
                 "session" => await SessionAsync(options).ConfigureAwait(false),
-                "agent-collection-view" => await AgentCollectionViewAsync(options).ConfigureAwait(false),
                 "redeem" => await RedeemAsync(options).ConfigureAwait(false),
                 "sessions" => await ListSessionsAsync(options).ConfigureAwait(false),
                 "index-status" => await IndexStatusAsync(options).ConfigureAwait(false),
@@ -644,6 +649,103 @@ internal static class OwnerControlCli
 
         PrintMemoryItem(result.Reply);
         return 0;
+    }
+
+    /// <summary>
+    /// S4-T4 owner feedback create: append-only usage data over the owner
+    /// channel. The draft names the seen target and the verdict; nothing here
+    /// edits the target, upgrades evidence, or rewrites beliefs.
+    /// </summary>
+    private static async Task<int> FeedbackCreateAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--zone-id", "--input-file");
+        var controlPipe = ControlPipe(options);
+        var resourceId = options.Required("--resource-id");
+        var zoneId = options.Required("--zone-id");
+        var inputPath = options.Required("--input-file");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId) || !ServiceSettingsLoader.IsSafeIdentifier(zoneId))
+        {
+            return Usage();
+        }
+
+        var content = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        try
+        {
+            if (content.Length is <= 0 or > 1024 * 1024)
+            {
+                Console.Error.WriteLine("ERROR invalid_feedback_size");
+                return 4;
+            }
+
+            var result = await InvokeOwnerAsync(controlPipe,
+                new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.FeedbackCreateOperation,
+                    resourceId, zoneId, ContentBase64: Convert.ToBase64String(content))).ConfigureAwait(false);
+            if (!result.Success || !HasStatus(result.Reply, "feedback_created"))
+            {
+                WriteServiceError(result);
+                return 4;
+            }
+
+            var revision = result.Reply.TryGetProperty("resourceRevision", out var value) ? value.GetInt64() : 0;
+            PrintFeedback(result.Reply);
+            Console.WriteLine($"FEEDBACK stored revision={revision}");
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(content);
+        }
+    }
+
+    /// <summary>
+    /// S4-T4 owner feedback read: the stored record at the pinned revision.
+    /// </summary>
+    private static async Task<int> FeedbackReadAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--resource-revision");
+        var controlPipe = ControlPipe(options);
+        var resourceId = options.Required("--resource-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId))
+        {
+            return Usage();
+        }
+
+        long? revision = null;
+        if (options.Optional("--resource-revision") is { } revisionText)
+        {
+            if (!long.TryParse(revisionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) || parsed < 1)
+            {
+                return Usage();
+            }
+
+            revision = parsed;
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.FeedbackReadOperation,
+                ResourceId: resourceId, ResourceRevision: revision)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "feedback"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintFeedback(result.Reply);
+        return 0;
+    }
+
+    private static void PrintFeedback(JsonElement reply)
+    {
+        if (!reply.TryGetProperty("feedback", out var feedback) || feedback.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        Console.WriteLine($"FEEDBACK id={JsonValueText(feedback, "id")} zone={JsonValueText(feedback, "zoneId")} revision={JsonValueText(feedback, "revision")} target={JsonValueText(feedback, "targetResourceId")} targetRevision={JsonValueText(feedback, "targetRevision")} kind={JsonValueText(feedback, "kind")} executor={JsonValueText(feedback, "executor")} method={JsonValueText(feedback, "creationMethod")} recordedUtc={JsonValueText(feedback, "recordedAtUtc")}");
+        if (feedback.TryGetProperty("note", out var note) && note.ValueKind == JsonValueKind.String)
+        {
+            Console.WriteLine($"note={note.GetString()}");
+        }
     }
 
     private static void PrintMemoryItem(JsonElement reply)
@@ -3177,6 +3279,246 @@ internal static class OwnerControlCli
         {
             Console.WriteLine("SEARCH no_match");
         }
+    }
+
+    /// <summary>
+    /// S4-T4 scoped brief through one redeemed session. Prints the short
+    /// deterministic projection under the caller's character budget: entries
+    /// with bounded excerpts plus stored citations/applicability/uncertainty,
+    /// then honest omissions and the uncertainty ledger. Memory data, never
+    /// system instructions. Denials stay on stderr with a failing exit.
+    /// </summary>
+    private static async Task<int> AgentBriefAsync(CommandOptions options)
+    {
+        options.RequireOnly("--agent-pipe", "--session-file", "--query", "--budget-chars");
+        var agentPipe = PipeName(options, "--agent-pipe");
+        var sessionPath = options.Required("--session-file");
+        var query = options.Optional("--query") ?? string.Empty;
+        if (query.Length > 256 || query.Any(char.IsControl))
+        {
+            return Usage();
+        }
+
+        var budget = 2000;
+        if (options.Optional("--budget-chars") is { } budgetText)
+        {
+            if (!int.TryParse(budgetText, NumberStyles.Integer, CultureInfo.InvariantCulture, out budget) ||
+                budget < 200 || budget > 8000)
+            {
+                return Usage();
+            }
+        }
+
+        string sessionToken;
+        try
+        {
+            sessionToken = AgentSessionFile.Read(sessionPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Console.Error.WriteLine("ERROR session_unreadable");
+            return 3;
+        }
+
+        var result = await InvokeAgentAsync(agentPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.AgentMemoryBriefOperation,
+                SessionToken: sessionToken,
+                AccessOperation: ServiceRequestHandler.MemoryContextAccessOperation,
+                Query: query,
+                BudgetChars: budget)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "memory_brief") ||
+            !result.Reply.TryGetProperty("memoryBrief", out var brief) ||
+            brief.ValueKind != JsonValueKind.Object)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintBrief(brief);
+        return 0;
+    }
+
+    private static void PrintBrief(JsonElement brief)
+    {
+        Console.WriteLine($"BRIEF query={JsonValueText(brief, "query")} budget={JsonValueText(brief, "budgetChars")} used={JsonValueText(brief, "usedChars")} truncated={JsonFlagText(brief, "truncated")} generation={JsonValueText(brief, "policyGeneration")}");
+        if (brief.TryGetProperty("selection", out var selection) && selection.ValueKind == JsonValueKind.Array)
+        {
+            Console.WriteLine("selection=" + string.Join(",", selection.EnumerateArray().Select(value => value.GetString())));
+        }
+
+        if (brief.TryGetProperty("entries", out var entries) && entries.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var entry in entries.EnumerateArray())
+            {
+                Console.WriteLine($"ENTRY id={JsonValueText(entry, "id")} revision={JsonValueText(entry, "revision")} kind={JsonValueText(entry, "kind")} author={JsonValueText(entry, "author")} executor={JsonValueText(entry, "executor")} method={JsonValueText(entry, "creationMethod")} evidence={JsonValueText(entry, "evidence")} level={JsonValueText(entry, "level")} truncated={JsonFlagText(entry, "truncated")}");
+                if (entry.TryGetProperty("title", out var title) && title.ValueKind == JsonValueKind.String)
+                {
+                    Console.WriteLine($"title={title.GetString()}");
+                }
+
+                Console.WriteLine($"excerpt={JsonValueText(entry, "excerpt")}");
+                if (entry.TryGetProperty("applicability", out var applicability) && applicability.ValueKind == JsonValueKind.Object)
+                {
+                    Console.WriteLine($"applicability project={JsonValueText(applicability, "project")} environment={JsonValueText(applicability, "environment")} version={JsonValueText(applicability, "version")}");
+                }
+
+                Console.WriteLine($"time occurred={JsonValueText(entry, "occurredAtUtc")} recorded={JsonValueText(entry, "recordedAtUtc")}");
+                if (entry.TryGetProperty("citations", out var citations) && citations.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var citation in citations.EnumerateArray())
+                    {
+                        var span = citation.TryGetProperty("span", out var spanValue) && spanValue.ValueKind == JsonValueKind.Object
+                            ? $"{JsonValueText(spanValue, "start")}-{JsonValueText(spanValue, "end")}"
+                            : "none";
+                        Console.WriteLine($"citation id={JsonValueText(citation, "sourceId")} revision={JsonValueText(citation, "sourceRevision")} span={span} status={JsonValueText(citation, "status")} availability={JsonValueText(citation, "availability")} warning={JsonValueText(citation, "warning")}");
+                    }
+                }
+
+                if (entry.TryGetProperty("warnings", out var warnings) && warnings.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var warning in warnings.EnumerateArray())
+                    {
+                        if (warning.ValueKind == JsonValueKind.String)
+                        {
+                            Console.WriteLine($"warning={warning.GetString()}");
+                        }
+                    }
+                }
+            }
+        }
+
+        if (brief.TryGetProperty("omitted", out var omitted) && omitted.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var miss in omitted.EnumerateArray())
+            {
+                Console.WriteLine($"OMITTED id={JsonValueText(miss, "id")} revision={JsonValueText(miss, "revision")} reason={JsonValueText(miss, "reason")}");
+            }
+        }
+
+        if (brief.TryGetProperty("uncertain", out var uncertain) && uncertain.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var flag in uncertain.EnumerateArray())
+            {
+                if (flag.ValueKind == JsonValueKind.String)
+                {
+                    Console.WriteLine($"UNCERTAIN {flag.GetString()}");
+                }
+            }
+        }
+
+        if ((!brief.TryGetProperty("entries", out var entryCheck) || entryCheck.GetArrayLength() == 0) &&
+            (!brief.TryGetProperty("omitted", out var omitCheck) || omitCheck.GetArrayLength() == 0))
+        {
+            Console.WriteLine("BRIEF no_match");
+        }
+    }
+
+    /// <summary>
+    /// S4-T4 agent feedback through one redeemed session. The draft names the
+    /// seen target and the verdict; the handler authorizes the target against
+    /// the frozen scope before any byte is written. The reply echoes the
+    /// stored record only; nothing here upgrades verification or rewrites
+    /// beliefs. Denials stay on stderr with a failing exit.
+    /// </summary>
+    private static async Task<int> AgentFeedbackAsync(CommandOptions options)
+    {
+        options.RequireOnly("--agent-pipe", "--session-file", "--input-file");
+        var agentPipe = PipeName(options, "--agent-pipe");
+        var sessionPath = options.Required("--session-file");
+        var inputPath = options.Required("--input-file");
+        string sessionToken;
+        try
+        {
+            sessionToken = AgentSessionFile.Read(sessionPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Console.Error.WriteLine("ERROR session_unreadable");
+            return 3;
+        }
+
+        var content = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        try
+        {
+            if (content.Length is <= 0 or > 1024 * 1024)
+            {
+                Console.Error.WriteLine("ERROR invalid_feedback_size");
+                return 4;
+            }
+
+            var result = await InvokeAgentAsync(agentPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.AgentFeedbackOperation,
+                    SessionToken: sessionToken,
+                    AccessOperation: ServiceRequestHandler.MemoryFeedbackAccessOperation,
+                    ContentBase64: Convert.ToBase64String(content))).ConfigureAwait(false);
+            if (!result.Success || !HasStatus(result.Reply, "feedback_created"))
+            {
+                WriteServiceError(result);
+                return 3;
+            }
+
+            PrintFeedback(result.Reply);
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(content);
+        }
+    }
+
+    /// <summary>
+    /// S4-T4 scoped feedback read through one redeemed session: only an
+    /// explicit feedback.read grant on the exact feedback ID/revision opens
+    /// the record.
+    /// </summary>
+    private static async Task<int> AgentFeedbackReadAsync(CommandOptions options)
+    {
+        options.RequireOnly("--agent-pipe", "--session-file", "--resource-id", "--resource-revision");
+        var agentPipe = PipeName(options, "--agent-pipe");
+        var sessionPath = options.Required("--session-file");
+        var resourceId = options.Required("--resource-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId))
+        {
+            return Usage();
+        }
+
+        if (!long.TryParse(options.Required("--resource-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var resourceRevision) ||
+            resourceRevision < 1)
+        {
+            return Usage();
+        }
+
+        string sessionToken;
+        try
+        {
+            sessionToken = AgentSessionFile.Read(sessionPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Console.Error.WriteLine("ERROR session_unreadable");
+            return 3;
+        }
+
+        var result = await InvokeAgentAsync(agentPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.AgentFeedbackReadOperation,
+                ResourceId: resourceId,
+                SessionToken: sessionToken,
+                AccessOperation: ServiceRequestHandler.FeedbackReadOperation,
+                ResourceRevision: resourceRevision)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "feedback"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintFeedback(result.Reply);
+        return 0;
     }
 
     private static async Task<int> AgentCollectionViewAsync(CommandOptions options)
