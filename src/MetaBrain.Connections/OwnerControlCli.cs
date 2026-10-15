@@ -34,6 +34,12 @@ internal static class OwnerControlCli
                 "agent-feedback" => await AgentFeedbackAsync(options).ConfigureAwait(false),
                 "agent-feedback-read" => await AgentFeedbackReadAsync(options).ConfigureAwait(false),
                 "agent-propose" => await AgentProposeAsync(options).ConfigureAwait(false),
+                "agent-relation-resolve" => await AgentRelationResolveAsync(options).ConfigureAwait(false),
+                "agent-relation-list" => await AgentRelationListAsync(options).ConfigureAwait(false),
+                "agent-relation-create" => await AgentRelationCreateAsync(options, supersede: false).ConfigureAwait(false),
+                "agent-relation-supersede" => await AgentRelationCreateAsync(options, supersede: true).ConfigureAwait(false),
+                "agent-relation-unlink" => await AgentRelationTransitionAsync(options, restore: false).ConfigureAwait(false),
+                "agent-relation-restore" => await AgentRelationTransitionAsync(options, restore: true).ConfigureAwait(false),
                 "write" => await WriteAsync(options).ConfigureAwait(false),
                 "memory-create" => await MemoryCreateAsync(options).ConfigureAwait(false),
                 "memory-revise" => await MemoryReviseAsync(options).ConfigureAwait(false),
@@ -1909,11 +1915,53 @@ internal static class OwnerControlCli
 
     private static void PrintRelation(JsonElement reply)
     {
-        if (!reply.TryGetProperty("relation", out var relation) || relation.ValueKind != JsonValueKind.Object)
+        if (reply.TryGetProperty("relation", out var relation) && relation.ValueKind == JsonValueKind.Object)
+        {
+            PrintRelationElement(relation);
+        }
+    }
+
+    private static void PrintRelations(JsonElement reply)
+    {
+        if (!reply.TryGetProperty("relations", out var relations) || relations.ValueKind != JsonValueKind.Array)
         {
             return;
         }
 
+        Console.WriteLine($"RELATIONS count={relations.GetArrayLength()}");
+        foreach (var relation in relations.EnumerateArray())
+        {
+            if (relation.ValueKind == JsonValueKind.Object)
+            {
+                PrintRelationElement(relation);
+            }
+        }
+    }
+
+    private static void PrintRelationCandidates(JsonElement reply)
+    {
+        var status = JsonValueText(reply, "status");
+        var truncated = reply.TryGetProperty("relationCandidatesTruncated", out var truncatedValue) &&
+            truncatedValue.ValueKind == JsonValueKind.True;
+        Console.WriteLine($"RELATION RESOLUTION status={status} truncated={truncated}");
+        if (reply.TryGetProperty("relationCandidates", out var candidates) && candidates.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var candidate in candidates.EnumerateArray())
+            {
+                Console.WriteLine(
+                    $"CANDIDATE id={JsonValueText(candidate, "resourceId")} kind={JsonValueText(candidate, "endpointKind")} " +
+                    $"revision={JsonValueText(candidate, "revision")} title={OptionalText(candidate, "title")}");
+            }
+        }
+
+        if (string.Equals(status, "relation_ambiguous", StringComparison.Ordinal))
+        {
+            Console.WriteLine("clarification_required=true mutation_performed=false");
+        }
+    }
+
+    private static void PrintRelationElement(JsonElement relation)
+    {
         Console.WriteLine($"RELATION id={JsonValueText(relation, "id")} zone={JsonValueText(relation, "zoneId")} revision={JsonValueText(relation, "revision")} kind={JsonValueText(relation, "kind")} state={JsonValueText(relation, "state")}");
         if (relation.TryGetProperty("from", out var from) && from.ValueKind == JsonValueKind.Object)
         {
@@ -1930,6 +1978,16 @@ internal static class OwnerControlCli
         if (relation.TryGetProperty("stateReason", out var stateReason) && stateReason.ValueKind == JsonValueKind.String)
         {
             Console.WriteLine($"stateReason={stateReason.GetString()}");
+        }
+
+        if (relation.TryGetProperty("requestEvidence", out var evidence) && evidence.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var entry in evidence.EnumerateArray())
+            {
+                Console.WriteLine(
+                    $"request action={JsonValueText(entry, "action")} executor={JsonValueText(entry, "executor")} " +
+                    $"recordedUtc={JsonValueText(entry, "recordedAtUtc")} text={JsonValueText(entry, "text")}");
+            }
         }
 
         if (relation.TryGetProperty("review", out var review) && review.ValueKind == JsonValueKind.Object)
@@ -3703,6 +3761,242 @@ internal static class OwnerControlCli
         }
     }
 
+    private static async Task<int> AgentRelationResolveAsync(CommandOptions options)
+    {
+        options.RequireOnly("--agent-pipe", "--session-file", "--query");
+        var agentPipe = PipeName(options, "--agent-pipe");
+        var sessionPath = options.Required("--session-file");
+        var query = options.Required("--query");
+        if (string.IsNullOrWhiteSpace(query) || query.Length > 256 || query.Any(char.IsControl))
+        {
+            return Usage();
+        }
+
+        string sessionToken;
+        try
+        {
+            sessionToken = AgentSessionFile.Read(sessionPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Console.Error.WriteLine("ERROR session_unreadable");
+            return 3;
+        }
+
+        var result = await InvokeAgentAsync(agentPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.AgentRelationResolveOperation,
+                SessionToken: sessionToken,
+                AccessOperation: ServiceRequestHandler.RelationListAccessOperation,
+                Query: query)).ConfigureAwait(false);
+        var status = result.Reply.ValueKind == JsonValueKind.Object &&
+            result.Reply.TryGetProperty("status", out var statusValue)
+            ? statusValue.GetString()
+            : null;
+        if (!result.Success || status is not ("relation_resolved" or "relation_ambiguous" or "relation_no_match"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintRelationCandidates(result.Reply);
+        return 0;
+    }
+
+    private static async Task<int> AgentRelationListAsync(CommandOptions options)
+    {
+        options.RequireOnly("--agent-pipe", "--session-file");
+        var agentPipe = PipeName(options, "--agent-pipe");
+        var sessionPath = options.Required("--session-file");
+        string sessionToken;
+        try
+        {
+            sessionToken = AgentSessionFile.Read(sessionPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Console.Error.WriteLine("ERROR session_unreadable");
+            return 3;
+        }
+
+        var result = await InvokeAgentAsync(agentPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.AgentRelationListOperation,
+                SessionToken: sessionToken,
+                AccessOperation: ServiceRequestHandler.RelationListAccessOperation)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "relations"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintRelations(result.Reply);
+        return 0;
+    }
+
+    private static async Task<int> AgentRelationCreateAsync(CommandOptions options, bool supersede)
+    {
+        options.RequireOnly("--agent-pipe", "--session-file", "--input-file");
+        var agentPipe = PipeName(options, "--agent-pipe");
+        var sessionPath = options.Required("--session-file");
+        var inputPath = options.Required("--input-file");
+        string sessionToken;
+        try
+        {
+            sessionToken = AgentSessionFile.Read(sessionPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Console.Error.WriteLine("ERROR session_unreadable");
+            return 3;
+        }
+
+        var draft = await ReadAgentRelationDraftAsync(inputPath).ConfigureAwait(false);
+        try
+        {
+            if (draft is null || draft.Length is <= 0 or > 1024 * 1024)
+            {
+                Console.Error.WriteLine("ERROR invalid_relation_size");
+                return 3;
+            }
+
+            var result = await InvokeAgentAsync(agentPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    supersede
+                        ? ServiceRequestHandler.AgentRelationSupersedeOperation
+                        : ServiceRequestHandler.AgentRelationCreateOperation,
+                    SessionToken: sessionToken,
+                    AccessOperation: supersede
+                        ? ServiceRequestHandler.LinkSupersedeOperation
+                        : ServiceRequestHandler.LinkCreateOperation,
+                    ContentBase64: Convert.ToBase64String(draft))).ConfigureAwait(false);
+            if (!result.Success || !HasStatus(result.Reply, "relation_created"))
+            {
+                WriteServiceError(result);
+                return 3;
+            }
+
+            PrintRelation(result.Reply);
+            return 0;
+        }
+        finally
+        {
+            if (draft is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(draft);
+            }
+        }
+    }
+
+    private static async Task<int> AgentRelationTransitionAsync(CommandOptions options, bool restore)
+    {
+        options.RequireOnly("--agent-pipe", "--session-file", "--resource-id", "--resource-revision", "--input-file");
+        var agentPipe = PipeName(options, "--agent-pipe");
+        var sessionPath = options.Required("--session-file");
+        var resourceId = options.Required("--resource-id");
+        if (!DomainIdentifiers.IsRelationId(resourceId) ||
+            !long.TryParse(options.Required("--resource-revision"), NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out var relationRevision) ||
+            relationRevision < 1)
+        {
+            return Usage();
+        }
+
+        string sessionToken;
+        try
+        {
+            sessionToken = AgentSessionFile.Read(sessionPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Console.Error.WriteLine("ERROR session_unreadable");
+            return 3;
+        }
+
+        var draft = await ReadAgentRelationDraftAsync(options.Required("--input-file")).ConfigureAwait(false);
+        try
+        {
+            if (draft is null || draft.Length is <= 0 or > 1024 * 1024)
+            {
+                Console.Error.WriteLine("ERROR invalid_relation_size");
+                return 3;
+            }
+
+            var result = await InvokeAgentAsync(agentPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    restore
+                        ? ServiceRequestHandler.AgentRelationRestoreOperation
+                        : ServiceRequestHandler.AgentRelationUnlinkOperation,
+                    ResourceId: resourceId,
+                    SessionToken: sessionToken,
+                    AccessOperation: restore
+                        ? ServiceRequestHandler.LinkRestoreOperation
+                        : ServiceRequestHandler.LinkRemoveOperation,
+                    ResourceRevision: relationRevision,
+                    ContentBase64: Convert.ToBase64String(draft))).ConfigureAwait(false);
+            var expectedStatus = restore ? "relation_relinked" : "relation_unlinked";
+            if (!result.Success || !HasStatus(result.Reply, expectedStatus))
+            {
+                WriteServiceError(result);
+                return 3;
+            }
+
+            PrintRelation(result.Reply);
+            return 0;
+        }
+        finally
+        {
+            if (draft is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(draft);
+            }
+        }
+    }
+    private static async Task<byte[]?> ReadAgentRelationDraftAsync(string inputPath)
+    {
+        if (!string.Equals(inputPath, "-", StringComparison.Ordinal))
+        {
+            return await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        }
+
+        using var content = new MemoryStream();
+        var buffer = new byte[8192];
+        try
+        {
+            var input = Console.OpenStandardInput();
+            while (true)
+            {
+                var read = await input.ReadAsync(buffer.AsMemory()).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    break;
+                }
+
+                if (content.Length + read > 1024 * 1024)
+                {
+                    return null;
+                }
+
+                content.Write(buffer, 0, read);
+            }
+
+            return content.ToArray();
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(buffer);
+            if (content.TryGetBuffer(out var stored))
+            {
+                CryptographicOperations.ZeroMemory(stored.AsSpan());
+            }
+        }
+    }
+
+
     private static async Task<int> AgentCollectionViewAsync(CommandOptions options)
     {
         options.RequireOnly("--agent-pipe", "--session-file");
@@ -4099,7 +4393,7 @@ internal static class OwnerControlCli
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|agent-search --query [--offset --limit --kind --current]|source-enroll --source-id --zone-id --format --format-version --input-file|source-relocate --source-id --source-generation --input-file|source-revoke --source-id|source-status --source-id|source-ingest --source-id|source-pause --source-id|source-resume --source-id|source-refresh-optin --source-id|source-refresh-optout --source-id|source-list|source-refresh|source-snapshot-list --source-id|source-snapshot-preserve --source-id --source-revision --retain-until-utc|source-snapshot-read --snapshot-id --snapshot-revision --output-file|source-snapshot-retain --snapshot-id --expected-revision --retain-until-utc|source-snapshot-purge --snapshot-id --expected-revision|research-capture --resource-id --zone-id --input-file [--title --source-url --source-author --source-date]|research-read --resource-id [--resource-revision --output-file]|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|lifecycle-create|lifecycle-read|lifecycle-retained-read --resource-revision|lifecycle-publish --expected-revision|lifecycle-reject --expected-revision|lifecycle-withdraw --expected-revision|lifecycle-repropose --expected-revision|lifecycle-question-resolve --expected-revision|lifecycle-question-reopen --expected-revision|lifecycle-intention-complete --expected-revision|lifecycle-intention-cancel --expected-revision|lifecycle-intention-supersede --expected-revision|lifecycle-intention-notify --expected-revision|lifecycle-intention-acknowledge --expected-revision|lifecycle-validity-set --expected-revision|lifecycle-retain --expected-revision|proposal-read --resource-id [--resource-revision]|proposal-list|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read|agent-collection-view|agent-search|agent-brief|agent-feedback|agent-feedback-read|agent-propose}; lifecycle --resource-id is the subject item ID; relation/lifecycle transitions need --expected-revision and an optional --input-file draft; agent-propose --session-file --input-file carries one proposal draft JSON (kind create/revise, idempotencyKey, inbox destinationResourceId/destinationRevision, revise subjectResourceId/subjectRevision, proposed item draft) and never publishes; source-enroll and source-relocate --input-file are JSON objects holding the private locator ({\"locator\": \"C:/exact/path\"}), never a command argument; source-snapshot-read requires an explicit --output-file export");
+        Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|agent-search --query [--offset --limit --kind --current]|source-enroll --source-id --zone-id --format --format-version --input-file|source-relocate --source-id --source-generation --input-file|source-revoke --source-id|source-status --source-id|source-ingest --source-id|source-pause --source-id|source-resume --source-id|source-refresh-optin --source-id|source-refresh-optout --source-id|source-list|source-refresh|source-snapshot-list --source-id|source-snapshot-preserve --source-id --source-revision --retain-until-utc|source-snapshot-read --snapshot-id --snapshot-revision --output-file|source-snapshot-retain --snapshot-id --expected-revision --retain-until-utc|source-snapshot-purge --snapshot-id --expected-revision|research-capture --resource-id --zone-id --input-file [--title --source-url --source-author --source-date]|research-read --resource-id [--resource-revision --output-file]|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|lifecycle-create|lifecycle-read|lifecycle-retained-read --resource-revision|lifecycle-publish --expected-revision|lifecycle-reject --expected-revision|lifecycle-withdraw --expected-revision|lifecycle-repropose --expected-revision|lifecycle-question-resolve --expected-revision|lifecycle-question-reopen --expected-revision|lifecycle-intention-complete --expected-revision|lifecycle-intention-cancel --expected-revision|lifecycle-intention-supersede --expected-revision|lifecycle-intention-notify --expected-revision|lifecycle-intention-acknowledge --expected-revision|lifecycle-validity-set --expected-revision|lifecycle-retain --expected-revision|proposal-read --resource-id [--resource-revision]|proposal-list|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read|agent-collection-view|agent-search|agent-brief|agent-feedback|agent-feedback-read|agent-propose|agent-relation-resolve|agent-relation-list|agent-relation-create|agent-relation-supersede|agent-relation-unlink|agent-relation-restore}; lifecycle --resource-id is the subject item ID; relation/lifecycle transitions need --expected-revision and an optional --input-file draft; agent-propose --session-file --input-file carries one proposal draft JSON (kind create/revise, idempotencyKey, inbox destinationResourceId/destinationRevision, revise subjectResourceId/subjectRevision, proposed item draft) and never publishes; agent-relation-create/supersede --session-file --input-file carries typed endpoints/revisions, kind, reason and requestEvidence; agent-relation-unlink/restore --session-file --resource-id --resource-revision --input-file carries stateReason/requestEvidence; restore returns only to proposed; source-enroll and source-relocate --input-file are JSON objects holding the private locator ({\"locator\": \"C:/exact/path\"}), never a command argument; source-snapshot-read requires an explicit --output-file export");
         return 2;
     }
 

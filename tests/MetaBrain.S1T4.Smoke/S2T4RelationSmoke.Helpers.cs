@@ -37,7 +37,8 @@ internal static partial class OwnerServiceSmoke
         long toRevision,
         object? toSpan,
         string reason,
-        DateTimeOffset now) => JsonSerializer.Serialize(new
+        DateTimeOffset now,
+        string? requestEvidence = null) => JsonSerializer.Serialize(new
     {
         kind,
         state,
@@ -57,6 +58,7 @@ internal static partial class OwnerServiceSmoke
         },
         creationMethod = "directWrite",
         reason,
+        requestEvidence,
         stateReason = (string?)null,
         occurredAtUtc = (DateTimeOffset?)null,
         recordedAtUtc = now.AddMinutes(1)

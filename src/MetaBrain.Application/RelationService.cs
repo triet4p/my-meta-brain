@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 using System.Security.Cryptography;
 using MetaBrain.Core.Domain;
 using MetaBrain.Core.Security;
@@ -19,6 +21,14 @@ public sealed record RelationReadResult(Relation? Relation, RelationReview? Revi
 /// looking current by construction.
 /// </summary>
 public sealed record RelationWriteResult(Relation Relation, RelationReview Review);
+public sealed record RelationEndpointCandidate(
+    string ResourceId,
+    RelationEndpointKind EndpointKind,
+    long Revision,
+    string? Title);
+
+public sealed record RelationResolveResult(RelationEndpointCandidate[] Candidates, bool HasMore);
+
 
 /// <summary>
 /// S2-T4 typed relation authority over the shared encrypted canonical store.
@@ -82,6 +92,11 @@ public sealed class RelationService
             throw new ArgumentException("An agent relation draft requires a subject endpoint.");
         }
 
+        if (context.Kind != PrincipalKind.Agent)
+        {
+            throw new UnauthorizedAccessException("Only the authenticated agent path can create an agent link.");
+        }
+
         var zoneId = store.TryGetZone(parsed.From.ResourceId, out var zone) && !string.IsNullOrEmpty(zone)
             ? zone
             : throw new ArgumentException("The relation subject endpoint has no registered zone.");
@@ -111,6 +126,33 @@ public sealed class RelationService
         byte[]? transitionJson,
         IManagedResourceStore store) =>
         Transition(context, relationId, expectedRevision, RelationState.Retracted, transitionJson, store);
+
+    /// <summary>
+    /// Agent unlink is an explicit, reversible relation action. The caller's
+    /// quote is retained as agent-reported evidence; it is never interpreted
+    /// as owner confirmation.
+    /// </summary>
+    public RelationWriteResult UnlinkAgent(
+        AuthenticatedContext context,
+        string relationId,
+        long expectedRevision,
+        byte[]? transitionJson,
+        IManagedResourceStore store) =>
+        Transition(context, relationId, expectedRevision, RelationState.Retracted, transitionJson, store,
+            RelationRequestAction.Remove);
+
+    /// <summary>
+    /// Undo for an agent unlink returns the relation to proposed, never accepted.
+    /// </summary>
+    public RelationWriteResult RelinkAgent(
+        AuthenticatedContext context,
+        string relationId,
+        long expectedRevision,
+        byte[]? transitionJson,
+        IManagedResourceStore store) =>
+        Transition(context, relationId, expectedRevision, RelationState.Proposed, transitionJson, store,
+            RelationRequestAction.Restore);
+
 
     /// <summary>
     /// Relink: the only way back from an unlink, and deliberately through
@@ -192,6 +234,146 @@ public sealed class RelationService
         return new RelationReadResult(ToRelation(stored, revision), review);
     }
 
+    /// <summary>
+    /// Enumerates relation metadata only when both pinned endpoints pass the
+    /// caller's frozen-scope authorizer. The caller must separately authorize
+    /// the relation-list operation before invoking this projection.
+    /// </summary>
+    public RelationReadResult[] List(
+        AuthenticatedContext context,
+        IManagedResourceStore store,
+        Func<RelationEndpoint, bool> endpointAuthorizer)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(endpointAuthorizer);
+        EnsureTrusted(context);
+
+        var relations = LoadRelations(store);
+        var liveRevisions = store.ListResources()
+            .Where(resource => DomainIdentifiers.IsRelationId(resource.ResourceId))
+            .ToDictionary(resource => resource.ResourceId, resource => resource.Revision, StringComparer.Ordinal);
+        var results = new List<RelationReadResult>();
+        foreach (var stored in relations)
+        {
+            if (!endpointAuthorizer(stored.From) || !endpointAuthorizer(stored.To) ||
+                !liveRevisions.TryGetValue(stored.Id, out var revision))
+            {
+                continue;
+            }
+
+            var review = EvaluateReview(stored, relations, store, endpointAuthorizer);
+            results.Add(new RelationReadResult(ToRelation(stored, revision), review));
+        }
+
+        results.Sort((left, right) => StringComparer.Ordinal.Compare(left.Relation!.Id, right.Relation!.Id));
+        return results.ToArray();
+    }
+
+    /// <summary>
+    /// Resolves a caller's short reference over only its frozen memory/source
+    /// snapshot. It reads the exact approved revisions, projects titles only,
+    /// and never returns source text, body, zone, locator, or unapproved IDs.
+    /// </summary>
+    public RelationResolveResult ResolveEndpoints(
+        AuthenticatedContext context,
+        string query,
+        IReadOnlyList<ScopeResourceRevision> resources,
+        IReadOnlyList<ScopeResourceRevision> destinationResources,
+        bool canReadMemory,
+        bool canReadSource,
+        IManagedResourceStore store)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(resources);
+        ArgumentNullException.ThrowIfNull(destinationResources);
+        ArgumentNullException.ThrowIfNull(store);
+        EnsureTrusted(context);
+        if (string.IsNullOrWhiteSpace(query) || query.Length > 256 || query.Any(char.IsControl))
+        {
+            throw new ArgumentException("A bounded relation endpoint query is required.");
+        }
+
+        var needle = query.Trim();
+        var candidates = new List<RelationEndpointCandidate>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var hasMore = false;
+        foreach (var resource in resources.Concat(destinationResources))
+        {
+            if (!DomainIdentifiers.IsDomainIdentifier(resource.ResourceId) ||
+                !seen.Add(resource.ResourceId) || (!canReadMemory && !canReadSource))
+            {
+                continue;
+            }
+
+            byte[]? raw = null;
+            try
+            {
+                raw = store.ReadContent(resource.ResourceId, resource.Revision);
+                using var document = JsonDocument.Parse(raw);
+                var root = document.RootElement;
+                if (root.ValueKind != JsonValueKind.Object ||
+                    !root.TryGetProperty("id", out var idValue) ||
+                    idValue.ValueKind != JsonValueKind.String ||
+                    !string.Equals(idValue.GetString(), resource.ResourceId, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                RelationEndpointKind endpointKind;
+                if (canReadMemory && root.TryGetProperty("kind", out _))
+                {
+                    endpointKind = RelationEndpointKind.MemoryItem;
+                }
+                else if (canReadSource && root.TryGetProperty("availability", out _))
+                {
+                    endpointKind = RelationEndpointKind.RegisteredSource;
+                }
+                else
+                {
+                    continue;
+                }
+
+                string? title = root.TryGetProperty("title", out var titleValue) &&
+                    titleValue.ValueKind == JsonValueKind.String
+                    ? titleValue.GetString()
+                    : null;
+                if (!resource.ResourceId.Contains(needle, StringComparison.OrdinalIgnoreCase) &&
+                    (title is null || !title.Contains(needle, StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
+                if (candidates.Count == 32)
+                {
+                    hasMore = true;
+                    continue;
+                }
+
+                candidates.Add(new RelationEndpointCandidate(
+                    resource.ResourceId, endpointKind, resource.Revision, title));
+            }
+            catch (JsonException)
+            {
+                // An approved opaque resource that is not a readable memory or
+                // registered-source envelope is not a resolution candidate.
+            }
+            catch (ManagedResourceUnavailableException)
+            {
+                // A moved or unavailable frozen revision is not a live target.
+            }
+            finally
+            {
+                if (raw is { Length: > 0 })
+                {
+                    CryptographicOperations.ZeroMemory(raw);
+                }
+            }
+        }
+
+        return new RelationResolveResult(candidates.ToArray(), hasMore);
+    }
+
     private static RelationWriteResult Write(
         AuthenticatedContext context,
         string relationId,
@@ -216,9 +398,24 @@ public sealed class RelationService
             throw;
         }
 
+        DateTimeOffset? serverRecordedAtUtc = null;
         if (forceProposed)
         {
-            draft = draft with { State = RelationState.Proposed };
+            if (context.Kind != PrincipalKind.Agent || string.IsNullOrWhiteSpace(draft.RequestEvidence) ||
+                draft.RequestEvidence.Length > RelationCodec.MaximumRequestEvidenceLength)
+            {
+                throw new ArgumentException("An agent link requires bounded caller-reported request evidence.");
+            }
+
+            serverRecordedAtUtc = DateTimeOffset.UtcNow;
+            draft = draft with
+            {
+                State = RelationState.Proposed,
+                CreationMethod = CreationMethod.Paraphrase,
+                StateReason = null,
+                OccurredAtUtc = null,
+                RecordedAtUtc = serverRecordedAtUtc
+            };
         }
 
         RelationValidator.ValidateDraft(draft, relationId, zoneId);
@@ -233,9 +430,19 @@ public sealed class RelationService
         var relations = LoadRelations(store);
         EnsureNoCycle(relations, kind, from.ResourceId, to.ResourceId, relationId);
 
-        var now = DateTimeOffset.UtcNow;
-        var recordedAtUtc = draft.RecordedAtUtc ?? now;
+        var now = serverRecordedAtUtc ?? DateTimeOffset.UtcNow;
+        var recordedAtUtc = forceProposed ? now : draft.RecordedAtUtc ?? now;
         var executor = ExecutorOf(context);
+        var requestEvidence = forceProposed
+            ? new[]
+            {
+                new RelationRequestEvidence(
+                    kind == RelationKind.Supersedes ? RelationRequestAction.Supersede : RelationRequestAction.Create,
+                    draft.RequestEvidence!,
+                    executor,
+                    now)
+            }
+            : Array.Empty<RelationRequestEvidence>();
         var stored = new StoredRelation(
             RelationCodec.CurrentSchemaVersion,
             relationId,
@@ -251,7 +458,8 @@ public sealed class RelationService
             draft.OccurredAtUtc,
             recordedAtUtc,
             executor,
-            now);
+            now,
+            requestEvidence);
         var payload = RelationCodec.EncodeStored(stored);
         try
         {
@@ -277,7 +485,8 @@ public sealed class RelationService
         long expectedRevision,
         RelationState target,
         byte[]? transitionJson,
-        IManagedResourceStore store)
+        IManagedResourceStore store,
+        RelationRequestAction? requestAction = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(store);
@@ -313,6 +522,12 @@ public sealed class RelationService
         }
 
         RelationValidator.ValidateTransition(transition, stored.State, target);
+        if (requestAction is not null &&
+            (context.Kind != PrincipalKind.Agent || string.IsNullOrWhiteSpace(transition.RequestEvidence) ||
+                transition.RequestEvidence.Length > RelationCodec.MaximumRequestEvidenceLength))
+        {
+            throw new ArgumentException("An agent relation transition requires bounded caller-reported request evidence.");
+        }
 
         // Endpoints and kind are immutable, but the derivation graph around
         // them can have changed: an edge that becomes active again (accept or
@@ -330,7 +545,12 @@ public sealed class RelationService
             State = target,
             StateReason = transition.StateReason,
             StateExecutor = ExecutorOf(context),
-            StateRecordedAtUtc = now
+            StateRecordedAtUtc = now,
+            RequestEvidence = requestAction is null
+                ? stored.RequestEvidence
+                : (stored.RequestEvidence ?? Array.Empty<RelationRequestEvidence>())
+                    .Append(new RelationRequestEvidence(requestAction.Value, transition.RequestEvidence!, ExecutorOf(context), now))
+                    .ToArray()
         };
         var payload = RelationCodec.EncodeStored(next);
         try
@@ -750,7 +970,8 @@ public sealed class RelationService
         stored.OccurredAtUtc,
         stored.RecordedAtUtc,
         stored.StateExecutor,
-        stored.StateRecordedAtUtc);
+        stored.StateRecordedAtUtc,
+        stored.RequestEvidence);
 
     private static long ResolveLiveRevision(IManagedResourceStore store, string relationId)
     {

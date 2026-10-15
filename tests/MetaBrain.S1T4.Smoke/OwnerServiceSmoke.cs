@@ -1248,15 +1248,34 @@ internal sealed class SmokeFixture : IDisposable
     public byte[] ExpectedContentA { get; }
     public byte[] ExpectedContentB { get; }
 
-    public static SmokeFixture Create() => Create(legacySettings: true);
+    public static SmokeFixture Create() => Create(legacySettings: true, rootPath: null);
 
-    public static SmokeFixture CreateUninitialized() => Create(legacySettings: false);
+    public static SmokeFixture CreateUninitialized() => Create(legacySettings: false, rootPath: null);
 
-    private static SmokeFixture Create(bool legacySettings)
+    public static SmokeFixture CreateUninitializedAt(string rootPath) =>
+        Create(legacySettings: false, rootPath: rootPath);
+    public static string FindRepositoryRoot()
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "AGENTS.md")) &&
+                Directory.Exists(Path.Combine(directory.FullName, ".git")))
+            {
+                return directory.FullName;
+            }
+        }
+
+        throw new InvalidOperationException("The smoke harness could not locate its repository root.");
+    }
+
+
+    private static SmokeFixture Create(bool legacySettings, string? rootPath)
     {
         var ownerSid = WindowsIdentity.GetCurrent().User
             ?? throw new InvalidOperationException("The current Windows token has no user SID.");
-        var root = Path.Combine(Path.GetTempPath(), "MetaBrain-S1-T2-Vault-" + Guid.NewGuid().ToString("N"));
+        var root = rootPath is null
+            ? Path.Combine(Path.GetTempPath(), "MetaBrain-S1-T2-Vault-" + Guid.NewGuid().ToString("N"))
+            : Path.GetFullPath(rootPath);
         if (Directory.Exists(root) || File.Exists(root))
         {
             throw new IOException("The generated synthetic fixture path already exists.");
@@ -1265,16 +1284,16 @@ internal sealed class SmokeFixture : IDisposable
         Directory.CreateDirectory(root);
         try
         {
-            SetRestrictedDirectoryAcl(root, ownerSid);
+            SetRestrictedDirectoryAcl(root, ownerSid, setOwner: rootPath is null);
             var serviceDirectory = Path.Combine(root, "service");
             var resourceRoot = Path.Combine(serviceDirectory, "resources");
             var outputDirectory = Path.Combine(root, "output");
             Directory.CreateDirectory(serviceDirectory);
             Directory.CreateDirectory(resourceRoot);
             Directory.CreateDirectory(outputDirectory);
-            SetRestrictedDirectoryAcl(serviceDirectory, ownerSid);
-            SetRestrictedDirectoryAcl(resourceRoot, ownerSid);
-            SetRestrictedDirectoryAcl(outputDirectory, ownerSid);
+            SetRestrictedDirectoryAcl(serviceDirectory, ownerSid, setOwner: rootPath is null);
+            SetRestrictedDirectoryAcl(resourceRoot, ownerSid, setOwner: rootPath is null);
+            SetRestrictedDirectoryAcl(outputDirectory, ownerSid, setOwner: rootPath is null);
 
             var expectedContentA = legacySettings
                 ? Encoding.UTF8.GetBytes("synthetic private fixture body A; metadata=" + MetadataMarker)
@@ -1288,8 +1307,8 @@ internal sealed class SmokeFixture : IDisposable
                 var pathB = Path.Combine(resourceRoot, FileB);
                 File.WriteAllBytes(pathA, expectedContentA);
                 File.WriteAllBytes(pathB, expectedContentB);
-                SetRestrictedFileAcl(pathA, ownerSid);
-                SetRestrictedFileAcl(pathB, ownerSid);
+                SetRestrictedFileAcl(pathA, ownerSid, setOwner: rootPath is null);
+                SetRestrictedFileAcl(pathB, ownerSid, setOwner: rootPath is null);
             }
 
             var controlPipe = "MetaBrainS1T2Vault-" + Guid.NewGuid().ToString("N");
@@ -1309,7 +1328,7 @@ internal sealed class SmokeFixture : IDisposable
                 })
                 : JsonSerializer.Serialize(new { schemaVersion = 3, ownerSid = ownerSid.Value, controlPipe, agentPipe });
             File.WriteAllText(settingsPath, settings, new UTF8Encoding(false));
-            SetRestrictedFileAcl(settingsPath, ownerSid);
+            SetRestrictedFileAcl(settingsPath, ownerSid, setOwner: rootPath is null);
 
             return new SmokeFixture(root, settingsPath, controlPipe, agentPipe, outputDirectory, expectedContentA, expectedContentB);
         }
@@ -1331,11 +1350,20 @@ internal sealed class SmokeFixture : IDisposable
         DeleteOwnedRoot(Root);
     }
 
-    internal static void SetRestrictedDirectoryAcl(string path, SecurityIdentifier ownerSid)
+    internal static void SetRestrictedDirectoryAcl(string path, SecurityIdentifier ownerSid, bool setOwner = true)
     {
+        var directory = new DirectoryInfo(path);
+        if (!setOwner)
+        {
+            RequireFixtureOwner(directory, ownerSid);
+        }
+
         var security = new DirectorySecurity();
         security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-        security.SetOwner(ownerSid);
+        if (setOwner)
+        {
+            security.SetOwner(ownerSid);
+        }
         var inheritance = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
         security.AddAccessRule(new FileSystemAccessRule(ownerSid, FileSystemRights.FullControl, inheritance,
             PropagationFlags.None, AccessControlType.Allow));
@@ -1343,28 +1371,69 @@ internal sealed class SmokeFixture : IDisposable
             PropagationFlags.None, AccessControlType.Allow));
         security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier("S-1-5-32-544"), FileSystemRights.FullControl,
             inheritance, PropagationFlags.None, AccessControlType.Allow));
-        System.IO.FileSystemAclExtensions.SetAccessControl(new DirectoryInfo(path), security);
+        System.IO.FileSystemAclExtensions.SetAccessControl(directory, security);
     }
 
-    internal static void SetRestrictedFileAcl(string path, SecurityIdentifier ownerSid)
+    internal static void SetRestrictedFileAcl(string path, SecurityIdentifier ownerSid, bool setOwner = true)
     {
+        var file = new FileInfo(path);
+        if (!setOwner)
+        {
+            RequireFixtureOwner(file, ownerSid);
+        }
+
         var security = new FileSecurity();
         security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-        security.SetOwner(ownerSid);
+        if (setOwner)
+        {
+            security.SetOwner(ownerSid);
+        }
         security.AddAccessRule(new FileSystemAccessRule(ownerSid, FileSystemRights.FullControl, AccessControlType.Allow));
         security.AddAccessRule(new FileSystemAccessRule(SystemSid, FileSystemRights.FullControl, AccessControlType.Allow));
         security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier("S-1-5-32-544"), FileSystemRights.FullControl, AccessControlType.Allow));
-        System.IO.FileSystemAclExtensions.SetAccessControl(new FileInfo(path), security);
+        System.IO.FileSystemAclExtensions.SetAccessControl(file, security);
+    }
+
+    private static void RequireFixtureOwner(DirectoryInfo directory, SecurityIdentifier expectedOwner)
+    {
+        var owner = System.IO.FileSystemAclExtensions.GetAccessControl(directory)
+            .GetOwner(typeof(SecurityIdentifier));
+        if (owner is not SecurityIdentifier actualOwner || !expectedOwner.Equals(actualOwner))
+        {
+            throw new UnauthorizedAccessException("A repository-local fixture directory is not owned by the current user.");
+        }
+    }
+
+    private static void RequireFixtureOwner(FileInfo file, SecurityIdentifier expectedOwner)
+    {
+        var owner = System.IO.FileSystemAclExtensions.GetAccessControl(file)
+            .GetOwner(typeof(SecurityIdentifier));
+        if (owner is not SecurityIdentifier actualOwner || !expectedOwner.Equals(actualOwner))
+        {
+            throw new UnauthorizedAccessException("A repository-local fixture file is not owned by the current user.");
+        }
     }
 
     private static void DeleteOwnedRoot(string root)
     {
         var fullRoot = Path.GetFullPath(root);
         var temporaryDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath()));
-        var expectedPrefix = temporaryDirectory + Path.DirectorySeparatorChar;
-        if (!fullRoot.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase) ||
-            !Path.GetFileName(fullRoot).StartsWith("MetaBrain-S1-T2-Vault-", StringComparison.Ordinal) ||
-            !Directory.Exists(fullRoot))
+        var temporaryRootPrefix = temporaryDirectory + Path.DirectorySeparatorChar;
+        var isOwnedTemporaryRoot = fullRoot.StartsWith(temporaryRootPrefix, StringComparison.OrdinalIgnoreCase) &&
+            Path.GetFileName(fullRoot).StartsWith("MetaBrain-S1-T2-Vault-", StringComparison.Ordinal);
+        var isOwnedS4T6Root = false;
+        if (!isOwnedTemporaryRoot)
+        {
+            var sprintArtifacts = Path.Combine(FindRepositoryRoot(), "artifacts", "sprint-4");
+            var sprintArtifactsPrefix = Path.TrimEndingDirectorySeparator(Path.GetFullPath(sprintArtifacts)) +
+                Path.DirectorySeparatorChar;
+            var name = Path.GetFileName(fullRoot);
+            isOwnedS4T6Root = fullRoot.StartsWith(sprintArtifactsPrefix, StringComparison.OrdinalIgnoreCase) &&
+                (name.StartsWith(".s4t6-smoke-", StringComparison.Ordinal) ||
+                 name.StartsWith(".s4t6-client-", StringComparison.Ordinal));
+        }
+
+        if ((!isOwnedTemporaryRoot && !isOwnedS4T6Root) || !Directory.Exists(fullRoot))
         {
             return;
         }

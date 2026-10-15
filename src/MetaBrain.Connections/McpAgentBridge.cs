@@ -306,6 +306,78 @@ internal static class McpAgentBridge
                     },
                     ["required"] = new JsonArray("sessionFile", "draft"),
                     ["additionalProperties"] = false,
+                }),
+            Tool("metabrain_relation_resolve", "Resolve endpoint titles only inside the exact frozen memory.read/source.read scope; returns no body or zone. If ambiguous, ask the user to clarify and do not mutate.",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["sessionFile"] = new JsonObject { ["type"] = "string" },
+                        ["query"] = new JsonObject { ["type"] = "string", ["maxLength"] = 256 },
+                    },
+                    ["required"] = new JsonArray("sessionFile", "query"),
+                    ["additionalProperties"] = false,
+                }),
+            Tool("metabrain_relation_list", "List relation metadata only when both pinned endpoints are readable in the exact frozen scope (relation.list plus endpoint read rights).",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject { ["sessionFile"] = new JsonObject { ["type"] = "string" } },
+                    ["required"] = new JsonArray("sessionFile"),
+                    ["additionalProperties"] = false,
+                }),
+            Tool("metabrain_relation_create", "Create a proposed typed relation (link.create plus exact read rights to both endpoints). Use relatedTo for association; never infer supports from similarity. Include requestEvidence as an agent-reported quote, not owner confirmation.",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["sessionFile"] = new JsonObject { ["type"] = "string" },
+                        ["draft"] = new JsonObject { ["type"] = "string" },
+                    },
+                    ["required"] = new JsonArray("sessionFile", "draft"),
+                    ["additionalProperties"] = false,
+                }),
+            Tool("metabrain_relation_supersede", "Create a proposed supersedes relation only (link.supersede plus exact read rights to both endpoints); does not replace or rewrite either item.",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["sessionFile"] = new JsonObject { ["type"] = "string" },
+                        ["draft"] = new JsonObject { ["type"] = "string" },
+                    },
+                    ["required"] = new JsonArray("sessionFile", "draft"),
+                    ["additionalProperties"] = false,
+                }),
+            Tool("metabrain_relation_unlink", "Retract a relation with explicit link.remove and exact read rights to both pinned endpoints. The draft carries stateReason and caller-reported requestEvidence; undo uses restore.",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["sessionFile"] = new JsonObject { ["type"] = "string" },
+                        ["resourceId"] = new JsonObject { ["type"] = "string" },
+                        ["resourceRevision"] = new JsonObject { ["type"] = "string" },
+                        ["draft"] = new JsonObject { ["type"] = "string" },
+                    },
+                    ["required"] = new JsonArray("sessionFile", "resourceId", "resourceRevision", "draft"),
+                    ["additionalProperties"] = false,
+                }),
+            Tool("metabrain_relation_restore", "Undo a prior unlink with explicit link.restore and exact read rights to both pinned endpoints; restores the link to proposed, never accepted.",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["sessionFile"] = new JsonObject { ["type"] = "string" },
+                        ["resourceId"] = new JsonObject { ["type"] = "string" },
+                        ["resourceRevision"] = new JsonObject { ["type"] = "string" },
+                        ["draft"] = new JsonObject { ["type"] = "string" },
+                    },
+                    ["required"] = new JsonArray("sessionFile", "resourceId", "resourceRevision", "draft"),
+                    ["additionalProperties"] = false,
                 }));
     }
 
@@ -331,6 +403,12 @@ internal static class McpAgentBridge
             {
                 return ErrorEnvelope(id, -32602, "bridge_raw_bearer_denied");
             }
+        }
+
+        if (name is "metabrain_relation_create" or "metabrain_relation_supersede" or
+            "metabrain_relation_unlink" or "metabrain_relation_restore")
+        {
+            return await CallRelationDraftToolAsync(agentPipe, id, name, args).ConfigureAwait(false);
         }
 
         string[] argv = name switch
@@ -381,6 +459,17 @@ internal static class McpAgentBridge
                 "--resource-id", RequiredArg(args, "resourceId"),
                 "--resource-revision", RequiredArg(args, "resourceRevision"),
             },
+            "metabrain_relation_resolve" => new[]
+            {
+                "owner", "agent-relation-resolve", "--agent-pipe", agentPipe,
+                "--session-file", RequiredArg(args, "sessionFile"),
+                "--query", RequiredArg(args, "query"),
+            },
+            "metabrain_relation_list" => new[]
+            {
+                "owner", "agent-relation-list", "--agent-pipe", agentPipe,
+                "--session-file", RequiredArg(args, "sessionFile"),
+            },
             "metabrain_propose" => BuildProposeArgs(agentPipe, args),
             _ => Array.Empty<string>(),
         };
@@ -411,6 +500,53 @@ internal static class McpAgentBridge
             ["isError"] = result.ExitCode != 0,
         });
     }
+
+    private static async Task<string> CallRelationDraftToolAsync(
+        string agentPipe,
+        JsonNode? id,
+        string name,
+        JsonObject args)
+    {
+        var draftText = RequiredArg(args, "draft");
+        if (string.IsNullOrWhiteSpace(draftText) || draftText.Length > 1024 * 1024)
+        {
+            return ErrorEnvelope(id, -32602, "bridge_invalid_params");
+        }
+
+        var command = name switch
+        {
+            "metabrain_relation_create" => "agent-relation-create",
+            "metabrain_relation_supersede" => "agent-relation-supersede",
+            "metabrain_relation_unlink" => "agent-relation-unlink",
+            _ => "agent-relation-restore"
+        };
+        var argv = new List<string>
+        {
+            "owner", command, "--agent-pipe", agentPipe,
+            "--session-file", RequiredArg(args, "sessionFile"),
+        };
+        if (name is "metabrain_relation_unlink" or "metabrain_relation_restore")
+        {
+            argv.Add("--resource-id");
+            argv.Add(RequiredArg(args, "resourceId"));
+            argv.Add("--resource-revision");
+            argv.Add(RequiredArg(args, "resourceRevision"));
+        }
+
+        argv.Add("--input-file");
+        argv.Add("-");
+        var result = await RunOwnerCommandAsync(argv.ToArray(), draftText).ConfigureAwait(false);
+        return ResultEnvelope(id, new JsonObject
+        {
+            ["content"] = new JsonArray(new JsonObject
+            {
+                ["type"] = "text",
+                ["text"] = Redact(result.Combined),
+            }),
+            ["isError"] = result.ExitCode != 0,
+        });
+    }
+
 
     private static string[] BuildRequestArgs(string agentPipe, JsonObject args)
     {
@@ -613,7 +749,7 @@ internal static class McpAgentBridge
     }
     private sealed record BridgeCommandResult(int ExitCode, string Combined);
 
-    private static async Task<BridgeCommandResult> RunOwnerCommandAsync(string[] argv)
+    private static async Task<BridgeCommandResult> RunOwnerCommandAsync(string[] argv, string? standardInput = null)
     {
         var executable = Environment.ProcessPath ?? throw new InvalidOperationException("The bridge host executable is unavailable.");
         var start = new System.Diagnostics.ProcessStartInfo(executable)
@@ -622,6 +758,7 @@ internal static class McpAgentBridge
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             RedirectStandardInput = true,
+            StandardInputEncoding = new UTF8Encoding(false),
             CreateNoWindow = true,
         };
         foreach (var argument in argv)
@@ -635,9 +772,14 @@ internal static class McpAgentBridge
             throw new IOException("The owner CLI process did not start.");
         }
 
-        process.StandardInput.Close();
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();
+        if (standardInput is not null)
+        {
+            await process.StandardInput.WriteAsync(standardInput).ConfigureAwait(false);
+        }
+
+        process.StandardInput.Close();
         await process.WaitForExitAsync().ConfigureAwait(false);
         return new BridgeCommandResult(process.ExitCode, await output.ConfigureAwait(false) + await error.ConfigureAwait(false));
     }

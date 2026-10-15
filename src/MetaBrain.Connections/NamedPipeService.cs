@@ -214,7 +214,12 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.RelationUnlinkOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.RelationRelinkOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.RelationReadOperation, StringComparison.Ordinal) ||
-                    string.Equals(request.Operation, ServiceRequestHandler.AgentLinkCreateOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.AgentRelationCreateOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.AgentRelationSupersedeOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.AgentRelationUnlinkOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.AgentRelationRestoreOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.AgentRelationResolveOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.AgentRelationListOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.AgentRelationReadOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.LifecycleCreateOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.LifecycleReadOperation, StringComparison.Ordinal) ||
@@ -317,7 +322,12 @@ internal sealed class NamedPipeService
                 !string.Equals(operation, ServiceRequestHandler.AgentFeedbackOperation, StringComparison.Ordinal) &&
                 !string.Equals(operation, ServiceRequestHandler.AgentFeedbackReadOperation, StringComparison.Ordinal) &&
                 !string.Equals(operation, ServiceRequestHandler.AgentProposeOperation, StringComparison.Ordinal) &&
-                !string.Equals(operation, ServiceRequestHandler.AgentLinkCreateOperation, StringComparison.Ordinal) &&
+                !string.Equals(operation, ServiceRequestHandler.AgentRelationCreateOperation, StringComparison.Ordinal) &&
+                !string.Equals(operation, ServiceRequestHandler.AgentRelationSupersedeOperation, StringComparison.Ordinal) &&
+                !string.Equals(operation, ServiceRequestHandler.AgentRelationUnlinkOperation, StringComparison.Ordinal) &&
+                !string.Equals(operation, ServiceRequestHandler.AgentRelationRestoreOperation, StringComparison.Ordinal) &&
+                !string.Equals(operation, ServiceRequestHandler.AgentRelationResolveOperation, StringComparison.Ordinal) &&
+                !string.Equals(operation, ServiceRequestHandler.AgentRelationListOperation, StringComparison.Ordinal) &&
                 !string.Equals(operation, ServiceRequestHandler.AgentRelationReadOperation, StringComparison.Ordinal) &&
                 !string.Equals(operation, ServiceRequestHandler.AgentAccessRequestOperation, StringComparison.Ordinal) &&
                 !string.Equals(operation, ServiceRequestHandler.AgentSourceSnapshotReadOperation, StringComparison.Ordinal) &&
@@ -338,7 +348,12 @@ internal sealed class NamedPipeService
             string.Equals(operation, ServiceRequestHandler.AgentCollectionViewOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentSourceReadOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentSourceSnapshotReadOperation, StringComparison.Ordinal) ||
-            string.Equals(operation, ServiceRequestHandler.AgentLinkCreateOperation, StringComparison.Ordinal) ||
+            string.Equals(operation, ServiceRequestHandler.AgentRelationCreateOperation, StringComparison.Ordinal) ||
+            string.Equals(operation, ServiceRequestHandler.AgentRelationSupersedeOperation, StringComparison.Ordinal) ||
+            string.Equals(operation, ServiceRequestHandler.AgentRelationUnlinkOperation, StringComparison.Ordinal) ||
+            string.Equals(operation, ServiceRequestHandler.AgentRelationRestoreOperation, StringComparison.Ordinal) ||
+            string.Equals(operation, ServiceRequestHandler.AgentRelationResolveOperation, StringComparison.Ordinal) ||
+            string.Equals(operation, ServiceRequestHandler.AgentRelationListOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentRelationReadOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentAccessRequestOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentAccessRequestStatusOperation, StringComparison.Ordinal) ||

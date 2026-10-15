@@ -139,3 +139,11 @@
 **Root cause:** Two coupled gaps. `HandleAccessRequestApprove` caught `OwnerAccessRequestException` but not the plain `ArgumentException` that `ValidateExpiry` throws for a past/non-UTC expiry, so the connection handler faulted without writing a JSON reply (client saw a dropped pipe). Then `ListenAsync` reaped completed connections with a bare `await`, which rethrew the faulted handler's exception out of the accept loop and disposed that channel's listener permanently.
 **Fix / workaround:** Map the known validation failure to a structured deny at the established boundary (`catch (ArgumentException)` → `request_invalid` in `HandleAccessRequestApprove`, before any grant is stored), and make the listener reap observe instead of rethrow (`try/await/catch`-observe faulted connection tasks, then keep accepting). No blanket `Exception` catch around the handler and no listener/retry redesign.
 **Watch out for:** Any pipe handler whose validator throws outside the handler's caught set, and any accept loop that awaits reaped connection tasks without observing faults — one bad request then kills the whole channel. Reproduce with a past-expiry approve followed by an `owner requests` on the same live service.
+
+## [2026-10-15] Server-stamp required metadata before agent draft validation
+
+**Symptom:** Agent relation creation passed session authorization but returned generic `resource_unavailable` without publishing a link.
+**Root cause:** The agent path cleared the caller's `RecordedAtUtc` before invoking the shared draft validator, which requires a non-null recorded timestamp; the server-generated timestamp was assigned only after validation.
+**Fix / workaround:** Generate a server-owned UTC timestamp before validation, put it into the normalized agent draft, and reuse it for the stored relation and request-evidence event. Caller timestamps remain ignored.
+**Watch out for:** If a shared validator requires a server-owned field, normalize that field before validation rather than clearing caller input and backfilling after the validator.
+

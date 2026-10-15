@@ -295,6 +295,18 @@ public sealed record RelationReviewWire(
     string State,
     string[] Reasons,
     string[] StaleResourceIds);
+public sealed record RelationRequestEvidenceWire(
+    string Action,
+    string Text,
+    string Executor,
+    DateTimeOffset RecordedAtUtc);
+
+public sealed record RelationEndpointCandidateWire(
+    string ResourceId,
+    string EndpointKind,
+    long Revision,
+    string? Title);
+
 
 public sealed record RelationWire(
     string Id,
@@ -313,7 +325,8 @@ public sealed record RelationWire(
     DateTimeOffset RecordedAtUtc,
     string StateExecutor,
     DateTimeOffset StateRecordedAtUtc,
-    RelationReviewWire Review);
+    RelationReviewWire Review,
+    RelationRequestEvidenceWire[]? RequestEvidence = null);
 
 public sealed record LifecycleStampWire(
     string Precision,
@@ -531,7 +544,10 @@ public sealed record ServiceReply(
     SourceEnrollmentWire[]? SourceEnrollments = null,
     SourceRefreshWire[]? SourceRefresh = null,
     SourceSnapshotWire? SourceSnapshot = null,
-    SourceSnapshotDescriptorWire[]? SourceSnapshots = null);
+    SourceSnapshotDescriptorWire[]? SourceSnapshots = null,
+    RelationWire[]? Relations = null,
+    RelationEndpointCandidateWire[]? RelationCandidates = null,
+    bool? RelationCandidatesTruncated = null);
 
 public sealed class ServiceRequestHandler
 {
@@ -593,7 +609,12 @@ public sealed class ServiceRequestHandler
     public const string RelationUnlinkOperation = "relation.unlink";
     public const string RelationRelinkOperation = "relation.relink";
     public const string RelationReadOperation = "relation.read";
-    public const string AgentLinkCreateOperation = "agent.link.create";
+    public const string AgentRelationCreateOperation = "agent.relation.create";
+    public const string AgentRelationSupersedeOperation = "agent.relation.supersede";
+    public const string AgentRelationUnlinkOperation = "agent.relation.unlink";
+    public const string AgentRelationRestoreOperation = "agent.relation.restore";
+    public const string AgentRelationResolveOperation = "agent.relation.resolve";
+    public const string AgentRelationListOperation = "agent.relation.list";
     public const string AgentRelationReadOperation = "agent.relation.read";
     public const string LifecycleCreateOperation = "lifecycle.create";
     public const string LifecycleReadOperation = "lifecycle.read";
@@ -632,13 +653,15 @@ public sealed class ServiceRequestHandler
     public const string ResearchReadOperation = "research.read";
 
     /// <summary>
-    /// Owner-grantable agent operation that authorizes creating one link
-    /// between an exact subject (source scope) and object (destination scope)
-    /// at pinned revisions. The wire operation is
-    /// <see cref="AgentLinkCreateOperation"/>; this is the grant operation name
-    /// already fixed by the scope authority.
+    /// Agent link creation authorizes both exact endpoints: a source endpoint
+    /// from the approved resource scope and a destination endpoint from the
+    /// separately approved destination scope.
     /// </summary>
+    public const string RelationListAccessOperation = "relation.list";
     public const string LinkCreateOperation = "link.create";
+    public const string LinkSupersedeOperation = "link.supersede";
+    public const string LinkRemoveOperation = "link.remove";
+    public const string LinkRestoreOperation = "link.restore";
     private readonly GrantAuthority _grantAuthority;
     private readonly IVaultLifecycle _vault;
     private readonly OwnerScopeGrantAuthority _ownerScopeGrants;
@@ -757,9 +780,29 @@ public sealed class ServiceRequestHandler
         {
             return HandleAgentSourceSnapshotRead(context, request, operation);
         }
-        if (string.Equals(request.Operation, AgentLinkCreateOperation, StringComparison.Ordinal))
+        if (string.Equals(request.Operation, AgentRelationResolveOperation, StringComparison.Ordinal))
         {
-            return HandleAgentLinkCreate(context, request, operation);
+            return HandleAgentRelationList(context, request, operation, resolve: true);
+        }
+        if (string.Equals(request.Operation, AgentRelationListOperation, StringComparison.Ordinal))
+        {
+            return HandleAgentRelationList(context, request, operation, resolve: false);
+        }
+        if (string.Equals(request.Operation, AgentRelationCreateOperation, StringComparison.Ordinal))
+        {
+            return HandleAgentRelationCreate(context, request, operation, supersede: false);
+        }
+        if (string.Equals(request.Operation, AgentRelationSupersedeOperation, StringComparison.Ordinal))
+        {
+            return HandleAgentRelationCreate(context, request, operation, supersede: true);
+        }
+        if (string.Equals(request.Operation, AgentRelationUnlinkOperation, StringComparison.Ordinal))
+        {
+            return HandleAgentRelationTransition(context, request, operation, restore: false);
+        }
+        if (string.Equals(request.Operation, AgentRelationRestoreOperation, StringComparison.Ordinal))
+        {
+            return HandleAgentRelationTransition(context, request, operation, restore: true);
         }
         if (string.Equals(request.Operation, AgentRelationReadOperation, StringComparison.Ordinal))
         {
@@ -2253,7 +2296,7 @@ public sealed class ServiceRequestHandler
             draft = Convert.FromBase64String(request.ContentBase64);
             var created = new RelationService().Create(context, request.ResourceId, request.ZoneId, draft, operation);
             return new ServiceReply(CurrentProtocolVersion, "relation_created", "owner", null,
-                ResourceRevision: created.Relation.Revision, Relation: ToRelationWire(created.Relation, created.Review));
+                ResourceRevision: created.Relation.Revision, Relation: ToRelationWire(created.Relation, created.Review, includeRequestEvidence: true));
         }
         catch (FormatException)
         {
@@ -2315,7 +2358,7 @@ public sealed class ServiceRequestHandler
                         ? "relation_unlinked"
                         : "relation_relinked";
             return new ServiceReply(CurrentProtocolVersion, status, "owner", null,
-                ResourceRevision: result.Relation.Revision, Relation: ToRelationWire(result.Relation, result.Review));
+                ResourceRevision: result.Relation.Revision, Relation: ToRelationWire(result.Relation, result.Review, includeRequestEvidence: true));
         }
         catch (FormatException)
         {
@@ -2360,7 +2403,7 @@ public sealed class ServiceRequestHandler
             }
 
             return new ServiceReply(CurrentProtocolVersion, "relation", "owner", null,
-                ResourceRevision: result.Relation.Revision, Relation: ToRelationWire(result.Relation, result.Review));
+                ResourceRevision: result.Relation.Revision, Relation: ToRelationWire(result.Relation, result.Review, includeRequestEvidence: true));
         }
         catch (ArgumentException)
         {
@@ -2380,14 +2423,16 @@ public sealed class ServiceRequestHandler
     /// from the subject endpoint's registered zone, and the link is always
     /// proposed: an agent session never records owner acceptance.
     /// </summary>
-    private ServiceReply HandleAgentLinkCreate(
+    private ServiceReply HandleAgentRelationCreate(
         AuthenticatedContext context,
         ServiceRequest request,
-        IVaultOperation? operation)
+        IVaultOperation? operation,
+        bool supersede)
     {
+        var accessOperation = supersede ? LinkSupersedeOperation : LinkCreateOperation;
         if (context.Kind != PrincipalKind.Agent || operation is null ||
             HasAgentLinkCreateExtras(request) ||
-            request.AccessOperation is not LinkCreateOperation ||
+            request.AccessOperation != accessOperation ||
             string.IsNullOrEmpty(request.ContentBase64))
         {
             return ResourceDenied();
@@ -2407,15 +2452,16 @@ public sealed class ServiceRequestHandler
                 return ResourceDenied();
             }
 
-            if (parsed.From is null || parsed.To is null)
+            if (parsed.From is null || parsed.To is null ||
+                (supersede
+                    ? parsed.Kind != Core.Domain.RelationKind.Supersedes
+                    : parsed.Kind == Core.Domain.RelationKind.Supersedes))
             {
                 return ResourceDenied();
             }
 
-            // Authorize the exact operation and both endpoint revisions against
-            // the frozen snapshot before any relation data is written.
             AgentAccessRequest Authorize() => new(
-                LinkCreateOperation,
+                accessOperation,
                 parsed.From.ResourceId,
                 parsed.From.Revision,
                 parsed.To.ResourceId,
@@ -2428,6 +2474,17 @@ public sealed class ServiceRequestHandler
                 beforeWrite.PolicyGeneration,
                 Authorize());
             if (!decision.Allowed)
+            {
+                return ResourceDenied();
+            }
+
+            var lookup = _agentSessions.LookupSession(
+                request.SessionToken,
+                beforeWrite.UnlockEpoch,
+                beforeWrite.PolicyGeneration);
+            if (lookup.Status != AgentSessionLookupStatus.Valid || lookup.Session is null ||
+                !HasEndpointReadRights(lookup.Session, parsed.From, destinationScope: false) ||
+                !HasEndpointReadRights(lookup.Session, parsed.To, destinationScope: true))
             {
                 return ResourceDenied();
             }
@@ -2466,6 +2523,227 @@ public sealed class ServiceRequestHandler
             return ResourceDenied();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return ResourceDenied();
+        }
+        finally
+        {
+            if (draft is { Length: > 0 })
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(draft);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Resolves endpoint labels or lists only relation metadata whose two
+    /// pinned endpoints are readable in the caller's frozen snapshot.
+    /// </summary>
+    private ServiceReply HandleAgentRelationList(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation,
+        bool resolve)
+    {
+        if (context.Kind != PrincipalKind.Agent || operation is null ||
+            HasAgentRelationListExtras(request, resolve) ||
+            request.AccessOperation != RelationListAccessOperation ||
+            (resolve
+                ? string.IsNullOrWhiteSpace(request.Query) || request.Query!.Length > 256
+                : request.Query is not null))
+        {
+            return ResourceDenied();
+        }
+
+        try
+        {
+            var beforeRead = operation.LoadScopeGrantState();
+            var decision = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                beforeRead.UnlockEpoch,
+                beforeRead.PolicyGeneration,
+                new AgentAccessRequest(RelationListAccessOperation));
+            if (!decision.Allowed)
+            {
+                return ResourceDenied();
+            }
+
+            var lookup = _agentSessions.LookupSession(
+                request.SessionToken,
+                beforeRead.UnlockEpoch,
+                beforeRead.PolicyGeneration);
+            if (lookup.Status != AgentSessionLookupStatus.Valid || lookup.Session is null)
+            {
+                return ResourceDenied();
+            }
+
+            var snapshot = lookup.Session;
+            if (resolve)
+            {
+                var result = new RelationService().ResolveEndpoints(
+                    context,
+                    request.Query!,
+                    snapshot.Resources,
+                    snapshot.DestinationResources,
+                    snapshot.Operations.Contains(MemoryReadOperation, StringComparer.Ordinal),
+                    snapshot.Operations.Contains(SourceReadOperation, StringComparer.Ordinal),
+                    operation);
+                var beforeServe = operation.LoadScopeGrantState();
+                var recheck = _agentSessions.AuthorizeSession(
+                    request.SessionToken,
+                    beforeServe.UnlockEpoch,
+                    beforeServe.PolicyGeneration,
+                    new AgentAccessRequest(RelationListAccessOperation));
+                if (!recheck.Allowed)
+                {
+                    return ResourceDenied();
+                }
+
+                foreach (var candidate in result.Candidates)
+                {
+                    operation.ValidateRegistration(candidate.ResourceId, candidate.Revision);
+                }
+
+                var ambiguous = result.HasMore || result.Candidates.Length > 1;
+                var status = ambiguous
+                    ? "relation_ambiguous"
+                    : result.Candidates.Length == 1 ? "relation_resolved" : "relation_no_match";
+                return new ServiceReply(
+                    CurrentProtocolVersion, status, null, null,
+                    Decision: recheck,
+                    PolicyGeneration: recheck.PolicyGeneration,
+                    RelationCandidates: result.Candidates.Select(candidate => new RelationEndpointCandidateWire(
+                        candidate.ResourceId,
+                        ToWireToken(candidate.EndpointKind.ToString()),
+                        candidate.Revision,
+                        candidate.Title)).ToArray(),
+                    RelationCandidatesTruncated: result.HasMore);
+            }
+
+            bool EndpointAllowed(Core.Domain.RelationEndpoint endpoint) =>
+                HasEndpointReadRights(snapshot, endpoint, destinationScope: true);
+            var relations = new RelationService().List(context, operation, EndpointAllowed);
+            var beforeServeList = operation.LoadScopeGrantState();
+            var recheckList = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                beforeServeList.UnlockEpoch,
+                beforeServeList.PolicyGeneration,
+                new AgentAccessRequest(RelationListAccessOperation));
+            if (!recheckList.Allowed)
+            {
+                return ResourceDenied();
+            }
+
+            var relationWires = new RelationWire[relations.Length];
+            for (var index = 0; index < relations.Length; index++)
+            {
+                var listed = relations[index];
+                operation.ValidateRegistration(listed.Relation!.Id, listed.Relation.Revision);
+                relationWires[index] = ToRelationWire(listed.Relation, listed.Review!);
+            }
+
+            return new ServiceReply(
+                CurrentProtocolVersion, "relations", null, null,
+                Decision: recheckList,
+                PolicyGeneration: recheckList.PolicyGeneration,
+                Relations: relationWires);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            return ResourceDenied();
+        }
+    }
+
+    /// <summary>
+    /// Agent unlink/undo requires its own grant action and exact read authority
+    /// for both pinned endpoints. Undo restores only to proposed.
+    /// </summary>
+    private ServiceReply HandleAgentRelationTransition(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation,
+        bool restore)
+    {
+        var accessOperation = restore ? LinkRestoreOperation : LinkRemoveOperation;
+        if (context.Kind != PrincipalKind.Agent || operation is null ||
+            HasAgentRelationMutationExtras(request) ||
+            request.AccessOperation != accessOperation ||
+            string.IsNullOrEmpty(request.ResourceId) ||
+            request.ResourceRevision is not { } expectedRevision || expectedRevision < 1 ||
+            string.IsNullOrEmpty(request.ContentBase64))
+        {
+            return ResourceDenied();
+        }
+
+        byte[]? draft = null;
+        try
+        {
+            draft = Convert.FromBase64String(request.ContentBase64);
+            var beforeRead = operation.LoadScopeGrantState();
+            var decision = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                beforeRead.UnlockEpoch,
+                beforeRead.PolicyGeneration,
+                new AgentAccessRequest(accessOperation));
+            if (!decision.Allowed)
+            {
+                return ResourceDenied();
+            }
+
+            var lookup = _agentSessions.LookupSession(
+                request.SessionToken,
+                beforeRead.UnlockEpoch,
+                beforeRead.PolicyGeneration);
+            if (lookup.Status != AgentSessionLookupStatus.Valid || lookup.Session is null)
+            {
+                return ResourceDenied();
+            }
+
+            bool EndpointAllowed(Core.Domain.RelationEndpoint endpoint) =>
+                HasEndpointReadRights(lookup.Session, endpoint, destinationScope: true);
+            var service = new RelationService();
+            var readable = service.Read(context, request.ResourceId, expectedRevision, operation, EndpointAllowed);
+            if (readable.Relation is null || readable.Review is null)
+            {
+                return ResourceDenied();
+            }
+
+            RelationWriteResult changed;
+            try
+            {
+                changed = restore
+                    ? service.RelinkAgent(context, request.ResourceId, expectedRevision, draft, operation)
+                    : service.UnlinkAgent(context, request.ResourceId, expectedRevision, draft, operation);
+            }
+            catch (ArgumentException)
+            {
+                return ResourceDenied();
+            }
+
+            var beforeServe = operation.LoadScopeGrantState();
+            var recheck = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                beforeServe.UnlockEpoch,
+                beforeServe.PolicyGeneration,
+                new AgentAccessRequest(accessOperation));
+            if (!recheck.Allowed)
+            {
+                return ResourceDenied();
+            }
+
+            operation.ValidateRegistration(changed.Relation.Id, changed.Relation.Revision);
+            return new ServiceReply(
+                CurrentProtocolVersion, restore ? "relation_relinked" : "relation_unlinked", null, null,
+                Decision: recheck,
+                PolicyGeneration: recheck.PolicyGeneration,
+                ResourceRevision: changed.Relation.Revision,
+                Relation: ToRelationWire(changed.Relation, changed.Review));
+        }
+        catch (FormatException)
+        {
+            return ResourceDenied();
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
         {
             return ResourceDenied();
         }
@@ -2577,7 +2855,10 @@ public sealed class ServiceRequestHandler
         }
     }
 
-    private static RelationWire ToRelationWire(Core.Domain.Relation relation, Core.Domain.RelationReview review) => new(
+    private static RelationWire ToRelationWire(
+        Core.Domain.Relation relation,
+        Core.Domain.RelationReview review,
+        bool includeRequestEvidence = false) => new(
         relation.Id,
         relation.ZoneId,
         relation.Revision,
@@ -2594,7 +2875,14 @@ public sealed class ServiceRequestHandler
         relation.RecordedAtUtc,
         ToWireToken(relation.StateExecutor.ToString()),
         relation.StateRecordedAtUtc,
-        ToRelationReviewWire(review));
+        ToRelationReviewWire(review),
+        includeRequestEvidence
+            ? relation.RequestEvidence?.Select(entry => new RelationRequestEvidenceWire(
+                ToWireToken(entry.Action.ToString()),
+                entry.Text,
+                ToWireToken(entry.Executor.ToString()),
+                entry.RecordedAtUtc)).ToArray()
+            : null);
 
     private static RelationEndpointWire ToRelationEndpointWire(Core.Domain.RelationEndpoint endpoint) => new(
         endpoint.ResourceId,
@@ -2882,6 +3170,28 @@ public sealed class ServiceRequestHandler
         scope.Any(resource =>
             string.Equals(resource.ResourceId, resourceId, StringComparison.Ordinal) &&
             resource.Revision == revision.Value);
+
+    private static bool HasEndpointReadRights(
+        AgentSessionSnapshot snapshot,
+        Core.Domain.RelationEndpoint endpoint,
+        bool destinationScope)
+    {
+        var requiredOperation = endpoint.EndpointKind switch
+        {
+            Core.Domain.RelationEndpointKind.MemoryItem => MemoryReadOperation,
+            Core.Domain.RelationEndpointKind.RegisteredSource => SourceReadOperation,
+            _ => string.Empty
+        };
+        if (requiredOperation.Length == 0 ||
+            !snapshot.Operations.Contains(requiredOperation, StringComparer.Ordinal))
+        {
+            return false;
+        }
+
+        return IsInGrantScope(snapshot.Resources, endpoint.ResourceId, endpoint.Revision) ||
+            (destinationScope &&
+                IsInGrantScope(snapshot.DestinationResources, endpoint.ResourceId, endpoint.Revision));
+    }
 
     /// <summary>
     /// S2-T3 scoped agent source read: the agent channel separately authorizes
@@ -5752,6 +6062,57 @@ public sealed class ServiceRequestHandler
         request.CatalogIds is not null || request.Purpose is not null ||
         request.AgentId is not null || request.AgentContext is not null ||
         request.DisclosureContext is not null || request.RequestId is not null;
+
+    private static bool HasAgentRelationListExtras(ServiceRequest request, bool resolve) =>
+        request.ZoneId is not null ||
+        request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ContentBase64 is not null || request.ResourceId is not null ||
+        request.ResourceRevision is not null || request.ResourceIds is not null ||
+        request.Operations is not null || request.DestinationResourceIds is not null ||
+        request.ExpiresAtUtc is not null || request.Provider is not null ||
+        request.Model is not null || request.MaximumCostUsd is not null ||
+        request.PreviewId is not null || request.CollectionId is not null ||
+        request.Token is not null || request.SessionId is not null ||
+        request.DestinationResourceId is not null || request.DestinationRevision is not null ||
+        request.EstimatedCostUsd is not null || request.InputTokens is not null ||
+        request.OutputTokens is not null ||
+        request.CatalogId is not null || request.Label is not null ||
+        request.Description is not null ||
+        request.CatalogIds is not null || request.Purpose is not null ||
+        request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null ||
+        request.SearchOffset is not null || request.SearchLimit is not null ||
+        request.SearchKind is not null || request.SearchCurrent is not null ||
+        request.BudgetChars is not null ||
+        request.SourceLocator is not null || request.SourceFormat is not null ||
+        request.SourceFormatVersion is not null || request.SourceTitle is not null ||
+        request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
+        request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null ||
+        (!resolve && request.Query is not null);
+
+    private static bool HasAgentRelationMutationExtras(ServiceRequest request) =>
+        request.ZoneId is not null ||
+        request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ResourceIds is not null || request.Operations is not null ||
+        request.DestinationResourceIds is not null || request.ExpiresAtUtc is not null ||
+        request.Provider is not null || request.Model is not null ||
+        request.MaximumCostUsd is not null || request.PreviewId is not null ||
+        request.CollectionId is not null || request.Token is not null ||
+        request.SessionId is not null ||
+        request.DestinationResourceId is not null || request.DestinationRevision is not null ||
+        request.EstimatedCostUsd is not null || request.InputTokens is not null ||
+        request.OutputTokens is not null || request.CatalogId is not null ||
+        request.Label is not null || request.Description is not null ||
+        request.Query is not null || request.CatalogIds is not null ||
+        request.Purpose is not null || request.AgentId is not null ||
+        request.AgentContext is not null || request.DisclosureContext is not null ||
+        request.RequestId is not null || request.SearchOffset is not null ||
+        request.SearchLimit is not null || request.SearchKind is not null ||
+        request.SearchCurrent is not null || request.BudgetChars is not null ||
+        request.SourceLocator is not null || request.SourceFormat is not null ||
+        request.SourceFormatVersion is not null || request.SourceTitle is not null ||
+        request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
+        request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null;
 
     private static bool HasCatalogDiscoveryExtras(ServiceRequest request, bool allowQuery = false) =>
         request.ZoneId is not null ||

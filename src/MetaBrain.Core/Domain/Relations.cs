@@ -48,6 +48,24 @@ public enum RelationState
     Rejected = 3,
     Retracted = 4
 }
+/// <summary>
+/// Agent-reported relation request actions. These entries preserve the claim
+/// that accompanied an operation; they do not attest owner intent.
+/// </summary>
+public enum RelationRequestAction
+{
+    Unknown = 0,
+    Create = 1,
+    Supersede = 2,
+    Remove = 3,
+    Restore = 4
+}
+
+public sealed record RelationRequestEvidence(
+    RelationRequestAction Action,
+    string Text,
+    ExecutorKind Executor,
+    DateTimeOffset RecordedAtUtc);
 
 /// <summary>
 /// Which endpoint of a relation carries the evidence for the other. related_to
@@ -112,14 +130,15 @@ public sealed record RelationDraft(
     string? Reason,
     string? StateReason,
     DateTimeOffset? OccurredAtUtc,
-    DateTimeOffset? RecordedAtUtc);
+    DateTimeOffset? RecordedAtUtc,
+    string? RequestEvidence = null);
 
 /// <summary>
 /// Client-supplied lifecycle transition draft. Only the rationale for the new
 /// state travels here; endpoints, kind, and the original reason are immutable
 /// after creation, so a link is never silently re-pointed or re-justified.
 /// </summary>
-public sealed record RelationTransitionDraft(string? StateReason);
+public sealed record RelationTransitionDraft(string? StateReason, string? RequestEvidence = null);
 
 /// <summary>
 /// Server-persisted relation (encrypted bytes). Revision lives in the vault
@@ -140,7 +159,8 @@ public sealed record StoredRelation(
     DateTimeOffset? OccurredAtUtc,
     DateTimeOffset RecordedAtUtc,
     ExecutorKind StateExecutor,
-    DateTimeOffset StateRecordedAtUtc);
+    DateTimeOffset StateRecordedAtUtc,
+    RelationRequestEvidence[]? RequestEvidence = null);
 
 /// <summary>
 /// Owner-facing read model: stored relation plus the live descriptor revision.
@@ -161,7 +181,8 @@ public sealed record Relation(
     DateTimeOffset? OccurredAtUtc,
     DateTimeOffset RecordedAtUtc,
     ExecutorKind StateExecutor,
-    DateTimeOffset StateRecordedAtUtc);
+    DateTimeOffset StateRecordedAtUtc,
+    RelationRequestEvidence[]? RequestEvidence = null);
 
 /// <summary>
 /// Computed review state for a stored relation, evaluated at read time against
@@ -178,6 +199,8 @@ public static class RelationCodec
     public const int CurrentSchemaVersion = 1;
     public const int MaximumReasonLength = 2000;
     public const int MaximumStateReasonLength = 2000;
+    public const int MaximumRequestEvidenceLength = 2000;
+    public const int MaximumRequestEvidenceEntries = 64;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -307,6 +330,7 @@ public static class RelationValidator
         ValidateStateReason(draft.StateReason, required: false);
         ValidateEndpoints(draft.From, draft.To);
         ValidateTimes(draft.OccurredAtUtc, draft.RecordedAtUtc);
+        ValidateRequestEvidenceText(draft.RequestEvidence, required: false);
     }
 
     public static void ValidateTransition(RelationTransitionDraft transition, RelationState current, RelationState target)
@@ -385,6 +409,7 @@ public static class RelationValidator
         ValidateStateReason(relation.StateReason, required: false);
         ValidateEndpoints(relation.From, relation.To);
         ValidateTimes(relation.OccurredAtUtc, relation.RecordedAtUtc);
+        ValidateRequestEvidence(relation.RequestEvidence, relation.RecordedAtUtc);
 
         if (relation.RecordedAtUtc.Offset != TimeSpan.Zero || relation.StateRecordedAtUtc.Offset != TimeSpan.Zero)
         {
@@ -510,6 +535,61 @@ public static class RelationValidator
             {
                 throw new ArgumentException("Occurred time cannot follow recorded time.");
             }
+        }
+    }
+    private static void ValidateRequestEvidenceText(string? text, bool required)
+    {
+        if (text is null)
+        {
+            if (required)
+            {
+                throw new ArgumentException("An agent relation action requires the caller-reported request text.");
+            }
+
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(text) || text.Length > RelationCodec.MaximumRequestEvidenceLength ||
+            text.Any(character => character == '\0' ||
+                (char.IsControl(character) && character is not '\r' and not '\n' and not '\t')))
+        {
+            throw new ArgumentException("Relation request evidence must be non-empty, bounded text.");
+        }
+    }
+
+    private static void ValidateRequestEvidence(
+        RelationRequestEvidence[]? evidence,
+        DateTimeOffset relationRecordedAtUtc)
+    {
+        if (evidence is null)
+        {
+            return;
+        }
+
+        if (evidence.Length > RelationCodec.MaximumRequestEvidenceEntries)
+        {
+            throw new ArgumentException("A relation carries too many request-evidence entries.");
+        }
+
+        var previousRecordedAtUtc = relationRecordedAtUtc;
+        foreach (var entry in evidence)
+        {
+            if (entry is null ||
+                !Enum.IsDefined(entry.Action) || entry.Action == RelationRequestAction.Unknown ||
+                !Enum.IsDefined(entry.Executor) || entry.Executor == ExecutorKind.Unknown)
+            {
+                throw new ArgumentException("A relation request-evidence entry requires a known action and executor.");
+            }
+
+            ValidateRequestEvidenceText(entry.Text, required: true);
+            if (entry.RecordedAtUtc.Offset != TimeSpan.Zero ||
+                entry.RecordedAtUtc < previousRecordedAtUtc ||
+                entry.RecordedAtUtc > DateTimeOffset.UtcNow.AddMinutes(5))
+            {
+                throw new ArgumentException("Relation request-evidence times must be ordered UTC values.");
+            }
+
+            previousRecordedAtUtc = entry.RecordedAtUtc;
         }
     }
 }

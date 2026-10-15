@@ -77,8 +77,12 @@ public sealed partial class OwnerScopeGrantAuthority
         "memory.feedback",
         "feedback.read",
         "relation.read",
+        "relation.list",
         "proposal.create",
         "link.create",
+        "link.supersede",
+        "link.remove",
+        "link.restore",
         "provider.egress"
     };
 
@@ -555,7 +559,8 @@ public sealed partial class OwnerScopeGrantAuthority
         ScopeGrantEgress? egress)
     {
         var needsDestination = operations.Contains("proposal.create", StringComparer.Ordinal) ||
-            operations.Contains("link.create", StringComparer.Ordinal);
+            operations.Contains("link.create", StringComparer.Ordinal) ||
+            operations.Contains("link.supersede", StringComparer.Ordinal);
         if (needsDestination != (destinations.Count > 0))
         {
             throw new ArgumentException("Proposal and link operations require a separate concrete destination scope.");

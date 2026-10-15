@@ -330,6 +330,17 @@ public sealed class AgentSessionAuthority
                 ? Deny("invalid_request", policyGeneration)
                 : Allow(policyGeneration);
         }
+        if (string.Equals(request.Operation, "relation.list", StringComparison.Ordinal) ||
+            string.Equals(request.Operation, "link.remove", StringComparison.Ordinal) ||
+            string.Equals(request.Operation, "link.restore", StringComparison.Ordinal))
+        {
+            return request.ResourceId is not null || request.ResourceRevision is not null ||
+                request.DestinationResourceId is not null || request.DestinationRevision is not null ||
+                HasEgressFields(request)
+                ? Deny("invalid_request", policyGeneration)
+                : Allow(policyGeneration);
+        }
+
 
         switch (request.Operation)
         {
@@ -362,6 +373,7 @@ public sealed class AgentSessionAuthority
                     : Deny("resource_unavailable", policyGeneration);
 
             case "link.create":
+            case "link.supersede":
                 if (HasEgressFields(request))
                 {
                     return Deny("invalid_request", policyGeneration);

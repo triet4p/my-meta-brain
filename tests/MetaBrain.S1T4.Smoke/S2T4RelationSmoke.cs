@@ -253,11 +253,12 @@ internal static partial class OwnerServiceSmoke
             var linkSession = await IssueS2T4LinkGrantAsync(connectionsExecutable, fixture, "s2t4-link",
                 relSupportTwo, lesson, srcTwo).ConfigureAwait(false);
             var agentLinkDraft = S2T4RelationDraft("supports", "proposed", lesson, "memoryItem", 1L, null, srcTwo, "registeredSource", 1L, new { start = 64L, end = 128L },
-                "Synthetic S2-T4 agent link reason; never a real owner secret.", now);
+                "Synthetic S2-T4 agent link reason; never a real owner secret.", now,
+                "The user explicitly asked to connect this synthetic lesson to this synthetic research source as evidence.");
             var agentCreated = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
                 protocolVersion = 1,
-                operation = "agent.link.create",
+                operation = "agent.relation.create",
                 sessionToken = ReadSessionBearer(linkSession.SessionFile),
                 accessOperation = "link.create",
                 contentBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(agentLinkDraft))
@@ -422,7 +423,7 @@ internal static partial class OwnerServiceSmoke
             var zoneLinkDenied = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
                 protocolVersion = 1,
-                operation = "agent.link.create",
+                operation = "agent.relation.create",
                 sessionToken = ReadSessionBearer(zoneGrant.SessionFile),
                 accessOperation = "link.create",
                 contentBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(agentLinkDraft))
@@ -444,7 +445,7 @@ internal static partial class OwnerServiceSmoke
             var lockedAgentLink = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
                 protocolVersion = 1,
-                operation = "agent.link.create",
+                operation = "agent.relation.create",
                 sessionToken = ReadSessionBearer(linkSession.SessionFile),
                 accessOperation = "link.create",
                 contentBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(agentLinkDraft))
