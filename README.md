@@ -169,7 +169,9 @@ dotnet build src/MetaBrain.OwnerUi/MetaBrain.OwnerUi.csproj -c Release
 src/MetaBrain.OwnerUi/bin/Release/net10.0-windows/MetaBrain.OwnerUi.exe --control-pipe metabrain-owner
 ```
 
-Choose **Connect to service** to open the owner session, **Check again** to probe the service for its current state, and **End session** to drop it. The console reports a stopped service as unavailable instead of a stale unlocked vault, reports an endpoint that refuses owner authority (for example the agent pipe) as a denial, and holds no vault key, no private content and no listening socket. Unlock/lock, library, capture and catalog work arrive with their own sprint tasks.
+Choose **Connect to service** to open the owner session, **Check again** to probe the service for its current state, and **End session** to drop it. The console reports a stopped service as unavailable instead of a stale unlocked vault, reports an endpoint that refuses owner authority (for example the agent pipe) as a denial, and holds no vault key, no private content and no listening socket.
+
+The **Vault & key** view is where the vault itself is created, opened and locked (S5-T2). It sends the credential you type to the running service over the owner control pipe in one request; the service owns the vault, the key and the lock lifecycle. Provisioning shows the recovery key the service returns once, tells you to keep your own copy outside this machine, and stores no copy itself; unlock takes your passphrase, recovery unlock takes the recovery key you saved, and **Lock vault now** asks the service to drain in-flight private work, clear the key, invalidate pending tokens and live sessions and stop private reads, ingestion and jobs. A wrong, missing or unusable key leaves the vault locked and is reported as a refusal, never as an unavailable service. Locking, disconnecting, ending the session and a refused credential all clear the credential fields and the displayed recovery key. If both the passphrase and the recovery key are lost, the encrypted data cannot be opened again: there is no reset, no backdoor and no automatic unlock. Library, capture, review, relations, catalog and session-console work arrive with their own sprint tasks.
 
 ### 5. Running the Smoke Test Suite
 
@@ -179,10 +181,11 @@ Verify all security invariants, cryptoproof, token redemption, and IPC boundarie
 dotnet run --project tests/MetaBrain.S1T4.Smoke/MetaBrain.S1T4.Smoke.csproj
 ```
 
-The suite also exposes named scenarios, including `s5-t1` for the owner application boundary (owner-channel states plus agent-channel owner-operation denials) and `s5-t1-console-fixture` for preparing an owner-console fixture:
+The suite also exposes named scenarios, including `s5-t1` for the owner application boundary (owner-channel states plus agent-channel owner-operation denials), `s5-t2` for the owner vault key path (provisioning, wrong/missing-key refusal, lock invalidation and owner-held recovery), and `s5-t1-console-fixture`/`s5-t2-console-fixture` for preparing an owner-console fixture:
 
 ```powershell
 dotnet run --project tests/MetaBrain.S1T4.Smoke/MetaBrain.S1T4.Smoke.csproj -- s5-t1 src/MetaBrain.Connections/bin/Release/net10.0-windows/MetaBrain.Connections.exe
+dotnet run --project tests/MetaBrain.S1T4.Smoke/MetaBrain.S1T4.Smoke.csproj -- s5-t2 src/MetaBrain.Connections/bin/Release/net10.0-windows/MetaBrain.Connections.exe
 ```
 
 ---

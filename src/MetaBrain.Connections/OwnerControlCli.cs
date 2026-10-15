@@ -2293,7 +2293,7 @@ internal static class OwnerControlCli
         }
 
         var result = await InvokeOwnerAsync(controlPipe,
-            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, "vault.provision", Passphrase: passphrase)).ConfigureAwait(false);
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerVaultProvisionOperation, Passphrase: passphrase)).ConfigureAwait(false);
         if (!result.Success || !HasStatus(result.Reply, "provisioned") ||
             !result.Reply.TryGetProperty("recoveryCode", out var recovery) || recovery.ValueKind != JsonValueKind.String)
         {
@@ -2317,7 +2317,9 @@ internal static class OwnerControlCli
             return 3;
         }
 
-        var operation = useRecoveryCode ? "vault.recover" : "vault.unlock";
+        var operation = useRecoveryCode
+            ? ServiceRequestHandler.OwnerVaultRecoverOperation
+            : ServiceRequestHandler.OwnerVaultUnlockOperation;
         var request = useRecoveryCode
             ? new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, operation, RecoveryCode: credential)
             : new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, operation, Passphrase: credential);
@@ -2336,7 +2338,7 @@ internal static class OwnerControlCli
     {
         options.RequireOnly("--control-pipe");
         var result = await InvokeOwnerAsync(ControlPipe(options),
-            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, "vault.lock")).ConfigureAwait(false);
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerVaultLockOperation)).ConfigureAwait(false);
         if (!result.Success || !HasStatus(result.Reply, "locked"))
         {
             WriteServiceError(result);

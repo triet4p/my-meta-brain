@@ -554,6 +554,10 @@ public sealed class ServiceRequestHandler
     public const int CurrentProtocolVersion = 1;
     public const int MaximumIndexRows = 512;
     public const string OwnerStatusOperation = "owner.status";
+    public const string OwnerVaultProvisionOperation = "vault.provision";
+    public const string OwnerVaultUnlockOperation = "vault.unlock";
+    public const string OwnerVaultRecoverOperation = "vault.recover";
+    public const string OwnerVaultLockOperation = "vault.lock";
     public const string ResourceReadOperation = "resource.read";
     public const string SourceReadOperation = "source.read";
     public const string ResourceWriteOperation = "resource.write";
@@ -845,7 +849,7 @@ public sealed class ServiceRequestHandler
             return Error("forbidden");
         }
 
-        if (string.Equals(request.Operation, "vault.provision", StringComparison.Ordinal))
+        if (string.Equals(request.Operation, OwnerVaultProvisionOperation, StringComparison.Ordinal))
         {
             if (request.Passphrase is not { Length: >= 12 and <= 4096 })
             {
@@ -861,10 +865,10 @@ public sealed class ServiceRequestHandler
                 VaultState: _vault.State, RecoveryCode: recoveryCode);
         }
 
-        if (string.Equals(request.Operation, "vault.unlock", StringComparison.Ordinal) ||
-            string.Equals(request.Operation, "vault.recover", StringComparison.Ordinal))
+        if (string.Equals(request.Operation, OwnerVaultUnlockOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, OwnerVaultRecoverOperation, StringComparison.Ordinal))
         {
-            var recovery = string.Equals(request.Operation, "vault.recover", StringComparison.Ordinal);
+            var recovery = string.Equals(request.Operation, OwnerVaultRecoverOperation, StringComparison.Ordinal);
             var credential = recovery ? request.RecoveryCode : request.Passphrase;
             if (credential is null || credential.Length is 0 or > 4096 || !_vault.Unlock(credential, recovery))
             {
@@ -878,7 +882,7 @@ public sealed class ServiceRequestHandler
             return new ServiceReply(CurrentProtocolVersion, "unlocked", "owner", null, VaultState: _vault.State);
         }
 
-        if (string.Equals(request.Operation, "vault.lock", StringComparison.Ordinal))
+        if (string.Equals(request.Operation, OwnerVaultLockOperation, StringComparison.Ordinal))
         {
             await _vault.LockAsync().ConfigureAwait(false);
             _ownerScopeGrants.ClearPreviews();

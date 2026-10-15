@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using MetaBrain.Application;
 using MetaBrain.Connections;
 
 namespace MetaBrain.S1T4.Smoke;
@@ -91,7 +92,9 @@ internal static partial class OwnerServiceSmoke
 
             foreach (var ownerOnlyOperation in new[]
                      {
-                         "owner.status", "vault.unlock", "vault.provision", "vault.lock",
+                         ServiceRequestHandler.OwnerStatusOperation,
+                         ServiceRequestHandler.OwnerVaultUnlockOperation, ServiceRequestHandler.OwnerVaultProvisionOperation,
+                         ServiceRequestHandler.OwnerVaultLockOperation, ServiceRequestHandler.OwnerVaultRecoverOperation,
                          "owner.sessions", "owner.session.revoke", "owner.catalog.publish", "owner.catalog.list",
                          "owner.request.approve", "owner.access.requests", "owner.scope.list", "resource.read", "resource.write"
                      })

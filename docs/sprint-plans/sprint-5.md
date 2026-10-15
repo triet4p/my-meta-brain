@@ -6,7 +6,7 @@ Owner unlock encrypted vault, quản lý recovery/catalog/access requests/scoped
 
 ## Status and Dependencies
 
-- Status: In progress — S5-T1 authorized; Sprint 4 PASS. Shared key/lock/catalog/request/approval APIs và scoped tools đã có. UI không tạo security policy hoặc key store riêng.
+- Status: In progress — S5-T1 complete với accepted evidence và exact-snapshot checkpoint; S5-T2 authorized, S5-T3…S5-T7 pending. Entry Sprint 4 PASS. UI không tạo security policy hoặc key store riêng.
 - [Global plan](../PLAN.md), [specification](../META-BRAIN.md), [requirements](../REQUIREMENTS.md).
 - Requirements: R30, R31; bảo toàn R02–R06, R11, R12, R14, R19, R32, R34, R36.
 
@@ -18,14 +18,14 @@ UI dùng shared encrypted core và key/lock/approval APIs; không direct decrypt
 
 Status legend: [ ] pending / [~] in progress / [x] done. OMP role selection, evidence review, record ownership, and exact-snapshot checkpoints follow the [canonical execution contract](../PLAN.md#planning-and-execution-contract). Worker artifact for S5-T<M>: `artifacts/sprint-5/task-<M>.md`; reviewers and checkpoint executors own their separate records under the sprint artifact tree.
 
-Workflow: Full route. Mỗi task cần independent evidence PASS và fresh Bronze exact-snapshot checkpoint trước task độc lập tiếp theo; sprint differential review sau mọi task gate/checkpoint. S5-T1 được owner giao Silver; worker không commit, chỉ checkpoint executor commit reviewed task-owned scope trên `main`, không push. Gate records dưới `artifacts/sprint-5/`; Main chỉ ghi concise outcome links.
+Workflow: Full route. Mỗi task cần independent evidence PASS và fresh Bronze exact-snapshot checkpoint trước task độc lập tiếp theo; sprint differential review sau mọi task gate/checkpoint. S5-T1 và S5-T2 được owner giao Silver; worker không commit, chỉ checkpoint executor commit reviewed task-owned scope trên `main`, không push. Gate records dưới `artifacts/sprint-5/`; Main chỉ ghi concise outcome links.
 
-- [~] **S5-T1 — Owner UI host và authenticated application boundary.** Requirements: R02, R05, R30, R32.
+- [x] **S5-T1 — Owner UI host và authenticated application boundary.** Requirements: R02, R05, R30, R32.
     - Scope: runtime UI đã chọn, owner session/auth, navigation và lỗi kết nối; không dashboard giả bằng mocks.
     - Acceptance: UI nối service thật, thể hiện locked/unavailable rõ, agent API/session không gọi owner operations hoặc suy body/Origin/localhost thành consent. Owner workflow explicit; không claim OS protection khỏi same-account process.
     - Evidence: actual UI/service connection, agent-channel owner calls denied, stop/restart/startup locked; visual proof, không mocks.
 
-- [ ] **S5-T2 — Unlock/lock và key/recovery UI.** Requirements: R02, R04, R31, R34, R36.
+- [~] **S5-T2 — Unlock/lock và key/recovery UI.** Requirements: R02, R04, R31, R34, R36.
     - Scope: owner key provisioning/unlock, recovery guidance và lock lifecycle qua S1 APIs; không key hierarchy hoặc autonomous unlock.
     - Acceptance: wrong/missing key không mở vault; recovery material user tự bảo quản, không persist plaintext secret; mất key không fake reset/recovery. Lock clear private views/cache, revoke sessions/tokens, pause jobs; restart locked. Key không agent/model/log.
     - Evidence: actual UI unlock/wrong-key/lock/restart/recovery flow trên synthetic vault, read/session bị chặn sau lock; visual proof và limits managed-memory erasure.
@@ -65,4 +65,6 @@ Không áp phong cách thương hiệu khi user chưa yêu cầu. Native/web hos
 
 ## Gate Record
 
-Pending. Chưa có UI hoặc visual verification.
+S5-T1 complete: [worker evidence](../../artifacts/sprint-5/task-1.md), [independent evidence PASS](../../artifacts/sprint-5/reviews/S5-T1-S5T1-REVIEW-20261015-A1.md) và [Bronze exact-snapshot checkpoint PASS](../../artifacts/sprint-5/checkpoints/S5-T1-S5T1-CHECKPOINT-20261015-A1.md); commit `591973e32c541d719aba17adb2b07012614562ae`. Actual WPF/service và visual proof accepted; zero actionable findings. No push.
+
+Nonblocking residuals được giữ trong evidence review: pre-existing MCP non-string argument crash (fail closed, ngoài scope S5-T1); transient `locking` và protocol-mismatch branches chưa được exercise động. S5-T2…S5-T7 và sprint differential gate còn pending; không suy S5-T1 PASS thành Sprint 5 complete.

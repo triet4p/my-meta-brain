@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Meta Brain — Owner console"
-        Width="1020" Height="660"
+        Width="1020" Height="720"
         FontFamily="Segoe UI" FontSize="13"
         Background="#FFF6F7F9">
     <DockPanel>
@@ -31,10 +31,11 @@
                                Foreground="#FF6B7280" Margin="2,0,0,8" />
                     <TextBlock DockPanel.Dock="Bottom" TextWrapping="Wrap" FontSize="11" Foreground="#FF6B7280" Margin="2,12,2,0"
                                Text="Only delivered views appear here. This host ships no placeholder screen and no control without a real backing operation." />
-                    <ListBox x:Name="Navigation" BorderThickness="0" Background="Transparent" Height="84"
+                    <ListBox x:Name="Navigation" BorderThickness="0" Background="Transparent" Height="126"
                              SelectionChanged="OnNavigationChanged">
                         <ListBoxItem Content="Owner session" Padding="8,6" />
                         <ListBoxItem Content="Vault status" Padding="8,6" />
+                        <ListBoxItem Content="Vault &amp; key" Padding="8,6" />
                     </ListBox>
                 </DockPanel>
             </Border>
@@ -103,6 +104,98 @@
                         <TextBlock x:Name="VaultStateText" FontSize="22" FontWeight="SemiBold" Margin="0,16,0,0" />
                         <TextBlock x:Name="VaultStateDetail" TextWrapping="Wrap" Margin="0,8,0,0" />
                         <TextBlock x:Name="VaultRawText" TextWrapping="Wrap" Margin="0,16,0,0" Foreground="#FF6B7280" />
+                    </StackPanel>
+
+                    <StackPanel x:Name="VaultKeyPanel" Visibility="Collapsed">
+                        <TextBlock Text="Vault &amp; key" FontSize="19" FontWeight="SemiBold" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,8,0,0"
+                                   Text="Unlock, lock and key recovery are your explicit acts. This console sends the credential you type to the running service over the owner control pipe in one request; the service owns the vault, the key and the lock lifecycle. This console never unlocks by itself, never keeps a key, and never derives or replaces a key." />
+
+                        <TextBlock Text="Service reports" FontWeight="SemiBold" Margin="0,16,0,0" />
+                        <TextBlock x:Name="VaultKeyStateText" TextWrapping="Wrap" Margin="0,4,0,0" FontSize="16" />
+
+                        <TextBlock x:Name="VaultActStateText" TextWrapping="Wrap" Margin="0,8,0,0" Foreground="#FF6B7280" />
+
+                        <TextBlock x:Name="SensitiveStateText" TextWrapping="Wrap" Margin="0,8,0,0" Foreground="#FF6B7280" />
+
+                        <Border x:Name="ProvisionPanel" Margin="0,16,0,0" Padding="14" Background="White"
+                                BorderBrush="#FFD5D8DC" BorderThickness="1" CornerRadius="3">
+                            <StackPanel>
+                                <TextBlock Text="Create the owner vault" FontWeight="SemiBold" FontSize="15" />
+                                <TextBlock TextWrapping="Wrap" Margin="0,6,0,0"
+                                           Text="No vault exists for this configuration yet. Choose a passphrase of at least 12 characters. The service derives the key from it and returns a recovery key once; keep that recovery key outside this machine and outside the vault." />
+                                <TextBlock Text="Passphrase" Margin="0,10,0,2" Foreground="#FF6B7280" />
+                                <PasswordBox x:Name="ProvisionPassphraseInput" Width="360" HorizontalAlignment="Left"
+                                             AutomationProperties.AutomationId="ProvisionPassphraseInput"
+                                             PasswordChanged="OnSecretFieldChanged" />
+                                <TextBlock Text="Repeat passphrase" Margin="0,8,0,2" Foreground="#FF6B7280" />
+                                <PasswordBox x:Name="ProvisionConfirmInput" Width="360" HorizontalAlignment="Left"
+                                             AutomationProperties.AutomationId="ProvisionConfirmInput"
+                                             PasswordChanged="OnSecretFieldChanged" />
+                                <TextBlock x:Name="ProvisionHintText" TextWrapping="Wrap" Margin="0,8,0,0" Foreground="#FF6B7280" />
+                                <Button x:Name="ProvisionButton" Content="Provision owner key" Padding="14,7"
+                                        Margin="0,10,0,0" HorizontalAlignment="Left" Click="OnProvisionClicked" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border x:Name="RecoveryPanel" Margin="0,16,0,0" Padding="14" Background="#FFFFF7E6"
+                                BorderBrush="#FFE0B44A" BorderThickness="1" CornerRadius="3">
+                            <StackPanel>
+                                <TextBlock Text="Recovery key — shown once" FontWeight="SemiBold" FontSize="15" />
+                                <TextBlock x:Name="RecoveryGuidanceText" TextWrapping="Wrap" Margin="0,6,0,0"
+                                           Text="No recovery key is on screen. The service returns it once, right after provisioning, and this console stored none: if you did not save it then, it cannot be shown again." />
+                                <TextBlock x:Name="RecoveryKeyText" Margin="0,10,0,0" FontFamily="Consolas" FontSize="14"
+                                           TextWrapping="Wrap" AutomationProperties.AutomationId="RecoveryKeyText" />
+                                <Button x:Name="HideRecoveryButton" Content="I saved it — hide from screen" Padding="14,7"
+                                        Margin="0,10,0,0" HorizontalAlignment="Left" Click="OnHideRecoveryClicked" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border x:Name="UnlockPanel" Margin="0,16,0,0" Padding="14" Background="White"
+                                BorderBrush="#FFD5D8DC" BorderThickness="1" CornerRadius="3">
+                            <StackPanel>
+                                <TextBlock Text="Unlock or recover the vault" FontWeight="SemiBold" FontSize="15" />
+                                <TextBlock TextWrapping="Wrap" Margin="0,6,0,0"
+                                           Text="Unlocking opens the vault the service already holds; it never creates, resets or replaces a vault. A wrong or missing key leaves the vault locked." />
+                                <TextBlock Text="Passphrase" Margin="0,10,0,2" Foreground="#FF6B7280" />
+                                <PasswordBox x:Name="UnlockPassphraseInput" Width="360" HorizontalAlignment="Left"
+                                             AutomationProperties.AutomationId="UnlockPassphraseInput"
+                                             PasswordChanged="OnSecretFieldChanged" />
+                                <Button x:Name="UnlockButton" Content="Unlock vault" Padding="14,7"
+                                        Margin="0,10,0,0" HorizontalAlignment="Left" Click="OnUnlockClicked" />
+                                <TextBlock Text="Recovery key (only if you saved it)" Margin="0,14,0,2" Foreground="#FF6B7280" />
+                                <PasswordBox x:Name="RecoveryInput" Width="360" HorizontalAlignment="Left"
+                                             AutomationProperties.AutomationId="RecoveryInput"
+                                             PasswordChanged="OnSecretFieldChanged" />
+                                <Button x:Name="RecoverButton" Content="Unlock with recovery key" Padding="14,7"
+                                        Margin="0,10,0,0" HorizontalAlignment="Left" Click="OnRecoverClicked" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border x:Name="LockPanel" Margin="0,16,0,0" Padding="14" Background="White"
+                                BorderBrush="#FFD5D8DC" BorderThickness="1" CornerRadius="3">
+                            <StackPanel>
+                                <TextBlock Text="Lock the vault" FontWeight="SemiBold" FontSize="15" />
+                                <TextBlock TextWrapping="Wrap" Margin="0,6,0,0"
+                                           Text="Locking asks the service to drain in-flight private operations, clear the key, invalidate pending tokens and live sessions and stop private reads, ingestion and jobs. This console then clears the credential fields and any recovery key it was still showing. The next service start is locked again." />
+                                <Button x:Name="LockButton" Content="Lock vault now" Padding="14,7"
+                                        Margin="0,10,0,0" HorizontalAlignment="Left" Click="OnLockClicked" />
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock x:Name="VaultMessageText" TextWrapping="Wrap" Margin="0,16,0,0" FontWeight="SemiBold" />
+
+                        <TextBlock Text="Recovery guidance and limits" FontWeight="SemiBold" Margin="0,20,0,6" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• You keep the recovery key, not this application: store it outside this machine, outside the vault and outside any agent chat, prompt, config or log." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• If both the passphrase and the recovery key are lost, the encrypted data cannot be opened again. There is no reset, no backdoor, no administrator override and no automatic unlock in this product; nothing on this screen can bring it back." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Unlock is always your explicit act on this screen. No timer, restart, service, job or agent request unlocks the vault, and a locked vault serves no private content." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Limit — memory erasure: the credential you type exists as managed .NET/WPF strings in this process while the request is built and sent, and clearing this screen does not promise that every managed-memory copy or an OS memory dump is erased. This console makes no secure-erasure claim." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Limit — same Windows account: a process running as this account can control this console or read its memory while the vault is unlocked. Encryption protects data at rest; it is not a sandbox against your own account." />
                     </StackPanel>
                 </Grid>
             </ScrollViewer>

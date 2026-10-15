@@ -247,7 +247,9 @@ internal static partial class OwnerServiceSmoke
                 "The owner control pipe accepted an agent-channel session inspection operation.");
             foreach (var ownerOnlyOperation in new[]
                      {
-                         "vault.unlock", "vault.provision", "vault.lock", "owner.scope.preview", "owner.scope.issue",
+                         ServiceRequestHandler.OwnerVaultUnlockOperation, ServiceRequestHandler.OwnerVaultProvisionOperation,
+                         ServiceRequestHandler.OwnerVaultLockOperation, ServiceRequestHandler.OwnerVaultRecoverOperation,
+                         "owner.scope.preview", "owner.scope.issue",
                          "owner.scope.collection.set", "owner.scope.collection.list", "owner.scope.list",
                          ServiceRequestHandler.OwnerStatusOperation, "resource.read", "resource.write"
                      })
