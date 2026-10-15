@@ -8,7 +8,7 @@
 
 Meta Brain là bộ nhớ thứ hai local-first cho owner, encrypted personal vault với key user kiểm soát. Agents chạy bình thường, khám phá owner-published catalog, request memory và đổi token một lần lấy scoped session qua MCP; không sandbox hoặc bảo mật lại original agent sessions. Provenance, durability, owner control và selective synthesis giữ nguyên.
 
-- Baseline: 2026-09-28; owner-approved CR01/D016 ngày 2026-10-01 thay security model. Replacement Sprint 1/M1 complete: S1-T1 retained, S1-T2–T9 evidence/checkpoints PASS, documentation correction PASS/checkpoint `911c12a0f157e7d176587528a0a32b52c8345407`, final differential deep `S1-DEEP-20261007-A2` PASS with no actionable findings. Walkthrough consent does not change product/S6/secret policies. Sprint 2/M2 complete: S2-T1–T7 accepted evidence/checkpoints and final differential `S2-DEEP-20261012-A1` PASS with no actionable findings; owner xác nhận mọi thay đổi Sprint 2 đã commit. Sprint 3/M3 complete: S3-P0/S3-T1–T6 accepted checkpoints; final differential `S3-DEEP-20261013-A1` PASS, zero actionable findings, latest product commit `d71bd67bbd044dd43849ade866ac615afc4d81b9`. Sprints 4–8 Not started. Old AppContainer PASS historical only; no production acceptance or new push authorization.
+- Baseline: 2026-09-28; owner-approved CR01/D016 ngày 2026-10-01 thay security model. Replacement Sprint 1/M1 complete: S1-T1 retained, S1-T2–T9 evidence/checkpoints PASS, documentation correction PASS/checkpoint `911c12a0f157e7d176587528a0a32b52c8345407`, final differential deep `S1-DEEP-20261007-A2` PASS with no actionable findings. Walkthrough consent does not change product/S6/secret policies. Sprint 2/M2 complete: S2-T1–T7 accepted evidence/checkpoints and final differential `S2-DEEP-20261012-A1` PASS with no actionable findings; owner xác nhận mọi thay đổi Sprint 2 đã commit. Sprint 3/M3 complete: S3-P0/S3-T1–T6 accepted checkpoints; final differential `S3-DEEP-20261013-A1` PASS, zero actionable findings, latest product commit `d71bd67bbd044dd43849ade866ac615afc4d81b9`. Sprint 4/M4 complete: S4-T1–T7 accepted evidence/checkpoints, final differential `S4-DEEP-D1-run02` PASS, zero actionable findings, latest checkpoint `1992621976a082104e01b08471a8ce5751781c4c`. Sprints 5–8 Not started. Old AppContainer PASS historical only; no production acceptance or new push authorization.
 - Đặc tả: [META-BRAIN](META-BRAIN.md).
 - Hợp đồng yêu cầu và change control: [REQUIREMENTS](REQUIREMENTS.md).
 - Hướng dẫn agent: [AGENTS](../AGENTS.md).
@@ -25,7 +25,7 @@ Mỗi chặng có một sprint plan chi tiết. Hoàn thành chặng không đ�
 | [x] M1 — Encrypted vault và scoped sharing | User key/unlock/lock; ciphertext/tamper proof; approved catalog/request review; single-use token/session/scope/revoke thật trên normal Codex/OMP | Không; CR01 replacement complete | [Sprint 1](sprint-plans/sprint-1.md) |
 | [x] M2 — Durable encrypted core | Item/source/zone/revision/relations/lifecycle canonical mã hóa; protected index rebuild/crash recovery | Replacement M1 | [Sprint 2](sprint-plans/sprint-2.md) |
 | [x] M3 — Faithful encrypted capture | Read-only allowlisted Codex/OMP sources, encrypted import/cache/snapshot và lock-aware refresh | M2 | [Sprint 3](sprint-plans/sprint-3.md) |
-| [ ] M4 — Scoped agent memory access | Catalog/request/token + retrieval/evidence/brief/proposal/link qua MCP clients bình thường | M3 | [Sprint 4](sprint-plans/sprint-4.md) |
+| [x] M4 — Scoped agent memory access | Catalog/request/token + retrieval/evidence/brief/proposal/link qua MCP clients bình thường | M3 | [Sprint 4](sprint-plans/sprint-4.md) |
 | [ ] M5 — Owner workbench | Unlock/recovery UI, library/review/relations, catalog publication/request approval/token/session console | M4 | [Sprint 5](sprint-plans/sprint-5.md) |
 | [ ] M6 — Grounded structuring | Profile code/research/trend, synthesis phân tầng, provider controls và share có owner duyệt | M5 | [Sprint 6](sprint-plans/sprint-6.md) |
 | [ ] M7 — Time and lifecycle | Intention, temporal recall, review-after, forgetting, archive và purge đúng lineage | M6 | [Sprint 7](sprint-plans/sprint-7.md) |
@@ -42,7 +42,7 @@ S1-T9 [behavioral evidence A3](../artifacts/sprint-1/reviews/S1-T9-S1T9-REVIEW-2
 | 1 | Complete — CR01 replacement M1 | S1-T1 retained; S1-T2–T9 [x] and doc correction committed | Task evidence/checkpoints PASS; final differential deep A2 PASS |
 | 2 | Complete — M2 | S2-T1–T7 [x] | Task evidence/checkpoints PASS; final differential `S2-DEEP-20261012-A1` PASS; latest product commit `e4e7c5f5` |
 | 3 | Complete — M3 | S3-P0/S3-T1–T6 [x] | [Accepted task records](sprint-plans/sprint-3.md#gate-record), latest checkpoint `d71bd67b`; final differential `S3-DEEP-20261013-A1` PASS, zero actionable findings |
-| 4 | Not started | S4-T1…S4-T7 | Pending |
+| 4 | Complete — M4 | S4-T1–T7 [x], ENV1 [x] | [Accepted gates/checkpoints](sprint-plans/sprint-4.md#gate-record), latest checkpoint `1992621976a082104e01b08471a8ce5751781c4c`; [differential PASS](../artifacts/sprint-4/reviews/sprint-4-deep-d1.md), zero actionable findings |
 | 5 | Not started | S5-T1…S5-T7 | Pending |
 | 6 | Not started | S6-T1…S6-T7 | Pending |
 | 7 | Not started | S7-T1…S7-T6 | Pending |
