@@ -596,10 +596,17 @@ internal static partial class OwnerServiceSmoke
                 "The new agent-source-snapshot-read CLI did not serve the exact preserved snapshot (exit=" + agentSnapshot.ExitCode + "; stdout=" + agentSnapshot.StandardOutput.Trim() + "; stderr=" + agentSnapshot.StandardError.Trim() + ").");
             var bridgeSnapshot = await RunBridgeToolAsync(connectionsExecutable, fixture.AgentPipe,
                 "metabrain_source_snapshot_read", new { sessionFile = snapshotSession.SessionFile, snapshotId, snapshotRevision = "1" }).ConfigureAwait(false);
-            Require(bridgeSnapshot.Contains(snapshotId, StringComparison.Ordinal) &&
-                    bridgeSnapshot.Contains(snapshotDigest, StringComparison.Ordinal) &&
-                    !bridgeSnapshot.Contains("mb1_", StringComparison.Ordinal),
-                "The new metabrain_source_snapshot_read bridge tool did not serve the exact preserved snapshot.");
+            string bridgeSnapshotText;
+            using (var bridgeSnapshotDocument = JsonDocument.Parse(bridgeSnapshot))
+            {
+                bridgeSnapshotText = bridgeSnapshotDocument.RootElement
+                    .GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString() ?? string.Empty;
+            }
+
+            Require(bridgeSnapshotText.Contains(snapshotId, StringComparison.Ordinal) &&
+                    bridgeSnapshotText.Contains(snapshotDigest, StringComparison.Ordinal) &&
+                    !bridgeSnapshotText.Contains("mb1_", StringComparison.Ordinal),
+                "The new metabrain_source_snapshot_read bridge tool did not serve the exact preserved snapshot (text=" + bridgeSnapshotText + ").");
             var snapshotDeniedLockedGrant = await RunOwnerCommandAsync(connectionsExecutable,
                 "owner", "agent-source-snapshot-read", "--agent-pipe", fixture.AgentPipe,
                 "--session-file", itemSession.SessionFile,

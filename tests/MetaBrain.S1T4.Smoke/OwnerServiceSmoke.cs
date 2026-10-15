@@ -1430,7 +1430,9 @@ internal sealed class SmokeFixture : IDisposable
             var name = Path.GetFileName(fullRoot);
             isOwnedS4T6Root = fullRoot.StartsWith(sprintArtifactsPrefix, StringComparison.OrdinalIgnoreCase) &&
                 (name.StartsWith(".s4t6-smoke-", StringComparison.Ordinal) ||
-                 name.StartsWith(".s4t6-client-", StringComparison.Ordinal));
+                 name.StartsWith(".s4t6-client-", StringComparison.Ordinal) ||
+                 name.StartsWith(".s4t7-smoke-", StringComparison.Ordinal) ||
+                 name.StartsWith(".s4t7-client-", StringComparison.Ordinal));
         }
 
         if ((!isOwnedTemporaryRoot && !isOwnedS4T6Root) || !Directory.Exists(fullRoot))
