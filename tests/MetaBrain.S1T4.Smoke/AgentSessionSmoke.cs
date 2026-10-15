@@ -6,6 +6,7 @@ using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using MetaBrain.Application;
 
 namespace MetaBrain.S1T4.Smoke;
 
@@ -248,7 +249,7 @@ internal static partial class OwnerServiceSmoke
                      {
                          "vault.unlock", "vault.provision", "vault.lock", "owner.scope.preview", "owner.scope.issue",
                          "owner.scope.collection.set", "owner.scope.collection.list", "owner.scope.list",
-                         "owner.status", "resource.read", "resource.write"
+                         ServiceRequestHandler.OwnerStatusOperation, "resource.read", "resource.write"
                      })
             {
                 var denied = await InvokeAgentRequestAsync(fixture.AgentPipe, new

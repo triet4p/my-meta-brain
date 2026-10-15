@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>MetaBrain.OwnerUi</AssemblyName>
+    <RootNamespace>MetaBrain.OwnerUi</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The owner application reaches the shared core/application policy only
+         through the owner control channel client in Connections; it has no
+         reference to the vault store and applies no policy of its own. -->
+    <ProjectReference Include="..\MetaBrain.Connections\MetaBrain.Connections.csproj" />
+  </ItemGroup>
+</Project>

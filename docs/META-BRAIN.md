@@ -303,6 +303,8 @@ UI tối thiểu về phạm vi sản phẩm, không phải MVP:
 
 Hai câu hỏi phải trả lời được từ UI: “Vì sao hệ thống nhớ điều này?” và “Ai có thể đọc điều này?”. UI không phải feed gây xao nhãng; hỗ trợ thao tác nhanh, keyboard và nội dung Việt–Anh. Security preview dùng đúng policy engine, không approximation ở frontend.
 
+Implementation (S5-T1): owner console WPF `MetaBrain.OwnerUi` mở một owner session tường minh tới service đang chạy qua owner control pipe với client `MetaBrain.Connections.OwnerChannelClient`, và thể hiện trạng thái thật service trả: reachable cùng vault `uninitialized`/`locked`/`locking`/`unlocked`, `service unavailable` (transport_unavailable/denied/timeout), `owner authority denied` (forbidden/unauthorized) và protocol mismatch, mỗi trạng thái kèm code thật. Navigation chỉ gồm view đã triển khai (owner session, vault status); attach/check/end session là hành động owner tường minh. Ranh giới giữ nguyên: không key vault, không đọc/ghi vault file, không fetch/cache private content, không listening socket, không suy body/Origin/localhost/agent claim thành owner authority, và unknown/failed answer không bao giờ hiển thị như unlocked. Unlock/lock, library, capture, review, relations, catalog và session console thuộc S5-T2–S5-T7; same-account OS compromise vẫn ngoài cam kết.
+
 ## 14. Chất lượng production và nghiệm thu
 
 Sản phẩm hoàn chỉnh cần cài đặt, khởi động lại, nâng cấp/migrate schema, rollback/recovery phù hợp, backup/restore, export và gỡ ứng dụng không xóa nguồn trái ý. Không reset kho để né migration; lỗi/crash không mất memory đã báo lưu thành công.

@@ -136,7 +136,7 @@ internal static class OwnerControlCli
         options.RequireOnly("--control-pipe");
         var result = await InvokeOwnerAsync(
             ControlPipe(options),
-            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, "owner.status")).ConfigureAwait(false);
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerStatusOperation)).ConfigureAwait(false);
         if (!result.Success || !HasStatus(result.Reply, "running"))
         {
             WriteServiceError(result);

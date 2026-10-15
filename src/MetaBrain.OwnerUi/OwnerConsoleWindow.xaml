@@ -1,0 +1,111 @@
+<Window x:Class="MetaBrain.OwnerUi.OwnerConsoleWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Meta Brain — Owner console"
+        Width="1020" Height="660"
+        FontFamily="Segoe UI" FontSize="13"
+        Background="#FFF6F7F9">
+    <DockPanel>
+        <Border x:Name="StateBanner" DockPanel.Dock="Top" Padding="16,12" Background="#FF6B7280">
+            <StackPanel>
+                <TextBlock x:Name="StateHeadline" Foreground="White" FontSize="17" FontWeight="SemiBold"
+                           TextWrapping="Wrap" Text="No owner session" />
+                <TextBlock x:Name="StateDetail" Foreground="#FFF1F2F4" TextWrapping="Wrap" Margin="0,6,0,0" />
+            </StackPanel>
+        </Border>
+
+        <Border DockPanel.Dock="Bottom" Padding="12,6" Background="#FFECEDEF"
+                BorderBrush="#FFD5D8DC" BorderThickness="0,1,0,0">
+            <TextBlock x:Name="StatusText" TextWrapping="Wrap" Foreground="#FF3F4650" />
+        </Border>
+
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="250" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Background="#FFEDEFF2" BorderBrush="#FFD5D8DC" BorderThickness="0,0,1,0" Padding="12">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="OWNER WORKBENCH" FontSize="11" FontWeight="SemiBold"
+                               Foreground="#FF6B7280" Margin="2,0,0,8" />
+                    <TextBlock DockPanel.Dock="Bottom" TextWrapping="Wrap" FontSize="11" Foreground="#FF6B7280" Margin="2,12,2,0"
+                               Text="Only delivered views appear here. This host ships no placeholder screen and no control without a real backing operation." />
+                    <ListBox x:Name="Navigation" BorderThickness="0" Background="Transparent" Height="84"
+                             SelectionChanged="OnNavigationChanged">
+                        <ListBoxItem Content="Owner session" Padding="8,6" />
+                        <ListBoxItem Content="Vault status" Padding="8,6" />
+                    </ListBox>
+                </DockPanel>
+            </Border>
+
+            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Padding="18,16,18,16">
+                <Grid>
+                    <StackPanel x:Name="OwnerSessionPanel">
+                        <TextBlock Text="Owner session" FontSize="19" FontWeight="SemiBold" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,8,0,0"
+                                   Text="This console holds no vault key and never opens or writes a vault file. Every value below is an answer of the running service on the owner control pipe, which derives owner authority from this Windows account's token and ignores identity-shaped fields in the request body." />
+
+                        <Grid Margin="0,16,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="200" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Control pipe" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBlock Grid.Row="0" Grid.Column="1" x:Name="ControlPipeText" Margin="0,0,0,6" TextWrapping="Wrap" />
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Owner Windows account" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBlock Grid.Row="1" Grid.Column="1" x:Name="OwnerAccountText" Margin="0,0,0,6" TextWrapping="Wrap" />
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Session state" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBlock Grid.Row="2" Grid.Column="1" x:Name="SessionStateText" Margin="0,0,0,6" TextWrapping="Wrap" />
+
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Protocol revision" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBlock Grid.Row="3" Grid.Column="1" x:Name="ProtocolText" Margin="0,0,0,6" TextWrapping="Wrap" />
+
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="Last check" Foreground="#FF6B7280" />
+                            <TextBlock Grid.Row="4" Grid.Column="1" x:Name="LastCheckText" TextWrapping="Wrap" />
+                        </Grid>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
+                            <Button x:Name="ConnectButton" Content="Connect to service" Padding="14,7" Click="OnConnectClicked" />
+                            <Button x:Name="CheckButton" Content="Check again" Padding="14,7" Margin="8,0,0,0" Click="OnCheckClicked" />
+                            <Button x:Name="DetachButton" Content="End session" Padding="14,7" Margin="8,0,0,0" Click="OnDetachClicked" />
+                        </StackPanel>
+
+                        <TextBlock Text="Boundary facts" FontWeight="SemiBold" Margin="0,20,0,6" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Owner authority comes only from this Windows account's connection to the owner control pipe." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Request body fields, an Origin/localhost claim, or an agent-supplied owner claim never grant owner authority." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• This application opens no listening socket, so no localhost endpoint can act as the owner through it." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Limit: another process running as this same Windows account can control this application or read its memory. This host does not claim protection from same-account processes." />
+
+                        <TextBlock Text="Session activity (this process only)" FontWeight="SemiBold" Margin="0,20,0,6" />
+                        <ListBox x:Name="ActivityList" Height="150" Background="White" BorderBrush="#FFD5D8DC" />
+                    </StackPanel>
+
+                    <StackPanel x:Name="VaultStatusPanel" Visibility="Collapsed">
+                        <TextBlock Text="Vault status" FontSize="19" FontWeight="SemiBold" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,8,0,0"
+                                   Text="The service owns the vault. This console only reports the state the service returned and what that state means for private workbench views; it never reads, decrypts or caches private content, and an unknown state is never treated as unlocked." />
+
+                        <TextBlock x:Name="VaultStateText" FontSize="22" FontWeight="SemiBold" Margin="0,16,0,0" />
+                        <TextBlock x:Name="VaultStateDetail" TextWrapping="Wrap" Margin="0,8,0,0" />
+                        <TextBlock x:Name="VaultRawText" TextWrapping="Wrap" Margin="0,16,0,0" Foreground="#FF6B7280" />
+                    </StackPanel>
+                </Grid>
+            </ScrollViewer>
+        </Grid>
+    </DockPanel>
+</Window>

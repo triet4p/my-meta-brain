@@ -553,6 +553,7 @@ public sealed class ServiceRequestHandler
 {
     public const int CurrentProtocolVersion = 1;
     public const int MaximumIndexRows = 512;
+    public const string OwnerStatusOperation = "owner.status";
     public const string ResourceReadOperation = "resource.read";
     public const string SourceReadOperation = "source.read";
     public const string ResourceWriteOperation = "resource.write";
@@ -720,7 +721,7 @@ public sealed class ServiceRequestHandler
             return Error("unsupported_protocol");
         }
 
-        if (string.Equals(request.Operation, "owner.status", StringComparison.Ordinal))
+        if (string.Equals(request.Operation, OwnerStatusOperation, StringComparison.Ordinal))
         {
             if (!AuthorizationPolicy.Allows(context, ServicePermission.InspectOwnerStatus))
             {

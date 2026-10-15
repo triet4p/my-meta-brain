@@ -157,12 +157,32 @@ dotnet run --project src/MetaBrain.Connections/MetaBrain.Connections.csproj -- o
 dotnet run --project src/MetaBrain.Connections/MetaBrain.Connections.csproj -- owner lock --pipe metabrain-owner
 ```
 
-### 4. Running the Smoke Test Suite
+### 4. Start the Owner Console
+
+Build and start the Windows owner console (S5-T1). It attaches an explicit owner session to a service that is already running and shows the real vault state the service reports:
+
+```powershell
+# Build the owner console
+dotnet build src/MetaBrain.OwnerUi/MetaBrain.OwnerUi.csproj -c Release
+
+# Start the console against the owner control pipe of a running service
+src/MetaBrain.OwnerUi/bin/Release/net10.0-windows/MetaBrain.OwnerUi.exe --control-pipe metabrain-owner
+```
+
+Choose **Connect to service** to open the owner session, **Check again** to probe the service for its current state, and **End session** to drop it. The console reports a stopped service as unavailable instead of a stale unlocked vault, reports an endpoint that refuses owner authority (for example the agent pipe) as a denial, and holds no vault key, no private content and no listening socket. Unlock/lock, library, capture and catalog work arrive with their own sprint tasks.
+
+### 5. Running the Smoke Test Suite
 
 Verify all security invariants, cryptoproof, token redemption, and IPC boundaries:
 
 ```powershell
 dotnet run --project tests/MetaBrain.S1T4.Smoke/MetaBrain.S1T4.Smoke.csproj
+```
+
+The suite also exposes named scenarios, including `s5-t1` for the owner application boundary (owner-channel states plus agent-channel owner-operation denials) and `s5-t1-console-fixture` for preparing an owner-console fixture:
+
+```powershell
+dotnet run --project tests/MetaBrain.S1T4.Smoke/MetaBrain.S1T4.Smoke.csproj -- s5-t1 src/MetaBrain.Connections/bin/Release/net10.0-windows/MetaBrain.Connections.exe
 ```
 
 ---

@@ -116,7 +116,7 @@ internal static class LegacyVaultMigration
 
     private static void EnsureServiceStopped(string controlPipe)
     {
-        var request = JsonSerializer.Serialize(new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, "owner.status"), JsonOptions);
+        var request = JsonSerializer.Serialize(new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerStatusOperation), JsonOptions);
         var result = PipeClient.InvokeOwnerAsync(controlPipe, request, CancellationToken.None).GetAwaiter().GetResult();
         if (result.Success)
         {
