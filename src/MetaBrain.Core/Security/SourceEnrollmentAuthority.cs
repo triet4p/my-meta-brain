@@ -134,15 +134,21 @@ public enum SourceQuarantineReason
 {
     MixedLocator = 1,
     GenerationTruncated = 2,
-    GenerationReplaced = 3
+    GenerationReplaced = 3,
+    MappingUnknown = 4
 }
 
 /// <summary>
 /// Encrypted quarantine record for a source whose identity or mapping became
-/// ambiguous (R16): the locator is claimed by another enrollment, or the
-/// fixture's bytes no longer match the enrolled generation. Quarantine is
-/// private state, it is checked before any source read, and only an explicit
-/// owner re-enrollment or revocation clears it.
+/// ambiguous (R16): the locator is claimed by another enrollment, the
+/// fixture's bytes no longer match the enrolled generation, or the owner
+/// submitted a source whose zone/format mapping is not yet resolved
+/// (<see cref="SourceQuarantineReason.MappingUnknown"/>). A mapping-unknown
+/// record holds the submitted locator with no zone default and no transcript
+/// read: only an explicit owner resolution (confirm the mapping or revoke the
+/// submission) clears it. Quarantine is private state, it is checked before
+/// any source read, and only an explicit owner re-enrollment, resolution or
+/// revocation clears it.
 /// </summary>
 public sealed record SourceQuarantineRecord(
     string SourceId,
@@ -379,6 +385,147 @@ public sealed class SourceEnrollmentAuthority
             return (state with { Enrollments = enrollments, Quarantine = quarantine }, next);
         });
     }
+    /// <summary>
+    /// S5-T7 owner mapping review: submits one source whose zone/format mapping
+    /// the owner cannot yet resolve into the private quarantine without any
+    /// transcript read and without guessing a zone. The submitted locator is
+    /// grammar-checked only; no anchor is computed, no journal is created, and
+    /// no enrollment is recorded, so nothing can be ingested from the held
+    /// mapping. The held detail names the unresolved field (zone, format, or
+    /// both) as a bounded diagnostic token. Only an explicit owner resolution
+    /// (confirm the mapping via the normal enroll path, or revoke the held
+    /// submission) clears the held record.
+    /// </summary>
+    public SourceQuarantineRecord SubmitMappingUnknown(
+        AuthenticatedContext actor,
+        string sourceId,
+        string locator,
+        string? zoneId,
+        string? format,
+        int? formatVersion,
+        string detail,
+        ISourceEnrollmentPersistence persistence)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(persistence);
+        EnsureOwner(actor);
+        if (!DomainIdentifiers.IsDomainIdentifier(sourceId) ||
+            sourceId.Length > SourceIngestionLimits.MaximumSourceIdLength)
+        {
+            throw new ArgumentException("The source ID must be an opaque safe identifier.");
+        }
+
+        var normalizedLocator = SourceEnrollmentGrammar.NormalizeLocator(locator);
+        if (!string.Equals(detail, "zone_unresolved", StringComparison.Ordinal) &&
+            !string.Equals(detail, "format_unresolved", StringComparison.Ordinal) &&
+            !string.Equals(detail, "mapping_unresolved", StringComparison.Ordinal))
+        {
+            throw new ArgumentException("The unresolved mapping detail must name the unresolved field.");
+        }
+
+        if (zoneId is not null && !DomainIdentifiers.IsSafeIdentifier(zoneId))
+        {
+            throw new ArgumentException("The submitted zone must be an opaque safe identifier when given.");
+        }
+
+        if (format is not null && !SourceEnrollmentGrammar.IsFormat(format))
+        {
+            throw new ArgumentException("The submitted format must be a valid format token when given.");
+        }
+
+        if (formatVersion is not null && formatVersion < 1)
+        {
+            throw new ArgumentException("The submitted format version must be at least 1 when given.");
+        }
+
+        // No default is ever applied: an unresolved zone stays unresolved, an
+        // unresolved format stays unresolved, and the transcript is never
+        // opened to guess either of them.
+        var now = DateTimeOffset.UtcNow;
+        return persistence.UpdateSourceEnrollmentState(state =>
+        {
+            var validated = ValidateAndNormalizeState(state);
+            if (FindEnrollment(validated, sourceId) is not null)
+            {
+                throw new SourceOperationException("source_already_enrolled");
+            }
+
+            foreach (var other in validated.Enrollments)
+            {
+                if (other.RevokedAtUtc is null &&
+                    string.Equals(other.Locator, normalizedLocator, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new SourceOperationException("source_locator_in_use");
+                }
+            }
+
+            foreach (var other in validated.Quarantine)
+            {
+                if (!string.Equals(other.SourceId, sourceId, StringComparison.Ordinal) &&
+                    string.Equals(other.Locator, normalizedLocator, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new SourceOperationException("source_locator_in_use");
+                }
+            }
+
+            var existing = Array.FindIndex(validated.Quarantine, record =>
+                string.Equals(record.SourceId, sourceId, StringComparison.Ordinal));
+            if (existing >= 0 && validated.Quarantine[existing].Reason != SourceQuarantineReason.MappingUnknown)
+            {
+                throw new SourceOperationException("source_quarantined");
+            }
+
+            if (validated.Quarantine.Length >= SourceIngestionLimits.MaximumQuarantineRecords && existing < 0)
+            {
+                throw new IOException("The source quarantine limit is exhausted.");
+            }
+
+            var record = new SourceQuarantineRecord(sourceId, SourceQuarantineReason.MappingUnknown, detail, normalizedLocator, now);
+            var quarantine = validated.Quarantine
+                .Where((_, index) => index != existing)
+                .Append(record)
+                .OrderBy(candidate => candidate.SourceId, StringComparer.Ordinal)
+                .ToArray();
+            return (state with { Quarantine = quarantine }, record);
+        });
+    }
+
+    /// <summary>
+    /// S5-T7 owner mapping resolution: revokes one held mapping-unknown
+    /// submission without enrolling it. The held locator is never opened and
+    /// no zone is ever defaulted; the record is simply cleared so the source
+    /// ID may be reused once the owner knows its mapping.
+    /// </summary>
+    public void RevokeMappingUnknown(
+        AuthenticatedContext actor,
+        string sourceId,
+        ISourceEnrollmentPersistence persistence)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(persistence);
+        EnsureOwner(actor);
+        if (!DomainIdentifiers.IsDomainIdentifier(sourceId))
+        {
+            throw new ArgumentException("The source ID must be an opaque safe identifier.");
+        }
+
+        persistence.UpdateSourceEnrollmentState(state =>
+        {
+            var validated = ValidateAndNormalizeState(state);
+            var index = Array.FindIndex(validated.Quarantine, record =>
+                string.Equals(record.SourceId, sourceId, StringComparison.Ordinal));
+            if (index < 0 || validated.Quarantine[index].Reason != SourceQuarantineReason.MappingUnknown)
+            {
+                throw new SourceOperationException("source_not_mapping_unknown");
+            }
+
+            var quarantine = validated.Quarantine
+                .Where((_, position) => position != index)
+                .ToArray();
+            return (state with { Quarantine = quarantine }, true);
+        });
+    }
+
     /// <summary>
     /// Owner-confirmed relocation of the same enrolled generation. The
     /// coordinator has already read the exact caller-supplied locator and

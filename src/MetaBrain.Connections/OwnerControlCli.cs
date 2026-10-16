@@ -63,6 +63,8 @@ internal static class OwnerControlCli
                 "source-refresh-optout" => await SourceRefreshOptInAsync(options, optIn: false).ConfigureAwait(false),
                 "source-list" => await SourceListAsync(options).ConfigureAwait(false),
                 "source-refresh" => await SourceRefreshAsync(options).ConfigureAwait(false),
+                "source-mapping-submit" => await SourceMappingSubmitAsync(options).ConfigureAwait(false),
+                "source-mapping-resolve" => await SourceMappingResolveAsync(options).ConfigureAwait(false),
                 "source-snapshot-list" => await SourceSnapshotListAsync(options).ConfigureAwait(false),
                 "source-snapshot-preserve" => await SourceSnapshotPreserveAsync(options).ConfigureAwait(false),
                 "source-snapshot-read" => await SourceSnapshotReadAsync(options).ConfigureAwait(false),
@@ -1545,6 +1547,87 @@ internal static class OwnerControlCli
         Console.WriteLine($"REFRESH count={entries.GetArrayLength()}");
         return 0;
     }
+    /// <summary>
+    /// S5-T7 owner mapping review submission: holds one source whose
+    /// zone/format mapping is unresolved in the private quarantine. The
+    /// private locator travels in a request file, never in arguments; the
+    /// reply names the held mapping without echoing the locator. No zone is
+    /// ever defaulted and no transcript is ever opened by this command.
+    /// </summary>
+    private static async Task<int> SourceMappingSubmitAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--source-id", "--input-file", "--zone-id", "--format", "--format-version");
+        var controlPipe = ControlPipe(options);
+        var sourceId = options.Required("--source-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(sourceId))
+        {
+            return Usage();
+        }
+
+        var zoneId = options.Optional("--zone-id");
+        var format = options.Optional("--format");
+        int? formatVersion = null;
+        if (options.Optional("--format-version") is { } formatVersionText)
+        {
+            if (!long.TryParse(formatVersionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ||
+                parsed is < 1 or > 1_000_000)
+            {
+                return Usage();
+            }
+
+            formatVersion = (int)parsed;
+        }
+
+        if ((zoneId is not null && !ServiceSettingsLoader.IsSafeIdentifier(zoneId)) ||
+            (formatVersion is not null && format is null))
+        {
+            return Usage();
+        }
+
+        var locator = await ReadSourceEnrollmentLocatorAsync(options.Required("--input-file")).ConfigureAwait(false);
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceMappingSubmitOperation,
+                ResourceId: sourceId, ZoneId: zoneId, SourceLocator: locator,
+                SourceFormat: format, SourceFormatVersion: formatVersion)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "source_mapping_held"))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        PrintSourceEnrollment(result.Reply);
+        return 0;
+    }
+
+    /// <summary>
+    /// S5-T7 mapping resolution withdrawal: clears one held mapping-unknown
+    /// submission without enrolling it. The held locator is never opened.
+    /// </summary>
+    private static async Task<int> SourceMappingResolveAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--source-id");
+        var controlPipe = ControlPipe(options);
+        var sourceId = options.Required("--source-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(sourceId))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceMappingResolveOperation,
+                ResourceId: sourceId)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "source_mapping_withdrawn"))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        Console.WriteLine($"SOURCE MAPPING withdrawn id={sourceId}");
+        return 0;
+    }
+
 
     private static async Task<int> SourceSnapshotListAsync(CommandOptions options)
     {

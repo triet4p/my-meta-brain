@@ -254,6 +254,8 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.SourceRefreshOptOutOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceListOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceRefreshOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceMappingSubmitOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceMappingResolveOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceSnapshotPreserveOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceSnapshotListOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceSnapshotReadOperation, StringComparison.Ordinal) ||

@@ -451,6 +451,11 @@ internal static partial class OwnerServiceSmoke
                          ServiceRequestHandler.OwnerCatalogPreviewOperation,
                          ServiceRequestHandler.OwnerAccessRequestPreviewOperation,
                          ServiceRequestHandler.OwnerSessionListOperation,
+                         ServiceRequestHandler.SourceListOperation,
+                         ServiceRequestHandler.SourceStatusOperation,
+                         ServiceRequestHandler.SourceMappingSubmitOperation,
+                         ServiceRequestHandler.SourceSnapshotListOperation,
+                         ServiceRequestHandler.OwnerScopeCollectionListOperation,
                          ServiceRequestHandler.MemoryReadOperation,
                          ServiceRequestHandler.SourceReadOperation,
                          ServiceRequestHandler.OwnerIndexRebuildOperation

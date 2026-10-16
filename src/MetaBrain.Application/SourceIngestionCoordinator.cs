@@ -249,6 +249,41 @@ public sealed class SourceIngestionCoordinator
     {
         ArgumentNullException.ThrowIfNull(owner);
         ArgumentNullException.ThrowIfNull(operation);
+        var fullState = SourceEnrollmentAuthority.ValidateAndNormalizeState(operation.LoadSourceEnrollmentState());
+        var held = SourceEnrollmentAuthority.FindQuarantine(fullState, sourceId);
+        if (held is not null && held.Reason == SourceQuarantineReason.MappingUnknown &&
+            SourceEnrollmentAuthority.FindEnrollment(fullState, sourceId) is null)
+        {
+            // A held mapping-unknown submission is reported with its quarantine
+            // record, no mapping, no checkpoint and no availability probe: the
+            // held transcript is never opened to resolve the mapping.
+            return new SourceEnrollmentStatus(
+                held.SourceId,
+                "(unresolved)",
+                "(unresolved)",
+                0,
+                0,
+                SourceEnrollmentLife.Quarantined,
+                0,
+                held.RecordedAtUtc,
+                null,
+                held,
+                0,
+                0,
+                0,
+                0,
+                null,
+                SourceAvailabilityObservation.NotChecked,
+                null,
+                null,
+                null,
+                null,
+                false,
+                0,
+                0,
+                0);
+        }
+
         var enrollment = LoadActiveEnrollment(owner, sourceId, operation);
         var quarantine = SourceEnrollmentAuthority.FindQuarantine(
             SourceEnrollmentAuthority.ValidateAndNormalizeState(operation.LoadSourceEnrollmentState()), sourceId);
@@ -666,6 +701,35 @@ public sealed class SourceIngestionCoordinator
         bool optIn,
         ISourceEnrollmentPersistence persistence) =>
         _enrollments.SetRefreshOptIn(owner, sourceId, optIn, persistence);
+    /// <summary>
+    /// S5-T7 owner mapping review submission: holds one source whose
+    /// zone/format mapping is unresolved in the private quarantine with no
+    /// transcript read and no guessed zone. The coordinator performs no
+    /// anchor read here — the authority grammar-checks the locator only —
+    /// so an uncertain mapping can never be ingested into a default zone.
+    /// </summary>
+    public SourceQuarantineRecord SubmitMappingUnknown(
+        AuthenticatedContext owner,
+        string sourceId,
+        string locator,
+        string? zoneId,
+        string? format,
+        int? formatVersion,
+        string detail,
+        ISourceEnrollmentPersistence persistence) =>
+        _enrollments.SubmitMappingUnknown(owner, sourceId, locator, zoneId, format, formatVersion, detail, persistence);
+
+    /// <summary>
+    /// S5-T7 owner mapping resolution withdrawal: clears one held
+    /// mapping-unknown submission without enrolling it. The held locator is
+    /// never opened.
+    /// </summary>
+    public void RevokeMappingUnknown(
+        AuthenticatedContext owner,
+        string sourceId,
+        ISourceEnrollmentPersistence persistence) =>
+        _enrollments.RevokeMappingUnknown(owner, sourceId, persistence);
+
 
     public IReadOnlyList<SourceEnrollmentStatus> List(
         AuthenticatedContext owner,
@@ -674,7 +738,7 @@ public sealed class SourceIngestionCoordinator
         ArgumentNullException.ThrowIfNull(owner);
         ArgumentNullException.ThrowIfNull(operation);
         var state = SourceEnrollmentAuthority.ValidateAndNormalizeState(operation.LoadSourceEnrollmentState());
-        var result = new List<SourceEnrollmentStatus>(state.Enrollments.Length);
+        var result = new List<SourceEnrollmentStatus>(state.Enrollments.Length + state.Quarantine.Length);
         foreach (var enrollment in state.Enrollments.OrderBy(candidate => candidate.SourceId, StringComparer.Ordinal))
         {
             var quarantine = SourceEnrollmentAuthority.FindQuarantine(state, enrollment.SourceId);
@@ -718,6 +782,42 @@ public sealed class SourceIngestionCoordinator
                 journalBytes,
                 snapshotBytes,
                 snapshotRevision));
+        }
+
+        // S5-T7 mapping review: held mapping-unknown submissions are reported
+        // beside the allowlist with their quarantine record, no mapping, no
+        // checkpoint and no availability probe. The held locator is never
+        // echoed: only the quarantine reason, the unresolved-field detail and
+        // the recorded time cross this record.
+        foreach (var held in state.Quarantine
+            .Where(record => record.Reason == SourceQuarantineReason.MappingUnknown)
+            .OrderBy(record => record.SourceId, StringComparer.Ordinal))
+        {
+            result.Add(new SourceEnrollmentStatus(
+                held.SourceId,
+                "(unresolved)",
+                "(unresolved)",
+                0,
+                0,
+                SourceEnrollmentLife.Quarantined,
+                0,
+                held.RecordedAtUtc,
+                null,
+                held,
+                0,
+                0,
+                0,
+                0,
+                null,
+                SourceAvailabilityObservation.NotChecked,
+                null,
+                null,
+                null,
+                null,
+                false,
+                0,
+                0,
+                0));
         }
 
         return result;

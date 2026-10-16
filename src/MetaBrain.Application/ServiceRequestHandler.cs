@@ -723,6 +723,8 @@ public sealed class ServiceRequestHandler
     public const string SourceRefreshOptOutOperation = "source.refresh.optout";
     public const string SourceListOperation = "source.list";
     public const string SourceRefreshOperation = "source.refresh";
+    public const string SourceMappingSubmitOperation = "source.mapping.submit";
+    public const string SourceMappingResolveOperation = "source.mapping.resolve";
     public const string SourceSnapshotPreserveOperation = "source.snapshot.preserve";
     public const string SourceSnapshotListOperation = "source.snapshot.list";
     public const string SourceSnapshotRetainOperation = "source.snapshot.retain";
@@ -1083,7 +1085,9 @@ public sealed class ServiceRequestHandler
             string.Equals(request.Operation, SourceRefreshOptInOperation, StringComparison.Ordinal) ||
             string.Equals(request.Operation, SourceRefreshOptOutOperation, StringComparison.Ordinal) ||
             string.Equals(request.Operation, SourceListOperation, StringComparison.Ordinal) ||
-            string.Equals(request.Operation, SourceRefreshOperation, StringComparison.Ordinal))
+            string.Equals(request.Operation, SourceRefreshOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceMappingSubmitOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceMappingResolveOperation, StringComparison.Ordinal))
         {
             return HandleSourceIngestionCommand(context, request, operation, cancellationToken);
         }
@@ -2157,6 +2161,83 @@ public sealed class ServiceRequestHandler
                 return Error("source_state_unavailable");
             }
         }
+        if (string.Equals(request.Operation, SourceMappingSubmitOperation, StringComparison.Ordinal))
+        {
+            // S5-T7 mapping review submission carries only the source ID, the
+            // submitted locator and the unresolved-field detail. Zone, format
+            // and version travel only when the owner can state them; every
+            // other field is refused so a submission can never steer another
+            // flow, and the transcript is never opened to guess the mapping.
+            if (HasSourceMappingSubmitExtras(request) ||
+                string.IsNullOrEmpty(request.ResourceId) || string.IsNullOrEmpty(request.SourceLocator))
+            {
+                return Error("invalid_request");
+            }
+
+            try
+            {
+                var held = _sourceIngestion.SubmitMappingUnknown(
+                    context, request.ResourceId, request.SourceLocator,
+                    request.ZoneId, request.SourceFormat, request.SourceFormatVersion,
+                    ResolveMappingDetail(request), operation);
+                return new ServiceReply(CurrentProtocolVersion, "source_mapping_held", "owner", null,
+                    SourceEnrollment: ToSourceEnrollmentWire(
+                        new SourceEnrollmentStatus(
+                            held.SourceId, "(unresolved)", "(unresolved)", 0, 0,
+                            SourceEnrollmentLife.Quarantined, 0, held.RecordedAtUtc, null, held,
+                            0, 0, 0, 0, null,
+                            MetaBrain.Core.Domain.SourceAvailabilityObservation.NotChecked, null, null, null, null, false, 0, 0, 0)));
+            }
+            catch (ArgumentException)
+            {
+                return Error("invalid_request");
+            }
+            catch (SourceOperationException ex)
+            {
+                return Error(ex.Code);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Error("forbidden");
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException)
+            {
+                return Error("source_state_unavailable");
+            }
+        }
+
+        if (string.Equals(request.Operation, SourceMappingResolveOperation, StringComparison.Ordinal))
+        {
+            // S5-T7 mapping resolution withdrawal carries only the source ID:
+            // the held locator is never opened and no zone is ever defaulted.
+            if (HasSourceCommandExtras(request) || string.IsNullOrEmpty(request.ResourceId))
+            {
+                return Error("invalid_request");
+            }
+
+            try
+            {
+                _sourceIngestion.RevokeMappingUnknown(context, request.ResourceId, operation);
+                return new ServiceReply(CurrentProtocolVersion, "source_mapping_withdrawn", "owner", null);
+            }
+            catch (ArgumentException)
+            {
+                return Error("invalid_request");
+            }
+            catch (SourceOperationException ex)
+            {
+                return Error(ex.Code);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Error("forbidden");
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException)
+            {
+                return Error("source_state_unavailable");
+            }
+        }
+
 
         return Error("invalid_request");
     }
@@ -2183,6 +2264,7 @@ public sealed class ServiceRequestHandler
                 {
                     SourceQuarantineReason.GenerationTruncated => "generation_truncated",
                     SourceQuarantineReason.GenerationReplaced => "generation_replaced",
+                    SourceQuarantineReason.MappingUnknown => "mapping_unknown",
                     _ => "mixed_locator"
                 },
                 quarantine.Detail,
@@ -2224,6 +2306,7 @@ public sealed class ServiceRequestHandler
                 {
                     SourceQuarantineReason.GenerationTruncated => "generation_truncated",
                     SourceQuarantineReason.GenerationReplaced => "generation_replaced",
+                    SourceQuarantineReason.MappingUnknown => "mapping_unknown",
                     _ => "mixed_locator"
                 },
                 quarantine.Detail,
@@ -6297,6 +6380,49 @@ public sealed class ServiceRequestHandler
         request.SourceFormat is not null || request.SourceFormatVersion is not null ||
         request.SourceTitle is not null || request.SourceAuthor is not null ||
         request.SourceCapturedAtUtc is not null || request.SnapshotRetainUntilUtc is not null;
+    /// <summary>
+    /// S5-T7 mapping review submission carries only the source ID, the
+    /// submitted locator, the optional unresolved zone/format/version the
+    /// owner can still state, and the unresolved-field detail. Zone travels
+    /// here (unlike revoke/status/ingest) because the owner may know the zone
+    /// while the format is unresolved, or vice versa; nothing is ever
+    /// defaulted server-side. Every other field is refused.
+    /// </summary>
+    private static bool HasSourceMappingSubmitExtras(ServiceRequest request) =>
+        request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ContentBase64 is not null || request.ResourceIds is not null ||
+        request.Operations is not null || request.DestinationResourceIds is not null ||
+        request.ExpiresAtUtc is not null || request.Provider is not null ||
+        request.Model is not null || request.MaximumCostUsd is not null ||
+        request.PreviewId is not null || request.CollectionId is not null ||
+        request.Token is not null || request.SessionToken is not null ||
+        request.SessionId is not null || request.AccessOperation is not null ||
+        request.ResourceRevision is not null || request.DestinationResourceId is not null ||
+        request.DestinationRevision is not null || request.EstimatedCostUsd is not null ||
+        request.InputTokens is not null || request.OutputTokens is not null ||
+        request.CatalogId is not null || request.Label is not null ||
+        request.Description is not null || request.Query is not null ||
+        request.CatalogIds is not null || request.Purpose is not null ||
+        request.RequestId is not null || request.SourceTitle is not null ||
+        request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
+        request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null;
+
+    /// <summary>
+    /// Resolves the unresolved-field detail for a mapping review submission
+    /// from the fields the owner could state: a missing zone, a missing
+    /// format, or both. The detail is a bounded diagnostic token carried in
+    /// the quarantine record; it never echoes the locator.
+    /// </summary>
+    private static string ResolveMappingDetail(ServiceRequest request)
+    {
+        var zoneMissing = string.IsNullOrEmpty(request.ZoneId);
+        var formatMissing = string.IsNullOrEmpty(request.SourceFormat) || request.SourceFormatVersion is null;
+        return zoneMissing && formatMissing ? "mapping_unresolved"
+            : zoneMissing ? "zone_unresolved"
+            : formatMissing ? "format_unresolved"
+            : "mapping_unresolved";
+    }
+
 
     /// <summary>
     /// S3-T4 capture carries only the source ID, zone, verbatim text, and the

@@ -32,7 +32,7 @@
                                Foreground="#FF6B7280" Margin="2,0,0,8" />
                     <TextBlock DockPanel.Dock="Bottom" TextWrapping="Wrap" FontSize="11" Foreground="#FF6B7280" Margin="2,12,2,0"
                                Text="Only delivered views appear here. This host ships no placeholder screen and no control without a real backing operation." />
-                    <ListBox x:Name="Navigation" BorderThickness="0" Background="Transparent" Height="180"
+                    <ListBox x:Name="Navigation" BorderThickness="0" Background="Transparent" Height="220"
                              SelectionChanged="OnNavigationChanged">
                         <ListBoxItem Content="Owner session" Padding="8,6" />
                         <ListBoxItem Content="Vault status" Padding="8,6" />
@@ -41,6 +41,7 @@
                         <ListBoxItem Content="Inbox" Padding="8,6" />
                         <ListBoxItem Content="Relations" Padding="8,6" />
                         <ListBoxItem Content="Sharing" Padding="8,6" />
+                        <ListBoxItem Content="Sources" Padding="8,6" />
                     </ListBox>
                 </DockPanel>
             </Border>
@@ -752,6 +753,184 @@
                                    Text="• Keyboard: Enter in a list opens the selected row, F5 in this view re-reads the catalog, requests and sessions, Ctrl+L locks the vault." />
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
                                    Text="• Privacy: this view holds no on-disk cache. Locking the vault (or losing the service, or ending the session) clears every mapping, request, preview, handoff path and session above, and an answer already in flight is discarded instead of restoring them." />
+                    </StackPanel>
+                    <StackPanel x:Name="SourcesPanel" Visibility="Collapsed">
+                        <TextBlock Text="Sources" FontSize="19" FontWeight="SemiBold" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,8,0,0"
+                                   Text="Enroll and tend your source allowlist, hold an uncertain mapping for review, and preserve what matters. The service owns the allowlist, the held mapping review, the checkpoints, the quarantine records, the availability observations, the encrypted cache scope, the refresh consent, the collections and the preserved snapshots; this console only sends your explicit acts and renders the answers it receives. No locator is ever echoed: the wire carries none, and what you type as a locator travels only in the request that needs it." />
+
+                        <TextBlock Text="Service reports" FontWeight="SemiBold" Margin="0,16,0,0" />
+                        <TextBlock x:Name="SourcesStateText" TextWrapping="Wrap" Margin="0,4,0,0" FontSize="16" />
+
+                        <TextBlock Text="Enrolled sources (allowlist — listing opens no transcript)" FontWeight="SemiBold" Margin="0,18,0,0" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
+                                   Text="Each row is the service's own mapping, life state, checkpoint, quarantine, availability and encrypted cache scope. A held mapping-unknown submission appears beside the allowlist with its quarantine reason and unresolved-field detail — never with a guessed zone." />
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="SourcesRefreshButton" Content="Read sources" Padding="14,7" Click="OnSourcesRefreshClicked" />
+                            <Button x:Name="SourceOpenButton" Content="Open selected source" Padding="14,7" Margin="8,0,0,0" Click="OnSourceOpenClicked" />
+                            <Button x:Name="SourcesRefreshPassButton" Content="Run refresh pass" Padding="14,7" Margin="8,0,0,0" Click="OnSourcesRefreshPassClicked" />
+                        </StackPanel>
+                        <TextBlock x:Name="SourcesMessageText" TextWrapping="Wrap" Margin="0,10,0,0" FontWeight="SemiBold" />
+                        <ListBox x:Name="SourcesList" Height="130" Margin="0,8,0,0" Background="White" BorderBrush="#FFD5D8DC"
+                                 AutomationProperties.AutomationId="SourcesList"
+                                 SelectionChanged="OnSourcesSelectionChanged" KeyDown="OnSourcesListKeyDown" />
+                        <TextBlock x:Name="SourceDetailText" TextWrapping="Wrap" Margin="0,8,0,0" FontFamily="Consolas" />
+                        <TextBlock x:Name="SourceMessageText" TextWrapping="Wrap" Margin="0,8,0,0" FontWeight="SemiBold" />
+                        <TextBlock x:Name="IngestOutcomeText" TextWrapping="Wrap" Margin="0,6,0,0" FontFamily="Consolas" />
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="SourceIngestButton" Content="Ingest selected source" Padding="14,7" Click="OnSourceIngestClicked" />
+                            <Button x:Name="SourcePauseButton" Content="Pause selected source" Padding="14,7" Margin="8,0,0,0" Click="OnSourcePauseClicked" />
+                            <Button x:Name="SourceResumeButton" Content="Resume selected source" Padding="14,7" Margin="8,0,0,0" Click="OnSourceResumeClicked" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <Button x:Name="SourceOptInButton" Content="Opt selected into refresh" Padding="14,7" Click="OnSourceOptInClicked" />
+                            <Button x:Name="SourceOptOutButton" Content="Opt selected out of refresh" Padding="14,7" Margin="8,0,0,0" Click="OnSourceOptOutClicked" />
+                            <Button x:Name="SourceSnapshotsButton" Content="List snapshots of selected" Padding="14,7" Margin="8,0,0,0" Click="OnSourceSnapshotsClicked" />
+                        </StackPanel>
+
+                        <TextBlock Text="Hold an uncertain mapping for review (no transcript read, no guessed zone)" FontWeight="SemiBold" Margin="0,22,0,0" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
+                                   Text="Name the source ID and the locator file of the source whose zone or format you cannot yet resolve. The service holds the submission in the private quarantine without opening its transcript and without defaulting a zone; only your explicit resolution (enroll once known, or withdraw here) clears it. The locator travels only in this request and is never echoed back." />
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Source ID (you name it)" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="MappingSourceIdInput" Margin="0,0,10,6"
+                                     AutomationProperties.AutomationId="MappingSourceIdInput" />
+                            <TextBlock Grid.Row="0" Grid.Column="2" Text="Locator file" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="0" Grid.Column="3" x:Name="MappingLocatorInput" Margin="0,0,0,6"
+                                     AutomationProperties.AutomationId="MappingLocatorInput" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Zone (if known)" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="1" Grid.Column="1" x:Name="MappingZoneInput" Margin="0,0,10,6"
+                                     AutomationProperties.AutomationId="MappingZoneInput" />
+                            <TextBlock Grid.Row="1" Grid.Column="2" Text="Format (if known)" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="1" Grid.Column="3" x:Name="MappingFormatInput" Margin="0,0,0,6"
+                                     AutomationProperties.AutomationId="MappingFormatInput" />
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Format version" Foreground="#FF6B7280" />
+                            <TextBox Grid.Row="2" Grid.Column="1" x:Name="MappingFormatVersionInput" Margin="0,0,10,0"
+                                     AutomationProperties.AutomationId="MappingFormatVersionInput" />
+                        </Grid>
+                        <TextBlock TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280"
+                                   Text="Leave the zone empty when it is unresolved, and the format empty when it is unresolved. The held detail names which field is unresolved; nothing is defaulted." />
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="MappingSubmitButton" Content="Hold mapping for review" Padding="14,7" Click="OnMappingSubmitClicked" />
+                            <Button x:Name="MappingWithdrawButton" Content="Withdraw held mapping" Padding="14,7" Margin="8,0,0,0" Click="OnMappingWithdrawClicked" />
+                        </StackPanel>
+
+                        <TextBlock Text="Refresh pass (only opted-in sources are read)" FontWeight="SemiBold" Margin="0,22,0,0" />
+                        <TextBlock x:Name="RefreshMessageText" TextWrapping="Wrap" Margin="0,6,0,0" FontWeight="SemiBold" />
+                        <ListBox x:Name="RefreshList" Height="90" Margin="0,8,0,0" Background="White" BorderBrush="#FFD5D8DC"
+                                 AutomationProperties.AutomationId="RefreshList" />
+
+                        <TextBlock Text="Collections (selection metadata — never a grant)" FontWeight="SemiBold" Margin="0,22,0,0" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
+                                   Text="A collection organizes resources you name; adding a member never widens a frozen grant or session. The service resolves every member against the live managed resources, so an unknown member is refused instead of stored." />
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="CollectionsRefreshButton" Content="Read collections" Padding="14,7" Click="OnCollectionsRefreshClicked" />
+                        </StackPanel>
+                        <TextBlock x:Name="CollectionsMessageText" TextWrapping="Wrap" Margin="0,10,0,0" FontWeight="SemiBold" />
+                        <ListBox x:Name="CollectionsList" Height="90" Margin="0,8,0,0" Background="White" BorderBrush="#FFD5D8DC"
+                                 AutomationProperties.AutomationId="CollectionsList"
+                                 SelectionChanged="OnCollectionsSelectionChanged" KeyDown="OnCollectionsListKeyDown" />
+                        <Grid Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Collection ID" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="CollectionIdInput" Margin="0,0,0,6"
+                                     AutomationProperties.AutomationId="CollectionIdInput" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Member IDs (comma list)" Foreground="#FF6B7280" />
+                            <TextBox Grid.Row="1" Grid.Column="1" x:Name="CollectionMembersInput"
+                                     AutomationProperties.AutomationId="CollectionMembersInput" />
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="CollectionSaveButton" Content="Save collection membership" Padding="14,7" Click="OnCollectionSaveClicked" />
+                        </StackPanel>
+
+                        <TextBlock Text="Preserved snapshots (explicit opt-in — never automatic)" FontWeight="SemiBold" Margin="0,22,0,0" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
+                                   Text="Preservation freezes one generation's exact bytes with the source reference revision, the generation anchor and a retention you choose. The reference is the registry record of the enrolled locator you name below: register it first (revision 1), then preserve from the revision it reports. A retention is always an explicit future UTC instant. Snapshot content itself is never shown here." />
+                        <TextBlock Text="Reference of the selected source (registry record preservation freezes)" FontWeight="SemiBold" Margin="0,14,0,0" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
+                                   Text="Name the enrolled locator file of the selected source exactly as it was enrolled. The service stores revision 1 of its registry reference with the live availability it observes; only your explicit act registers it, and the locator travels only in that request and is never echoed back." />
+                        <Grid Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Locator file" Foreground="#FF6B7280" />
+                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="SnapshotReferenceLocatorInput"
+                                     AutomationProperties.AutomationId="SnapshotReferenceLocatorInput" />
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="SnapshotReferenceRegisterButton" Content="Register selected reference" Padding="14,7" Click="OnSnapshotReferenceRegisterClicked" />
+                        </StackPanel>
+                        <TextBlock x:Name="SnapshotMessageText" TextWrapping="Wrap" Margin="0,10,0,0" FontWeight="SemiBold" />
+                        <ListBox x:Name="SnapshotsList" Height="90" Margin="0,8,0,0" Background="White" BorderBrush="#FFD5D8DC"
+                                 SelectionChanged="OnSnapshotsSelectionChanged" KeyDown="OnSnapshotsListKeyDown" />
+                        <TextBlock x:Name="SnapshotDetailText" TextWrapping="Wrap" Margin="0,8,0,0" FontFamily="Consolas" />
+                        <Grid Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Source ID" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="SnapshotSourceIdInput" Margin="0,0,10,6"
+                                     AutomationProperties.AutomationId="SnapshotSourceIdInput" />
+                            <TextBlock Grid.Row="0" Grid.Column="2" Text="Source revision" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="0" Grid.Column="3" x:Name="SnapshotSourceRevisionInput" Margin="0,0,0,6"
+                                     AutomationProperties.AutomationId="SnapshotSourceRevisionInput" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Retain until (UTC)" Foreground="#FF6B7280" />
+                            <TextBox Grid.Row="1" Grid.Column="1" x:Name="SnapshotRetainInput" Grid.ColumnSpan="3"
+                                     AutomationProperties.AutomationId="SnapshotRetainInput" />
+                        </Grid>
+                        <TextBlock TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280"
+                                   Text="The retention must be an explicit UTC instant (ISO 8601 with a Z or +00:00 suffix) in the future. Extending a snapshot's retention names the snapshot and its live revision." />
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="SnapshotPreserveButton" Content="Preserve this snapshot" Padding="14,7" Click="OnSnapshotPreserveClicked" />
+                            <Button x:Name="SnapshotRetainButton" Content="Extend selected retention" Padding="14,7" Margin="8,0,0,0" Click="OnSnapshotRetainClicked" />
+                        </StackPanel>
+
+                        <TextBlock Text="Scope and limits of this view" FontWeight="SemiBold" Margin="0,20,0,6" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Enrollment is always explicit: a source enrolls with the zone, format and version you state, and an uncertain mapping is held for review instead of guessed into a default zone. Nothing here enrolls by itself." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• A held mapping was never read: its transcript stays untouched until you enroll it with a known mapping, and withdrawing it enrolls nothing." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• An unregistered format is the service's explicit unsupported diagnostic, never a silent best effort; a missing source names relocation or revocation, never a scan; a replaced or truncated source is quarantined with its checkpoint frozen, and only your explicit re-enrollment adopts the new bytes." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Collections organize; they never grant. Added members never enter a frozen session scope, and an unknown member is refused instead of stored." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Preservation is explicit and scoped: one generation's exact bytes with the source revision it was taken from and the retention you chose. No transcript is migrated automatically and no profile is scanned." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Refresh reads only opted-in sources while unlocked; every other source names its skip reason with no read. Locking stops private reads and refresh." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Keyboard: Enter in a list opens the selected row, F5 in this view re-reads sources, collections and the refresh pass, Ctrl+L locks the vault." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Privacy: this view holds no on-disk cache and echoes no locator. Locking the vault (or losing the service, or ending the session) clears every source, collection, snapshot and draft above, and an answer already in flight is discarded instead of restoring them." />
                     </StackPanel>
                 </Grid>
             </ScrollViewer>

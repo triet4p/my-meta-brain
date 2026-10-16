@@ -63,6 +63,11 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     private OwnerCatalogMapping[]? _renderedCatalog;
     private OwnerAccessRequestInfo[]? _renderedRequests;
     private OwnerAgentSessionInfo[]? _renderedSessions;
+    private long _sourcesFormVersion;
+    private OwnerSourceEnrollment[]? _renderedSources;
+    private OwnerSourceRefreshEntry[]? _renderedRefresh;
+    private OwnerCollectionMapping[]? _renderedCollections;
+    private OwnerSourceSnapshotDescriptor[]? _renderedSnapshots;
 
     internal OwnerConsoleWindow(OwnerConsoleSession session)
     {
@@ -156,6 +161,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         InboxPanel.Visibility = Navigation.SelectedIndex == 4 ? Visibility.Visible : Visibility.Collapsed;
         RelationsPanel.Visibility = Navigation.SelectedIndex == 5 ? Visibility.Visible : Visibility.Collapsed;
         SharingPanel.Visibility = Navigation.SelectedIndex == 6 ? Visibility.Visible : Visibility.Collapsed;
+        SourcesPanel.Visibility = Navigation.SelectedIndex == 7 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void Render()
@@ -231,12 +237,22 @@ public partial class OwnerConsoleWindow : System.Windows.Window
             SyncSharingForm();
         }
 
+        if (_sourcesFormVersion != _session.SourcesFormVersion)
+        {
+            // The session dropped the sources drafts of the epoch that ended
+            // (lock, lost service, end of session): the mapping-review,
+            // collection and snapshot controls of this window go with them.
+            _sourcesFormVersion = _session.SourcesFormVersion;
+            SyncSourcesForm();
+        }
+
         RenderVaultStatus(attached, status);
         RenderVaultKey(attached);
         RenderLibrary(attached);
         RenderInbox(attached);
         RenderRelations(attached);
         RenderSharing(attached);
+        RenderSources(attached);
     }
 
     private string LastCheckText_Value() => _session.LastCheckLocal is { } last
@@ -502,6 +518,12 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         {
             e.Handled = true;
             _ = RefreshSharingAsync();
+        }
+
+        if (e.Key == System.Windows.Input.Key.F5 && Navigation.SelectedIndex == 7)
+        {
+            e.Handled = true;
+            _ = RefreshSourcesForKeyboardAsync();
         }
     }
 

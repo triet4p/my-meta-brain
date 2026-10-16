@@ -102,6 +102,16 @@ internal static partial class OwnerServiceSmoke
                          ServiceRequestHandler.OwnerCatalogListOperation, ServiceRequestHandler.OwnerCatalogWithdrawOperation,
                          ServiceRequestHandler.OwnerAccessRequestListOperation, ServiceRequestHandler.OwnerAccessRequestPreviewOperation,
                          ServiceRequestHandler.OwnerAccessRequestApproveOperation, ServiceRequestHandler.OwnerAccessRequestRejectOperation,
+                         ServiceRequestHandler.SourceEnrollOperation, ServiceRequestHandler.SourceRevokeOperation,
+                         ServiceRequestHandler.SourceStatusOperation, ServiceRequestHandler.SourceIngestOperation,
+                         ServiceRequestHandler.SourceRelocateOperation, ServiceRequestHandler.SourcePauseOperation,
+                         ServiceRequestHandler.SourceResumeOperation, ServiceRequestHandler.SourceRefreshOptInOperation,
+                         ServiceRequestHandler.SourceRefreshOptOutOperation, ServiceRequestHandler.SourceListOperation,
+                         ServiceRequestHandler.SourceRefreshOperation, ServiceRequestHandler.SourceMappingSubmitOperation,
+                         ServiceRequestHandler.SourceMappingResolveOperation, ServiceRequestHandler.SourceSnapshotPreserveOperation,
+                         ServiceRequestHandler.SourceSnapshotListOperation, ServiceRequestHandler.SourceSnapshotReadOperation,
+                         ServiceRequestHandler.SourceSnapshotRetainOperation, ServiceRequestHandler.SourceSnapshotPurgeOperation,
+                         ServiceRequestHandler.OwnerScopeCollectionSetOperation, ServiceRequestHandler.OwnerScopeCollectionListOperation,
                          "owner.sessions", "owner.session.revoke", "owner.catalog.publish", "owner.catalog.list",
                          "owner.request.approve", "owner.access.requests", "owner.scope.list", "resource.read", "resource.write"
                      })

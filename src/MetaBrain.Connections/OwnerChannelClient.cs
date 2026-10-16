@@ -611,11 +611,170 @@ public sealed record OwnerSessionListResult(
     string? ErrorCode,
     long PolicyGeneration,
     OwnerAgentSessionInfo[]? Sessions);
-
 public sealed record OwnerSessionRevokeResult(
     OwnerCommandOutcome Outcome,
     string? ErrorCode,
     string? SessionId);
+
+/// <summary>
+/// One enrolled source exactly as the service reported it. The private locator
+/// is deliberately absent: the owner supplied it at enrollment, and the wire
+/// carries only the mapping the service stores (source ID, zone, declared
+/// format/version, generation and life state) plus the checkpoint, quarantine,
+/// availability and encrypted cache scope the service computed. No transcript
+/// content, locator, key or secret crosses this record.
+/// </summary>
+public sealed record OwnerSourceQuarantine(
+    string Reason,
+    string Detail,
+    DateTimeOffset RecordedAtUtc);
+
+/// <summary>
+/// One enrolled source of the owner allowlist: its explicit mapping, its
+/// enrollment/quarantine/pause life state, its persisted checkpoint summary,
+/// the exact-locator availability observation (for a status read) and the
+/// actual encrypted cache scope (journal/snapshot ciphertext sizes and the
+/// snapshot revision, resolved from the live manifest). A list answer carries
+/// no availability probe; a status answer carries the probe of the exact
+/// enrolled locator only.
+/// </summary>
+public sealed record OwnerSourceEnrollment(
+    string SourceId,
+    string ZoneId,
+    string Format,
+    int FormatVersion,
+    long Generation,
+    string Life,
+    long AnchorLength,
+    DateTimeOffset EnrolledAtUtc,
+    DateTimeOffset? RevokedAtUtc,
+    OwnerSourceQuarantine? Quarantine,
+    string Availability,
+    DateTimeOffset? AvailabilityObservedAtUtc,
+    DateTimeOffset? RelocatedAtUtc,
+    long? SourceReferenceRevision,
+    DateTimeOffset? PausedAtUtc,
+    bool RefreshOptIn,
+    long JournalCiphertextBytes,
+    long SnapshotCiphertextBytes,
+    long SnapshotRevision,
+    long JournalRevision,
+    long ConsumedOffset,
+    int EventCount,
+    int DiagnosticCount,
+    DateTimeOffset? LastIngestAtUtc);
+
+public sealed record OwnerSourceListResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerSourceEnrollment[]? Sources);
+
+public sealed record OwnerSourceStatusResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerSourceEnrollment? Source);
+
+/// <summary>
+/// One ingestion outcome the service reported for a completed explicit owner
+/// ingest: the status token (ingest_advanced, ingest_idle,
+/// ingest_partial_pending), the checkpoint the run acted on and the enrolled
+/// mapping it belongs to. The unsupported diagnostics arrive as explicit
+/// status tokens but stay refusals: they carry no outcome here and remain on
+/// the result's refusal outcome and error code instead of collapsing into a
+/// generic failure, and an unregistered format is an explicit unsupported
+/// refusal rather than a silent best effort.
+/// </summary>
+public sealed record OwnerSourceIngestOutcome(
+    string Status,
+    long ConsumedOffset,
+    int EventsAdded,
+    int DiagnosticsAdded,
+    string? DiagnosticCode,
+    OwnerSourceEnrollment? Enrollment);
+
+public sealed record OwnerSourceIngestResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerSourceIngestOutcome? Ingest);
+
+/// <summary>
+/// One refresh entry of an explicit owner refresh pass: the source, its
+/// refresh status (an ingest outcome for an opted-in active source, or the
+/// exact skip reason with no read for every other source), and the checkpoint
+/// movement of that pass. No transcript content, locator or secret crosses
+/// this record.
+/// </summary>
+public sealed record OwnerSourceRefreshEntry(
+    string SourceId,
+    string Status,
+    long ConsumedOffset,
+    int EventsAdded,
+    int DiagnosticsAdded,
+    string? DiagnosticCode);
+
+public sealed record OwnerSourceRefreshResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerSourceRefreshEntry[]? Entries);
+
+/// <summary>
+/// One owner collection exactly as the service stores it: the collection ID
+/// the owner named and the member resource IDs it currently holds. A
+/// collection is owner-side selection metadata only: adding a member never
+/// widens a frozen grant or session, and the service resolves a collection
+/// into concrete resource revisions only at grant-preview time.
+/// </summary>
+public sealed record OwnerCollectionMapping(
+    string CollectionId,
+    string[] ResourceIds);
+
+public sealed record OwnerCollectionListResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerCollectionMapping[]? Collections);
+
+public sealed record OwnerCollectionSetResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerCollectionMapping? Collection);
+
+/// <summary>
+/// One explicitly preserved source snapshot: its snapshot identity, the zone
+/// it was preserved in, its live revision, the source generation it froze,
+/// the source reference revision it was taken from, the exact byte length and
+/// digest it fingerprints, and the owner-selected retention it carries.
+/// Content itself leaves the service only through the explicit snapshot-read
+/// path the owner names; this record carries no bytes.
+/// </summary>
+public sealed record OwnerSourceSnapshotDescriptor(
+    string Id,
+    string ZoneId,
+    long Revision,
+    long Generation);
+
+public sealed record OwnerSourceSnapshotEntry(
+    string Id,
+    string ZoneId,
+    long Revision,
+    string SourceId,
+    long SourceRevision,
+    long SourceGeneration,
+    long SourceLength,
+    string SourceDigest,
+    DateTimeOffset CapturedAtUtc,
+    DateTimeOffset RetainUntilUtc,
+    bool Purged);
+
+public sealed record OwnerSourceSnapshotListResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerSourceSnapshotDescriptor[]? Snapshots);
+
+public sealed record OwnerSourceSnapshotResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerSourceSnapshotEntry? Snapshot);
+
 
 /// <summary>
 /// The owner-application client of the authenticated owner control channel.
@@ -842,6 +1001,70 @@ public static class OwnerChannelClient
         {
             CryptographicOperations.ZeroMemory(draft);
         }
+    }
+
+    /// <summary>
+    /// Registers the preservation reference of the owner's selected enrolled
+    /// source through the existing S2-T3 registry create: the metadata-only
+    /// record the snapshot preserve freezes. The owner names the enrolled
+    /// locator explicitly in this request (request-file discipline, as with
+    /// enrollment); the service validates it against the live enrollment
+    /// before storing revision 1. No new authority, no transcript read.
+    /// </summary>
+    public static async Task<OwnerSourceReadResult> RegisterSourceReferenceAsync(
+        string controlPipe,
+        string sourceId,
+        string zoneId,
+        string locator,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(sourceId);
+        ArgumentNullException.ThrowIfNull(zoneId);
+        ArgumentNullException.ThrowIfNull(locator);
+        var draftJson = BuildSourceReferenceDraft(locator);
+        try
+        {
+            var reply = await ReadReplyAsync(
+                controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.SourceCreateOperation,
+                    ResourceId: sourceId,
+                    ZoneId: zoneId,
+                    ContentBase64: Convert.ToBase64String(draftJson)),
+                "source_created",
+                cancellationToken).ConfigureAwait(false);
+
+            return new OwnerSourceReadResult(reply.Outcome, reply.ErrorCode, ProjectSource(reply));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(draftJson);
+        }
+    }
+
+    private static byte[] BuildSourceReferenceDraft(string locator)
+    {
+        // The registry requires explicit provenance beside the locator: the
+        // owner asserts the live availability the service will re-observe,
+        // with a direct-write creation method and UTC record time.
+        var draft = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            title = (string?)null,
+            locator,
+            version = "reference-v1",
+            availability = "available",
+            creationMethod = "directWrite",
+            capturedAtUtc = (DateTimeOffset?)null,
+            recordedAtUtc = DateTimeOffset.UtcNow,
+        });
+        if (draft.Length is <= 0 or > 1024 * 1024)
+        {
+            CryptographicOperations.ZeroMemory(draft);
+            throw new ArgumentException("The source reference draft is invalid.", nameof(locator));
+        }
+
+        return draft;
     }
 
     /// <summary>
@@ -1430,6 +1653,32 @@ public static class OwnerChannelClient
     }
 
     /// <summary>
+    /// Runs one bounded ingest for an enrolled source. Completed runs
+    /// (advanced/idle/partial) answer with their status; the unsupported
+    /// diagnostics arrive as explicit status tokens and stay refusals with
+    /// their own code here, as does every other refusal (unknown, revoked,
+    /// paused, quarantined, missing, unreadable). The outcome is the
+    /// service's own: an unregistered format stays an explicit unsupported
+    /// refusal, never a completed save and never a silent best effort.
+    /// </summary>
+    public static async Task<OwnerSourceIngestResult> IngestSourceAsync(
+        string controlPipe,
+        string sourceId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(sourceId);
+        var reply = await ReadIngestReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceIngestOperation,
+                ResourceId: sourceId),
+            cancellationToken).ConfigureAwait(false);
+
+        return ProjectSourceIngest(reply);
+    }
+
+    /// <summary>
     /// Approves exactly the narrowed scope the owner chose — a subset of the
     /// previewed resource IDs and of the requested operations — with an
     /// explicit UTC expiry and optional concrete destinations. Any growth past
@@ -1576,6 +1825,340 @@ public static class OwnerChannelClient
         return new OwnerSessionRevokeResult(reply.Outcome, reply.ErrorCode,
             reply.Outcome == OwnerCommandOutcome.Completed ? sessionId : null);
     }
+    // ---- S5-T7 sources and organization ----
+
+    /// <summary>
+    /// Lists every enrolled source with its life, checkpoint, refresh consent
+    /// and actual encrypted cache scope. Held mapping-unknown submissions are
+    /// reported beside the allowlist with their quarantine record, no mapping
+    /// and no checkpoint. Listing never opens a transcript and never echoes a
+    /// locator: the owner supplied every locator, and the wire carries none.
+    /// </summary>
+    public static async Task<OwnerSourceListResult> ListSourcesAsync(
+        string controlPipe,
+        CancellationToken cancellationToken)
+    {
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.SourceListOperation),
+            "sources_listed",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerSourceListResult(reply.Outcome, reply.ErrorCode, ProjectSourceEnrollments(reply));
+    }
+
+    /// <summary>
+    /// Reads one source's status: its life, checkpoint, quarantine, exact
+    /// availability observation and encrypted cache scope. A held
+    /// mapping-unknown submission reports its quarantine record with no probe.
+    /// </summary>
+    public static async Task<OwnerSourceStatusResult> ReadSourceStatusAsync(
+        string controlPipe,
+        string sourceId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(sourceId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceStatusOperation,
+                ResourceId: sourceId),
+            "source_status",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerSourceStatusResult(reply.Outcome, reply.ErrorCode, ProjectSourceEnrollment(reply));
+    }
+
+
+    /// <summary>
+    /// Submits one source whose zone/format mapping the owner cannot yet
+    /// resolve into the private quarantine. The locator travels only in this
+    /// request; no transcript is opened and no zone is defaulted. The held
+    /// reply names the unresolved field without echoing the locator.
+    /// </summary>
+    public static async Task<OwnerSourceStatusResult> SubmitMappingUnknownAsync(
+        string controlPipe,
+        string sourceId,
+        string locator,
+        string? zoneId,
+        string? format,
+        int? formatVersion,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(sourceId);
+        ArgumentNullException.ThrowIfNull(locator);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceMappingSubmitOperation,
+                ResourceId: sourceId,
+                ZoneId: zoneId,
+                SourceLocator: locator,
+                SourceFormat: format,
+                SourceFormatVersion: formatVersion),
+            "source_mapping_held",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerSourceStatusResult(reply.Outcome, reply.ErrorCode, ProjectSourceEnrollment(reply));
+    }
+
+    /// <summary>
+    /// Withdraws one held mapping-unknown submission without enrolling it.
+    /// The held locator is never opened.
+    /// </summary>
+    public static async Task<OwnerSourceIngestResult> WithdrawMappingUnknownAsync(
+        string controlPipe,
+        string sourceId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(sourceId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceMappingResolveOperation,
+                ResourceId: sourceId),
+            "source_mapping_withdrawn",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerSourceIngestResult(reply.Outcome, reply.ErrorCode, null);
+    }
+
+    /// <summary>
+    /// Pauses one enrolled source: stops status reads, ingest and refresh for
+    /// that source with no transcript open and no checkpoint movement.
+    /// </summary>
+    public static async Task<OwnerSourceStatusResult> PauseSourceAsync(
+        string controlPipe,
+        string sourceId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(sourceId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourcePauseOperation,
+                ResourceId: sourceId),
+            "source_paused",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerSourceStatusResult(reply.Outcome, reply.ErrorCode, ProjectSourceEnrollment(reply));
+    }
+
+    /// <summary>
+    /// Resumes one paused source from its persisted checkpoint: only new
+    /// records are consumed, never duplicates.
+    /// </summary>
+    public static async Task<OwnerSourceStatusResult> ResumeSourceAsync(
+        string controlPipe,
+        string sourceId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(sourceId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceResumeOperation,
+                ResourceId: sourceId),
+            "source_resumed",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerSourceStatusResult(reply.Outcome, reply.ErrorCode, ProjectSourceEnrollment(reply));
+    }
+
+    /// <summary>
+    /// Records the owner's explicit per-source background-refresh consent.
+    /// Refresh runs only for opted-in sources while unlocked.
+    /// </summary>
+    public static async Task<OwnerSourceStatusResult> SetSourceRefreshOptInAsync(
+        string controlPipe,
+        string sourceId,
+        bool optIn,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(sourceId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                optIn ? ServiceRequestHandler.SourceRefreshOptInOperation : ServiceRequestHandler.SourceRefreshOptOutOperation,
+                ResourceId: sourceId),
+            optIn ? "source_refresh_opted_in" : "source_refresh_opted_out",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerSourceStatusResult(reply.Outcome, reply.ErrorCode, ProjectSourceEnrollment(reply));
+    }
+
+    /// <summary>
+    /// Runs one explicit idempotent refresh pass over the owner allowlist.
+    /// Only opted-in active sources are ingested; every other source names
+    /// its skip reason with no read.
+    /// </summary>
+    public static async Task<OwnerSourceRefreshResult> RefreshSourcesAsync(
+        string controlPipe,
+        CancellationToken cancellationToken)
+    {
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.SourceRefreshOperation),
+            "sources_refreshed",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerSourceRefreshResult(reply.Outcome, reply.ErrorCode, ProjectSourceRefresh(reply));
+    }
+
+    /// <summary>
+    /// Lists the owner collections: the collection IDs the owner named and
+    /// the member resource IDs each currently holds. Membership is selection
+    /// metadata only and never widens a grant.
+    /// </summary>
+    public static async Task<OwnerCollectionListResult> ListCollectionsAsync(
+        string controlPipe,
+        CancellationToken cancellationToken)
+    {
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerScopeCollectionListOperation),
+            "scope_collections",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerCollectionListResult(reply.Outcome, reply.ErrorCode, ProjectCollections(reply));
+    }
+
+    /// <summary>
+    /// Saves one owner collection membership: the exact member resource IDs
+    /// the owner named against the collection ID the owner named. The service
+    /// resolves every member against the live managed resources, so an unknown
+    /// member is refused instead of stored; adding a member never widens a
+    /// frozen grant or session.
+    /// </summary>
+    public static async Task<OwnerCollectionSetResult> SetCollectionAsync(
+        string controlPipe,
+        string collectionId,
+        string[] resourceIds,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(collectionId);
+        ArgumentNullException.ThrowIfNull(resourceIds);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerScopeCollectionSetOperation,
+                ResourceIds: resourceIds,
+                CollectionId: collectionId),
+            "collection_set",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerCollectionSetResult(reply.Outcome, reply.ErrorCode, ProjectCollection(reply));
+    }
+
+    /// <summary>
+    /// Lists the explicitly preserved snapshots of one enrolled source: one
+    /// descriptor per generation with its live revision.
+    /// </summary>
+    public static async Task<OwnerSourceSnapshotListResult> ListSourceSnapshotsAsync(
+        string controlPipe,
+        string sourceId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(sourceId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceSnapshotListOperation,
+                ResourceId: sourceId),
+            "source_snapshots",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerSourceSnapshotListResult(reply.Outcome, reply.ErrorCode, ProjectSnapshotDescriptors(reply));
+    }
+
+    /// <summary>
+    /// Explicitly preserves one enrolled source generation: the exact bytes
+    /// of the enrolled generation are frozen with the source reference
+    /// revision, the generation anchor and the owner-selected future UTC
+    /// retention. Nothing is migrated automatically.
+    /// </summary>
+    public static async Task<OwnerSourceSnapshotResult> PreserveSourceSnapshotAsync(
+        string controlPipe,
+        string sourceId,
+        long sourceRevision,
+        DateTimeOffset retainUntilUtc,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(sourceId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceSnapshotPreserveOperation,
+                ResourceId: sourceId,
+                ResourceRevision: sourceRevision,
+                SnapshotRetainUntilUtc: retainUntilUtc),
+            "source_snapshot_preserved",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerSourceSnapshotResult(reply.Outcome, reply.ErrorCode, ProjectSnapshot(reply));
+    }
+
+    /// <summary>
+    /// Opens one explicitly preserved snapshot by its own snapshot ID and
+    /// live revision: the service rechecks the live revision and serves the
+    /// frozen metadata. Snapshot content itself never crosses this record;
+    /// this is the inspect path the snapshot list rows open through.
+    /// </summary>
+    public static async Task<OwnerSourceSnapshotResult> ReadSourceSnapshotAsync(
+        string controlPipe,
+        string snapshotId,
+        long expectedRevision,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(snapshotId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceSnapshotReadOperation,
+                ResourceId: snapshotId,
+                ResourceRevision: expectedRevision),
+            "source_snapshot",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerSourceSnapshotResult(reply.Outcome, reply.ErrorCode, ProjectSnapshot(reply));
+    }
+
+    /// <summary>
+    /// Extends one preserved snapshot's retention to a new explicit future
+    /// UTC instant.
+    /// </summary>
+    public static async Task<OwnerSourceSnapshotResult> RetainSourceSnapshotAsync(
+        string controlPipe,
+        string snapshotId,
+        long expectedRevision,
+        DateTimeOffset retainUntilUtc,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(snapshotId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceSnapshotRetainOperation,
+                ResourceId: snapshotId,
+                ResourceRevision: expectedRevision,
+                SnapshotRetainUntilUtc: retainUntilUtc),
+            "source_snapshot_retained",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerSourceSnapshotResult(reply.Outcome, reply.ErrorCode, ProjectSnapshot(reply));
+    }
+
 
     private static async Task<OwnerRelationResult> TransitionRelationAsync(
         string controlPipe,
@@ -2473,6 +3056,359 @@ public static class OwnerChannelClient
 
         return projected.ToArray();
     }
+    // ---- S5-T7 sources and organization projections ----
+
+    // Ingest has its own reply reader because the service reports explicit
+    // run outcomes as status replies: the unsupported diagnostics arrive as
+    // status tokens (not error-code replies), like advanced/idle/partial.
+    // A status reply completes here with its token; an error-code reply
+    // stays a refusal with the service's error code, so the console log and
+    // outcome never present a refusal as a completed save.
+
+    private static async Task<OwnerReply> ReadIngestReplyAsync(
+        string controlPipe,
+        ServiceRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!IsValidControlPipe(controlPipe))
+        {
+            throw new ArgumentException("The owner control pipe name is invalid.", nameof(controlPipe));
+        }
+
+        var requestJson = System.Text.Json.JsonSerializer.Serialize(request, JsonOptions);
+        var result = await PipeClient.InvokeOwnerAsync(controlPipe, requestJson, cancellationToken).ConfigureAwait(false);
+
+        System.Text.Json.JsonDocument document;
+        try
+        {
+            document = System.Text.Json.JsonDocument.Parse(result.Json);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return OwnerReply.Unavailable("malformed_reply");
+        }
+
+        using (document)
+        {
+            var reply = document.RootElement;
+            if (reply.ValueKind != System.Text.Json.JsonValueKind.Object)
+            {
+                return OwnerReply.Unavailable("malformed_reply");
+            }
+
+            if (reply.TryGetProperty("error", out var error) && error.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                var code = error.GetString()!;
+                return code switch
+                {
+                    "forbidden" or "unauthorized" => new OwnerReply(OwnerCommandOutcome.OwnerAuthorityDenied, OwnerVaultState.Unknown, code, null, default),
+                    "unsupported_protocol" => new OwnerReply(OwnerCommandOutcome.ProtocolMismatch, OwnerVaultState.Unknown, code, null, default),
+                    _ => IsLocalTransportCode(code)
+                        ? OwnerReply.Unavailable(code)
+                        : new OwnerReply(OwnerCommandOutcome.Refused, OwnerVaultState.Unknown, code, null, default)
+                };
+            }
+
+            if (!HasText(reply, "principal", "owner"))
+            {
+                return new OwnerReply(OwnerCommandOutcome.OwnerAuthorityDenied, OwnerVaultState.Unknown, "owner_plane_mismatch", null, default);
+            }
+
+            var state = reply.TryGetProperty("vaultState", out var vault) && vault.ValueKind == System.Text.Json.JsonValueKind.String
+                ? MapVaultState(vault.GetString())
+                : OwnerVaultState.Unknown;
+            return new OwnerReply(OwnerCommandOutcome.Completed, state, null, null, reply.Clone());
+        }
+    }
+
+    private static OwnerSourceEnrollment[]? ProjectSourceEnrollments(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            reply.Payload.ValueKind != System.Text.Json.JsonValueKind.Object ||
+            !reply.Payload.TryGetProperty("sourceEnrollments", out var enrollments) ||
+            enrollments.ValueKind != System.Text.Json.JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var projected = new List<OwnerSourceEnrollment>();
+        foreach (var element in enrollments.EnumerateArray())
+        {
+            if (element.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                ProjectSourceEnrollmentElement(element, null) is { } enrollment)
+            {
+                projected.Add(enrollment);
+            }
+        }
+
+        return projected.ToArray();
+    }
+
+    private static OwnerSourceEnrollment? ProjectSourceEnrollment(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            reply.Payload.ValueKind != System.Text.Json.JsonValueKind.Object ||
+            !reply.Payload.TryGetProperty("sourceEnrollment", out var enrollment) ||
+            enrollment.ValueKind != System.Text.Json.JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        System.Text.Json.JsonElement? journal = null;
+        if (reply.Payload.TryGetProperty("sourceIngestion", out var journalElement) &&
+            journalElement.ValueKind == System.Text.Json.JsonValueKind.Object)
+        {
+            journal = journalElement;
+        }
+
+        return ProjectSourceEnrollmentElement(enrollment, journal);
+    }
+
+    /// <summary>
+    /// One enrollment element as the wire carried it. The wire carries no
+    /// locator by design; an element without its source ID is not an
+    /// enrollment this client can render, so it is reported as no enrollment
+    /// rather than as a mapping with an invented identity.
+    /// </summary>
+    private static OwnerSourceEnrollment? ProjectSourceEnrollmentElement(System.Text.Json.JsonElement enrollment, System.Text.Json.JsonElement? journal)
+    {
+        if (!enrollment.TryGetProperty("sourceId", out var id) || id.ValueKind != System.Text.Json.JsonValueKind.String)
+        {
+            return null;
+        }
+
+        OwnerSourceQuarantine? quarantine = null;
+        if (enrollment.TryGetProperty("quarantine", out var quarantineElement) &&
+            quarantineElement.ValueKind == System.Text.Json.JsonValueKind.Object)
+        {
+            var recordedAt = Timestamp(quarantineElement, "recordedAtUtc");
+            if (recordedAt is not null)
+            {
+                quarantine = new OwnerSourceQuarantine(
+                    Text(quarantineElement, "reason") ?? "unknown",
+                    Text(quarantineElement, "detail") ?? string.Empty,
+                    recordedAt.Value);
+            }
+        }
+
+        return new OwnerSourceEnrollment(
+            id.GetString() ?? string.Empty,
+            Text(enrollment, "zoneId") ?? "(unresolved)",
+            Text(enrollment, "format") ?? "(unresolved)",
+            enrollment.TryGetProperty("formatVersion", out var formatVersion) && formatVersion.ValueKind == System.Text.Json.JsonValueKind.Number
+                ? formatVersion.GetInt32() : 0,
+            Int64(enrollment, "generation"),
+            Text(enrollment, "life") ?? "unknown",
+            Int64(enrollment, "anchorLength"),
+            Timestamp(enrollment, "enrolledAtUtc") ?? DateTimeOffset.MinValue,
+            Timestamp(enrollment, "revokedAtUtc"),
+            quarantine,
+            Text(enrollment, "availability") ?? "unknown",
+            Timestamp(enrollment, "availabilityObservedAtUtc"),
+            Timestamp(enrollment, "relocatedAtUtc"),
+            OptionalInt64(enrollment, "sourceReferenceRevision"),
+            Timestamp(enrollment, "pausedAtUtc"),
+            Flag(enrollment, "refreshOptIn"),
+            Int64(enrollment, "journalCiphertextBytes"),
+            Int64(enrollment, "snapshotCiphertextBytes"),
+            Int64(enrollment, "snapshotRevision"),
+            journal is { } journalValue ? Int64(journalValue, "journalRevision") : 0,
+            journal is { } journalValue2 ? Int64(journalValue2, "consumedOffset") : 0,
+            journal is { } journalValue3 ? Int32(journalValue3, "eventCount") : 0,
+            journal is { } journalValue4 ? Int32(journalValue4, "diagnosticCount") : 0,
+            journal is { } journalValue5 ? Timestamp(journalValue5, "lastIngestUtc") : null);
+    }
+
+    private static OwnerSourceIngestResult ProjectSourceIngest(OwnerReply reply)
+    {
+        // The service's own shape is authoritative: a status reply carries
+        // the run outcome token, and an error-code reply carries the refusal
+        // code. The unsupported diagnostics are explicit refusals of the run
+        // with their own refusal code: they keep a refusal outcome and the
+        // service's code here so the console, the session log and the CLI
+        // never present them as a completed save. Completed runs project
+        // their status outcome with the checkpoint they acted on.
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            reply.Payload.ValueKind != System.Text.Json.JsonValueKind.Object ||
+            !reply.Payload.TryGetProperty("status", out var status) ||
+            status.ValueKind != System.Text.Json.JsonValueKind.String)
+        {
+            return new OwnerSourceIngestResult(reply.Outcome, reply.ErrorCode, null);
+        }
+
+        var statusText = status.GetString() ?? string.Empty;
+        if (statusText is "ingest_unsupported_format" or "ingest_unsupported_record")
+        {
+            return new OwnerSourceIngestResult(OwnerCommandOutcome.Refused, statusText, null);
+        }
+
+        System.Text.Json.JsonElement? journal = null;
+        if (reply.Payload.TryGetProperty("sourceIngestion", out var journalElement) &&
+            journalElement.ValueKind == System.Text.Json.JsonValueKind.Object)
+        {
+            journal = journalElement;
+        }
+
+        OwnerSourceEnrollment? enrollment = null;
+        if (reply.Payload.TryGetProperty("sourceEnrollment", out var enrollmentElement) &&
+            enrollmentElement.ValueKind == System.Text.Json.JsonValueKind.Object)
+        {
+            enrollment = ProjectSourceEnrollmentElement(enrollmentElement, journal);
+        }
+
+        return new OwnerSourceIngestResult(reply.Outcome, null, new OwnerSourceIngestOutcome(
+            status.GetString() ?? string.Empty,
+            journal is { } journalValue ? Int64(journalValue, "consumedOffset") : 0,
+            0,
+            journal is { } journalValue2 ? Int32(journalValue2, "diagnosticCount") : 0,
+            journal is { } journalValue3 && journalValue3.TryGetProperty("diagnosticCode", out var diagnostic) && diagnostic.ValueKind == System.Text.Json.JsonValueKind.String
+                ? diagnostic.GetString() : null,
+            enrollment));
+    }
+
+    private static OwnerSourceRefreshEntry[]? ProjectSourceRefresh(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            reply.Payload.ValueKind != System.Text.Json.JsonValueKind.Object ||
+            !reply.Payload.TryGetProperty("sourceRefresh", out var entries) ||
+            entries.ValueKind != System.Text.Json.JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var projected = new List<OwnerSourceRefreshEntry>();
+        foreach (var element in entries.EnumerateArray())
+        {
+            if (element.ValueKind != System.Text.Json.JsonValueKind.Object ||
+                !element.TryGetProperty("sourceId", out var id) || id.ValueKind != System.Text.Json.JsonValueKind.String)
+            {
+                continue;
+            }
+
+            projected.Add(new OwnerSourceRefreshEntry(
+                id.GetString() ?? string.Empty,
+                Text(element, "status") ?? "unknown",
+                Int64(element, "consumedOffset"),
+                Int32(element, "eventsAdded"),
+                Int32(element, "diagnosticsAdded"),
+                Text(element, "diagnosticCode")));
+        }
+
+        return projected.ToArray();
+    }
+
+    private static OwnerCollectionMapping[]? ProjectCollections(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            reply.Payload.ValueKind != System.Text.Json.JsonValueKind.Object ||
+            !reply.Payload.TryGetProperty("scopeCollections", out var collections) ||
+            collections.ValueKind != System.Text.Json.JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var projected = new List<OwnerCollectionMapping>();
+        foreach (var element in collections.EnumerateArray())
+        {
+            if (ProjectCollectionElement(element) is { } collection)
+            {
+                projected.Add(collection);
+            }
+        }
+
+        return projected.ToArray();
+    }
+
+    private static OwnerCollectionMapping? ProjectCollection(OwnerReply reply) =>
+        reply.Outcome == OwnerCommandOutcome.Completed &&
+        reply.Payload.ValueKind == System.Text.Json.JsonValueKind.Object &&
+        reply.Payload.TryGetProperty("scopeCollections", out var collections) &&
+        collections.ValueKind == System.Text.Json.JsonValueKind.Array &&
+        collections.GetArrayLength() == 1 &&
+        collections[0].ValueKind == System.Text.Json.JsonValueKind.Object
+            ? ProjectCollectionElement(collections[0])
+            : null;
+
+    private static OwnerCollectionMapping? ProjectCollectionElement(System.Text.Json.JsonElement collection)
+    {
+        if (!collection.TryGetProperty("collectionId", out var id) || id.ValueKind != System.Text.Json.JsonValueKind.String)
+        {
+            return null;
+        }
+
+        var members = collection.TryGetProperty("resourceIds", out var resourceIds) &&
+            resourceIds.ValueKind == System.Text.Json.JsonValueKind.Array
+                ? resourceIds.EnumerateArray()
+                    .Where(member => member.ValueKind == System.Text.Json.JsonValueKind.String)
+                    .Select(member => member.GetString()!)
+                    .ToArray()
+                : Array.Empty<string>();
+        return new OwnerCollectionMapping(id.GetString() ?? string.Empty, members);
+    }
+
+    private static OwnerSourceSnapshotDescriptor[]? ProjectSnapshotDescriptors(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            reply.Payload.ValueKind != System.Text.Json.JsonValueKind.Object ||
+            !reply.Payload.TryGetProperty("sourceSnapshots", out var snapshots) ||
+            snapshots.ValueKind != System.Text.Json.JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var projected = new List<OwnerSourceSnapshotDescriptor>();
+        foreach (var element in snapshots.EnumerateArray())
+        {
+            if (element.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                element.TryGetProperty("id", out var id) && id.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                projected.Add(new OwnerSourceSnapshotDescriptor(
+                    id.GetString() ?? string.Empty,
+                    Text(element, "zoneId") ?? string.Empty,
+                    Int64(element, "revision"),
+                    Int64(element, "generation")));
+            }
+        }
+
+        return projected.ToArray();
+    }
+
+    private static OwnerSourceSnapshotEntry? ProjectSnapshot(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            reply.Payload.ValueKind != System.Text.Json.JsonValueKind.Object ||
+            !reply.Payload.TryGetProperty("sourceSnapshot", out var snapshot) ||
+            snapshot.ValueKind != System.Text.Json.JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        if (!snapshot.TryGetProperty("id", out var id) || id.ValueKind != System.Text.Json.JsonValueKind.String)
+        {
+            return null;
+        }
+
+        var capturedAt = Timestamp(snapshot, "capturedAtUtc");
+        var retainUntil = Timestamp(snapshot, "retainUntilUtc");
+        if (capturedAt is null || retainUntil is null)
+        {
+            return null;
+        }
+
+        return new OwnerSourceSnapshotEntry(
+            id.GetString() ?? string.Empty,
+            Text(snapshot, "zoneId") ?? string.Empty,
+            Int64(snapshot, "revision"),
+            Text(snapshot, "sourceId") ?? string.Empty,
+            Int64(snapshot, "sourceRevision"),
+            Int64(snapshot, "sourceGeneration"),
+            Int64(snapshot, "sourceLength"),
+            Text(snapshot, "sourceDigest") ?? string.Empty,
+            capturedAt.Value,
+            retainUntil.Value,
+            snapshot.TryGetProperty("purged", out var purged) && purged.ValueKind == System.Text.Json.JsonValueKind.True);
+    }
+
 
     /// <summary>One item's live publication record.</summary>
     private static OwnerLifecycleState? ProjectLifecycle(OwnerReply reply)

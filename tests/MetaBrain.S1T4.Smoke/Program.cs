@@ -34,12 +34,13 @@ internal static class Program
              string.Equals(args[0], "s4-t7", StringComparison.Ordinal) ||
              string.Equals(args[0], "s4-t7-client-fixture", StringComparison.Ordinal) ||
              string.Equals(args[0], "s4-t6-client-fixture", StringComparison.Ordinal) ||
-            string.Equals(args[0], "s5-t1", StringComparison.Ordinal) ||
+             string.Equals(args[0], "s5-t1", StringComparison.Ordinal) ||
              string.Equals(args[0], "s5-t2", StringComparison.Ordinal) ||
              string.Equals(args[0], "s5-t3", StringComparison.Ordinal) ||
              string.Equals(args[0], "s5-t4", StringComparison.Ordinal) ||
              string.Equals(args[0], "s5-t5", StringComparison.Ordinal) ||
-             string.Equals(args[0], "s5-t6", StringComparison.Ordinal))
+             string.Equals(args[0], "s5-t6", StringComparison.Ordinal) ||
+             string.Equals(args[0], "s5-t7", StringComparison.Ordinal))
             ? args[0]
             : args.Length == 3 &&
               (string.Equals(args[0], "s5-t1-console-fixture", StringComparison.Ordinal) ||
@@ -49,10 +50,9 @@ internal static class Program
                string.Equals(args[0], "s5-t4-console-fixture", StringComparison.Ordinal) ||
                string.Equals(args[0], "s5-t4-console-inbox", StringComparison.Ordinal) ||
                string.Equals(args[0], "s5-t4-console-proposals", StringComparison.Ordinal) ||
-               string.Equals(args[0], "s5-t5-console-fixture", StringComparison.Ordinal) ||
-               string.Equals(args[0], "s5-t5-console-corpus", StringComparison.Ordinal) ||
-               string.Equals(args[0], "s5-t6-console-fixture", StringComparison.Ordinal) ||
-               string.Equals(args[0], "s5-t6-console-corpus", StringComparison.Ordinal))
+               string.Equals(args[0], "s5-t6-console-corpus", StringComparison.Ordinal) ||
+               string.Equals(args[0], "s5-t7-console-fixture", StringComparison.Ordinal) ||
+               string.Equals(args[0], "s5-t7-console-corpus", StringComparison.Ordinal))
                 ? args[0]
                 : null;
         var executable = scenario is not null ? args[1] : args.Length == 1 ? args[0] : null;
@@ -169,6 +169,9 @@ internal static class Program
                 case "s5-t6":
                     await OwnerServiceSmoke.RunS5T6SharingAsync(fullPath).ConfigureAwait(false);
                     break;
+                case "s5-t7":
+                    await OwnerServiceSmoke.RunS5T7SourcesAsync(fullPath).ConfigureAwait(false);
+                    break;
                 case "s5-t1-console-fixture":
                     await OwnerServiceSmoke.RunS5T1OwnerUiFixtureAsync(Path.GetFullPath(args[2])).ConfigureAwait(false);
                     break;
@@ -201,6 +204,12 @@ internal static class Program
                     break;
                 case "s5-t6-console-corpus":
                     await OwnerServiceSmoke.S5T6WriteConsoleCorpusAsync(fullPath, Path.GetFullPath(args[2])).ConfigureAwait(false);
+                    break;
+                case "s5-t7-console-fixture":
+                    await OwnerServiceSmoke.RunS5T7ConsoleFixtureAsync(Path.GetFullPath(args[2])).ConfigureAwait(false);
+                    break;
+                case "s5-t7-console-corpus":
+                    await OwnerServiceSmoke.S5T7WriteConsoleCorpusAsync(fullPath, Path.GetFullPath(args[2])).ConfigureAwait(false);
                     break;
                 case "agent-session":
                     await OwnerServiceSmoke.RunAgentSessionAsync(fullPath).ConfigureAwait(false);
