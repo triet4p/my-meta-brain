@@ -59,6 +59,10 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     private OwnerConsoleSession.RelationEndpointPick[]? _renderedRelationCandidates;
     private OwnerConsoleSession.RelationEndpointPick? _relationSubject;
     private OwnerConsoleSession.RelationEndpointPick? _relationObject;
+    private long _sharingFormVersion;
+    private OwnerCatalogMapping[]? _renderedCatalog;
+    private OwnerAccessRequestInfo[]? _renderedRequests;
+    private OwnerAgentSessionInfo[]? _renderedSessions;
 
     internal OwnerConsoleWindow(OwnerConsoleSession session)
     {
@@ -151,6 +155,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         LibraryPanel.Visibility = Navigation.SelectedIndex == 3 ? Visibility.Visible : Visibility.Collapsed;
         InboxPanel.Visibility = Navigation.SelectedIndex == 4 ? Visibility.Visible : Visibility.Collapsed;
         RelationsPanel.Visibility = Navigation.SelectedIndex == 5 ? Visibility.Visible : Visibility.Collapsed;
+        SharingPanel.Visibility = Navigation.SelectedIndex == 6 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void Render()
@@ -216,11 +221,22 @@ public partial class OwnerConsoleWindow : System.Windows.Window
             SyncRelationForm();
         }
 
+        if (_sharingFormVersion != _session.SharingFormVersion)
+        {
+            // The session dropped the sharing drafts of the epoch that ended
+            // (lock, lost service, end of session): the publication, narrowing
+            // and handoff controls of this window go with them, so no draft of
+            // a finished epoch stays on screen and none can be sent later.
+            _sharingFormVersion = _session.SharingFormVersion;
+            SyncSharingForm();
+        }
+
         RenderVaultStatus(attached, status);
         RenderVaultKey(attached);
         RenderLibrary(attached);
         RenderInbox(attached);
         RenderRelations(attached);
+        RenderSharing(attached);
     }
 
     private string LastCheckText_Value() => _session.LastCheckLocal is { } last
@@ -480,6 +496,12 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         {
             e.Handled = true;
             _ = _session.RefreshRelationsAsync();
+        }
+
+        if (e.Key == System.Windows.Input.Key.F5 && Navigation.SelectedIndex == 6)
+        {
+            e.Handled = true;
+            _ = RefreshSharingAsync();
         }
     }
 
@@ -1630,5 +1652,38 @@ public partial class OwnerConsoleWindow : System.Windows.Window
                 "  span=" + span + "  status=" + Citation.Status + "  availability=" + Citation.Availability +
                 (Citation.Warning is null ? string.Empty : "  warning=" + Citation.Warning);
         }
+    }
+
+    /// <summary>
+    /// One catalog mapping exactly as the service listed it, rendered as one line.
+    /// </summary>
+    private sealed record CatalogRow(OwnerCatalogMapping Entry)
+    {
+        public override string ToString() =>
+            "catalog " + Entry.CatalogId + "  label=" + Entry.Label +
+            "  resource=" + Entry.ResourceId + "@" + Entry.Revision.ToString(CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// One access request exactly as the service listed it, rendered as one line.
+    /// </summary>
+    private sealed record AccessRequestRow(OwnerAccessRequestInfo Request)
+    {
+        public override string ToString() =>
+            "request " + Request.RequestId + "  status=" + Request.Status +
+            "  purpose=" + Request.Purpose +
+            "  catalogs=" + (Request.CatalogIds.Length == 0 ? "(none)" : string.Join(",", Request.CatalogIds)) +
+            "  operations=" + (Request.RequestedOperations.Length == 0 ? "(none)" : string.Join(",", Request.RequestedOperations));
+    }
+
+    /// <summary>
+    /// One live session exactly as the service listed it, rendered as one line.
+    /// </summary>
+    private sealed record AgentSessionRow(OwnerAgentSessionInfo Session)
+    {
+        public override string ToString() =>
+            "session " + Session.SessionId + "  grant=" + Session.GrantId +
+            "  expires=" + Session.ExpiresAtUtc.ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture) +
+            "  operations=" + (Session.Operations.Length == 0 ? "(none)" : string.Join(",", Session.Operations));
     }
 }

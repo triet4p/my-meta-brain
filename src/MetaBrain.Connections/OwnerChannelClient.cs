@@ -463,6 +463,161 @@ public sealed record OwnerRelationResult(
     OwnerRelation? Relation);
 
 /// <summary>
+/// One owner-approved catalog mapping exactly as the service stores it. The
+/// resource/revision pair is the private mapping and stays on the owner
+/// channel; only the catalog ID, label and description ever reach discovery.
+/// </summary>
+public sealed record OwnerCatalogMapping(
+    string CatalogId,
+    string Label,
+    string Description,
+    string ResourceId,
+    long Revision,
+    DateTimeOffset UpdatedAtUtc);
+
+/// <summary>
+/// What publication of one catalog entry would store, plus the live revision
+/// of the mapped resource. Mutates nothing and mints no access.
+/// </summary>
+public sealed record OwnerCatalogPreviewEntry(
+    string CatalogId,
+    string Label,
+    string Description,
+    string ResourceId,
+    long ResourceRevision,
+    OwnerCatalogMapping? ExistingEntry);
+
+public sealed record OwnerCatalogPreviewResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerCatalogPreviewEntry? Preview);
+
+public sealed record OwnerCatalogListResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerCatalogMapping[]? Entries);
+
+public sealed record OwnerCatalogPublishResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    string? CatalogId);
+
+public sealed record OwnerCatalogWithdrawResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    string? CatalogId);
+
+/// <summary>One concrete resource/revision pair inside a frozen owner-approved scope.</summary>
+public sealed record OwnerScopeResource(string ResourceId, string ZoneId, long Revision);
+
+/// <summary>
+/// One access request as the owner sees it: the agent's catalog IDs, purpose,
+/// declared provider/disclosure context and requested operations, plus the
+/// resolved resource snapshot and the terminal decision, if any. A pending
+/// request is never permission: only an explicit owner approval mints a grant.
+/// </summary>
+public sealed record OwnerAccessRequestInfo(
+    string RequestId,
+    string[] CatalogIds,
+    string Purpose,
+    string? AgentId,
+    string? AgentContext,
+    string? Provider,
+    string? Model,
+    string? DisclosureContext,
+    string[] RequestedOperations,
+    OwnerScopeResource[] ResolvedResources,
+    DateTimeOffset CreatedAtUtc,
+    string Status,
+    string? ApprovedGrantId,
+    DateTimeOffset? DecidedAtUtc);
+
+/// <summary>One previewed request body: the exact resource bytes the vault holds, decoded for the owner's eyes only.</summary>
+public sealed record OwnerAccessRequestBody(string ResourceId, string Text);
+
+/// <summary>
+/// The bound snapshot an approval would mint: the exact resources/revisions,
+/// operations, purpose and disclosure the owner saw, with the bodies shown
+/// once on the attached owner console. Held only in memory; a revision,
+/// membership or catalog change between this preview and the approval fails
+/// the approval closed.
+/// </summary>
+public sealed record OwnerAccessRequestPreviewInfo(
+    string PreviewId,
+    string RequestId,
+    string[] CatalogIds,
+    OwnerScopeResource[] Resources,
+    string[] Operations,
+    string Purpose,
+    string? AgentId,
+    string? AgentContext,
+    string? Provider,
+    string? Model,
+    string? DisclosureContext,
+    DateTimeOffset CreatedAtUtc,
+    long PolicyGeneration,
+    long UnlockEpoch,
+    OwnerAccessRequestBody[] Bodies);
+
+public sealed record OwnerAccessRequestListResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerAccessRequestInfo[]? Requests);
+
+public sealed record OwnerAccessRequestPreviewResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerAccessRequestPreviewInfo? Preview);
+
+/// <summary>
+/// What one explicit owner approval minted. The bearer itself is never
+/// returned here: it travels only into the DPAPI-protected local handoff file
+/// at <see cref="HandoffPath"/>, and the console shows that path, never the token.
+/// </summary>
+public sealed record OwnerAccessApprovalResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    string? GrantId,
+    string? HandoffPath);
+
+public sealed record OwnerAccessRejectResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    string? RequestId);
+
+/// <summary>One provider-egress ceiling inside a frozen session snapshot.</summary>
+public sealed record OwnerSessionEgress(string Provider, string Model, decimal MaximumCostUsd);
+
+/// <summary>
+/// One live agent session as the owner sees it: the frozen grant snapshot
+/// (concrete IDs/revisions, operations, destinations, expiry, egress) with no
+/// verifier or bearer material. Added members or revisions never enter this
+/// snapshot afterwards.
+/// </summary>
+public sealed record OwnerAgentSessionInfo(
+    string SessionId,
+    string GrantId,
+    OwnerScopeResource[] Resources,
+    string[] Operations,
+    OwnerScopeResource[] Destinations,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset ExpiresAtUtc,
+    OwnerSessionEgress? Egress,
+    long PolicyGeneration,
+    long UnlockEpoch);
+
+public sealed record OwnerSessionListResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    long PolicyGeneration,
+    OwnerAgentSessionInfo[]? Sessions);
+
+public sealed record OwnerSessionRevokeResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    string? SessionId);
+
+/// <summary>
 /// The owner-application client of the authenticated owner control channel.
 /// It owns no key material and no authority: every call is an ordinary service
 /// request whose owner authority the service derives from the caller's Windows
@@ -1123,6 +1278,305 @@ public static class OwnerChannelClient
         TransitionRelationAsync(
             controlPipe, ServiceRequestHandler.RelationRelinkOperation, "relation_relinked", relation, rationale: null, cancellationToken);
 
+    // ---- S5-T6 catalog/access-request/session console ----
+
+    /// <summary>
+    /// Shows what publication of one catalog entry would store, plus the live
+    /// revision of the mapped resource. Mutates nothing and mints no access.
+    /// The label and description are explicit owner text: unlike the CLI path,
+    /// this console call carries no private-title/path/citation autofill, and
+    /// the service derives nothing from the mapped resource either.
+    /// </summary>
+    public static async Task<OwnerCatalogPreviewResult> PreviewCatalogAsync(
+        string controlPipe,
+        string catalogId,
+        string label,
+        string description,
+        string resourceId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(catalogId);
+        ArgumentNullException.ThrowIfNull(label);
+        ArgumentNullException.ThrowIfNull(description);
+        ArgumentNullException.ThrowIfNull(resourceId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerCatalogPreviewOperation,
+                ResourceId: resourceId,
+                CatalogId: catalogId,
+                Label: label,
+                Description: description),
+            "catalog_preview",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerCatalogPreviewResult(reply.Outcome, reply.ErrorCode, ProjectCatalogPreview(reply));
+    }
+
+    /// <summary>
+    /// Publishes exactly the owner-typed label/description against the mapped
+    /// resource. Only the ID/label/description triplet reaches discovery; the
+    /// private mapping stays encrypted.
+    /// </summary>
+    public static async Task<OwnerCatalogPublishResult> PublishCatalogAsync(
+        string controlPipe,
+        string catalogId,
+        string label,
+        string description,
+        string resourceId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(catalogId);
+        ArgumentNullException.ThrowIfNull(label);
+        ArgumentNullException.ThrowIfNull(description);
+        ArgumentNullException.ThrowIfNull(resourceId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerCatalogPublishOperation,
+                ResourceId: resourceId,
+                CatalogId: catalogId,
+                Label: label,
+                Description: description),
+            "catalog_published",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerCatalogPublishResult(
+            reply.Outcome, reply.ErrorCode,
+            reply.Outcome == OwnerCommandOutcome.Completed ? Text(reply.Payload, "catalogId") : null);
+    }
+
+    /// <summary>
+    /// Lists the private owner catalog mappings on the owner channel only.
+    /// Discovery stays public-triplet only.
+    /// </summary>
+    public static async Task<OwnerCatalogListResult> ListCatalogAsync(
+        string controlPipe,
+        CancellationToken cancellationToken)
+    {
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerCatalogListOperation),
+            "catalog_entries",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerCatalogListResult(reply.Outcome, reply.ErrorCode, ProjectCatalogEntries(reply));
+    }
+
+    /// <summary>
+    /// Withdraws one catalog entry so future discovery converges to no-match.
+    /// Already delivered copies cannot be recalled.
+    /// </summary>
+    public static async Task<OwnerCatalogWithdrawResult> WithdrawCatalogAsync(
+        string controlPipe,
+        string catalogId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(catalogId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerCatalogWithdrawOperation,
+                CatalogId: catalogId),
+            "catalog_withdrawn",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerCatalogWithdrawResult(
+            reply.Outcome, reply.ErrorCode,
+            reply.Outcome == OwnerCommandOutcome.Completed ? Text(reply.Payload, "catalogId") ?? catalogId : null);
+    }
+
+    /// <summary>
+    /// Lists the pending access requests with their purpose, catalogs and
+    /// resolved snapshots. A listed request is never permission.
+    /// </summary>
+    public static async Task<OwnerAccessRequestListResult> ListAccessRequestsAsync(
+        string controlPipe,
+        CancellationToken cancellationToken)
+    {
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerAccessRequestListOperation),
+            "access_requests",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerAccessRequestListResult(reply.Outcome, reply.ErrorCode, ProjectAccessRequests(reply));
+    }
+
+    /// <summary>
+    /// Binds one pending request to its frozen snapshot and decodes the exact
+    /// resource bodies the vault holds, for the owner's eyes on this console
+    /// only. Nothing is written to disk by the caller.
+    /// </summary>
+    public static async Task<OwnerAccessRequestPreviewResult> PreviewAccessRequestAsync(
+        string controlPipe,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(requestId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerAccessRequestPreviewOperation,
+                RequestId: requestId),
+            "access_request_preview",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerAccessRequestPreviewResult(reply.Outcome, reply.ErrorCode, ProjectAccessRequestPreview(reply));
+    }
+
+    /// <summary>
+    /// Approves exactly the narrowed scope the owner chose — a subset of the
+    /// previewed resource IDs and of the requested operations — with an
+    /// explicit UTC expiry and optional concrete destinations. Any growth past
+    /// the previewed snapshot is refused by the service. The issued bearer is
+    /// written only into a DPAPI-protected local handoff file created here;
+    /// the returned record carries its path, never the token.
+    /// </summary>
+    public static async Task<OwnerAccessApprovalResult> ApproveAccessRequestAsync(
+        string controlPipe,
+        string requestId,
+        string previewId,
+        string[]? resourceIds,
+        string[]? operations,
+        string[]? destinationResourceIds,
+        DateTimeOffset expiresAtUtc,
+        string? provider,
+        string? model,
+        decimal? maximumCostUsd,
+        string handoffPath,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(requestId);
+        ArgumentNullException.ThrowIfNull(previewId);
+        ArgumentNullException.ThrowIfNull(handoffPath);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerAccessRequestApproveOperation,
+                ResourceIds: resourceIds,
+                Operations: operations,
+                DestinationResourceIds: destinationResourceIds,
+                ExpiresAtUtc: expiresAtUtc,
+                Provider: provider,
+                Model: model,
+                MaximumCostUsd: maximumCostUsd,
+                PreviewId: previewId,
+                RequestId: requestId),
+            "access_request_approved",
+            cancellationToken).ConfigureAwait(false);
+
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            !reply.Payload.TryGetProperty("grantId", out var grant) ||
+            grant.ValueKind != JsonValueKind.String ||
+            !reply.Payload.TryGetProperty("token", out var token) ||
+            token.ValueKind != JsonValueKind.String)
+        {
+            return new OwnerAccessApprovalResult(reply.Outcome, reply.ErrorCode, null, null);
+        }
+
+        var tokenText = token.GetString() ?? string.Empty;
+        OwnerTokenHandoff handoff;
+        try
+        {
+            handoff = OwnerTokenHandoff.Create(handoffPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or InvalidDataException)
+        {
+            return new OwnerAccessApprovalResult(OwnerCommandOutcome.Refused, "handoff_destination_unavailable", null, null);
+        }
+
+        using (handoff)
+        {
+            try
+            {
+                handoff.WriteToken(tokenText);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or System.ComponentModel.Win32Exception)
+            {
+                return new OwnerAccessApprovalResult(OwnerCommandOutcome.Refused, "token_handoff_failed", null, null);
+            }
+
+            return new OwnerAccessApprovalResult(OwnerCommandOutcome.Completed, null, grant.GetString(), handoff.Path);
+        }
+    }
+
+    /// <summary>
+    /// Rejects one pending request with the owner's explicit decision. No
+    /// grant is created by this path.
+    /// </summary>
+    public static async Task<OwnerAccessRejectResult> RejectAccessRequestAsync(
+        string controlPipe,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(requestId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerAccessRequestRejectOperation,
+                RequestId: requestId),
+            "access_request_rejected",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerAccessRejectResult(reply.Outcome, reply.ErrorCode,
+            reply.Outcome == OwnerCommandOutcome.Completed ? requestId : null);
+    }
+
+    /// <summary>
+    /// Lists the live agent sessions with their effective frozen scopes,
+    /// expiries and policy generations. Carries no verifier or bearer.
+    /// </summary>
+    public static async Task<OwnerSessionListResult> ListSessionsAsync(
+        string controlPipe,
+        CancellationToken cancellationToken)
+    {
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerSessionListOperation),
+            "sessions_listed",
+            cancellationToken).ConfigureAwait(false);
+
+        long generation = 0;
+        if (reply.Payload.ValueKind == JsonValueKind.Object &&
+            reply.Payload.TryGetProperty("policyGeneration", out var generationValue) &&
+            generationValue.ValueKind == JsonValueKind.Number)
+        {
+            generation = generationValue.GetInt64();
+        }
+
+        return new OwnerSessionListResult(reply.Outcome, reply.ErrorCode, generation, ProjectSessions(reply));
+    }
+
+    /// <summary>
+    /// Revokes one live session by its ID. The bearer, if already redeemed,
+    /// authorizes nothing afterwards.
+    /// </summary>
+    public static async Task<OwnerSessionRevokeResult> RevokeSessionAsync(
+        string controlPipe,
+        string sessionId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(sessionId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerSessionRevokeOperation,
+                SessionId: sessionId),
+            "session_revoked",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerSessionRevokeResult(reply.Outcome, reply.ErrorCode,
+            reply.Outcome == OwnerCommandOutcome.Completed ? sessionId : null);
+    }
+
     private static async Task<OwnerRelationResult> TransitionRelationAsync(
         string controlPipe,
         string operation,
@@ -1161,7 +1615,6 @@ public static class OwnerChannelClient
             }
         }
     }
-
     private static async Task<OwnerLifecycleResult> TransitionLifecycleAsync(
         string controlPipe,
         OwnerLifecycleState lifecycle,
@@ -1747,6 +2200,279 @@ public static class OwnerChannelClient
                 .Select(item => item.GetString()!)
                 .ToArray()
             : Array.Empty<string>();
+
+    // ---- S5-T6 projections: catalog, access requests, sessions ----
+
+    private static OwnerCatalogPreviewEntry? ProjectCatalogPreview(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            reply.Payload.ValueKind != JsonValueKind.Object ||
+            !reply.Payload.TryGetProperty("catalogPreview", out var preview) ||
+            preview.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        OwnerCatalogMapping? existing = null;
+        if (preview.TryGetProperty("existingEntry", out var current) && current.ValueKind == JsonValueKind.Object)
+        {
+            existing = ProjectCatalogMappingElement(current);
+        }
+
+        return new OwnerCatalogPreviewEntry(
+            Text(preview, "catalogId") ?? string.Empty,
+            Text(preview, "label") ?? string.Empty,
+            Text(preview, "description") ?? string.Empty,
+            Text(preview, "resourceId") ?? string.Empty,
+            Int64(preview, "resourceRevision"),
+            existing);
+    }
+
+    private static OwnerCatalogMapping[]? ProjectCatalogEntries(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            reply.Payload.ValueKind != JsonValueKind.Object ||
+            !reply.Payload.TryGetProperty("catalogEntries", out var entries) ||
+            entries.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var projected = new List<OwnerCatalogMapping>();
+        foreach (var element in entries.EnumerateArray())
+        {
+            if (element.ValueKind == JsonValueKind.Object && ProjectCatalogMappingElement(element) is { } mapping)
+            {
+                projected.Add(mapping);
+            }
+        }
+
+        return projected.ToArray();
+    }
+
+    private static OwnerCatalogMapping? ProjectCatalogMappingElement(JsonElement entry) =>
+        entry.TryGetProperty("catalogId", out var id) && id.ValueKind == JsonValueKind.String &&
+        entry.TryGetProperty("resourceId", out var resource) && resource.ValueKind == JsonValueKind.String
+            ? new OwnerCatalogMapping(
+                id.GetString() ?? string.Empty,
+                Text(entry, "label") ?? string.Empty,
+                Text(entry, "description") ?? string.Empty,
+                resource.GetString() ?? string.Empty,
+                Int64(entry, "revision"),
+                Timestamp(entry, "updatedAtUtc") ?? DateTimeOffset.MinValue)
+            : null;
+
+    private static OwnerAccessRequestInfo[]? ProjectAccessRequests(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            reply.Payload.ValueKind != JsonValueKind.Object ||
+            !reply.Payload.TryGetProperty("accessRequests", out var requests) ||
+            requests.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var projected = new List<OwnerAccessRequestInfo>();
+        foreach (var element in requests.EnumerateArray())
+        {
+            if (element.ValueKind == JsonValueKind.Object && ProjectAccessRequestElement(element) is { } request)
+            {
+                projected.Add(request);
+            }
+        }
+
+        return projected.ToArray();
+    }
+
+    private static OwnerAccessRequestInfo? ProjectAccessRequestElement(JsonElement request) =>
+        request.TryGetProperty("requestId", out var id) && id.ValueKind == JsonValueKind.String
+            ? new OwnerAccessRequestInfo(
+                id.GetString() ?? string.Empty,
+                Strings(request, "catalogIds"),
+                Text(request, "purpose") ?? string.Empty,
+                Text(request, "agentId"),
+                Text(request, "agentContext"),
+                Text(request, "provider"),
+                Text(request, "model"),
+                Text(request, "disclosureContext"),
+                Strings(request, "requestedOperations"),
+                ProjectScopeResources(request, "resolvedResources"),
+                Timestamp(request, "createdAtUtc") ?? DateTimeOffset.MinValue,
+                Text(request, "status") ?? "unknown",
+                Text(request, "approvedGrantId"),
+                Timestamp(request, "decidedAtUtc"))
+            : null;
+
+    private static OwnerAccessRequestPreviewInfo? ProjectAccessRequestPreview(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            reply.Payload.ValueKind != JsonValueKind.Object ||
+            !reply.Payload.TryGetProperty("accessRequestPreview", out var preview) ||
+            preview.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return new OwnerAccessRequestPreviewInfo(
+            Text(preview, "previewId") ?? string.Empty,
+            Text(preview, "requestId") ?? string.Empty,
+            Strings(preview, "catalogIds"),
+            ProjectScopeResources(preview, "resources"),
+            Strings(preview, "operations"),
+            Text(preview, "purpose") ?? string.Empty,
+            Text(preview, "agentId"),
+            Text(preview, "agentContext"),
+            Text(preview, "provider"),
+            Text(preview, "model"),
+            Text(preview, "disclosureContext"),
+            Timestamp(preview, "createdAtUtc") ?? DateTimeOffset.MinValue,
+            Int64(preview, "policyGeneration"),
+            Int64(preview, "unlockEpoch"),
+            DecodePreviewBodies(reply));
+    }
+
+    /// <summary>
+    /// The preview bodies the service included for the owner's eyes. Each body
+    /// is strict UTF-8 the vault holds; anything undecodable is reported as
+    /// unavailable instead of reconstructed.
+    /// </summary>
+    private static OwnerAccessRequestBody[] DecodePreviewBodies(OwnerReply reply)
+    {
+        if (!reply.Payload.TryGetProperty("contentBase64", out var encoded) || encoded.ValueKind != JsonValueKind.String)
+        {
+            return Array.Empty<OwnerAccessRequestBody>();
+        }
+
+        byte[] outer;
+        try
+        {
+            outer = Convert.FromBase64String(encoded.GetString() ?? string.Empty);
+        }
+        catch (FormatException)
+        {
+            return Array.Empty<OwnerAccessRequestBody>();
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(outer);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return Array.Empty<OwnerAccessRequestBody>();
+            }
+
+            var bodies = new List<OwnerAccessRequestBody>();
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (property.Value.ValueKind != JsonValueKind.String)
+                {
+                    continue;
+                }
+
+                byte[] body;
+                try
+                {
+                    body = Convert.FromBase64String(property.Value.GetString() ?? string.Empty);
+                }
+                catch (FormatException)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    bodies.Add(new OwnerAccessRequestBody(property.Name, StrictUtf8.GetString(body)));
+                }
+                catch (ArgumentException)
+                {
+                    bodies.Add(new OwnerAccessRequestBody(property.Name, "(the service served bytes this console cannot show as text)"));
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(body);
+                }
+            }
+
+            return bodies.OrderBy(body => body.ResourceId, StringComparer.Ordinal).ToArray();
+        }
+        catch (JsonException)
+        {
+            return Array.Empty<OwnerAccessRequestBody>();
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(outer);
+        }
+    }
+
+    private static OwnerAgentSessionInfo[]? ProjectSessions(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            reply.Payload.ValueKind != JsonValueKind.Object ||
+            !reply.Payload.TryGetProperty("agentSessions", out var sessions) ||
+            sessions.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var projected = new List<OwnerAgentSessionInfo>();
+        foreach (var element in sessions.EnumerateArray())
+        {
+            if (element.ValueKind == JsonValueKind.Object && ProjectSessionElement(element) is { } session)
+            {
+                projected.Add(session);
+            }
+        }
+
+        return projected.ToArray();
+    }
+
+    private static OwnerAgentSessionInfo? ProjectSessionElement(JsonElement session) =>
+        session.TryGetProperty("sessionId", out var id) && id.ValueKind == JsonValueKind.String &&
+        session.TryGetProperty("grantId", out var grant) && grant.ValueKind == JsonValueKind.String
+            ? new OwnerAgentSessionInfo(
+                id.GetString() ?? string.Empty,
+                grant.GetString() ?? string.Empty,
+                ProjectScopeResources(session, "resources"),
+                Strings(session, "operations"),
+                ProjectScopeResources(session, "destinationResources"),
+                Timestamp(session, "createdAtUtc") ?? DateTimeOffset.MinValue,
+                Timestamp(session, "expiresAtUtc") ?? DateTimeOffset.MinValue,
+                ProjectSessionEgress(session),
+                Int64(session, "policyGeneration"),
+                Int64(session, "unlockEpoch"))
+            : null;
+
+    private static OwnerSessionEgress? ProjectSessionEgress(JsonElement session) =>
+        session.TryGetProperty("egress", out var egress) && egress.ValueKind == JsonValueKind.Object &&
+        egress.TryGetProperty("provider", out var provider) && provider.ValueKind == JsonValueKind.String &&
+        egress.TryGetProperty("model", out var model) && model.ValueKind == JsonValueKind.String &&
+        egress.TryGetProperty("maximumCostUsd", out var ceiling) && ceiling.ValueKind == JsonValueKind.Number
+            ? new OwnerSessionEgress(provider.GetString() ?? string.Empty, model.GetString() ?? string.Empty, ceiling.GetDecimal())
+            : null;
+
+    private static OwnerScopeResource[] ProjectScopeResources(JsonElement element, string property)
+    {
+        if (!element.TryGetProperty(property, out var resources) || resources.ValueKind != JsonValueKind.Array)
+        {
+            return Array.Empty<OwnerScopeResource>();
+        }
+
+        var projected = new List<OwnerScopeResource>();
+        foreach (var entry in resources.EnumerateArray())
+        {
+            if (entry.ValueKind == JsonValueKind.Object &&
+                entry.TryGetProperty("resourceId", out var id) && id.ValueKind == JsonValueKind.String &&
+                entry.TryGetProperty("zoneId", out var zone) && zone.ValueKind == JsonValueKind.String &&
+                entry.TryGetProperty("revision", out var revision) && revision.ValueKind == JsonValueKind.Number)
+            {
+                projected.Add(new OwnerScopeResource(
+                    id.GetString() ?? string.Empty, zone.GetString() ?? string.Empty, revision.GetInt64()));
+            }
+        }
+
+        return projected.ToArray();
+    }
 
     /// <summary>One item's live publication record.</summary>
     private static OwnerLifecycleState? ProjectLifecycle(OwnerReply reply)

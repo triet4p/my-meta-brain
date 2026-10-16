@@ -43,7 +43,7 @@ S1-T9 [behavioral evidence A3](../artifacts/sprint-1/reviews/S1-T9-S1T9-REVIEW-2
 | 2 | Complete — M2 | S2-T1–T7 [x] | Task evidence/checkpoints PASS; final differential `S2-DEEP-20261012-A1` PASS; latest product commit `e4e7c5f5` |
 | 3 | Complete — M3 | S3-P0/S3-T1–T6 [x] | [Accepted task records](sprint-plans/sprint-3.md#gate-record), latest checkpoint `d71bd67b`; final differential `S3-DEEP-20261013-A1` PASS, zero actionable findings |
 | 4 | Complete — M4 | S4-T1–T7 [x], ENV1 [x] | [Accepted gates/checkpoints](sprint-plans/sprint-4.md#gate-record), latest checkpoint `1992621976a082104e01b08471a8ce5751781c4c`; [differential PASS](../artifacts/sprint-4/reviews/sprint-4-deep-d1.md), zero actionable findings |
-| 5 | In progress — S5-T1–T4 complete | S5-T1–T4 [x]; S5-T5…S5-T7 pending | [Accepted evidence/checkpoints](sprint-plans/sprint-5.md#gate-record), latest commit `e0559888`; remaining task gates and sprint differential pending |
+| 5 | In progress — S5-T1–T5 complete | S5-T1–T5 [x]; S5-T6…S5-T7 pending | [Accepted evidence/checkpoints](sprint-plans/sprint-5.md#gate-record), latest commit `f8e8cd09`; remaining task gates and sprint differential pending |
 | 6 | Not started | S6-T1…S6-T7 | Pending |
 | 7 | Not started | S7-T1…S7-T6 | Pending |
 | 8 | Not started | S8-T1…S8-T7 | Pending |

@@ -252,6 +252,10 @@ internal static partial class OwnerServiceSmoke
                          ServiceRequestHandler.OwnerLibrarySearchOperation,
                          ServiceRequestHandler.OwnerRelationListOperation,
                          ServiceRequestHandler.OwnerProposalPublishOperation, ServiceRequestHandler.OwnerProposalRejectOperation,
+                         ServiceRequestHandler.OwnerCatalogPreviewOperation, ServiceRequestHandler.OwnerCatalogPublishOperation,
+                         ServiceRequestHandler.OwnerCatalogListOperation, ServiceRequestHandler.OwnerCatalogWithdrawOperation,
+                         ServiceRequestHandler.OwnerAccessRequestListOperation, ServiceRequestHandler.OwnerAccessRequestPreviewOperation,
+                         ServiceRequestHandler.OwnerAccessRequestApproveOperation, ServiceRequestHandler.OwnerAccessRequestRejectOperation,
                          "owner.scope.preview", "owner.scope.issue",
                          "owner.scope.collection.set", "owner.scope.collection.list", "owner.scope.list",
                          ServiceRequestHandler.OwnerStatusOperation, "resource.read", "resource.write"

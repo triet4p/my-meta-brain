@@ -32,7 +32,7 @@
                                Foreground="#FF6B7280" Margin="2,0,0,8" />
                     <TextBlock DockPanel.Dock="Bottom" TextWrapping="Wrap" FontSize="11" Foreground="#FF6B7280" Margin="2,12,2,0"
                                Text="Only delivered views appear here. This host ships no placeholder screen and no control without a real backing operation." />
-                    <ListBox x:Name="Navigation" BorderThickness="0" Background="Transparent" Height="156"
+                    <ListBox x:Name="Navigation" BorderThickness="0" Background="Transparent" Height="180"
                              SelectionChanged="OnNavigationChanged">
                         <ListBoxItem Content="Owner session" Padding="8,6" />
                         <ListBoxItem Content="Vault status" Padding="8,6" />
@@ -40,6 +40,7 @@
                         <ListBoxItem Content="Library" Padding="8,6" />
                         <ListBoxItem Content="Inbox" Padding="8,6" />
                         <ListBoxItem Content="Relations" Padding="8,6" />
+                        <ListBoxItem Content="Sharing" Padding="8,6" />
                     </ListBox>
                 </DockPanel>
             </Border>
@@ -603,6 +604,154 @@
                                    Text="• Nothing on this screen fetches a source, calls a provider, writes a vault file or stores a link of its own: every act is one request to the running service, and what an agent session can see is decided by that session's grant, not here." />
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
                                    Text="• Keyboard: Enter in the relation list inspects the selected link, Enter in the candidate list picks it as the subject, F5 in this view reads the relation set again, Ctrl+L locks the vault." />
+                    </StackPanel>
+
+                    <StackPanel x:Name="SharingPanel" Visibility="Collapsed">
+                        <TextBlock Text="Sharing" FontSize="19" FontWeight="SemiBold" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,8,0,0"
+                                   Text="Publish what agents may discover, review what they asked for, and see what their sessions can still read. The service owns the encrypted catalog mapping, the pending requests, the bound previews, the issued grants and the live sessions; this console only sends your explicit acts and renders the answers it receives. A pending request is never permission: only your approval below mints a grant, and the bearer travels only into a DPAPI-protected local handoff file whose path — never the token — is shown." />
+
+                        <TextBlock Text="Service reports" FontWeight="SemiBold" Margin="0,16,0,0" />
+                        <TextBlock x:Name="SharingStateText" TextWrapping="Wrap" Margin="0,4,0,0" FontSize="16" />
+
+                        <TextBlock Text="Catalog publication (only the label and description you type become public)" FontWeight="SemiBold" Margin="0,18,0,0" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
+                                   Text="A publication preview mutates nothing and mints no access. The label and description are explicit owner text: this screen never fills them from a private title, path or citation, and neither does the service. Publishing stores exactly what the preview showed; withdrawing removes the entry from future discovery (copies already delivered cannot be recalled)." />
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Catalog ID (you name it)" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="CatalogIdInput" Margin="0,0,10,6"
+                                     AutomationProperties.AutomationId="CatalogIdInput" />
+                            <TextBlock Grid.Row="0" Grid.Column="2" Text="Mapped resource ID" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="0" Grid.Column="3" x:Name="CatalogResourceInput" Margin="0,0,0,6"
+                                     AutomationProperties.AutomationId="CatalogResourceInput" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Public label" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="1" Grid.Column="1" x:Name="CatalogLabelInput" Margin="0,0,10,6"
+                                     AutomationProperties.AutomationId="CatalogLabelInput" />
+                            <TextBlock Grid.Row="1" Grid.Column="2" Text="Public description" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="1" Grid.Column="3" x:Name="CatalogDescriptionInput" Margin="0,0,0,6"
+                                     AutomationProperties.AutomationId="CatalogDescriptionInput" />
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="CatalogPreviewButton" Content="Preview publication" Padding="14,7" Click="OnCatalogPreviewClicked" />
+                            <Button x:Name="CatalogPublishButton" Content="Publish this exact metadata" Padding="14,7" Margin="8,0,0,0" Click="OnCatalogPublishClicked" />
+                            <Button x:Name="CatalogRefreshButton" Content="Read catalog mappings" Padding="14,7" Margin="8,0,0,0" Click="OnCatalogRefreshClicked" />
+                        </StackPanel>
+                        <TextBlock x:Name="CatalogPreviewText" TextWrapping="Wrap" Margin="0,10,0,0" FontFamily="Consolas" />
+                        <TextBlock x:Name="CatalogMessageText" TextWrapping="Wrap" Margin="0,8,0,0" FontWeight="SemiBold" />
+                        <ListBox x:Name="CatalogList" Height="120" Margin="0,8,0,0" Background="White" BorderBrush="#FFD5D8DC"
+                                 AutomationProperties.AutomationId="CatalogList"
+                                 SelectionChanged="OnCatalogSelectionChanged" KeyDown="OnCatalogListKeyDown" />
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <Button x:Name="CatalogWithdrawButton" Content="Withdraw selected entry" Padding="14,7" Click="OnCatalogWithdrawClicked" />
+                        </StackPanel>
+
+                        <TextBlock Text="Access requests (purpose first — a request is never permission)" FontWeight="SemiBold" Margin="0,22,0,0" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
+                                   Text="Read the pending requests, bind one to its frozen snapshot to see the exact resources, revisions, bodies and disclosure it asks about, then narrow it to a smaller scope, approve exactly that scope, or reject it. Approving mints only a narrowed subset of the previewed IDs and operations — never more — and writes the bearer only into the DPAPI-protected local handoff file you name." />
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="RequestsRefreshButton" Content="Read access requests" Padding="14,7" Click="OnRequestsRefreshClicked" />
+                            <Button x:Name="RequestPreviewButton" Content="Preview selected request" Padding="14,7" Margin="8,0,0,0" Click="OnRequestPreviewClicked" />
+                        </StackPanel>
+                        <TextBlock x:Name="RequestsMessageText" TextWrapping="Wrap" Margin="0,10,0,0" FontWeight="SemiBold" />
+                        <ListBox x:Name="RequestsList" Height="120" Margin="0,8,0,0" Background="White" BorderBrush="#FFD5D8DC"
+                                 AutomationProperties.AutomationId="RequestsList"
+                                 SelectionChanged="OnRequestsSelectionChanged" KeyDown="OnRequestsListKeyDown" />
+                        <Border x:Name="RequestDetailPanel" Margin="0,14,0,0" Padding="14" Background="White"
+                                BorderBrush="#FFD5D8DC" BorderThickness="1" CornerRadius="3">
+                            <StackPanel>
+                                <TextBlock Text="Bound request preview (the exact snapshot an approval would draw from)" FontWeight="SemiBold" FontSize="15" />
+                                <TextBlock x:Name="RequestPreviewSummaryText" TextWrapping="Wrap" Margin="0,8,0,0" FontFamily="Consolas" />
+                                <TextBox x:Name="RequestPreviewBodiesText" Height="150" Margin="0,8,0,0" IsReadOnly="True" AcceptsReturn="True"
+                                         TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas"
+                                         AutomationProperties.AutomationId="RequestPreviewBodiesText" />
+                                <TextBlock Text="Narrow this preview (subsets only — the service refuses any growth)" Foreground="#FF6B7280" Margin="0,12,0,2" />
+                                <Grid Margin="0,6,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="150" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Approve resource IDs" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                                    <TextBox Grid.Row="0" Grid.Column="1" x:Name="ApproveResourceIdsInput" Margin="0,0,0,6"
+                                             AutomationProperties.AutomationId="ApproveResourceIdsInput" />
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Approve operations" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                                    <TextBox Grid.Row="1" Grid.Column="1" x:Name="ApproveOperationsInput" Margin="0,0,0,6"
+                                             AutomationProperties.AutomationId="ApproveOperationsInput" />
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Destination IDs (optional)" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                                    <TextBox Grid.Row="2" Grid.Column="1" x:Name="ApproveDestinationIdsInput" Margin="0,0,0,6"
+                                             AutomationProperties.AutomationId="ApproveDestinationIdsInput" />
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Expires at (UTC)" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                                    <TextBox Grid.Row="3" Grid.Column="1" x:Name="ApproveExpiryInput" Margin="0,0,0,6"
+                                             AutomationProperties.AutomationId="ApproveExpiryInput" />
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Provider/model (egress)" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                                    <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,6">
+                                        <TextBox x:Name="ApproveProviderInput" Width="150" VerticalContentAlignment="Center"
+                                                 AutomationProperties.AutomationId="ApproveProviderInput" />
+                                        <TextBox x:Name="ApproveModelInput" Width="150" VerticalContentAlignment="Center" Margin="8,0,0,0"
+                                                 AutomationProperties.AutomationId="ApproveModelInput" />
+                                        <TextBox x:Name="ApproveMaxCostInput" Width="90" VerticalContentAlignment="Center" Margin="8,0,0,0"
+                                                 AutomationProperties.AutomationId="ApproveMaxCostInput" />
+                                    </StackPanel>
+                                    <TextBlock Grid.Row="5" Grid.Column="0" Text="Local handoff file" Foreground="#FF6B7280" />
+                                    <TextBox Grid.Row="5" Grid.Column="1" x:Name="ApproveHandoffInput"
+                                             AutomationProperties.AutomationId="ApproveHandoffInput" />
+                                </Grid>
+                                <TextBlock TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280"
+                                           Text="Leave the operations empty for read-only. Name concrete IDs to narrow; leaving the IDs empty approves the whole bound snapshot. An expiry in UTC is required (ISO 8601 with an explicit Z or +00:00). Provider fields only with the provider.egress operation and within the frozen $0.25 job ceiling." />
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                    <Button x:Name="RequestApproveButton" Content="Approve this narrowed scope" Padding="14,7" Click="OnRequestApproveClicked" />
+                                    <Button x:Name="RequestRejectButton" Content="Reject request" Padding="14,7" Margin="8,0,0,0" Click="OnRequestRejectClicked" />
+                                </StackPanel>
+                                <TextBlock x:Name="RequestDecisionText" TextWrapping="Wrap" Margin="0,12,0,0" FontWeight="SemiBold" />
+                                <TextBlock x:Name="RequestHandoffText" TextWrapping="Wrap" Margin="0,6,0,0" FontFamily="Consolas" />
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Text="Live sessions (effective frozen scope — what each session can still read)" FontWeight="SemiBold" Margin="0,22,0,0" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
+                                   Text="Each row is the session's frozen grant snapshot: concrete IDs/revisions, operations, expiry and egress. Added members or revisions never enter a frozen scope afterwards. Revoking ends that session's bearer immediately; locking the vault ends every session." />
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="SessionsRefreshButton" Content="Read live sessions" Padding="14,7" Click="OnSessionsRefreshClicked" />
+                            <Button x:Name="SessionRevokeButton" Content="Revoke selected session" Padding="14,7" Margin="8,0,0,0" Click="OnSessionRevokeClicked" />
+                        </StackPanel>
+                        <TextBlock x:Name="SessionsMessageText" TextWrapping="Wrap" Margin="0,10,0,0" FontWeight="SemiBold" />
+                        <ListBox x:Name="SessionsList" Height="120" Margin="0,8,0,0" Background="White" BorderBrush="#FFD5D8DC"
+                                 AutomationProperties.AutomationId="SessionsList"
+                                 SelectionChanged="OnSessionsSelectionChanged" KeyDown="OnSessionsListKeyDown" />
+                        <TextBlock x:Name="SessionDetailText" TextWrapping="Wrap" Margin="0,8,0,0" FontFamily="Consolas" />
+
+                        <TextBlock Text="Scope and limits of this view" FontWeight="SemiBold" Margin="0,20,0,6" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• The private index is not the catalog: discovery serves only the ID/label/description triplets you published, and searching or reading a body needs a redeemed session inside its own grant — never this screen." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• A publication preview shows exactly what would be stored and mints nothing; cancelled previews change no discovery. A stale bound preview (a changed revision, membership or mapping) fails an approval closed, and an already-used token never redeems twice." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Added members, revisions or links never widen a frozen grant or session: narrowing below the bound preview is the only direction this screen offers, and the service refuses any growth." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• The token handoff is a DPAPI-protected local file owned by this Windows account (owner/SYSTEM/Administrators only). This console shows its path, never the token; no key or token travels through chat, logs, arguments or screenshots." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• No protected launcher or alternate key/policy store exists on this path: every act above is one request to the running service over the owner control pipe, under the shared core policy." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Keyboard: Enter in a list opens the selected row, F5 in this view re-reads the catalog, requests and sessions, Ctrl+L locks the vault." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Privacy: this view holds no on-disk cache. Locking the vault (or losing the service, or ending the session) clears every mapping, request, preview, handoff path and session above, and an answer already in flight is discarded instead of restoring them." />
                     </StackPanel>
                 </Grid>
             </ScrollViewer>

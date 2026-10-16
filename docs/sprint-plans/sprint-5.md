@@ -6,7 +6,7 @@ Owner unlock encrypted vault, quản lý recovery/catalog/access requests/scoped
 
 ## Status and Dependencies
 
-- Status: In progress — S5-T1–T4 complete với accepted evidence và exact-snapshot checkpoints; S5-T5 in progress; S5-T6…S5-T7 pending. Entry Sprint 4 PASS. UI không tạo security policy hoặc key store riêng.
+- Status: In progress — S5-T1–T5 complete với accepted evidence và exact-snapshot checkpoints; S5-T6 in progress; S5-T7 pending. Entry Sprint 4 PASS. UI không tạo security policy hoặc key store riêng.
 - [Global plan](../PLAN.md), [specification](../META-BRAIN.md), [requirements](../REQUIREMENTS.md).
 - Requirements: R30, R31; bảo toàn R02–R06, R11, R12, R14, R19, R32, R34, R36.
 
@@ -18,7 +18,7 @@ UI dùng shared encrypted core và key/lock/approval APIs; không direct decrypt
 
 Status legend: [ ] pending / [~] in progress / [x] done. OMP role selection, evidence review, record ownership, and exact-snapshot checkpoints follow the [canonical execution contract](../PLAN.md#planning-and-execution-contract). Worker artifact for S5-T<M>: `artifacts/sprint-5/task-<M>.md`; reviewers and checkpoint executors own their separate records under the sprint artifact tree.
 
-Workflow: Full route. Mỗi task cần independent evidence PASS và fresh Bronze exact-snapshot checkpoint trước task độc lập tiếp theo; sprint differential review sau mọi task gate/checkpoint. S5-T1–S5-T5 được owner giao Silver; worker không commit, chỉ checkpoint executor commit reviewed task-owned scope trên `main`, không push. Gate records dưới `artifacts/sprint-5/`; Main chỉ ghi concise outcome links.
+Workflow: Full route. Mỗi task cần independent evidence PASS và fresh Bronze exact-snapshot checkpoint trước task độc lập tiếp theo; sprint differential review sau mọi task gate/checkpoint. S5-T1–S5-T5 được owner giao Silver; S5-T6 giao Gold. Worker không commit, chỉ checkpoint executor commit reviewed task-owned scope trên `main`, không push. Gate records dưới `artifacts/sprint-5/`; Main chỉ ghi concise outcome links.
 
 - [x] **S5-T1 — Owner UI host và authenticated application boundary.** Requirements: R02, R05, R30, R32.
     - Scope: runtime UI đã chọn, owner session/auth, navigation và lỗi kết nối; không dashboard giả bằng mocks.
@@ -40,12 +40,12 @@ Workflow: Full route. Mỗi task cần independent evidence PASS và fresh Bronz
     - Acceptance: unlocked nhập text+zone, encrypted save/revision conflict/authorship/undo đúng; AI save không user-written. Locked không báo saved hoặc persist plaintext draft; unsaved input xử lý/cảnh báo rõ trước lock, không fake fallback.
     - Evidence: thao tác UI thật, restart sau save, concurrent edit conflict; malformed input không mất văn bản user; không bắt provider để ghi nhớ.
 
-- [~] **S5-T5 — Explicit relations workbench.** Requirements: R14, R15, R30.
+- [x] **S5-T5 — Explicit relations workbench.** Requirements: R14, R15, R30.
     - Scope: list/add/remove/inspect relations và proposed links với lý do/provenance; không cần graph visualization.
     - Acceptance: owner nối hai items, chọn related_to thay vì supports, xem nguồn/cycle error và undo; change revision hiển thị stale dependency; relation tạo từ MCP hiển thị executed_by/confirmation đúng.
     - Evidence: UI operations kết hợp link đã tạo bởi agent thật; cross-zone visibility preview không lộ endpoint agent không có quyền.
 
-- [ ] **S5-T6 — Catalog/access request approval và session console.** Requirements: R02–R07, R31.
+- [~] **S5-T6 — Catalog/access request approval và session console.** Requirements: R02–R07, R31.
     - Scope: publish/withdraw catalog metadata, pending request/mục đích, owner preview/narrow/approve/reject, token local handoff, effective scope/expiry/revoke qua S1 APIs.
     - Acceptance: private index khác approved catalog; publication preview không auto title/path/citations. Request không permission; user chọn concrete IDs/revisions/operations/raw/provider disclosure. Read-only default, added member/revision không auto scope; no master key/token qua chat/log/args; không protected launcher.
     - Evidence: actual UI publish catalog → agent request → owner narrow/reject/approve → connector redeem/read → revoke/lock/deny; stale preview và used token negatives, catalog withdrawal và consent được quan sát.
@@ -79,4 +79,8 @@ S5-T3 limits được giữ trong evidence review: late-reply rejection được
 
 S5-T4 complete: [worker evidence](../../artifacts/sprint-5/task-4.md), [independent evidence PASS](../../artifacts/sprint-5/reviews/S5-T4-S5T4-REVIEW-20261015-A1.md) và [Bronze exact-snapshot checkpoint PASS](../../artifacts/sprint-5/checkpoints/S5-T4-S5T4-CHECKPOINT-20261015-A1.md); commit `e05598885b9d97f24cda074b2e642a7ab9e71dd1`. Actual WPF capture/restart read-back, proposal source/editor, attribution-preserving publish/reject, lifecycle undo, conflict/input retention và unsaved-lock proof accepted; zero actionable findings. No push.
 
-S5-T4 limits được giữ trong evidence review: undo là lifecycle withdraw/repropose, không restore superseded item revision trước S7; pane đọc first cited source revision; retry/stale-answer proof dùng deterministic checks, không kill/race live write. S5-T5…S5-T7 và sprint differential gate còn pending; không suy task PASS thành Sprint 5 complete.
+S5-T4 limits được giữ trong evidence review: undo là lifecycle withdraw/repropose, không restore superseded item revision trước S7; pane đọc first cited source revision; retry/stale-answer proof dùng deterministic checks, không kill/race live write.
+
+S5-T5 complete: [worker evidence](../../artifacts/sprint-5/task-5.md), [independent evidence PASS](../../artifacts/sprint-5/reviews/S5-T5-S5T5-REVIEW-20261015-A1.md) và [Bronze exact-snapshot checkpoint PASS](../../artifacts/sprint-5/checkpoints/S5-T5-S5T5-CHECKPOINT-20261015-A1.md); commit `f8e8cd0938ef972b79a5a583ec12890f80a21376`. Actual WPF relation operations, real OMP MCP-created link/provenance/owner confirmation, cycle refusal, stale dependency, remove/undo và cross-zone non-disclosure proof accepted; zero actionable findings. No push.
+
+S5-T5 limits được giữ trong evidence review: endpoint content chỉ đọc live revision, moved pin hiển thị needsReview, không đọc archive trước S7; undo đưa relation về proposed, không tự khôi phục owner approval; stale-answer guard dùng deterministic seam, không wall-clock race. S5-T6…S5-T7 và sprint differential gate còn pending; không suy task PASS thành Sprint 5 complete.
