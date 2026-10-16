@@ -168,6 +168,24 @@ public sealed record LibraryHitWire(
     string Publication);
 
 /// <summary>
+/// One S5-T4 owner review outcome. It names the pending proposal that was
+/// reviewed at its exact revision, the canonical memory item the review wrote
+/// under the ID derived from that proposal, and the publication state the
+/// shared lifecycle record of that item now carries. It never carries the
+/// proposed body: that travels on the proposal read the owner reviewed, and the
+/// item itself is served as an ordinary memory item.
+/// </summary>
+public sealed record ProposalReviewWire(
+    string ProposalId,
+    long ProposalRevision,
+    string Kind,
+    string ItemId,
+    long ItemRevision,
+    string Publication,
+    long LifecycleRevision,
+    bool DecisionApplied);
+
+/// <summary>
 /// One S5-T3 owner library page. The applied filters are echoed so the console
 /// describes the answer it received instead of the filters it hoped were used.
 /// A generation that has fallen behind the vault is never served as this page:
@@ -595,7 +613,8 @@ public sealed record ServiceReply(
     SourceSnapshotDescriptorWire[]? SourceSnapshots = null,
     RelationWire[]? Relations = null,
     RelationEndpointCandidateWire[]? RelationCandidates = null,
-    bool? RelationCandidatesTruncated = null);
+    bool? RelationCandidatesTruncated = null,
+    ProposalReviewWire? ProposalReview = null);
 
 public sealed class ServiceRequestHandler
 {
@@ -690,6 +709,8 @@ public sealed class ServiceRequestHandler
     public const string OwnerIndexStatusOperation = "owner.index.status";
     public const string OwnerIndexRebuildOperation = "owner.index.rebuild";
     public const string OwnerLibrarySearchOperation = "owner.library.search";
+    public const string OwnerProposalPublishOperation = "owner.proposal.publish";
+    public const string OwnerProposalRejectOperation = "owner.proposal.reject";
     public const string SourceEnrollOperation = "source.enroll";
     public const string SourceRevokeOperation = "source.revoke";
     public const string SourceStatusOperation = "source.status";
@@ -912,6 +933,16 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, OwnerLibrarySearchOperation, StringComparison.Ordinal))
         {
             return HandleOwnerLibrarySearch(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerProposalPublishOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerProposalReview(context, request, operation, publish: true);
+        }
+
+        if (string.Equals(request.Operation, OwnerProposalRejectOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerProposalReview(context, request, operation, publish: false);
         }
 
         if (string.Equals(request.Operation, OwnerVaultProvisionOperation, StringComparison.Ordinal))
@@ -4007,6 +4038,84 @@ public sealed class ServiceRequestHandler
     }
 
     /// <summary>
+    /// S5-T4 owner review of one pending proposal. Publishing writes the
+    /// content the owner reviewed as canonical memory content through the same
+    /// revision-gated services a direct owner write uses, keeping the
+    /// proposal's own attribution, and records the decision as the publication
+    /// state of the resulting item through the shared lifecycle core. Rejecting
+    /// records the owner's decision — with the rationale the owner gave —
+    /// without ever applying the proposal to the item it would have revised.
+    ///
+    /// Both acts are owner-only, need an unlocked vault, name the proposal at
+    /// exactly the revision the owner reviewed (a proposal that moved fails
+    /// closed), and refuse every field their contract does not name. The
+    /// proposal record itself is never edited: it stays the agent's pending
+    /// write, and only this owner act can turn its content into canonical
+    /// content.
+    /// </summary>
+    private ServiceReply HandleOwnerProposalReview(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation,
+        bool publish)
+    {
+        if (context.Kind != PrincipalKind.Owner || operation is null || HasProposalReviewExtras(request) ||
+            string.IsNullOrEmpty(request.ResourceId) ||
+            request.ResourceRevision is not { } proposalRevision || proposalRevision < 1 ||
+            string.IsNullOrEmpty(request.ContentBase64))
+        {
+            return Error("invalid_request");
+        }
+
+        byte[]? draft = null;
+        try
+        {
+            draft = Convert.FromBase64String(request.ContentBase64);
+            var service = new ProposalReviewService();
+            var review = publish
+                ? service.Publish(context, request.ResourceId, proposalRevision, draft, operation)
+                : service.Reject(context, request.ResourceId, proposalRevision, draft, operation);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                publish ? "proposal_published" : "proposal_rejected",
+                "owner",
+                null,
+                ResourceRevision: review.Item.Revision,
+                MemoryItem: ToMemoryWire(review.Item, operation),
+                ProposalReview: ToProposalReviewWire(review));
+        }
+        catch (FormatException)
+        {
+            return Error("invalid_request");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        finally
+        {
+            if (draft is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(draft);
+            }
+        }
+    }
+
+    private static ProposalReviewWire ToProposalReviewWire(ProposalReviewResult review) => new(
+        review.ProposalId,
+        review.ProposalRevision,
+        ToWireToken(review.Kind.ToString()),
+        review.ItemId,
+        review.Item.Revision,
+        Core.Domain.LifecycleTokens.Publication(review.Publication),
+        review.LifecycleRevision,
+        review.DecisionApplied);
+
+    /// <summary>
     /// S5-T3 owner library search and browse over the owner's own unlocked
     /// vault (R10, R11, R23, R30). The service applies every filter — text,
     /// zone, collection, kind, abstraction level, time window, currentness —
@@ -5987,6 +6096,40 @@ public sealed class ServiceRequestHandler
         request.SourceFormatVersion is not null || request.SourceTitle is not null ||
         request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
         request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null;
+
+    /// <summary>
+    /// S5-T4 owner proposal review carries exactly the reviewed proposal ID,
+    /// its exact revision and the reviewed content (publish) or the owner's
+    /// rationale (reject) — and nothing else. Credentials, zone, scope,
+    /// sessions, catalog, egress, source and snapshot fields are refused, so a
+    /// review body can never steer another flow, name a zone, or mint
+    /// authority.
+    /// </summary>
+    private static bool HasProposalReviewExtras(ServiceRequest request) =>
+        request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ZoneId is not null || request.ResourceIds is not null ||
+        request.Operations is not null || request.DestinationResourceIds is not null ||
+        request.ExpiresAtUtc is not null || request.Provider is not null ||
+        request.Model is not null || request.MaximumCostUsd is not null ||
+        request.PreviewId is not null || request.CollectionId is not null ||
+        request.Token is not null || request.SessionToken is not null ||
+        request.SessionId is not null || request.AccessOperation is not null ||
+        request.DestinationResourceId is not null || request.DestinationRevision is not null ||
+        request.EstimatedCostUsd is not null || request.InputTokens is not null ||
+        request.OutputTokens is not null || request.CatalogId is not null ||
+        request.Label is not null || request.Description is not null ||
+        request.Query is not null || request.CatalogIds is not null ||
+        request.SearchOffset is not null || request.SearchLimit is not null ||
+        request.SearchKind is not null || request.SearchCurrent is not null ||
+        request.BudgetChars is not null || request.Purpose is not null ||
+        request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null ||
+        request.SourceLocator is not null || request.SourceFormat is not null ||
+        request.SourceFormatVersion is not null || request.SourceTitle is not null ||
+        request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
+        request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null ||
+        request.SearchLevel is not null || request.SearchFromUtc is not null ||
+        request.SearchToUtc is not null;
 
     private static bool HasOwnerOnlyFields(
         ServiceRequest request,

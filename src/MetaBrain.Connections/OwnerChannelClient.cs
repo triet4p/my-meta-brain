@@ -1,5 +1,6 @@
 ﻿using System.Globalization;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using MetaBrain.Application;
 
@@ -273,6 +274,124 @@ public sealed record OwnerIndexResult(
     OwnerIndexReport? Index);
 
 /// <summary>
+/// One capture the owner typed: the verbatim unstructured text with the zone
+/// it belongs to and the optional metadata the owner chose to declare. No
+/// provider, fetch or classification exists on this path (R19).
+/// </summary>
+public sealed record OwnerCaptureDraft(
+    string ResourceId,
+    string ZoneId,
+    string Text,
+    string? Title = null,
+    string? Locator = null,
+    string? Author = null,
+    DateTimeOffset? CapturedAtUtc = null);
+
+public sealed record OwnerCaptureResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerSourceDetail? Source);
+
+/// <summary>
+/// One captured note read back at its exact registry revision: the registry
+/// metadata and the verbatim text the vault holds. A registration that keeps
+/// no captured text answers <c>research_note_unavailable</c> instead of
+/// inventing content.
+/// </summary>
+public sealed record OwnerResearchNoteResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerSourceDetail? Source,
+    string? Text);
+
+/// <summary>One pending proposal identity from the owner inbox: never its body.</summary>
+public sealed record OwnerProposalIdentity(string Id, long Revision, string ZoneId);
+
+public sealed record OwnerProposalListResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerProposalIdentity[]? Proposals);
+
+/// <summary>
+/// The reviewed content of one proposal: the fields the owner may change, plus
+/// the attribution the proposal declared, which travels back unchanged so the
+/// service can verify that the review never rewrote an author, a creation
+/// method or an evidence level.
+/// </summary>
+public sealed record OwnerReviewDraft(
+    string Kind,
+    string Author,
+    string CreationMethod,
+    string Evidence,
+    string Level,
+    string? Title,
+    string Body,
+    OwnerItemSource[] Sources,
+    DateTimeOffset? OccurredAtUtc,
+    string? Project,
+    string? Environment,
+    string? Version);
+
+/// <summary>
+/// One pending proposal as the owner reviews it: its zone, kind, pinned
+/// subject, approved inbox destination, idempotency identity, payload hash,
+/// executor and recorded time, the agent's confirmation claim (a claim only,
+/// never verified by this surface) and the proposed item draft exactly as the
+/// agent wrote it.
+/// </summary>
+public sealed record OwnerProposalDetail(
+    string Id,
+    string ZoneId,
+    long Revision,
+    string Kind,
+    string DestinationResourceId,
+    long DestinationRevision,
+    string? SubjectResourceId,
+    long? SubjectRevision,
+    string IdempotencyKey,
+    string PayloadHash,
+    string Executor,
+    DateTimeOffset RecordedAtUtc,
+    bool ClaimedUserConfirmed,
+    OwnerReviewDraft Item);
+
+public sealed record OwnerProposalReadResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerProposalDetail? Proposal);
+
+/// <summary>
+/// One review outcome: which proposal was reviewed at which revision, the item
+/// the review wrote, the publication state its lifecycle record carries now,
+/// and whether this request is what recorded that decision.
+/// </summary>
+public sealed record OwnerReviewOutcome(
+    string ProposalId,
+    long ProposalRevision,
+    string Kind,
+    string ItemId,
+    long ItemRevision,
+    string Publication,
+    long LifecycleRevision,
+    bool DecisionApplied);
+
+public sealed record OwnerReviewResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerReviewOutcome? Review);
+
+/// <summary>One item's publication record: its live revision and publication state.</summary>
+public sealed record OwnerLifecycleState(
+    string SubjectResourceId,
+    long Revision,
+    string Publication);
+
+public sealed record OwnerLifecycleResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerLifecycleState? Lifecycle);
+
+/// <summary>
 /// The owner-application client of the authenticated owner control channel.
 /// It owns no key material and no authority: every call is an ordinary service
 /// request whose owner authority the service derives from the caller's Windows
@@ -282,6 +401,13 @@ public sealed record OwnerIndexResult(
 public static class OwnerChannelClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
+    /// <summary>
+    /// Strict UTF-8 for captured text: a string this process cannot represent
+    /// is refused rather than stored with substituted replacement characters,
+    /// so what the owner typed is what a restart reads back.
+    /// </summary>
+    private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     /// <summary>Protocol revision this client speaks; the service refuses other revisions.</summary>
     public static int ProtocolVersion => ServiceRequestHandler.CurrentProtocolVersion;
@@ -536,6 +662,368 @@ public static class OwnerChannelClient
         return new OwnerIndexResult(reply.Outcome, reply.ErrorCode, ProjectIndex(reply));
     }
 
+    /// <summary>
+    /// Captures one piece of unstructured text into the encrypted source
+    /// registry through the S3-T4 owner operation: the text and its zone are
+    /// the write, the metadata is optional and never inferred from the text or
+    /// the locator, and no provider, fetch, classification or summary runs on
+    /// this path (R19). The text is encoded strictly, so a string this process
+    /// cannot represent as UTF-8 is refused by the caller instead of being
+    /// stored with substituted characters.
+    /// </summary>
+    public static async Task<OwnerCaptureResult> CaptureResearchNoteAsync(
+        string controlPipe,
+        OwnerCaptureDraft draft,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+        var text = StrictUtf8.GetBytes(draft.Text);
+        try
+        {
+            var reply = await ReadReplyAsync(
+                controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.ResearchCaptureOperation,
+                    ResourceId: draft.ResourceId,
+                    ZoneId: draft.ZoneId,
+                    ContentBase64: Convert.ToBase64String(text),
+                    SourceTitle: draft.Title,
+                    SourceLocator: draft.Locator,
+                    SourceAuthor: draft.Author,
+                    SourceCapturedAtUtc: draft.CapturedAtUtc),
+                "research_captured",
+                cancellationToken).ConfigureAwait(false);
+
+            return new OwnerCaptureResult(reply.Outcome, reply.ErrorCode, ProjectSource(reply));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(text);
+        }
+    }
+
+    /// <summary>
+    /// Reads one captured note at its exact registry revision, returning the
+    /// verbatim text the vault holds beside its registry metadata, so what the
+    /// owner sees after a restart is the bytes that were stored and nothing
+    /// reconstructed. A registration that keeps no captured text answers
+    /// <c>research_note_unavailable</c> rather than an empty note.
+    /// </summary>
+    public static async Task<OwnerResearchNoteResult> ReadResearchNoteAsync(
+        string controlPipe,
+        string resourceId,
+        long? revision,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(resourceId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.ResearchReadOperation,
+                ResourceId: resourceId,
+                ResourceRevision: revision),
+            "research_note",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerResearchNoteResult(reply.Outcome, reply.ErrorCode, ProjectSource(reply), DecodeServedText(reply));
+    }
+
+    /// <summary>
+    /// Lists the pending proposal inbox: identity, live revision and zone of
+    /// each pending proposal, never a proposed body.
+    /// </summary>
+    public static async Task<OwnerProposalListResult> ListProposalsAsync(
+        string controlPipe,
+        CancellationToken cancellationToken)
+    {
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.ProposalListOperation),
+            "proposals",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerProposalListResult(reply.Outcome, reply.ErrorCode, ProjectProposalIdentities(reply));
+    }
+
+    /// <summary>
+    /// Reads one pending proposal at its exact live revision (or the named
+    /// one): its provenance plus the proposed item draft exactly as the agent
+    /// wrote it.
+    /// </summary>
+    public static async Task<OwnerProposalReadResult> ReadProposalAsync(
+        string controlPipe,
+        string proposalId,
+        long? revision,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(proposalId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.ProposalReadOperation,
+                ResourceId: proposalId,
+                ResourceRevision: revision),
+            "proposal",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerProposalReadResult(reply.Outcome, reply.ErrorCode, ProjectProposal(reply));
+    }
+
+    /// <summary>
+    /// Publishes one pending proposal with the content the owner reviewed. The
+    /// proposal is named at exactly the revision that was reviewed, and the
+    /// attribution fields travel back as the proposal declared them: the
+    /// service refuses a reviewed draft that names another author, creation
+    /// method or evidence, so an approval can never relabel an AI-written
+    /// record as user-written or user-confirmed.
+    /// </summary>
+    public static async Task<OwnerReviewResult> PublishProposalAsync(
+        string controlPipe,
+        OwnerProposalDetail proposal,
+        OwnerReviewDraft reviewed,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(proposal);
+        ArgumentNullException.ThrowIfNull(reviewed);
+        var draft = BuildReviewDraft(
+            reviewed.Kind, reviewed.Author, reviewed.CreationMethod, reviewed.Evidence, reviewed.Level,
+            reviewed.Title, reviewed.Body, reviewed.Sources, reviewed.OccurredAtUtc,
+            reviewed.Project, reviewed.Environment, reviewed.Version);
+        try
+        {
+            var reply = await ReadReplyAsync(
+                controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.OwnerProposalPublishOperation,
+                    ResourceId: proposal.Id,
+                    ResourceRevision: proposal.Revision,
+                    ContentBase64: Convert.ToBase64String(draft)),
+                "proposal_published",
+                cancellationToken).ConfigureAwait(false);
+
+            return new OwnerReviewResult(reply.Outcome, reply.ErrorCode, ProjectReview(reply));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(draft);
+        }
+    }
+
+    /// <summary>
+    /// Rejects one pending proposal with the rationale the owner gave, naming
+    /// the proposal at exactly the revision that was reviewed. The proposal's
+    /// own content is recorded as the rejected review item and the item the
+    /// proposal would have revised is never touched.
+    /// </summary>
+    public static async Task<OwnerReviewResult> RejectProposalAsync(
+        string controlPipe,
+        OwnerProposalDetail proposal,
+        string rationale,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(proposal);
+        ArgumentNullException.ThrowIfNull(rationale);
+        var draft = EncodeTransition(rationale, null);
+        try
+        {
+            var reply = await ReadReplyAsync(
+                controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.OwnerProposalRejectOperation,
+                    ResourceId: proposal.Id,
+                    ResourceRevision: proposal.Revision,
+                    ContentBase64: Convert.ToBase64String(draft)),
+                "proposal_rejected",
+                cancellationToken).ConfigureAwait(false);
+
+            return new OwnerReviewResult(reply.Outcome, reply.ErrorCode, ProjectReview(reply));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(draft);
+        }
+    }
+
+    /// <summary>
+    /// Reads the publication record of one memory item: the live revision of
+    /// its lifecycle record and the publication state it carries. An item with
+    /// no record yet has no publication decision, which the caller reports as
+    /// "none" instead of inventing a state.
+    /// </summary>
+    public static async Task<OwnerLifecycleResult> ReadLifecycleAsync(
+        string controlPipe,
+        string subjectResourceId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(subjectResourceId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.LifecycleReadOperation,
+                ResourceId: subjectResourceId),
+            "lifecycle",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerLifecycleResult(reply.Outcome, reply.ErrorCode, ProjectLifecycle(reply));
+    }
+
+    /// <summary>
+    /// Undoes a completed publish: the item goes from <c>published</c> to
+    /// <c>withdrawn</c> as one explicit owner act with the owner's rationale,
+    /// so it stops being current without being deleted, and keeps its content,
+    /// its attribution and its whole publication history.
+    /// </summary>
+    public static Task<OwnerLifecycleResult> WithdrawReviewItemAsync(
+        string controlPipe,
+        OwnerLifecycleState lifecycle,
+        string rationale,
+        CancellationToken cancellationToken) =>
+        TransitionLifecycleAsync(
+            controlPipe, lifecycle, ServiceRequestHandler.LifecycleWithdrawOperation, "lifecycle_withdrawn", rationale, cancellationToken);
+
+    /// <summary>
+    /// Undoes a completed rejection: the review item goes from
+    /// <c>rejected</c> back to <c>proposal</c> as one explicit owner act with
+    /// the owner's rationale, so the same canonical record can be reviewed
+    /// again instead of a second copy being written.
+    /// </summary>
+    public static Task<OwnerLifecycleResult> ReproposeReviewItemAsync(
+        string controlPipe,
+        OwnerLifecycleState lifecycle,
+        string rationale,
+        CancellationToken cancellationToken) =>
+        TransitionLifecycleAsync(
+            controlPipe, lifecycle, ServiceRequestHandler.LifecycleReProposeOperation, "lifecycle_reproposed", rationale, cancellationToken);
+
+    private static async Task<OwnerLifecycleResult> TransitionLifecycleAsync(
+        string controlPipe,
+        OwnerLifecycleState lifecycle,
+        string operation,
+        string expectedStatus,
+        string rationale,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(lifecycle);
+        ArgumentNullException.ThrowIfNull(rationale);
+        var draft = EncodeTransition(rationale, null);
+        try
+        {
+            var reply = await ReadReplyAsync(
+                controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    operation,
+                    ResourceId: lifecycle.SubjectResourceId,
+                    ContentBase64: Convert.ToBase64String(draft),
+                    ResourceRevision: lifecycle.Revision),
+                expectedStatus,
+                cancellationToken).ConfigureAwait(false);
+
+            return new OwnerLifecycleResult(reply.Outcome, reply.ErrorCode, ProjectLifecycle(reply));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(draft);
+        }
+    }
+
+    /// <summary>
+    /// The reviewed item draft exactly as the memory write service reads it.
+    /// The recorded instant is the moment the owner's act is sent: this record
+    /// is recorded now, whatever the proposed content declares about when the
+    /// statement happened.
+    /// </summary>
+    private static byte[] BuildReviewDraft(
+        string kind,
+        string author,
+        string creationMethod,
+        string evidence,
+        string level,
+        string? title,
+        string body,
+        OwnerItemSource[] sources,
+        DateTimeOffset? occurredAtUtc,
+        string? project,
+        string? environment,
+        string? version) =>
+        JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            kind,
+            author,
+            creationMethod,
+            evidence,
+            level,
+            title,
+            body,
+            sources = sources.Select(source => new
+            {
+                sourceId = source.SourceId,
+                locator = source.Locator,
+                availability = source.Availability,
+                sourceRevision = source.SourceRevision,
+                span = source.SpanStart is { } start && source.SpanEnd is { } end
+                    ? new { start, end }
+                    : null
+            }).ToArray(),
+            occurredAtUtc = occurredAtUtc?.ToUniversalTime(),
+            recordedAtUtc = DateTimeOffset.UtcNow,
+            applicability = project is null && environment is null && version is null
+                ? null
+                : new { project, environment, version }
+        });
+
+    /// <summary>One lifecycle transition draft: the owner's words, nothing else.</summary>
+    private static byte[] EncodeTransition(string rationale, string? replacementResourceId) =>
+        JsonSerializer.SerializeToUtf8Bytes(new { rationale, replacementResourceId });
+
+    /// <summary>
+    /// The verbatim text the service served, or null when the answer carried
+    /// none or could not be decoded as UTF-8; a served note is never
+    /// reconstructed, replaced or guessed.
+    /// </summary>
+    private static string? DecodeServedText(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed || reply.Payload.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var encoded = Text(reply.Payload, "contentBase64");
+        if (string.IsNullOrEmpty(encoded))
+        {
+            return null;
+        }
+
+        byte[] bytes;
+        try
+        {
+            bytes = Convert.FromBase64String(encoded);
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+
+        try
+        {
+            return StrictUtf8.GetString(bytes);
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(bytes);
+        }
+    }
+
     private static async Task<OwnerVaultCommandResult> ExecuteVaultCommandAsync(
         string controlPipe,
         ServiceRequest request,
@@ -788,6 +1276,123 @@ public static class OwnerChannelClient
             Int32(index, "rowCount"),
             Flag(index, "stale"),
             Flag(index, "canonicalMoved"));
+    }
+
+    /// <summary>The pending inbox identities the service listed; never a proposed body.</summary>
+    private static OwnerProposalIdentity[]? ProjectProposalIdentities(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            reply.Payload.ValueKind != JsonValueKind.Object ||
+            !reply.Payload.TryGetProperty("proposals", out var proposals) ||
+            proposals.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        return proposals.EnumerateArray()
+            .Select(proposal => new OwnerProposalIdentity(
+                Text(proposal, "id") ?? string.Empty,
+                Int64(proposal, "revision"),
+                Text(proposal, "zoneId") ?? string.Empty))
+            .ToArray();
+    }
+
+    /// <summary>
+    /// One pending proposal with its provenance and the proposed item draft,
+    /// exactly as the agent wrote it. The user-confirmation value is the claim
+    /// the record carries and is never presented as a verified confirmation.
+    /// </summary>
+    private static OwnerProposalDetail? ProjectProposal(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            reply.Payload.ValueKind != JsonValueKind.Object ||
+            !reply.Payload.TryGetProperty("proposal", out var proposal) ||
+            proposal.ValueKind != JsonValueKind.Object ||
+            !proposal.TryGetProperty("item", out var item) ||
+            item.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var sources = item.TryGetProperty("sources", out var sourceElements) && sourceElements.ValueKind == JsonValueKind.Array
+            ? sourceElements.EnumerateArray().Select(ProjectItemSource).ToArray()
+            : Array.Empty<OwnerItemSource>();
+        string? project = null;
+        string? environment = null;
+        string? version = null;
+        if (item.TryGetProperty("applicability", out var applicability) && applicability.ValueKind == JsonValueKind.Object)
+        {
+            project = Text(applicability, "project");
+            environment = Text(applicability, "environment");
+            version = Text(applicability, "version");
+        }
+
+        return new OwnerProposalDetail(
+            Text(proposal, "id") ?? string.Empty,
+            Text(proposal, "zoneId") ?? string.Empty,
+            Int64(proposal, "revision"),
+            Text(proposal, "kind") ?? string.Empty,
+            Text(proposal, "destinationResourceId") ?? string.Empty,
+            Int64(proposal, "destinationRevision"),
+            Text(proposal, "subjectResourceId"),
+            OptionalInt64(proposal, "subjectRevision"),
+            Text(proposal, "idempotencyKey") ?? string.Empty,
+            Text(proposal, "payloadHash") ?? string.Empty,
+            Text(proposal, "executor") ?? string.Empty,
+            Timestamp(proposal, "recordedAtUtc") ?? DateTimeOffset.MinValue,
+            Flag(proposal, "claimedUserConfirmed"),
+            new OwnerReviewDraft(
+                Text(item, "kind") ?? string.Empty,
+                Text(item, "author") ?? string.Empty,
+                Text(item, "creationMethod") ?? string.Empty,
+                Text(item, "evidence") ?? string.Empty,
+                Text(item, "level") ?? string.Empty,
+                Text(item, "title"),
+                Text(item, "body") ?? string.Empty,
+                sources,
+                Timestamp(item, "occurredAtUtc"),
+                project,
+                environment,
+                version));
+    }
+
+    /// <summary>One review outcome as the service reported it.</summary>
+    private static OwnerReviewOutcome? ProjectReview(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            reply.Payload.ValueKind != JsonValueKind.Object ||
+            !reply.Payload.TryGetProperty("proposalReview", out var review) ||
+            review.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return new OwnerReviewOutcome(
+            Text(review, "proposalId") ?? string.Empty,
+            Int64(review, "proposalRevision"),
+            Text(review, "kind") ?? string.Empty,
+            Text(review, "itemId") ?? string.Empty,
+            Int64(review, "itemRevision"),
+            Text(review, "publication") ?? string.Empty,
+            Int64(review, "lifecycleRevision"),
+            Flag(review, "decisionApplied"));
+    }
+
+    /// <summary>One item's live publication record.</summary>
+    private static OwnerLifecycleState? ProjectLifecycle(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            reply.Payload.ValueKind != JsonValueKind.Object ||
+            !reply.Payload.TryGetProperty("lifecycle", out var lifecycle) ||
+            lifecycle.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return new OwnerLifecycleState(
+            Text(lifecycle, "subjectResourceId") ?? string.Empty,
+            Int64(lifecycle, "revision"),
+            Text(lifecycle, "publication") ?? string.Empty);
     }
 
     private static long? SpanStart(JsonElement element) =>

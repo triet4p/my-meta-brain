@@ -277,6 +277,18 @@ public static class LifecycleCodec
         return draft;
     }
 
+    /// <summary>
+    /// Encodes one lifecycle draft exactly as <see cref="DecodeDraft"/> reads
+    /// it. The S5-T4 owner review act creates the lifecycle record of the item
+    /// it just wrote, so that draft is built server-side instead of travelling
+    /// through a request body; it is the same schema and the same validation.
+    /// </summary>
+    public static byte[] EncodeDraft(LifecycleDraft draft)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+        return JsonSerializer.SerializeToUtf8Bytes(draft, JsonOptions);
+    }
+
     public static LifecycleTransitionDraft DecodeTransitionDraft(byte[]? json)
     {
         if (json is null || json.Length == 0)

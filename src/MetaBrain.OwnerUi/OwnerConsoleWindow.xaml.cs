@@ -28,6 +28,13 @@ public partial class OwnerConsoleWindow : System.Windows.Window
 
     private const int DefaultLibraryPageSize = 10;
 
+    /// <summary>The service's own memory-kind spellings, shared by the views that name a kind.</summary>
+    private static readonly string[] MemoryKindTokens =
+    {
+        "claim", "observation", "question", "hypothesis", "decision",
+        "lesson", "procedure", "synthesis", "preference", "intention"
+    };
+
     /// <summary>
     /// What the recovery-key element holds once the key is off the screen. The
     /// element never keeps the key itself after a clear.
@@ -41,6 +48,11 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     private bool _clearingInputs;
     private OwnerLibraryPage? _renderedPage;
     private OwnerItemDetail? _renderedItem;
+    private long _captureDraftVersion;
+    private long _reviewDraftVersion;
+    private bool _syncingInboxEditors;
+    private OwnerProposalIdentity[]? _renderedProposals;
+    private OwnerSourceDetail? _renderedCaptureSource;
 
     internal OwnerConsoleWindow(OwnerConsoleSession session)
     {
@@ -49,6 +61,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         Navigation.SelectedIndex = 0;
         ActivityList.ItemsSource = _session.Activity;
         InitializeLibraryControls();
+        InitializeInboxControls();
         LibraryTitleInput.TextChanged += (_, _) => Render();
         LibraryResults.MouseDoubleClick += async (_, _) => await OpenSelectedLibraryResultAsync();
         _session.Changed += OnSessionChanged;
@@ -67,11 +80,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     /// </summary>
     private void InitializeLibraryControls()
     {
-        foreach (var kind in new[]
-                 {
-                     AnyFilterItem, "claim", "observation", "question", "hypothesis",
-                     "decision", "lesson", "procedure", "synthesis", "preference", "intention"
-                 })
+        foreach (var kind in new[] { AnyFilterItem }.Concat(MemoryKindTokens))
         {
             LibraryKindInput.Items.Add(kind);
         }
@@ -132,6 +141,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         VaultStatusPanel.Visibility = Navigation.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
         VaultKeyPanel.Visibility = Navigation.SelectedIndex == 2 ? Visibility.Visible : Visibility.Collapsed;
         LibraryPanel.Visibility = Navigation.SelectedIndex == 3 ? Visibility.Visible : Visibility.Collapsed;
+        InboxPanel.Visibility = Navigation.SelectedIndex == 4 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void Render()
@@ -177,9 +187,20 @@ public partial class OwnerConsoleWindow : System.Windows.Window
             SyncLibraryFilterInputs();
         }
 
+        if (_captureDraftVersion != _session.CaptureDraftVersion || _reviewDraftVersion != _session.ReviewDraftVersion)
+        {
+            // The session dropped or replaced the inbox editor content with the
+            // private state it belonged to (lock, end of session, a newly opened
+            // proposal): the input controls of this window go with it.
+            _captureDraftVersion = _session.CaptureDraftVersion;
+            _reviewDraftVersion = _session.ReviewDraftVersion;
+            SyncInboxEditors();
+        }
+
         RenderVaultStatus(attached, status);
         RenderVaultKey(attached);
         RenderLibrary(attached);
+        RenderInbox(attached);
     }
 
     private string LastCheckText_Value() => _session.LastCheckLocal is { } last
@@ -566,8 +587,8 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     private bool TryReadLibraryFilters(int offset, out OwnerLibraryQuery query)
     {
         query = new OwnerLibraryQuery();
-        if (!TryParseLibraryTimestamp(LibraryFromInput.Text, out var fromUtc) ||
-            !TryParseLibraryTimestamp(LibraryToInput.Text, out var toUtc))
+        if (!TryParseOwnerUtcDate(LibraryFromInput.Text, out var fromUtc) ||
+            !TryParseOwnerUtcDate(LibraryToInput.Text, out var toUtc))
         {
             _session.ReportLibraryInputProblem(
                 "This console did not send the search: a From/To value is not a date or date-time it understands. Use yyyy-MM-dd or yyyy-MM-ddTHH:mm in UTC.");
@@ -593,7 +614,12 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         return true;
     }
 
-    private static bool TryParseLibraryTimestamp(string text, out DateTimeOffset? value)
+    /// <summary>
+    /// Reads one owner-supplied UTC date-time. A value this console does not
+    /// understand is refused with a plain explanation instead of being dropped
+    /// silently into a different window or a different capture.
+    /// </summary>
+    private static bool TryParseOwnerUtcDate(string text, out DateTimeOffset? value)
     {
         value = null;
         if (string.IsNullOrWhiteSpace(text))
@@ -765,12 +791,354 @@ public partial class OwnerConsoleWindow : System.Windows.Window
             : "No private library act is offered while the service does not report the vault unlocked.");
     }
 
+    // ---- S5-T4 inbox: capture and proposal review ----
+
+    /// <summary>
+    /// The review editor names a kind and a level from the service's own
+    /// spellings. A kind is required (there is no "(any)" here): the reviewed
+    /// item is either this kind or it is not reviewed at all.
+    /// </summary>
+    private void InitializeInboxControls()
+    {
+        foreach (var kind in MemoryKindTokens)
+        {
+            ReviewKindInput.Items.Add(kind);
+        }
+
+        foreach (var level in new[] { "l0", "l1", "l2", "l3Plus" })
+        {
+            ReviewLevelInput.Items.Add(level);
+        }
+    }
+
+    /// <summary>
+    /// Puts the session's inbox state back into the input controls: the capture
+    /// editor, the review editor and the rationale. Used at startup and whenever
+    /// the session replaces or drops that state (a newly opened proposal, a lock,
+    /// the end of the session), so this window never keeps text the session no
+    /// longer holds.
+    /// </summary>
+    private void SyncInboxEditors()
+    {
+        _syncingInboxEditors = true;
+        try
+        {
+            CaptureTextInput.Text = _session.CaptureDraft;
+            ReviewRationaleInput.Text = string.Empty;
+            var draft = _session.ReviewDraft;
+            ReviewKindInput.SelectedItem = draft?.Kind;
+            ReviewLevelInput.SelectedItem = draft?.Level;
+            ReviewTitleInput.Text = draft?.Title ?? string.Empty;
+            ReviewBodyInput.Text = draft?.Body ?? string.Empty;
+        }
+        finally
+        {
+            _syncingInboxEditors = false;
+        }
+    }
+
+    private void OnCaptureTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_syncingInboxEditors)
+        {
+            return;
+        }
+
+        _session.SetCaptureDraft(CaptureTextInput.Text);
+        RenderCaptureHint();
+    }
+
+    /// <summary>
+    /// Shows whether the editor holds text the vault does not have. This is the
+    /// fact the lock warning and the "saved" claim both come from, so it is
+    /// never inferred from the button having been pressed.
+    /// </summary>
+    private void RenderCaptureHint()
+    {
+        var length = _session.CaptureDraft.Length;
+        CaptureHintText.Text = _session.HasUnsavedCaptureText
+            ? "UNSAVED: the editor holds " + length.ToString(CultureInfo.InvariantCulture) +
+                " characters the vault does not have. Locking asks before discarding them; Clear editor discards them now."
+            : length == 0
+                ? "The editor is empty. Nothing is written until you press Save capture."
+                : "The editor text is exactly the text this session saved.";
+    }
+
+    private async void OnCaptureSaveClicked(object sender, RoutedEventArgs e)
+    {
+        if (!TryReadCaptureFields(out var resourceId, out var zoneId, out var title, out var locator, out var author, out var capturedAt))
+        {
+            return;
+        }
+
+        await _session.CaptureAsync(resourceId, zoneId, title, locator, author, capturedAt);
+    }
+
+    private void OnCaptureClearClicked(object sender, RoutedEventArgs e) => _session.ClearCaptureDraft();
+
+    private async void OnCaptureReadBackClicked(object sender, RoutedEventArgs e)
+    {
+        var sourceId = CaptureReadBackIdInput.Text.Trim();
+        if (sourceId.Length == 0)
+        {
+            _session.ReportInboxInputProblem("This console did not send the read: name the note ID (or a source ID) the service should serve.");
+            return;
+        }
+
+        long? exact = null;
+        var revisionText = CaptureReadBackRevisionInput.Text.Trim();
+        if (revisionText.Length > 0)
+        {
+            if (!long.TryParse(revisionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) || parsed < 1)
+            {
+                _session.ReportInboxInputProblem("This console did not send the read: the revision must be a positive number, or empty for the live revision.");
+                return;
+            }
+
+            exact = parsed;
+        }
+
+        await _session.ReadBackCaptureAsync(sourceId, exact);
+    }
+
+    /// <summary>
+    /// Reads the capture fields. An empty ID or zone is refused here with an
+    /// explanation instead of being sent as a request the service would refuse
+    /// without saying which field was wrong; the text stays in the editor either
+    /// way.
+    /// </summary>
+    private bool TryReadCaptureFields(
+        out string resourceId,
+        out string zoneId,
+        out string? title,
+        out string? locator,
+        out string? author,
+        out DateTimeOffset? capturedAtUtc)
+    {
+        resourceId = CaptureResourceInput.Text.Trim();
+        zoneId = CaptureZoneInput.Text.Trim();
+        title = FilterText(CaptureTitleInput.Text);
+        locator = FilterText(CaptureLocatorInput.Text);
+        author = FilterText(CaptureAuthorInput.Text);
+        capturedAtUtc = null;
+
+        if (resourceId.Length == 0 || zoneId.Length == 0)
+        {
+            _session.ReportInboxInputProblem(
+                "This console did not send the capture: the note needs an ID you name and the zone it belongs to. Your text is still in the editor.");
+            return false;
+        }
+
+        if (!TryParseOwnerUtcDate(CaptureDateInput.Text, out capturedAtUtc))
+        {
+            _session.ReportInboxInputProblem(
+                "This console did not send the capture: the source date is not a date it understands. Use yyyy-MM-dd or yyyy-MM-ddTHH:mm in UTC, or leave it empty. Your text is still in the editor.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private async void OnReviewInboxClicked(object sender, RoutedEventArgs e) =>
+        await _session.RefreshReviewInboxAsync();
+
+    private async void OnReviewOpenClicked(object sender, RoutedEventArgs e) => await OpenSelectedProposalAsync();
+
+    private async void OnReviewProposalKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Enter)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        await OpenSelectedProposalAsync();
+    }
+
+    private void OnReviewProposalSelectionChanged(object sender, SelectionChangedEventArgs e) => Render();
+
+    private async Task OpenSelectedProposalAsync()
+    {
+        if (ReviewProposals.SelectedItem is ProposalRow row)
+        {
+            await _session.OpenReviewProposalAsync(row.Identity);
+        }
+    }
+
+    private async void OnReviewPublishClicked(object sender, RoutedEventArgs e)
+    {
+        if (BuildReviewedDraft() is not { } reviewed)
+        {
+            _session.ReportInboxInputProblem("This console did not send the review: open a proposal and choose a kind and a level for it.");
+            return;
+        }
+
+        await _session.PublishReviewProposalAsync(reviewed);
+    }
+
+    private async void OnReviewRejectClicked(object sender, RoutedEventArgs e) =>
+        await _session.RejectReviewProposalAsync(ReviewRationaleInput.Text);
+
+    private async void OnReviewUndoClicked(object sender, RoutedEventArgs e) =>
+        await _session.UndoReviewDecisionAsync(ReviewRationaleInput.Text);
+
+    /// <summary>
+    /// The reviewed content this console sends: the owner's edits for the content
+    /// fields, and the attribution and citations exactly as the proposal carried
+    /// them. This view offers no control that changes an author, a creation
+    /// method or an evidence level, and the service independently refuses a
+    /// reviewed draft that names different ones — so approving a proposal can
+    /// never relabel an AI-written note as user-written or user-confirmed.
+    /// </summary>
+    private OwnerReviewDraft? BuildReviewedDraft()
+    {
+        var proposal = _session.ReviewProposal;
+        if (proposal is null || ReviewKindInput.SelectedItem is not string kind || ReviewLevelInput.SelectedItem is not string level)
+        {
+            return null;
+        }
+
+        return new OwnerReviewDraft(
+            kind,
+            proposal.Item.Author,
+            proposal.Item.CreationMethod,
+            proposal.Item.Evidence,
+            level,
+            ReviewTitleInput.Text,
+            ReviewBodyInput.Text,
+            proposal.Item.Sources,
+            proposal.Item.OccurredAtUtc,
+            proposal.Item.Project,
+            proposal.Item.Environment,
+            proposal.Item.Version);
+    }
+
+    /// <summary>
+    /// Renders the inbox from the service's answers only: the capture state, the
+    /// proposal inbox, the opened proposal with the source it cites beside the
+    /// editor, and the publication state of the item a decision writes. When the
+    /// vault is not unlocked this shows no private content at all and every
+    /// private text box is empty.
+    /// </summary>
+    private void RenderInbox(bool attached)
+    {
+        var unlocked = attached && _session.ReportedVaultState == OwnerVaultState.Unlocked;
+        var inFlight = _session.InboxActInFlight;
+
+        RenderCaptureHint();
+        CaptureMessageText.Text = _session.CaptureMessage ?? (unlocked
+            ? "No capture has been sent in this session. Nothing private is written until you press Save capture."
+            : "No private capture act is offered while the service does not report the vault unlocked.");
+        CaptureSavedText.Text = _session.CaptureSource is null
+            ? "No capture from this session is saved; the editor text is not in the vault."
+            : "Saved capture: id=" + _session.CaptureSource.Id +
+                " revision=" + _session.CaptureSource.Revision.ToString(CultureInfo.InvariantCulture) +
+                " zone=" + _session.CaptureSource.ZoneId +
+                " title=" + (_session.CaptureSource.Title ?? "(none)") +
+                " availability=" + _session.CaptureSource.Availability +
+                " speaker=" + _session.CaptureSource.Author +
+                " locator=" + (_session.CaptureSource.Locator ?? "(none)");
+
+        if (!ReferenceEquals(_renderedCaptureSource, _session.CaptureSource) && _session.CaptureSource is { } savedSource)
+        {
+            _renderedCaptureSource = savedSource;
+            CaptureReadBackIdInput.Text = savedSource.Id;
+        }
+
+        CaptureReadBackMessageText.Text = _session.CaptureReadBackMessage ?? "No read-back has been sent in this session.";
+        CaptureReadBackSourceText.Text = _session.CaptureReadBackSource is { } readBack
+            ? "id=" + readBack.Id + "  revision=" + readBack.Revision.ToString(CultureInfo.InvariantCulture) +
+                "  zone=" + readBack.ZoneId + "  availability=" + readBack.Availability +
+                "  title=" + (readBack.Title ?? "(none)") + "  captured=" + Stamp(readBack.CapturedAtUtc) +
+                "  locator=" + (readBack.Locator ?? "(none)")
+            : string.Empty;
+        CaptureReadBackText.Text = _session.CaptureReadBackText ?? string.Empty;
+
+        var proposals = _session.ReviewProposals;
+        if (!ReferenceEquals(_renderedProposals, proposals))
+        {
+            _renderedProposals = proposals;
+            ReviewProposals.ItemsSource = proposals.Select(identity => new ProposalRow(identity)).ToArray();
+        }
+
+        ReviewInboxMessageText.Text = _session.ReviewInboxMessage ?? (unlocked
+            ? "No inbox listing has been asked for in this session."
+            : "No private review act is offered while the service does not report the vault unlocked.");
+
+        var proposal = _session.ReviewProposal;
+        ReviewProvenanceText.Text = proposal is null
+            ? "No proposal is open. Refresh the inbox, choose a pending proposal and open it."
+            : "proposal=" + proposal.Id + "  revision=" + proposal.Revision.ToString(CultureInfo.InvariantCulture) +
+                "  kind=" + proposal.Kind + "  zone=" + proposal.ZoneId +
+                "  executor=" + proposal.Executor + "  recorded=" + Stamp(proposal.RecordedAtUtc) +
+                "  inbox=" + proposal.DestinationResourceId + "@" + proposal.DestinationRevision.ToString(CultureInfo.InvariantCulture) +
+                "  idempotency=" + proposal.IdempotencyKey +
+                "  payloadHash=" + ShortDigest(proposal.PayloadHash) +
+                (proposal.SubjectResourceId is null
+                    ? "  pin=none (a create proposal)"
+                    : "  pin=" + proposal.SubjectResourceId + "@" + (proposal.SubjectRevision ?? 0).ToString(CultureInfo.InvariantCulture)) +
+                "  claimedUserConfirmed=" + (proposal.ClaimedUserConfirmed ? "claimed (never verified here)" : "no claim");
+        ReviewItemStateText.Text = proposal is null ? string.Empty : _session.ReviewItemStateMessage ?? string.Empty;
+        ReviewAttributionText.Text = proposal is null
+            ? string.Empty
+            : "author=" + proposal.Item.Author + "  creation=" + proposal.Item.CreationMethod +
+                "  evidence=" + proposal.Item.Evidence + "  (fixed by the proposal; read-only)";
+        ReviewCitationsText.Text = proposal is null
+            ? string.Empty
+            : "stored citations: " + (proposal.Item.Sources.Length == 0
+                ? "(none)"
+                : string.Join("; ", proposal.Item.Sources.Select(cited =>
+                    (cited.SourceId ?? "(no source id)") + "@" +
+                    (cited.SourceRevision?.ToString(CultureInfo.InvariantCulture) ?? "(none)"))));
+        ReviewSourceMetaText.Text = _session.ReviewSource is { } reviewSource
+            ? "id=" + reviewSource.Id + "  revision=" + reviewSource.Revision.ToString(CultureInfo.InvariantCulture) +
+                "  zone=" + reviewSource.ZoneId + "  availability=" + reviewSource.Availability +
+                "  title=" + (reviewSource.Title ?? "(none)") + "  captured=" + Stamp(reviewSource.CapturedAtUtc) +
+                "  locator=" + (reviewSource.Locator ?? "(none)")
+            : string.Empty;
+        ReviewSourceMessageText.Text = proposal is null ? string.Empty : _session.ReviewSourceMessage ?? string.Empty;
+        ReviewSourceText.Text = _session.ReviewSourceText ?? string.Empty;
+        ReviewMessageText.Text = _session.ReviewMessage ?? (unlocked
+            ? "No review act has been sent in this session. Publishing writes the content you see; rejecting records your decision without applying the proposal."
+            : "No private review act is offered while the service does not report the vault unlocked.");
+
+        CaptureSaveButton.IsEnabled = unlocked && !inFlight;
+        CaptureClearButton.IsEnabled = !inFlight;
+        CaptureReadBackButton.IsEnabled = unlocked && !inFlight;
+        CaptureTextInput.IsEnabled = unlocked && !inFlight;
+        CaptureResourceInput.IsEnabled = unlocked && !inFlight;
+        CaptureZoneInput.IsEnabled = unlocked && !inFlight;
+        CaptureTitleInput.IsEnabled = unlocked && !inFlight;
+        CaptureLocatorInput.IsEnabled = unlocked && !inFlight;
+        CaptureAuthorInput.IsEnabled = unlocked && !inFlight;
+        CaptureDateInput.IsEnabled = unlocked && !inFlight;
+        ReviewInboxButton.IsEnabled = unlocked && !inFlight;
+        ReviewOpenButton.IsEnabled = unlocked && !inFlight && ReviewProposals.SelectedItem is ProposalRow;
+        ReviewProposals.IsEnabled = unlocked && !inFlight;
+        ReviewKindInput.IsEnabled = unlocked && !inFlight && proposal is not null;
+        ReviewLevelInput.IsEnabled = unlocked && !inFlight && proposal is not null;
+        ReviewTitleInput.IsEnabled = unlocked && !inFlight && proposal is not null;
+        ReviewBodyInput.IsEnabled = unlocked && !inFlight && proposal is not null;
+        ReviewRationaleInput.IsEnabled = unlocked && !inFlight && proposal is not null;
+        ReviewPublishButton.IsEnabled = unlocked && !inFlight && proposal is not null;
+        ReviewRejectButton.IsEnabled = unlocked && !inFlight && proposal is not null;
+        ReviewUndoButton.IsEnabled = unlocked && !inFlight && _session.ReviewDecisionIsUndoable;
+    }
+
     private static string Stamp(DateTimeOffset? value) =>
         value is { } instant
             ? instant.ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture)
             : "(none)";
 
     private static string ShortDigest(string digest) => digest.Length <= 12 ? digest : digest[..12];
+
+    /// <summary>One pending proposal exactly as the service listed it, rendered as one line.</summary>
+    private sealed record ProposalRow(OwnerProposalIdentity Identity)
+    {
+        public override string ToString() =>
+            "proposal " + Identity.Id + "  rev=" + Identity.Revision.ToString(CultureInfo.InvariantCulture) +
+            "  zone=" + Identity.ZoneId;
+    }
 
     /// <summary>One search hit exactly as the service listed it, rendered as one line.</summary>
     private sealed record LibraryResultRow(OwnerLibraryHit Hit)

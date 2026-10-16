@@ -161,3 +161,24 @@
 **Fix / workaround:** Assert the count the *service* reported (the console also renders the page total as live text) and use the realized-row count only for pages that fit on screen; drive combo boxes with the keyboard (focus the combo, walk its ordered items with the arrow keys, then read the selection back through `SelectionPattern` to prove it moved) instead of relying on popup containers.
 **Watch out for:** UI-automation assertions that assume one automation element per data row or that popup items are always selectable; assert state through live text/properties and prefer real keyboard input, which is also what the acceptance requires.
 
+## [2026-10-16] Retry safety compared writer-stamped bytes, so an identical retry looked like different content
+
+**Symptom:** The S5-T4 scenario assertion "a repeated review writes nothing twice" failed: the service refused a retry that carried exactly the reviewed content, while the same path resumed correctly for a rejection.
+**Root cause:** The crash/retry resume check compared the exact stored envelope bytes with the envelope the current attempt would write. The record's own recorded instant is part of that envelope but is stamped per attempt, so two semantically identical reviews produced different bytes and were read as "different content".
+**Fix / workaround:** Compare the content field by field (identity, zone, schema, kind, author, executor, creation method, evidence, level, title, body, occurred instant, applicability, citations) and let the first attempt's recorded instant stand as the truthful one; the act's own stamp is excluded from the comparison.
+**Watch out for:** Any "is this the same write" check over serialized records — a field the writer itself stamps (recorded time, request id, attempt counter) makes two identical attempts differ. Either exclude writer-stamped fields from the identity of the content or state explicitly which stamp wins.
+
+## [2026-10-16] A UI-automation wait matched the view's static guidance text instead of the service's answer
+
+**Symptom:** An S5-T4 proof run failed at "the capture outcome states that the note needs no provider" even though the console did show that outcome; an earlier run of the same harness passed.
+**Root cause:** The wait needle was the short phrase `registered source`, which also appears in the view's static guidance sentence ("stored as an encrypted registered source before any structuring step runs"), so the wait could return as soon as the view was rendered and the following assertion read the screen before the answer arrived.
+**Fix / workaround:** Wait on a phrase only the answer can produce (`The service saved the text as registered source`), then assert the rest of the outcome text from the same snapshot.
+**Watch out for:** Any UI-proof wait whose needle may already exist before the act's answer: static guidance, labels and the console's default "nothing sent yet" messages all live in the same automation text as the answer.
+
+## [2026-10-16] A recorded decision was invisible because the reader resolved "the item" by the wrong rule
+
+**Symptom:** After the S5-T4 console rejected a revise proposal, reopening that proposal showed "no publication record yet" and the undo control stayed disabled, although the rejection had been recorded successfully.
+**Root cause:** The console resolved the review's canonical item from the proposal kind (pinned subject item for a revise proposal) and read *that* item's lifecycle record, while the act records the decision on the review item derived from the proposal. Publishing a revise proposal does target the pinned item, but rejecting one records the review item, so the single "resolve the item" rule was wrong for one of the two decisions.
+**Fix / workaround:** Resolve the review item as the item the decision is recorded on (derived from the proposal), read its record for the decision, and read the pinned item's record separately as context for what the publish would change.
+**Watch out for:** A derived identity that depends on the *act* rather than on the subject: when one entity is "the target of this decision" for a different act than for another, keep the resolution rule next to the act and never assume a single heuristic covers both.
+

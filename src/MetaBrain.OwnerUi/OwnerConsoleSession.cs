@@ -172,8 +172,30 @@ internal sealed partial class OwnerConsoleSession
     /// it drains in-flight private operations, clears the key, invalidates
     /// pending tokens and live sessions and stops private work; this console
     /// then clears its own sensitive state.
+    /// <para>
+    /// Locking clears this console's private views, including capture text that
+    /// was never saved, so the first lock request that arrives while such text
+    /// is in the editor is refused with an explicit warning instead of silently
+    /// discarding it. Pressing lock again with the same text discards it and
+    /// locks. An external lock, or any other transition away from the unlocked
+    /// vault, still clears the private state immediately — there is no state
+    /// where a locked console keeps private text.
+    /// </para>
     /// </summary>
-    public Task LockAsync() => RunVaultActAsync(OwnerVaultAct.Lock, credential: null);
+    public Task LockAsync()
+    {
+        if (HasUnsavedCaptureText && !string.Equals(_lockWarnedText, CaptureDraft, StringComparison.Ordinal))
+        {
+            _lockWarnedText = CaptureDraft;
+            VaultMessage = "The capture editor holds " + CaptureDraft.Length.ToString(CultureInfo.InvariantCulture) +
+                " characters that were never saved. The service stores nothing of an unsaved capture, and locking clears the editor, so that text will be gone. Press Lock vault now again to discard it and lock.";
+            Append("refused to lock while the capture editor held unsaved text; warned the owner instead");
+            RaiseChanged();
+            return Task.CompletedTask;
+        }
+
+        return RunVaultActAsync(OwnerVaultAct.Lock, credential: null);
+    }
 
     internal static string VaultToken(OwnerVaultState state) => state switch
     {

@@ -320,6 +320,14 @@ public static class MemoryItemValidator
             throw new ArgumentException("A question cannot carry belief evidence; it stays unverified until resolved by a separate lifecycle step.");
         }
     }
+    /// <summary>
+    /// The canonical item ID a pending proposal is reviewed into (S5-T4): the
+    /// identity rule the owner review derives server-side, exposed so the owner
+    /// application can address the review item of a proposal it is showing
+    /// without deriving an identity convention of its own.
+    /// </summary>
+    public static string ReviewedItemIdFor(string proposalId) => DomainIdentifiers.ReviewedItemIdFor(proposalId);
+
     public static void ValidateStored(StoredMemoryEnvelope envelope)
     {
         ArgumentNullException.ThrowIfNull(envelope);
@@ -650,6 +658,17 @@ internal static class DomainIdentifiers
     /// </summary>
     public const string ProposalIdPrefix = "prop-";
 
+    /// <summary>
+    /// Reserved resource-ID prefix for the canonical memory item a pending
+    /// proposal is reviewed into (S5-T4). The ID is derived from the proposal
+    /// by <see cref="ReviewedItemIdFor"/>, so one proposal yields at most one
+    /// reviewed item and a repeated publish is a plain create-only miss
+    /// instead of a second copy. Unlike the namespaces above, a derived
+    /// reviewed-item ID is an ordinary memory item: the library, the lifecycle
+    /// record, citations and relations address it exactly like any other
+    /// item, and no other product surface mints an ID with this prefix.
+    /// </summary>
+    public const string ReviewedItemIdPrefix = "mi-";
 
     public static bool IsSafeIdentifier(string? value)
     {
@@ -704,6 +723,22 @@ internal static class DomainIdentifiers
     /// a caller, so one subject has at most one lifecycle record.
     /// </summary>
     public static string LifecycleIdFor(string subjectResourceId) => LifecycleIdPrefix + subjectResourceId;
+
+    /// <summary>
+    /// Memory item ID derived from the pending proposal it was reviewed from:
+    /// the ID is never chosen by a caller, so one proposal publishes at most
+    /// one reviewed item and the revision-gated write is what makes a
+    /// repeated review a refusal instead of a duplicate.
+    /// </summary>
+    public static string ReviewedItemIdFor(string proposalId)
+    {
+        if (!IsProposalId(proposalId))
+        {
+            throw new ArgumentException("The proposal ID must be an opaque safe proposal identifier.");
+        }
+
+        return ReviewedItemIdPrefix + proposalId;
+    }
 
     /// <summary>
     /// Retained-revision archive ID derived from its subject and the exact

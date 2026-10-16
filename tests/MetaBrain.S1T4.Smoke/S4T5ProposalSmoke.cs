@@ -579,20 +579,39 @@ internal static partial class OwnerServiceSmoke
 
     private sealed record S4T5Session(string SessionId, string SessionFile);
 
-    private static async Task<S4T5Session> IssueS4T5GrantAsync(
+    private static Task<S4T5Session> IssueS4T5GrantAsync(
         string executable,
         SmokeFixture fixture,
+        string name,
+        string operations,
+        string[] resourceIds,
+        string[] destinationIds) =>
+        IssueOwnerGrantAsync(executable, fixture.ControlPipe, fixture.AgentPipe, fixture.OutputDirectory,
+            name, operations, resourceIds, destinationIds);
+
+    /// <summary>
+    /// The same owner-approved grant and one-time redemption, addressed by the
+    /// endpoints and output directory directly. The S5-T4 console fixture writer
+    /// drives an already-created fixture root that it did not create, so it
+    /// cannot hold a <see cref="SmokeFixture"/> and passes the endpoints it read
+    /// from that root's settings instead.
+    /// </summary>
+    private static async Task<S4T5Session> IssueOwnerGrantAsync(
+        string executable,
+        string controlPipe,
+        string agentPipe,
+        string outputDirectory,
         string name,
         string operations,
         string[] resourceIds,
         string[] destinationIds)
     {
         var expiry = DateTimeOffset.UtcNow.AddHours(2).ToString("O", CultureInfo.InvariantCulture);
-        var handoff = Path.Combine(fixture.OutputDirectory, name + ".grant-handoff");
-        var sessionFile = Path.Combine(fixture.OutputDirectory, name + ".session-handoff");
+        var handoff = Path.Combine(outputDirectory, name + ".grant-handoff");
+        var sessionFile = Path.Combine(outputDirectory, name + ".session-handoff");
         var args = new List<string>
         {
-            "owner", "grant", "--control-pipe", fixture.ControlPipe,
+            "owner", "grant", "--control-pipe", controlPipe,
             "--resource-ids", string.Join(",", resourceIds),
             "--operations", operations,
             "--expires-at-utc", expiry,
@@ -609,7 +628,7 @@ internal static partial class OwnerServiceSmoke
             $"The owner could not issue the synthetic S4-T5 grant {name} (exit={grant.ExitCode}; stdout={grant.StandardOutput.Trim()}; stderr={grant.StandardError.Trim()}).");
         VerifyOwnerHandoffAcl(handoff);
         var redeem = await RunOwnerCommandAsync(executable,
-            "owner", "redeem", "--agent-pipe", fixture.AgentPipe,
+            "owner", "redeem", "--agent-pipe", agentPipe,
             "--handoff-file", handoff, "--session-file", sessionFile).ConfigureAwait(false);
         Require(redeem.ExitCode == 0 && redeem.StandardOutput.Contains("SESSION issued", StringComparison.Ordinal),
             $"Redemption failed for the synthetic S4-T5 grant {name} (exit={redeem.ExitCode}; stderr={redeem.StandardError.Trim()}).");
