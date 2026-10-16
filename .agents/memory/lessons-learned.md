@@ -147,3 +147,17 @@
 **Fix / workaround:** Generate a server-owned UTC timestamp before validation, put it into the normalized agent draft, and reuse it for the stored relation and request-evidence event. Caller timestamps remain ignored.
 **Watch out for:** If a shared validator requires a server-owned field, normalize that field before validation rather than clearing caller input and backfilling after the validator.
 
+## [2026-10-16] Generalizing a reply reader silently folded service refusals into "unavailable"
+
+**Symptom:** A new owner operation answered `search_index_stale`/`collection_unknown`/`invalid_request`, but the client reported `Unavailable` with that code instead of `Refused`; the same regression would have turned the accepted vault-key contract (`unlock_denied`, `credential_required`, `vault_already_initialized` must present as refusals, never as an unreachable service) into "service unavailable".
+**Root cause:** `OwnerChannelClient` classified owner answers in two steps: the reply reader tracked only transport availability, and a separate `MapOutcome` decided `Refused` vs `Unavailable` from the service error code. Generalizing the reader to serve several owner commands kept the first step and dropped the second, so every service-side error code fell through to `Unavailable`.
+**Fix / workaround:** Restore the single classification point inside the generalized reader: `forbidden`/`unauthorized` → owner-authority denied, `unsupported_protocol` → protocol mismatch, the codes this client fabricates (`malformed_reply`, `unexpected_reply`, `transport_*`) → unavailable, and every other code that came back from a running service → refused. Keep one reader for all owner commands instead of adding a second reply path.
+**Watch out for:** Any refactor that merges a two-step transport/policy classification — a refusal from a live endpoint must always stay distinguishable from no answer at all. Regression evidence: the `s5-t2` owner vault-key scenario (`Refused` for `unlock_denied`/`credential_required`/`vault_already_initialized`).
+
+## [2026-10-16] WPF UI Automation: virtualized list rows and popup combo items are not the same as data items
+
+**Symptom:** A UI Automation proof counted 8 realized `ListItem`s for a `ListBox` whose page held 10 rows, and selecting a `ComboBox` item found through `ItemContainerPattern.FindItemByProperty` failed with `Exception calling "Select": "Unrecognized error."`.
+**Root cause:** WPF virtualizes `ListBox` rows, so UI Automation only realizes the containers on screen (the rest exist in no automation tree), and a closed WPF `ComboBox` exposes its data items through `ItemContainerPattern` without a realized, selectable container until the popup is open.
+**Fix / workaround:** Assert the count the *service* reported (the console also renders the page total as live text) and use the realized-row count only for pages that fit on screen; drive combo boxes with the keyboard (focus the combo, walk its ordered items with the arrow keys, then read the selection back through `SelectionPattern` to prove it moved) instead of relying on popup containers.
+**Watch out for:** UI-automation assertions that assume one automation element per data row or that popup items are always selectable; assert state through live text/properties and prefer real keyboard input, which is also what the acceptance requires.
+

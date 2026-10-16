@@ -1,0 +1,471 @@
+using System.Globalization;
+using MetaBrain.Connections;
+
+namespace MetaBrain.OwnerUi;
+
+/// <summary>
+/// Library and evidence detail of the owner console (S5-T3).
+///
+/// Every value here is an answer of the running service on the owner control
+/// pipe: the service owns the search, the filters, the ranking, the citations
+/// and the revision gate, and this session never derives, re-ranks or repairs
+/// one. Private view state — the page, the open item, the open source and the
+/// owner's own query text — lives only in this process, is never written to
+/// any file, and is dropped with the private epoch it belonged to.
+///
+/// The private epoch is the lock boundary. It moves whenever the vault leaves
+/// the unlocked state this session was reporting, and an asynchronous answer is
+/// applied only while the epoch it was requested under is still current, after
+/// the service has been asked for its state again. A late answer for a finished
+/// epoch is dropped, so a lock cannot be undone by a reply that was already in
+/// flight; the periodic status probe only ever re-reports service state and
+/// never fetches private content.
+/// </summary>
+internal sealed partial class OwnerConsoleSession
+{
+    private static readonly TimeSpan LibraryActTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan LibraryRebuildTimeout = TimeSpan.FromMinutes(25);
+
+    private long _privateEpoch;
+    private long _libraryFilterVersion;
+
+    /// <summary>
+    /// Filters of the next library search, exactly as the owner set them. The
+    /// service applies them; this session only carries them to the request and
+    /// keeps them until the owner changes them or they are cleared with the
+    /// private state.
+    /// </summary>
+    public OwnerLibraryQuery LibraryQuery { get; private set; } = new();
+
+    /// <summary>Increments when the filters are reset (lock, end of session).</summary>
+    public long LibraryFilterVersion => _libraryFilterVersion;
+
+    /// <summary>Last library page the service answered, or null when none is shown.</summary>
+    public OwnerLibraryPage? LibraryPage { get; private set; }
+
+    /// <summary>Open item detail at the exact revision the service served.</summary>
+    public OwnerItemDetail? LibraryItem { get; private set; }
+
+    /// <summary>Open source at the exact registry revision the service served.</summary>
+    public OwnerSourceDetail? LibrarySource { get; private set; }
+
+    /// <summary>Last library index generation the service reported.</summary>
+    public OwnerIndexReport? LibraryIndex { get; private set; }
+
+    /// <summary>Owner-facing outcome of the last library act. Never private content.</summary>
+    public string? LibraryMessage { get; private set; }
+
+    /// <summary>True while one library act is in flight; further acts wait for its answer.</summary>
+    public bool LibraryActInFlight { get; private set; }
+
+    /// <summary>
+    /// The private epoch async library answers are bound to. A reply may only be
+    /// applied while this value is unchanged; it moves whenever the private
+    /// state is cleared.
+    /// </summary>
+    public long PrivateEpoch => _privateEpoch;
+
+    /// <summary>Applies the owner's filters for the next search (this process only).</summary>
+    public void SetLibraryQuery(OwnerLibraryQuery query)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        LibraryQuery = query;
+        RaiseChanged();
+    }
+
+    /// <summary>
+    /// Reports a filter value this console refuses to send, so the owner sees
+    /// which input is unusable instead of a silently different search. Never
+    /// private content.
+    /// </summary>
+    public void ReportLibraryInputProblem(string message)
+    {
+        LibraryMessage = message;
+        RaiseChanged();
+    }
+
+    /// <summary>
+    /// Asks the service for one library page under the owner's current filters.
+    /// </summary>
+    public async Task SearchLibraryAsync()
+    {
+        if (TryBeginLibraryAct() is not { } epoch)
+        {
+            return;
+        }
+
+        var result = await ExecuteLibraryRequestAsync(
+            LibraryActTimeout,
+            token => OwnerChannelClient.SearchLibraryAsync(ControlPipe, LibraryQuery, token),
+            errorCode => new OwnerLibrarySearchResult(OwnerCommandOutcome.Unavailable, errorCode, null)).ConfigureAwait(true);
+
+        await ProbeAsync().ConfigureAwait(true);
+        ApplyLibraryPageAnswer(epoch, result);
+        Append(DescribeLibraryActForLog("search", result.Outcome, result.ErrorCode));
+        RaiseChanged();
+    }
+
+    /// <summary>
+    /// Opens one hit's detail at the exact revision the page named. The service
+    /// serves that revision or refuses; it is never swapped for a newer one.
+    /// </summary>
+    public async Task OpenLibraryItemAsync(OwnerLibraryHit hit)
+    {
+        ArgumentNullException.ThrowIfNull(hit);
+        if (TryBeginLibraryAct() is not { } epoch)
+        {
+            return;
+        }
+
+        var result = await ExecuteLibraryRequestAsync(
+            LibraryActTimeout,
+            token => OwnerChannelClient.ReadMemoryItemAsync(ControlPipe, hit.Id, hit.Revision, token),
+            errorCode => new OwnerItemReadResult(OwnerCommandOutcome.Unavailable, errorCode, null)).ConfigureAwait(true);
+
+        await ProbeAsync().ConfigureAwait(true);
+        ApplyItemAnswer(epoch, result, renamed: false);
+        Append(DescribeLibraryActForLog("open item", result.Outcome, result.ErrorCode));
+        RaiseChanged();
+    }
+
+    /// <summary>
+    /// Opens one citation's source at the exact registry revision the citation
+    /// named, so evidence is checked against the revision it claims.
+    /// </summary>
+    public async Task OpenLibrarySourceAsync(string sourceId, long revision)
+    {
+        if (string.IsNullOrEmpty(sourceId) || revision < 1 || TryBeginLibraryAct() is not { } epoch)
+        {
+            return;
+        }
+
+        var result = await ExecuteLibraryRequestAsync(
+            LibraryActTimeout,
+            token => OwnerChannelClient.ReadSourceAsync(ControlPipe, sourceId, revision, token),
+            errorCode => new OwnerSourceReadResult(OwnerCommandOutcome.Unavailable, errorCode, null)).ConfigureAwait(true);
+
+        await ProbeAsync().ConfigureAwait(true);
+        ApplySourceAnswer(epoch, result);
+        Append(DescribeLibraryActForLog("open source", result.Outcome, result.ErrorCode));
+        RaiseChanged();
+    }
+
+    /// <summary>
+    /// Saves a new title through the existing revision-gated owner revise
+    /// operation. The item keeps its ID: only a new revision of the same item is
+    /// written, with the body, citations, times, applicability, attribution and
+    /// evidence the vault already held.
+    /// </summary>
+    public async Task RenameLibraryItemAsync(string title)
+    {
+        var item = LibraryItem;
+        if (item is null || string.IsNullOrWhiteSpace(title) || TryBeginLibraryAct() is not { } epoch)
+        {
+            return;
+        }
+
+        var result = await ExecuteLibraryRequestAsync(
+            LibraryActTimeout,
+            token => OwnerChannelClient.RenameMemoryTitleAsync(ControlPipe, item, title.Trim(), token),
+            errorCode => new OwnerItemReadResult(OwnerCommandOutcome.Unavailable, errorCode, null)).ConfigureAwait(true);
+
+        await ProbeAsync().ConfigureAwait(true);
+        ApplyItemAnswer(epoch, result, renamed: true);
+        Append(DescribeLibraryActForLog("rename title", result.Outcome, result.ErrorCode));
+        RaiseChanged();
+    }
+
+    /// <summary>
+    /// Materializes the library index generation for the unlocked vault. The
+    /// service requires this explicit owner act before it can answer a search;
+    /// a successful rebuild drops any page that came from an earlier generation
+    /// instead of presenting it as the new one.
+    /// </summary>
+    public async Task RebuildLibraryIndexAsync()
+    {
+        if (TryBeginLibraryAct() is not { } epoch)
+        {
+            return;
+        }
+
+        var result = await ExecuteLibraryRequestAsync(
+            LibraryRebuildTimeout,
+            token => OwnerChannelClient.RebuildLibraryIndexAsync(ControlPipe, token),
+            errorCode => new OwnerIndexResult(OwnerCommandOutcome.Unavailable, errorCode, null)).ConfigureAwait(true);
+
+        await ProbeAsync().ConfigureAwait(true);
+        ApplyIndexAnswer(epoch, result);
+        Append(DescribeLibraryActForLog("rebuild index", result.Outcome, result.ErrorCode));
+        RaiseChanged();
+    }
+
+    /// <summary>
+    /// Applies a library page answer requested under <paramref name="epoch"/>.
+    /// Returns false and changes nothing when that private epoch is gone, which
+    /// is the only guard between a late answer and a cleared private view. This
+    /// is the exact seam every asynchronous library act uses.
+    /// </summary>
+    internal bool ApplyLibraryPageAnswer(long epoch, OwnerLibrarySearchResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        if (epoch != _privateEpoch)
+        {
+            AppendIgnoredStaleAnswer("search");
+            return false;
+        }
+
+        if (result.Outcome == OwnerCommandOutcome.Completed && result.Page is not null)
+        {
+            LibraryPage = result.Page;
+            // A new page invalidates any detail and source opened from the old one.
+            LibraryItem = null;
+            LibrarySource = null;
+            LibraryMessage = DescribeLibraryAnswer("search", result.Outcome, result.ErrorCode, true);
+        }
+        else
+        {
+            LibraryMessage = DescribeLibraryAnswer("search", result.Outcome, result.ErrorCode, false);
+            ApplyPrivateRefusal(result.Outcome, result.ErrorCode);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Applies one item answer requested under <paramref name="epoch"/>, with the
+    /// same epoch guard as a page answer.
+    /// </summary>
+    internal bool ApplyItemAnswer(long epoch, OwnerItemReadResult result, bool renamed)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        if (epoch != _privateEpoch)
+        {
+            AppendIgnoredStaleAnswer(renamed ? "rename" : "item detail");
+            return false;
+        }
+
+        var act = renamed ? "rename" : "item detail";
+        if (result.Outcome != OwnerCommandOutcome.Completed || result.Item is null)
+        {
+            LibraryMessage = DescribeLibraryAnswer(act, result.Outcome, result.ErrorCode, false);
+            ApplyPrivateRefusal(result.Outcome, result.ErrorCode);
+            return true;
+        }
+
+        var previous = LibraryItem;
+        LibraryItem = result.Item;
+        LibraryMessage = DescribeLibraryAnswer(act, result.Outcome, result.ErrorCode, true);
+        if (!renamed)
+        {
+            LibrarySource = null;
+            return true;
+        }
+
+        if (previous is not null &&
+            (previous.Revision != result.Item.Revision || !string.Equals(previous.Id, result.Item.Id, StringComparison.Ordinal)))
+        {
+            // The library generation described the previous revision of this
+            // item, so the page it produced is behind this write. It is dropped
+            // rather than shown as if it still matched the vault.
+            LibraryPage = null;
+            LibrarySource = null;
+            LibraryMessage = "The service saved the new title as ID " + result.Item.Id +
+                " revision " + result.Item.Revision.ToString(CultureInfo.InvariantCulture) +
+                ": the same item, one new revision, with the stored body, citations, times and attribution unchanged. " +
+                "The library index is behind this write, so rebuild the library index before searching again.";
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Applies one source answer requested under <paramref name="epoch"/>, with
+    /// the same epoch guard as a page answer.
+    /// </summary>
+    internal bool ApplySourceAnswer(long epoch, OwnerSourceReadResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        if (epoch != _privateEpoch)
+        {
+            AppendIgnoredStaleAnswer("source detail");
+            return false;
+        }
+
+        if (result.Outcome == OwnerCommandOutcome.Completed && result.Source is not null)
+        {
+            LibrarySource = result.Source;
+            LibraryMessage = DescribeLibraryAnswer("source detail", result.Outcome, result.ErrorCode, true);
+        }
+        else
+        {
+            LibraryMessage = DescribeLibraryAnswer("source detail", result.Outcome, result.ErrorCode, false);
+            ApplyPrivateRefusal(result.Outcome, result.ErrorCode);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Applies one index answer requested under <paramref name="epoch"/>, with
+    /// the same epoch guard as a page answer.
+    /// </summary>
+    internal bool ApplyIndexAnswer(long epoch, OwnerIndexResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        if (epoch != _privateEpoch)
+        {
+            AppendIgnoredStaleAnswer("index rebuild");
+            return false;
+        }
+
+        if (result.Outcome != OwnerCommandOutcome.Completed || result.Index is null)
+        {
+            LibraryMessage = DescribeLibraryAnswer("rebuild index", result.Outcome, result.ErrorCode, false);
+            ApplyPrivateRefusal(result.Outcome, result.ErrorCode);
+            return true;
+        }
+
+        LibraryIndex = result.Index;
+        LibraryPage = null;
+        LibraryItem = null;
+        LibrarySource = null;
+        LibraryMessage = "The service materialized index generation " +
+            ShortDigest(result.Index.CanonicalDigest) + " with " +
+            result.Index.RowCount.ToString(CultureInfo.InvariantCulture) +
+            " rows" + (result.Index.Stale ? ", and it is already behind the vault: rebuild again to include later writes" : string.Empty) +
+            ". Search now reads this generation.";
+        return true;
+    }
+
+    /// <summary>
+    /// Drops every private view and every private filter of this session. Called
+    /// when the vault leaves the unlocked state this session was reporting, when
+    /// the owner ends the session, and on a completed lock: afterwards the epoch
+    /// has moved, so no answer that was already in flight can restore anything.
+    /// </summary>
+    private void ClearPrivateState()
+    {
+        ClearSensitiveState();
+        ClearPrivateLibraryState();
+        // The service dropped the index generation with the lock, so the console
+        // stops reporting one.
+        LibraryIndex = null;
+        LibraryMessage = null;
+        LibraryQuery = new OwnerLibraryQuery();
+        _libraryFilterVersion++;
+    }
+
+    /// <summary>
+    /// Drops the private library views and moves the private epoch while keeping
+    /// the owner's filters and the owner-facing message. Used when the service
+    /// answers that this private view cannot exist (locked vault, no index
+    /// generation, unavailable resource): the views go, the explanation of the
+    /// refusal stays.
+    /// </summary>
+    private void ClearPrivateLibraryState()
+    {
+        _privateEpoch++;
+        LibraryPage = null;
+        LibraryItem = null;
+        LibrarySource = null;
+    }
+
+    private void ApplyPrivateRefusal(OwnerCommandOutcome outcome, string? errorCode)
+    {
+        if (outcome == OwnerCommandOutcome.Refused &&
+            errorCode is "vault_locked" or "resource_unavailable" or "library_unavailable" or "index_unavailable" or "index_not_materialized")
+        {
+            ClearPrivateLibraryState();
+        }
+    }
+
+    private void AppendIgnoredStaleAnswer(string act) =>
+        Append("ignored a stale " + act + " answer: the unlocked vault state it belonged to is gone, so the cleared private view stays cleared");
+
+    /// <summary>
+    /// Starts one library act only while the service still reports the vault
+    /// unlocked and no other library act is in flight. Returns the private epoch
+    /// the request will belong to, or null when no act is offered.
+    /// </summary>
+    private long? TryBeginLibraryAct()
+    {
+        if (!Attached || LibraryActInFlight || ReportedVaultState != OwnerVaultState.Unlocked)
+        {
+            return null;
+        }
+
+        LibraryActInFlight = true;
+        LibraryMessage = null;
+        RaiseChanged();
+        return _privateEpoch;
+    }
+
+    private async Task<T> ExecuteLibraryRequestAsync<T>(
+        TimeSpan timeoutValue,
+        Func<CancellationToken, Task<T>> call,
+        Func<string, T> onFailure)
+    {
+        try
+        {
+            using var timeout = new CancellationTokenSource(timeoutValue);
+            return await call(timeout.Token).ConfigureAwait(true);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return onFailure("act_failed:" + ex.GetType().Name);
+        }
+        finally
+        {
+            LibraryActInFlight = false;
+        }
+    }
+
+    private static string DescribeLibraryActForLog(string act, OwnerCommandOutcome outcome, string? errorCode) =>
+        "owner act: library " + act + " -> " + outcome.ToString().ToLowerInvariant() +
+        (outcome == OwnerCommandOutcome.Completed ? "" : " (" + (errorCode ?? "unknown") + ")");
+
+    private static string DescribeLibraryAnswer(string act, OwnerCommandOutcome outcome, string? errorCode, bool hasPayload)
+    {
+        var code = errorCode ?? "unknown";
+        return outcome switch
+        {
+            OwnerCommandOutcome.Completed when hasPayload => act switch
+            {
+                "search" => "The service searched the vault and answered a library page under the filters this console sent.",
+                "item detail" => "The service served the item at the exact revision the page named.",
+                "source detail" => "The service served the registry revision this citation named; the locator shown is yours.",
+                _ => "The service performed the library index rebuild and reports the generation below."
+            },
+            OwnerCommandOutcome.Completed =>
+                "The service completed the library act but returned no library payload, so this console shows nothing instead of guessing.",
+            OwnerCommandOutcome.Refused => code switch
+            {
+                "index_not_materialized" =>
+                    "The service has no materialized library index for this unlocked vault, so it answered no search. Rebuild the library index to search.",
+                "index_unavailable" =>
+                    "The service cannot use a library index right now (code: index_unavailable). Nothing private was searched or shown.",
+                "search_index_stale" =>
+                    "The library index is behind the vault (a write happened after it was built), so the service refuses to search it: a match it named could no longer be opened at that revision. Rebuild the library index, then search again.",
+                "collection_unknown" =>
+                    "The service has no owner collection with that ID, so no search was performed. Collections are owner selection metadata and never grant access by themselves.",
+                "vault_locked" =>
+                    "The vault is locked, so the service answers no private library read. Unlock the vault (Vault & key) and rebuild the index to search again.",
+                "resource_unavailable" =>
+                    "The service did not serve that private resource at that revision (code: resource_unavailable). It may have moved or been removed; nothing else was substituted.",
+                "library_unavailable" =>
+                    "The service could not answer this library read (code: library_unavailable). No private content was served.",
+                "invalid_request" =>
+                    "The service refused this library read as invalid (code: invalid_request). Nothing private was read; an existing owner read answers a revision the vault no longer holds with this same code.",
+                _ => "The service refused this library request (code: " + code + "). Nothing private was read or changed."
+            },
+            OwnerCommandOutcome.OwnerAuthorityDenied =>
+                "This endpoint refused owner authority for the library request (code: " + code + "). An agent channel never serves the owner library.",
+            OwnerCommandOutcome.ProtocolMismatch =>
+                "The endpoint speaks a different protocol revision, so no library request was performed.",
+            _ => "No owner-channel answer reached the service (code: " + code + "), so no library request was performed."
+        };
+    }
+
+    private static string ShortDigest(string digest) =>
+        digest.Length <= 12 ? digest : digest[..12];
+}

@@ -8,6 +8,11 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
+    <!-- The suite drives the owner console session in process (the exact class
+         the WPF window uses) for the S5-T2/S5-T3 private-state lock boundary.
+         That session type owns no WPF surface, so this project keeps its plain
+         console implicit usings. -->
     <ProjectReference Include="..\..\src\MetaBrain.Connections\MetaBrain.Connections.csproj" />
+    <ProjectReference Include="..\..\src\MetaBrain.OwnerUi\MetaBrain.OwnerUi.csproj" />
   </ItemGroup>
 </Project>

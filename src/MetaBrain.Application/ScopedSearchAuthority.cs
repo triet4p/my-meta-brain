@@ -6,8 +6,10 @@ namespace MetaBrain.Application;
 
 /// <summary>
 /// S4-T2 scoped search authority: lexical/metadata/ranking/time queries over
-/// the protected private index, served only inside one redeemed session's
-/// frozen approved snapshot (R06, R23, R26).
+/// the protected private index. One ranking/time/currentness implementation
+/// serves two scope providers: a redeemed session's frozen approved snapshot
+/// (R06, R23, R26) and the owner's own unlocked library scope (R10, R11, R30),
+/// which carries no grant and therefore no snapshot authority.
 ///
 /// Order of checks (never inverted): session lookup against the live unlock
 /// epoch and policy generation (revoke/lock/expiry deny before anything is
@@ -139,6 +141,194 @@ public sealed class ScopedSearchAuthority
         // Total over the frozen scope: same filters, full ranking, no paging.
         var all = Search(session, query, kind, current, 0, int.MaxValue, materialized, index, vault);
         return all.Count;
+    }
+
+    /// <summary>
+    /// One owner library query (R10, R11, R23, R30). <see cref="Text"/> is the
+    /// owner's own search text; an empty text is a browse. Zone and collection
+    /// are not part of this record: the caller has already reduced the scope to
+    /// the owner-selected rows, so a filter can never widen what is searched.
+    /// </summary>
+    public sealed record OwnerLibraryQuery(
+        string? Text,
+        string? Kind,
+        string? Current,
+        string? Level,
+        DateTimeOffset? FromUtc,
+        DateTimeOffset? ToUtc,
+        int Offset,
+        int Limit);
+
+    /// <summary>
+    /// One owner library answer: <see cref="Total"/> counts matches under the
+    /// same filters inside the owner scope only (never a vault-wide count), and
+    /// <see cref="Hits"/> is the ranked page the owner may show.
+    /// </summary>
+    public sealed record OwnerLibraryPage(int Total, IReadOnlyList<ScoredHit> Hits);
+
+    /// <summary>
+    /// S5-T3 owner library search over the owner's own unlocked vault.
+    ///
+    /// Scope: the caller passes the exact (ID, revision) rows the owner's
+    /// filters selected from the materialized index generation. No grant and no
+    /// session snapshot is involved, so a collection or zone filter can only
+    /// narrow this list; nothing here can hand out authority over a resource
+    /// the owner's own vault does not hold at that revision.
+    ///
+    /// Ranking is the same implementation as scoped search (repeated-term
+    /// weight, direct-hit marker, state penalty), so a frontend never ranks.
+    /// An empty or whitespace text browses: every candidate in scope is
+    /// returned ordered by its recorded instant, because a browse has no query
+    /// terms to score. Text that produces no terms (stopwords, symbols only)
+    /// is a real query with no match instead of a browse.
+    ///
+    /// Every served hit is read at its own frozen revision through
+    /// <see cref="IManagedResourceStore"/>, which fails closed on a moved,
+    /// missing or tampered body, so a materialized row can never serve bytes
+    /// that no longer match it.
+    /// </summary>
+    public OwnerLibraryPage SearchOwner(
+        IReadOnlyList<ScopeResourceRevision> ownerScope,
+        OwnerLibraryQuery query,
+        PrivateIndexSnapshot? materialized,
+        IPrivateIndexStore index,
+        IManagedResourceStore vault)
+    {
+        ArgumentNullException.ThrowIfNull(ownerScope);
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentNullException.ThrowIfNull(index);
+        ArgumentNullException.ThrowIfNull(vault);
+        if (materialized is null)
+        {
+            throw new InvalidDataException("The search index has no materialized generation.");
+        }
+
+        var terms = SearchText.ExpandQuery(query.Text);
+        if (terms.Length == 0 && !string.IsNullOrWhiteSpace(query.Text))
+        {
+            return new OwnerLibraryPage(0, Array.Empty<ScoredHit>());
+        }
+
+        var scope = ownerScope.OrderBy(resource => resource.ResourceId, StringComparer.Ordinal).ToArray();
+        var scopeIds = scope.Select(resource => resource.ResourceId).ToArray();
+        var termTokens = terms.Select(term => term.Token).Distinct(StringComparer.Ordinal).ToArray();
+        var termWeights = terms.ToDictionary(term => term.Token, term => term, StringComparer.Ordinal);
+
+        // Browse reads the whole owner scope; a text query binds the token
+        // prefilter in the engine before any candidate document is scored.
+        var candidates = terms.Length == 0
+            ? new HashSet<string>(scopeIds, StringComparer.Ordinal)
+            : new HashSet<string>(index.SelectSearchCandidates(scopeIds, termTokens), StringComparer.Ordinal);
+
+        var matched = new List<OwnerCandidate>();
+        foreach (var resource in scope)
+        {
+            if (!candidates.Contains(resource.ResourceId))
+            {
+                continue;
+            }
+
+            var document = index.SelectSearchDocument(resource.ResourceId, resource.Revision);
+            if (document is null)
+            {
+                // Not a materialized memory item at this revision: excluded,
+                // never guessed at from another row or another revision.
+                continue;
+            }
+
+            if (query.Kind is not null && !string.Equals(document.Kind, query.Kind, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!PassesCurrent(document, query.Current ?? string.Empty) ||
+                !PassesWindow(document, query.FromUtc, query.ToUtc))
+            {
+                continue;
+            }
+
+            var score = 0.0;
+            var directHit = false;
+            if (terms.Length > 0)
+            {
+                score = Score(document, termWeights, out directHit);
+                if (score <= 0)
+                {
+                    continue;
+                }
+            }
+
+            // The abstraction level is stored in the item itself (the index
+            // carries no level column), so an explicit level filter reads the
+            // candidate: a body that cannot be proven is excluded, never
+            // assumed to match.
+            MemoryItem? item = null;
+            if (query.Level is not null)
+            {
+                item = ReadApprovedItem(vault, resource);
+                if (item is null ||
+                    !string.Equals(ServiceRequestHandler.ToWireToken(item.Level.ToString()), query.Level, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+            }
+
+            matched.Add(new OwnerCandidate(resource, document, score, directHit, item));
+        }
+
+        var ordered = terms.Length > 0
+            ? matched
+                .OrderByDescending(candidate => candidate.Score)
+                .ThenBy(candidate => candidate.Resource.ResourceId, StringComparer.Ordinal)
+            : matched
+                .OrderByDescending(candidate => candidate.Document.OccurredAtUtc ?? candidate.Document.RecordedAtUtc)
+                .ThenBy(candidate => candidate.Resource.ResourceId, StringComparer.Ordinal);
+
+        var hits = new List<ScoredHit>();
+        foreach (var candidate in ordered.Skip(query.Offset).Take(query.Limit))
+        {
+            var item = candidate.Item ?? ReadApprovedItem(vault, candidate.Resource);
+            if (item is null)
+            {
+                // The row moved or became unreadable between the filter and the
+                // read: the hit is dropped instead of being served from a
+                // different revision.
+                continue;
+            }
+
+            var stale = IsStale(candidate.Document, vault, candidate.Resource);
+            hits.Add(new ScoredHit(
+                candidate.Resource.ResourceId,
+                candidate.Resource.Revision,
+                terms.Length > 0 ? ApplyStatePenalty(candidate.Score, candidate.Document, stale) : 0,
+                candidate.DirectHit,
+                candidate.Document,
+                item,
+                stale));
+        }
+
+        return new OwnerLibraryPage(matched.Count, hits);
+    }
+
+    private sealed record OwnerCandidate(
+        ScopeResourceRevision Resource,
+        SearchIndexDocument Document,
+        double Score,
+        bool DirectHit,
+        MemoryItem? Item);
+
+    private static bool PassesWindow(SearchIndexDocument document, DateTimeOffset? fromUtc, DateTimeOffset? toUtc)
+    {
+        if (fromUtc is null && toUtc is null)
+        {
+            return true;
+        }
+
+        // The item's own time axis: its occurred instant when it has one, else
+        // the recorded instant. Both bounds are inclusive and compared in UTC.
+        var instant = document.OccurredAtUtc ?? document.RecordedAtUtc;
+        return (fromUtc is null || instant >= fromUtc.Value) &&
+            (toUtc is null || instant <= toUtc.Value);
     }
 
     private static double Score(SearchIndexDocument document, Dictionary<string, SearchText.QueryTerm> terms, out bool directHit)

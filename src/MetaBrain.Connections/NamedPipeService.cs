@@ -239,6 +239,7 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.LifecycleRetainRevisionOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerIndexStatusOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerIndexRebuildOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerLibrarySearchOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceEnrollOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceRevokeOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceStatusOperation, StringComparison.Ordinal) ||

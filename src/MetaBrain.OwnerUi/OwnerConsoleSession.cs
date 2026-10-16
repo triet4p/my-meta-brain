@@ -20,18 +20,22 @@ internal enum OwnerVaultAct
 /// <remarks>
 /// The session holds the pipe name this application may use, whether the owner
 /// attached it, the last owner-channel status the service reported, the outcome
-/// of the last explicit owner vault act, and a short activity log of this
-/// process only. It holds no vault key, no private content, no cached private
-/// view and no policy of its own: every value it shows is an answer of the
-/// running service on the owner control pipe, and an unknown or failed answer is
-/// never presented as a known vault state.
+/// of the last explicit owner vault act, the private library views of the
+/// currently unlocked epoch, and a short activity log of this process only. It
+/// holds no vault key, no policy of its own, no on-disk cache and no copy of
+/// any private content beyond the answers it is currently showing: every value
+/// it shows is an answer of the running service on the owner control pipe, and
+/// an unknown or failed answer is never presented as a known vault state. The
+/// private library views and the owner's own query text are dropped whenever
+/// the vault leaves the unlocked state they belong to, and an answer still in
+/// flight for that state is dropped with them.
 /// The owner credential travels from the owner's own input control to the
 /// service in that one request and is not kept here; the recovery material the
 /// service returns once for a fresh provisioning is held only while the owner
 /// can still read it, and is dropped on lock, disconnect, end of session and on
 /// every transition away from an unlocked vault.
 /// </remarks>
-internal sealed class OwnerConsoleSession
+internal sealed partial class OwnerConsoleSession
 {
     private const int MaximumActivityEntries = 200;
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(10);
@@ -119,7 +123,7 @@ internal sealed class OwnerConsoleSession
         Attached = false;
         Status = null;
         VaultMessage = null;
-        ClearSensitiveState();
+        ClearPrivateState();
         Append("ended owner session at the owner's request; cleared sensitive console state");
         RaiseChanged();
     }
@@ -205,7 +209,7 @@ internal sealed class OwnerConsoleSession
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            result = new OwnerVaultCommandResult(OwnerVaultCommandOutcome.Unavailable, OwnerVaultState.Unknown,
+            result = new OwnerVaultCommandResult(OwnerCommandOutcome.Unavailable, OwnerVaultState.Unknown,
                 "act_failed:" + ex.GetType().Name, null);
         }
         finally
@@ -214,7 +218,7 @@ internal sealed class OwnerConsoleSession
         }
 
         VaultMessage = DescribeAct(act, result);
-        if (result.Outcome == OwnerVaultCommandOutcome.Completed && act == OwnerVaultAct.Provision)
+        if (result.Outcome == OwnerCommandOutcome.Completed && act == OwnerVaultAct.Provision)
         {
             // The recovery material exists only in this answer. If the service
             // completed the provisioning but returned nothing the owner could
@@ -227,12 +231,12 @@ internal sealed class OwnerConsoleSession
             }
         }
 
-        if ((result.Outcome == OwnerVaultCommandOutcome.Completed && act == OwnerVaultAct.Lock) ||
-            result.Outcome == OwnerVaultCommandOutcome.Refused)
+        if ((result.Outcome == OwnerCommandOutcome.Completed && act == OwnerVaultAct.Lock) ||
+            result.Outcome == OwnerCommandOutcome.Refused)
         {
-            // A completed lock clears every sensitive console state, and a
-            // refused credential leaves no usable one behind either.
-            ClearSensitiveState();
+            // A completed lock clears every private console state, and a refused
+            // credential leaves no usable unlocked epoch behind either.
+            ClearPrivateState();
         }
 
         Append(DescribeActForLog(act, result));
@@ -274,8 +278,10 @@ internal sealed class OwnerConsoleSession
                 {
                     // Nothing private survives a state that is not the unlocked
                     // vault this console was reporting: the once-shown recovery
-                    // material and any typed credential go with it.
-                    ClearSensitiveState();
+                    // material, any typed credential and every private library
+                    // view go with it, and the private epoch moves so an answer
+                    // still in flight cannot restore them.
+                    ClearPrivateState();
                 }
             }
 
@@ -317,13 +323,13 @@ internal sealed class OwnerConsoleSession
     /// <summary>Owner-facing outcome of one vault act. Never contains a credential.</summary>
     private static string DescribeAct(OwnerVaultAct act, OwnerVaultCommandResult result) => result.Outcome switch
     {
-        OwnerVaultCommandOutcome.Completed => act switch
+        OwnerCommandOutcome.Completed => act switch
         {
             OwnerVaultAct.Provision => "The service created the vault and reports it unlocked. Save the recovery key shown below outside this machine: it is displayed once, this console stores it nowhere, and without it a lost passphrase cannot be undone.",
             OwnerVaultAct.Lock => "The service locked the vault and stopped private work. This console cleared the displayed recovery key and the credential fields.",
             _ => "The service opened the vault with the " + (act == OwnerVaultAct.UnlockWithRecoveryCode ? "recovery key" : "owner passphrase") + " you provided."
         },
-        OwnerVaultCommandOutcome.Refused => act switch
+        OwnerCommandOutcome.Refused => act switch
         {
             OwnerVaultAct.Provision when result.ErrorCode == "credential_required" =>
                 "The service refused the passphrase: a new vault passphrase must be at least 12 characters. Nothing was created.",
@@ -333,16 +339,16 @@ internal sealed class OwnerConsoleSession
                 "The service refused this credential (code: " + (result.ErrorCode ?? "unknown") + "). The vault stays locked and no private content was opened; this console cleared the credential field.",
             _ => "The service refused this request (code: " + (result.ErrorCode ?? "unknown") + "). Nothing changed."
         },
-        OwnerVaultCommandOutcome.OwnerAuthorityDenied =>
+        OwnerCommandOutcome.OwnerAuthorityDenied =>
             "This endpoint refused owner authority for the request (code: " + (result.ErrorCode ?? "unknown") + "). An agent channel never performs owner vault operations.",
-        OwnerVaultCommandOutcome.ProtocolMismatch =>
+        OwnerCommandOutcome.ProtocolMismatch =>
             "The endpoint speaks a different protocol revision, so no vault act was attempted.",
         _ => "No owner-channel answer reached the service (code: " + (result.ErrorCode ?? "unknown") + "), so no vault act was performed."
     };
 
     private static string DescribeActForLog(OwnerVaultAct act, OwnerVaultCommandResult result) =>
         "owner act: " + ActName(act) + " -> " + result.Outcome.ToString().ToLowerInvariant() +
-        (result.Outcome == OwnerVaultCommandOutcome.Completed ? "" : " (" + (result.ErrorCode ?? "unknown") + ")");
+        (result.Outcome == OwnerCommandOutcome.Completed ? "" : " (" + (result.ErrorCode ?? "unknown") + ")");
 
     private void Append(string entry)
     {

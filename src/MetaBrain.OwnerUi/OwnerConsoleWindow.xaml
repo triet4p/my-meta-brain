@@ -4,7 +4,8 @@
         Title="Meta Brain — Owner console"
         Width="1020" Height="720"
         FontFamily="Segoe UI" FontSize="13"
-        Background="#FFF6F7F9">
+        Background="#FFF6F7F9"
+        PreviewKeyDown="OnWindowPreviewKeyDown">
     <DockPanel>
         <Border x:Name="StateBanner" DockPanel.Dock="Top" Padding="16,12" Background="#FF6B7280">
             <StackPanel>
@@ -36,6 +37,7 @@
                         <ListBoxItem Content="Owner session" Padding="8,6" />
                         <ListBoxItem Content="Vault status" Padding="8,6" />
                         <ListBoxItem Content="Vault &amp; key" Padding="8,6" />
+                        <ListBoxItem Content="Library" Padding="8,6" />
                     </ListBox>
                 </DockPanel>
             </Border>
@@ -196,6 +198,117 @@
                                    Text="• Limit — memory erasure: the credential you type exists as managed .NET/WPF strings in this process while the request is built and sent, and clearing this screen does not promise that every managed-memory copy or an OS memory dump is erased. This console makes no secure-erasure claim." />
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
                                    Text="• Limit — same Windows account: a process running as this account can control this console or read its memory while the vault is unlocked. Encryption protects data at rest; it is not a sandbox against your own account." />
+                    </StackPanel>
+
+                    <StackPanel x:Name="LibraryPanel" Visibility="Collapsed">
+                        <TextBlock Text="Library" FontSize="19" FontWeight="SemiBold" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,8,0,0"
+                                   Text="Search and browse your own unlocked vault: the service searches, filters, ranks and cites, and this console only shows that answer with the exact IDs, revisions and statuses it received. A collection or zone filter narrows this search; it never widens what your vault holds and never grants anything to anyone else. Full text of an item stays on the detail read, and the private views below are dropped the moment the vault is locked." />
+
+                        <TextBlock Text="Service reports" FontWeight="SemiBold" Margin="0,16,0,0" />
+                        <TextBlock x:Name="LibraryStateText" TextWrapping="Wrap" Margin="0,4,0,0" FontSize="16" />
+                        <TextBlock x:Name="LibraryIndexText" TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280" />
+
+                        <TextBlock Text="Search and filter (the service applies every filter)" FontWeight="SemiBold" Margin="0,16,0,0" />
+                        <Grid Margin="0,6,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="90" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Search text" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="LibraryQueryInput" Margin="0,0,10,6"
+                                     AutomationProperties.AutomationId="LibraryQueryInput" KeyDown="OnLibraryQueryKeyDown" />
+                            <TextBlock Grid.Row="0" Grid.Column="2" Text="Zone" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="0" Grid.Column="3" x:Name="LibraryZoneInput" Margin="0,0,0,6"
+                                     AutomationProperties.AutomationId="LibraryZoneInput" />
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Collection" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="1" Grid.Column="1" x:Name="LibraryCollectionInput" Margin="0,0,10,6"
+                                     AutomationProperties.AutomationId="LibraryCollectionInput" />
+                            <TextBlock Grid.Row="1" Grid.Column="2" Text="Kind" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <ComboBox Grid.Row="1" Grid.Column="3" x:Name="LibraryKindInput" Margin="0,0,0,6"
+                                      AutomationProperties.AutomationId="LibraryKindInput" />
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Level" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <ComboBox Grid.Row="2" Grid.Column="1" x:Name="LibraryLevelInput" Margin="0,0,10,6"
+                                      AutomationProperties.AutomationId="LibraryLevelInput" />
+                            <TextBlock Grid.Row="2" Grid.Column="2" Text="Show" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <ComboBox Grid.Row="2" Grid.Column="3" x:Name="LibraryCurrentInput" Margin="0,0,0,6"
+                                      AutomationProperties.AutomationId="LibraryCurrentInput" />
+
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="From (UTC)" Foreground="#FF6B7280" />
+                            <TextBox Grid.Row="3" Grid.Column="1" x:Name="LibraryFromInput" Margin="0,0,10,0"
+                                     AutomationProperties.AutomationId="LibraryFromInput" />
+                            <TextBlock Grid.Row="3" Grid.Column="2" Text="To (UTC)" Foreground="#FF6B7280" />
+                            <TextBox Grid.Row="3" Grid.Column="3" x:Name="LibraryToInput"
+                                     AutomationProperties.AutomationId="LibraryToInput" />
+                        </Grid>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="LibrarySearchButton" Content="Search library" Padding="14,7" Click="OnLibrarySearchClicked" />
+                            <Button x:Name="LibraryResetButton" Content="Reset filters" Padding="14,7" Margin="8,0,0,0" Click="OnLibraryResetClicked" />
+                            <Button x:Name="LibraryRebuildButton" Content="Rebuild library index" Padding="14,7" Margin="8,0,0,0" Click="OnLibraryRebuildClicked" />
+                            <TextBlock Text="Page size" Foreground="#FF6B7280" VerticalAlignment="Center" Margin="16,0,6,0" />
+                            <ComboBox x:Name="LibraryPageSizeInput" Width="70" AutomationProperties.AutomationId="LibraryPageSizeInput" SelectionChanged="OnLibraryPageSizeChanged" />
+                            <Button x:Name="LibraryPreviousButton" Content="Previous page" Padding="14,7" Margin="8,0,0,0" Click="OnLibraryPreviousClicked" />
+                            <Button x:Name="LibraryNextButton" Content="Next page" Padding="14,7" Margin="8,0,0,0" Click="OnLibraryNextClicked" />
+                        </StackPanel>
+
+                        <TextBlock x:Name="LibraryMessageText" TextWrapping="Wrap" Margin="0,12,0,0" FontWeight="SemiBold" />
+                        <TextBlock x:Name="LibraryPageText" TextWrapping="Wrap" Margin="0,8,0,0" Foreground="#FF6B7280" />
+
+                        <ListBox x:Name="LibraryResults" Height="170" Margin="0,8,0,0" Background="White" BorderBrush="#FFD5D8DC"
+                                 AutomationProperties.AutomationId="LibraryResults"
+                                 SelectionChanged="OnLibraryResultChanged" KeyDown="OnLibraryResultsKeyDown" />
+
+                        <Border x:Name="LibraryDetailPanel" Margin="0,14,0,0" Padding="14" Background="White"
+                                BorderBrush="#FFD5D8DC" BorderThickness="1" CornerRadius="3">
+                            <StackPanel>
+                                <TextBlock Text="Evidence detail (the exact revision the service served)" FontWeight="SemiBold" FontSize="15" />
+                                <TextBlock x:Name="LibraryDetailSummaryText" TextWrapping="Wrap" Margin="0,8,0,0" FontFamily="Consolas" />
+                                <TextBlock x:Name="LibraryDetailTitleText" TextWrapping="Wrap" Margin="0,8,0,0" FontWeight="SemiBold" />
+                                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                    <TextBox x:Name="LibraryTitleInput" Width="360" VerticalContentAlignment="Center"
+                                             AutomationProperties.AutomationId="LibraryTitleInput" KeyDown="OnLibraryTitleKeyDown" />
+                                    <Button x:Name="LibraryRenameButton" Content="Save new title" Padding="14,7" Margin="8,0,0,0" Click="OnLibraryRenameClicked" />
+                                </StackPanel>
+                                <TextBlock x:Name="LibraryDetailBodyText" TextWrapping="Wrap" Margin="0,10,0,0" />
+                                <TextBlock x:Name="LibraryDetailApplicabilityText" TextWrapping="Wrap" Margin="0,8,0,0" Foreground="#FF6B7280" />
+                                <TextBlock x:Name="LibraryDetailWarningsText" TextWrapping="Wrap" Margin="0,8,0,0" Foreground="#FF9A1C1C" />
+
+                                <TextBlock Text="Stored citations (current / superseded / unknown are the service's answer)" FontWeight="SemiBold" Margin="0,14,0,6" />
+                                <ListBox x:Name="LibraryCitations" Height="110" Background="#FFFDFDFD" BorderBrush="#FFD5D8DC"
+                                         AutomationProperties.AutomationId="LibraryCitations" KeyDown="OnLibraryCitationKeyDown" />
+                                <Button x:Name="LibraryOpenSourceButton" Content="Open cited source at its revision" Padding="14,7"
+                                        Margin="0,8,0,0" HorizontalAlignment="Left" Click="OnLibraryOpenSourceClicked" />
+
+                                <TextBlock Text="Source as the service served it" FontWeight="SemiBold" Margin="0,14,0,0" />
+                                <TextBlock x:Name="LibrarySourceText" TextWrapping="Wrap" Margin="0,6,0,0" FontFamily="Consolas" />
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Text="Scope and limits of this view" FontWeight="SemiBold" Margin="0,20,0,6" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Collections and zones are selectors of your own vault: filtering by one narrows this search and grants nothing. Membership changes never widen a session, and a filter can never reach a resource your vault does not hold." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Searching reads the materialized library index generation, not the vault files: after a write (a new item, a revision, a publication change) the service refuses to search that generation and asks you to rebuild it, because a match it named could no longer be opened at that revision. A page is therefore only ever answered from a generation that still matches the vault." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• The body you see is the exact revision the service served; an item's older revisions are not readable (only the live revision and lifecycle-retained archives are), so this view never claims to show an item's revision history." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• A citation the service reports as unknown or superseded is shown as such, with its warning; a missing source stays visibly missing and is never presented as verified." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Keyboard: Ctrl+F focuses the search box, Enter searches, arrows choose a result, Enter opens it, Enter on a citation opens that source, and Ctrl+L locks the vault." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Privacy: this view holds no on-disk cache. Locking the vault (or losing the service) clears the page, the open item, the open source and your search text, and an answer already in flight is discarded instead of restoring them." />
                     </StackPanel>
                 </Grid>
             </ScrollViewer>

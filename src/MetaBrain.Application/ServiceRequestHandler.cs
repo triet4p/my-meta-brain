@@ -55,7 +55,10 @@ public sealed record ServiceRequest(
     string? SourceAuthor = null,
     DateTimeOffset? SourceCapturedAtUtc = null,
     long? SourceGeneration = null,
-    DateTimeOffset? SnapshotRetainUntilUtc = null);
+    DateTimeOffset? SnapshotRetainUntilUtc = null,
+    string? SearchLevel = null,
+    DateTimeOffset? SearchFromUtc = null,
+    DateTimeOffset? SearchToUtc = null);
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
     ScopeResourceRevision[] Resources,
@@ -142,6 +145,50 @@ public sealed record MemorySearchPageWire(
     int Limit,
     bool HasMore,
     MemorySearchHitWire[] Hits);
+
+/// <summary>
+/// One S5-T3 owner library hit: the exact canonical ID and revision the owner
+/// may open, the item's own zone/kind/level, the service's own score and
+/// snippet, its occurred/recorded instants and the publication state the index
+/// joined at rebuild time. Never a stored body, never an embedding and never a
+/// grant: the console shows what the service answered instead of ranking or
+/// reinterpreting it.
+/// </summary>
+public sealed record LibraryHitWire(
+    string Id,
+    long Revision,
+    string ZoneId,
+    string Kind,
+    string Level,
+    string? Title,
+    double Score,
+    string Snippet,
+    DateTimeOffset? OccurredAtUtc,
+    DateTimeOffset RecordedAtUtc,
+    string Publication);
+
+/// <summary>
+/// One S5-T3 owner library page. The applied filters are echoed so the console
+/// describes the answer it received instead of the filters it hoped were used.
+/// A generation that has fallen behind the vault is never served as this page:
+/// the service refuses that search with <c>search_index_stale</c> until the
+/// owner rebuilds the index, so a page is always a page of a generation that
+/// still equals canonical.
+/// </summary>
+public sealed record LibraryPageWire(
+    string Query,
+    string? ZoneId,
+    string? CollectionId,
+    string? Kind,
+    string? Level,
+    string Current,
+    DateTimeOffset? FromUtc,
+    DateTimeOffset? ToUtc,
+    int Total,
+    int Offset,
+    int Limit,
+    bool HasMore,
+    LibraryHitWire[] Hits);
 
 /// One S4-T4 brief entry: the approved ID and frozen revision it was
 /// projected from, the bounded excerpt carried under the caller's budget, and
@@ -531,6 +578,7 @@ public sealed record ServiceReply(
     MemoryItemWire? MemoryItem = null,
     MemorySearchPageWire? MemorySearch = null,
     MemoryBriefWire? MemoryBrief = null,
+    LibraryPageWire? Library = null,
     FeedbackWire? Feedback = null,
     ProposalWire? Proposal = null,
     ProposalIdentityWire[]? Proposals = null,
@@ -553,6 +601,8 @@ public sealed class ServiceRequestHandler
 {
     public const int CurrentProtocolVersion = 1;
     public const int MaximumIndexRows = 512;
+    public const int MaximumLibraryOffset = 10000;
+    public const int MaximumLibraryQueryLength = 256;
     public const string OwnerStatusOperation = "owner.status";
     public const string OwnerVaultProvisionOperation = "vault.provision";
     public const string OwnerVaultUnlockOperation = "vault.unlock";
@@ -639,6 +689,7 @@ public sealed class ServiceRequestHandler
     public const string LifecycleRetainRevisionOperation = "lifecycle.retain";
     public const string OwnerIndexStatusOperation = "owner.index.status";
     public const string OwnerIndexRebuildOperation = "owner.index.rebuild";
+    public const string OwnerLibrarySearchOperation = "owner.library.search";
     public const string SourceEnrollOperation = "source.enroll";
     public const string SourceRevokeOperation = "source.revoke";
     public const string SourceStatusOperation = "source.status";
@@ -723,6 +774,15 @@ public sealed class ServiceRequestHandler
         if (request.ProtocolVersion != CurrentProtocolVersion)
         {
             return Error("unsupported_protocol");
+        }
+
+        // The owner library filters are accepted by exactly one operation. Any
+        // other operation carrying them fails closed here instead of silently
+        // ignoring a field its own request contract does not name.
+        if (HasLibraryFilterFields(request) &&
+            !string.Equals(request.Operation, OwnerLibrarySearchOperation, StringComparison.Ordinal))
+        {
+            return Error("invalid_request");
         }
 
         if (string.Equals(request.Operation, OwnerStatusOperation, StringComparison.Ordinal))
@@ -847,6 +907,11 @@ public sealed class ServiceRequestHandler
         if (context.Kind != PrincipalKind.Owner)
         {
             return Error("forbidden");
+        }
+
+        if (string.Equals(request.Operation, OwnerLibrarySearchOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerLibrarySearch(context, request, operation);
         }
 
         if (string.Equals(request.Operation, OwnerVaultProvisionOperation, StringComparison.Ordinal))
@@ -3539,7 +3604,12 @@ public sealed class ServiceRequestHandler
         return warnings;
     }
 
-    private static string ToWireToken(string name)
+    /// <summary>
+    /// The camelCase token this surface uses for one enumeration name. Shared
+    /// with <see cref="ScopedSearchAuthority"/> so a filter token and the token
+    /// a reply carries are spelled by exactly one implementation.
+    /// </summary>
+    internal static string ToWireToken(string name)
     {
         if (string.IsNullOrEmpty(name))
         {
@@ -3935,6 +4005,231 @@ public sealed class ServiceRequestHandler
             hit.Item.RecordedAtUtc,
             hit.Stale);
     }
+
+    /// <summary>
+    /// S5-T3 owner library search and browse over the owner's own unlocked
+    /// vault (R10, R11, R23, R30). The service applies every filter — text,
+    /// zone, collection, kind, abstraction level, time window, currentness —
+    /// and ranks the page itself; the console renders this answer instead of
+    /// ranking or reinterpreting it.
+    ///
+    /// A collection is owner selection metadata: it can only narrow this
+    /// search and grants nothing, because what is searchable is still exactly
+    /// what the owner's own vault holds. Candidates come from the materialized
+    /// index generation and every served hit is read at its own revision
+    /// through the revision-gated owner operation, so a row whose canonical
+    /// revision moved is dropped instead of serving other bytes.
+    /// </summary>
+    private ServiceReply HandleOwnerLibrarySearch(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || HasLibrarySearchExtras(request))
+        {
+            return Error("invalid_request");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (_privateIndexStore is null)
+        {
+            return Error("index_unavailable");
+        }
+
+        var materialized = _privateIndexMaterialized;
+        if (materialized is null)
+        {
+            // Nothing has been materialized for this unlocked epoch, so no
+            // honest library answer exists yet: the owner rebuilds the index
+            // (an explicit owner act) instead of this read scanning the vault.
+            return Error("index_not_materialized");
+        }
+
+        var offset = request.SearchOffset ?? 0;
+        var limit = request.SearchLimit ?? ScopedSearchAuthority.DefaultLimit;
+        if (offset is < 0 or > MaximumLibraryOffset || limit < 1 || limit > ScopedSearchAuthority.MaximumLimit)
+        {
+            return Error("invalid_request");
+        }
+
+        if (request.Query is { Length: > MaximumLibraryQueryLength } ||
+            request.Query?.Any(char.IsControl) == true)
+        {
+            return Error("invalid_request");
+        }
+
+        var zoneId = string.IsNullOrWhiteSpace(request.ZoneId) ? null : request.ZoneId;
+        if (zoneId is not null && !DomainIdentifiers.IsSafeIdentifier(zoneId))
+        {
+            return Error("invalid_request");
+        }
+
+        var collectionId = string.IsNullOrWhiteSpace(request.CollectionId) ? null : request.CollectionId;
+        if (collectionId is not null && !DomainIdentifiers.IsSafeIdentifier(collectionId))
+        {
+            return Error("invalid_request");
+        }
+
+        var kind = string.IsNullOrWhiteSpace(request.SearchKind) ? null : request.SearchKind;
+        if (kind is not null && !IsLibraryKindToken(kind))
+        {
+            return Error("invalid_request");
+        }
+
+        var level = string.IsNullOrWhiteSpace(request.SearchLevel) ? null : request.SearchLevel;
+        if (level is not null && !IsLibraryLevelToken(level))
+        {
+            return Error("invalid_request");
+        }
+
+        var current = "all";
+        if (!string.IsNullOrWhiteSpace(request.SearchCurrent))
+        {
+            if (string.Equals(request.SearchCurrent, "current", StringComparison.OrdinalIgnoreCase))
+            {
+                current = "current";
+            }
+            else if (string.Equals(request.SearchCurrent, "history", StringComparison.OrdinalIgnoreCase))
+            {
+                current = "history";
+            }
+            else if (!string.Equals(request.SearchCurrent, "all", StringComparison.OrdinalIgnoreCase))
+            {
+                return Error("invalid_request");
+            }
+        }
+
+        if (request.SearchFromUtc is { } from && request.SearchToUtc is { } to && from > to)
+        {
+            return Error("invalid_request");
+        }
+
+        HashSet<string>? collectionMembers = null;
+        if (collectionId is not null)
+        {
+            try
+            {
+                var state = operation.LoadScopeGrantState();
+                var collection = state.Collections.FirstOrDefault(candidate =>
+                    string.Equals(candidate.CollectionId, collectionId, StringComparison.Ordinal));
+                if (collection is null)
+                {
+                    return Error("collection_unknown");
+                }
+
+                collectionMembers = new HashSet<string>(collection.ResourceIds, StringComparer.Ordinal);
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+            {
+                return Error("library_unavailable");
+            }
+        }
+
+        // Same generation contract as the scoped search: a materialized
+        // generation that no longer equals the live canonical set is refused
+        // instead of scanned, because a row the vault has moved past can no
+        // longer be served at the revision the index names — searching it would
+        // report matches (and a page count) the owner could not open. The owner
+        // rebuilds the index, which is an explicit owner act.
+        try
+        {
+            if (!string.Equals(materialized.CanonicalDigest, _privateIndex.Evaluate(operation), StringComparison.Ordinal))
+            {
+                return Error("search_index_stale");
+            }
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            return Error("library_unavailable");
+        }
+
+        var rows = materialized.Rows
+            .Where(row => row.RecordKind == PrivateIndexRecordKind.MemoryItem)
+            .Where(row => zoneId is null || string.Equals(row.ZoneId, zoneId, StringComparison.Ordinal))
+            .Where(row => collectionMembers is null || collectionMembers.Contains(row.ResourceId))
+            .ToArray();
+        var zones = rows.ToDictionary(row => row.ResourceId, row => row.ZoneId, StringComparer.Ordinal);
+        var scope = rows
+            .Select(row => new ScopeResourceRevision(row.ResourceId, row.ZoneId, row.Revision))
+            .ToArray();
+
+        var authority = new ScopedSearchAuthority();
+        ScopedSearchAuthority.OwnerLibraryPage page;
+        try
+        {
+            page = authority.SearchOwner(
+                scope,
+                new ScopedSearchAuthority.OwnerLibraryQuery(
+                    request.Query, kind, current, level, request.SearchFromUtc, request.SearchToUtc, offset, limit),
+                materialized,
+                _privateIndexStore,
+                operation);
+        }
+        catch (OperationCanceledException)
+        {
+            // A requested lock cancels the in-flight search at its next read
+            // boundary; the private answer dies with the operation instead of
+            // being served into an epoch that no longer exists.
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
+        {
+            return Error("library_unavailable");
+        }
+
+        var hits = page.Hits.Select(hit => new LibraryHitWire(
+            hit.ResourceId,
+            hit.Revision,
+            zones.TryGetValue(hit.ResourceId, out var hitZone) ? hitZone : string.Empty,
+            ToWireToken(hit.Item.Kind.ToString()),
+            ToWireToken(hit.Item.Level.ToString()),
+            hit.Item.Title,
+            Math.Round(hit.Score, 3),
+            BuildSnippet(hit.Item.Body, hit.Document.Tokens),
+            hit.Item.OccurredAtUtc,
+            hit.Item.RecordedAtUtc,
+            hit.Document.Publication)).ToArray();
+
+        return new ServiceReply(
+            CurrentProtocolVersion,
+            "library_page",
+            "owner",
+            null,
+            Library: new LibraryPageWire(
+                request.Query ?? string.Empty,
+                zoneId,
+                collectionId,
+                kind,
+                level,
+                current,
+                request.SearchFromUtc,
+                request.SearchToUtc,
+                page.Total,
+                offset,
+                limit,
+                offset + hits.Length < page.Total,
+                hits));
+    }
+
+    /// <summary>
+    /// True when the token names a known memory kind (never <c>unknown</c>) in
+    /// the spelling this surface uses, so an unknown kind filter is refused
+    /// instead of quietly matching nothing.
+    /// </summary>
+    private static bool IsLibraryKindToken(string token) =>
+        Enum.GetNames<MemoryKind>().Any(name =>
+            !string.Equals(name, nameof(MemoryKind.Unknown), StringComparison.Ordinal) &&
+            string.Equals(ToWireToken(name), token, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// True when the token names a known abstraction level (never
+    /// <c>unknown</c>) in the spelling this surface uses.
+    /// </summary>
+    private static bool IsLibraryLevelToken(string token) =>
+        Enum.GetNames<AbstractionLevel>().Any(name =>
+            !string.Equals(name, nameof(AbstractionLevel.Unknown), StringComparison.Ordinal) &&
+            string.Equals(ToWireToken(name), token, StringComparison.OrdinalIgnoreCase));
 
     private static string BuildSnippet(string body, string[] documentTokens)
     {
@@ -5654,6 +5949,44 @@ public sealed class ServiceRequestHandler
         request.Label is not null || request.Description is not null ||
         request.Token is not null || request.SessionToken is not null ||
         request.ContentBase64 is not null || request.Operations is not null;
+
+    /// <summary>
+    /// The S5-T3 owner library filters — abstraction level and the inclusive
+    /// time window — belong to exactly one operation. <see cref="HandleAsync"/>
+    /// refuses them on every other operation before dispatch, so an operation
+    /// whose own contract does not name them can never silently ignore one.
+    /// </summary>
+    private static bool HasLibraryFilterFields(ServiceRequest request) =>
+        request.SearchLevel is not null || request.SearchFromUtc is not null || request.SearchToUtc is not null;
+
+    /// <summary>
+    /// S5-T3 owner library search carries the query text, paging, the zone and
+    /// collection selectors, the kind/level/currentness filters and the time
+    /// window — and nothing else. Credentials, content, scope selection,
+    /// sessions, catalog, egress, relation and snapshot fields are refused, so
+    /// a library body can never steer another flow or mint authority.
+    /// </summary>
+    private static bool HasLibrarySearchExtras(ServiceRequest request) =>
+        request.ResourceId is not null || request.ResourceRevision is not null ||
+        request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ContentBase64 is not null || request.ResourceIds is not null ||
+        request.Operations is not null || request.DestinationResourceIds is not null ||
+        request.ExpiresAtUtc is not null || request.Provider is not null ||
+        request.Model is not null || request.MaximumCostUsd is not null ||
+        request.PreviewId is not null || request.Token is not null ||
+        request.SessionToken is not null || request.SessionId is not null ||
+        request.AccessOperation is not null || request.DestinationResourceId is not null ||
+        request.DestinationRevision is not null || request.EstimatedCostUsd is not null ||
+        request.InputTokens is not null || request.OutputTokens is not null ||
+        request.CatalogId is not null || request.Label is not null ||
+        request.Description is not null || request.CatalogIds is not null ||
+        request.BudgetChars is not null || request.Purpose is not null ||
+        request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null ||
+        request.SourceLocator is not null || request.SourceFormat is not null ||
+        request.SourceFormatVersion is not null || request.SourceTitle is not null ||
+        request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
+        request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null;
 
     private static bool HasOwnerOnlyFields(
         ServiceRequest request,

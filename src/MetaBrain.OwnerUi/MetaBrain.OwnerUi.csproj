@@ -15,4 +15,11 @@
          reference to the vault store and applies no policy of its own. -->
     <ProjectReference Include="..\MetaBrain.Connections\MetaBrain.Connections.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The repository's permanent regression suite drives the console session
+         (the exact class the window uses) in process, so the private-state lock
+         boundary is verified deterministically. It is a friend assembly only;
+         nothing here is a product surface. -->
+    <InternalsVisibleTo Include="MetaBrain.S1T4.Smoke" />
+  </ItemGroup>
 </Project>

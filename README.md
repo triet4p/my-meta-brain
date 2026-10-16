@@ -173,6 +173,8 @@ Choose **Connect to service** to open the owner session, **Check again** to prob
 
 The **Vault & key** view is where the vault itself is created, opened and locked (S5-T2). It sends the credential you type to the running service over the owner control pipe in one request; the service owns the vault, the key and the lock lifecycle. Provisioning shows the recovery key the service returns once, tells you to keep your own copy outside this machine, and stores no copy itself; unlock takes your passphrase, recovery unlock takes the recovery key you saved, and **Lock vault now** asks the service to drain in-flight private work, clear the key, invalidate pending tokens and live sessions and stop private reads, ingestion and jobs. A wrong, missing or unusable key leaves the vault locked and is reported as a refusal, never as an unavailable service. Locking, disconnecting, ending the session and a refused credential all clear the credential fields and the displayed recovery key. If both the passphrase and the recovery key are lost, the encrypted data cannot be opened again: there is no reset, no backdoor and no automatic unlock. Library, capture, review, relations, catalog and session-console work arrive with their own sprint tasks.
 
+The **Library** view is where you search, browse and open what the vault holds (S5-T3). Type a query (Vietnamese or English) or leave it empty to browse, set the filters you want — zone, owner collection, kind, abstraction level, an inclusive UTC time window, and whether to show current items or history — and press **Search library**. The service applies every filter and ranks the page; this console only shows the answer it received, with the exact IDs, revisions, statuses and scores. Choose a result and press Enter to read that exact revision with its stored evidence level, author, executor, creation method, body and citations; the citation status (current, superseded, unknown) and any warning are the service's own answer, so a missing source stays visibly missing. Choose a citation and press Enter to open that source registry revision, edit the title and **Save new title** to write one new revision of the same item, and **Rebuild library index** to materialize a generation after unlocking or after a write (the service refuses to search a generation that no longer matches the vault). Locking the vault clears the page, the open item, the open source and your search text, and an answer already in flight is discarded rather than restoring them. Keyboard: Ctrl+F focuses the search box, Enter searches, the arrows choose a result, Enter opens it or its citation, and Ctrl+L locks the vault.
+
 ### 5. Running the Smoke Test Suite
 
 Verify all security invariants, cryptoproof, token redemption, and IPC boundaries:
@@ -181,11 +183,12 @@ Verify all security invariants, cryptoproof, token redemption, and IPC boundarie
 dotnet run --project tests/MetaBrain.S1T4.Smoke/MetaBrain.S1T4.Smoke.csproj
 ```
 
-The suite also exposes named scenarios, including `s5-t1` for the owner application boundary (owner-channel states plus agent-channel owner-operation denials), `s5-t2` for the owner vault key path (provisioning, wrong/missing-key refusal, lock invalidation and owner-held recovery), and `s5-t1-console-fixture`/`s5-t2-console-fixture` for preparing an owner-console fixture:
+The suite also exposes named scenarios, including `s5-t1` for the owner application boundary (owner-channel states plus agent-channel owner-operation denials), `s5-t2` for the owner vault key path (provisioning, wrong/missing-key refusal, lock invalidation and owner-held recovery), `s5-t3` for the owner library (bilingual search, all filters, service-side ranking, evidence detail with citations, title edit, collection non-grant and the lock/stale-answer boundary), and `s5-t1-console-fixture`/`s5-t2-console-fixture`/`s5-t3-console-fixture` plus `s5-t3-console-corpus` for preparing an owner-console fixture:
 
 ```powershell
 dotnet run --project tests/MetaBrain.S1T4.Smoke/MetaBrain.S1T4.Smoke.csproj -- s5-t1 src/MetaBrain.Connections/bin/Release/net10.0-windows/MetaBrain.Connections.exe
 dotnet run --project tests/MetaBrain.S1T4.Smoke/MetaBrain.S1T4.Smoke.csproj -- s5-t2 src/MetaBrain.Connections/bin/Release/net10.0-windows/MetaBrain.Connections.exe
+dotnet run --project tests/MetaBrain.S1T4.Smoke/MetaBrain.S1T4.Smoke.csproj -- s5-t3 src/MetaBrain.Connections/bin/Release/net10.0-windows/MetaBrain.Connections.exe
 ```
 
 ---

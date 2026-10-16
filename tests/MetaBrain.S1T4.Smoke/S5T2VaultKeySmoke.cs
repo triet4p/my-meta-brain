@@ -43,7 +43,7 @@ internal static partial class OwnerServiceSmoke
             Console.WriteLine("PASS the owner channel reports an uninitialized vault before provisioning");
 
             var shortProvision = await OwnerChannelClient.ProvisionAsync(fixture.ControlPipe, "s5t2-short", CancellationToken.None).ConfigureAwait(false);
-            Require(shortProvision.Outcome == OwnerVaultCommandOutcome.Refused && shortProvision.ErrorCode == "credential_required",
+            Require(shortProvision.Outcome == OwnerCommandOutcome.Refused && shortProvision.ErrorCode == "credential_required",
                 "A too-short provisioning passphrase was not refused as a service answer (" + shortProvision + ").");
             var afterShort = await OwnerChannelClient.ReadStatusAsync(fixture.ControlPipe, CancellationToken.None).ConfigureAwait(false);
             Require(afterShort.VaultState == OwnerVaultState.Uninitialized,
@@ -51,7 +51,7 @@ internal static partial class OwnerServiceSmoke
             Console.WriteLine("PASS a too-short passphrase is refused and no vault is created");
 
             var provision = await OwnerChannelClient.ProvisionAsync(fixture.ControlPipe, passphrase, CancellationToken.None).ConfigureAwait(false);
-            Require(provision.Outcome == OwnerVaultCommandOutcome.Completed && provision.VaultState == OwnerVaultState.Unlocked,
+            Require(provision.Outcome == OwnerCommandOutcome.Completed && provision.VaultState == OwnerVaultState.Unlocked,
                 "Provisioning the vault through the owner channel did not complete unlocked (" + provision + ").");
             Require(provision.RecoveryCode is { Length: >= 40 },
                 "The service did not return usable recovery material for a fresh provisioning.");
@@ -59,7 +59,7 @@ internal static partial class OwnerServiceSmoke
             Console.WriteLine("PASS the owner channel provisions the vault and returns recovery material once");
 
             var secondProvision = await OwnerChannelClient.ProvisionAsync(fixture.ControlPipe, NewSyntheticPassphrase(), CancellationToken.None).ConfigureAwait(false);
-            Require(secondProvision.Outcome == OwnerVaultCommandOutcome.Refused && secondProvision.ErrorCode == "vault_already_initialized",
+            Require(secondProvision.Outcome == OwnerCommandOutcome.Refused && secondProvision.ErrorCode == "vault_already_initialized",
                 "A second provisioning was not refused (" + secondProvision + ").");
             Console.WriteLine("PASS a second provisioning is refused and never overwrites the existing vault");
 
@@ -99,7 +99,7 @@ internal static partial class OwnerServiceSmoke
             Console.WriteLine("PASS unlocked: a live scoped session reads the approved resource and a second token is left pending");
 
             var locked = await OwnerChannelClient.LockAsync(fixture.ControlPipe, CancellationToken.None).ConfigureAwait(false);
-            Require(locked.Outcome == OwnerVaultCommandOutcome.Completed && locked.VaultState == OwnerVaultState.Locked,
+            Require(locked.Outcome == OwnerCommandOutcome.Completed && locked.VaultState == OwnerVaultState.Locked,
                 "The owner-channel lock did not complete locked (" + locked + ").");
             var afterLock = await OwnerChannelClient.ReadStatusAsync(fixture.ControlPipe, CancellationToken.None).ConfigureAwait(false);
             Require(afterLock.VaultState == OwnerVaultState.Locked, "The vault was not locked after the owner-channel lock (" + afterLock + ").");
@@ -133,14 +133,14 @@ internal static partial class OwnerServiceSmoke
             Console.WriteLine("PASS locked: private reads and private jobs do not start through the existing core lifecycle");
 
             var wrongUnlock = await OwnerChannelClient.UnlockAsync(fixture.ControlPipe, wrongPassphrase, CancellationToken.None).ConfigureAwait(false);
-            Require(wrongUnlock.Outcome == OwnerVaultCommandOutcome.Refused && wrongUnlock.ErrorCode == "unlock_denied",
+            Require(wrongUnlock.Outcome == OwnerCommandOutcome.Refused && wrongUnlock.ErrorCode == "unlock_denied",
                 "A wrong passphrase was not refused as a service answer (" + wrongUnlock + ").");
             var missingUnlock = await OwnerChannelClient.UnlockAsync(fixture.ControlPipe, string.Empty, CancellationToken.None).ConfigureAwait(false);
-            Require(missingUnlock.Outcome == OwnerVaultCommandOutcome.Refused,
+            Require(missingUnlock.Outcome == OwnerCommandOutcome.Refused,
                 "A missing passphrase was not refused (" + missingUnlock + ").");
             var wrongRecovery = await OwnerChannelClient.UnlockWithRecoveryCodeAsync(
                 fixture.ControlPipe, recoveryCode + "-tampered", CancellationToken.None).ConfigureAwait(false);
-            Require(wrongRecovery.Outcome == OwnerVaultCommandOutcome.Refused && wrongRecovery.ErrorCode == "unlock_denied",
+            Require(wrongRecovery.Outcome == OwnerCommandOutcome.Refused && wrongRecovery.ErrorCode == "unlock_denied",
                 "Unusable recovery material was not refused as a service answer (" + wrongRecovery + ").");
             var stillLocked = await OwnerChannelClient.ReadStatusAsync(fixture.ControlPipe, CancellationToken.None).ConfigureAwait(false);
             Require(stillLocked.VaultState == OwnerVaultState.Locked,
@@ -148,7 +148,7 @@ internal static partial class OwnerServiceSmoke
             Console.WriteLine("PASS a wrong, missing or unusable key is refused and leaves the vault locked");
 
             var unlocked = await OwnerChannelClient.UnlockAsync(fixture.ControlPipe, passphrase, CancellationToken.None).ConfigureAwait(false);
-            Require(unlocked.Outcome == OwnerVaultCommandOutcome.Completed && unlocked.VaultState == OwnerVaultState.Unlocked,
+            Require(unlocked.Outcome == OwnerCommandOutcome.Completed && unlocked.VaultState == OwnerVaultState.Unlocked,
                 "The owner passphrase did not open the existing vault (" + unlocked + ").");
             var staleSession = await ReadThroughAgentAsync(connectionsExecutable, fixture.AgentPipe, liveSessionPath, resourceId, revision).ConfigureAwait(false);
             Require(staleSession.ExitCode != 0 && !staleSession.StandardOutput.Contains("AGENT-BODY-BEGIN", StringComparison.Ordinal),
@@ -159,10 +159,10 @@ internal static partial class OwnerServiceSmoke
             Console.WriteLine("PASS the owner passphrase opens the existing vault and the pre-lock session stays gone");
 
             var relocked = await OwnerChannelClient.LockAsync(fixture.ControlPipe, CancellationToken.None).ConfigureAwait(false);
-            Require(relocked.Outcome == OwnerVaultCommandOutcome.Completed && relocked.VaultState == OwnerVaultState.Locked,
+            Require(relocked.Outcome == OwnerCommandOutcome.Completed && relocked.VaultState == OwnerVaultState.Locked,
                 "The second owner-channel lock did not complete (" + relocked + ").");
             var recoveryUnlock = await OwnerChannelClient.UnlockWithRecoveryCodeAsync(fixture.ControlPipe, recoveryCode, CancellationToken.None).ConfigureAwait(false);
-            Require(recoveryUnlock.Outcome == OwnerVaultCommandOutcome.Completed && recoveryUnlock.VaultState == OwnerVaultState.Unlocked,
+            Require(recoveryUnlock.Outcome == OwnerCommandOutcome.Completed && recoveryUnlock.VaultState == OwnerVaultState.Unlocked,
                 "The owner-held recovery key did not open the existing vault (" + recoveryUnlock + ").");
             var readAfterRecovery = await RunOwnerCommandAsync(connectionsExecutable,
                 "owner", "read", "--control-pipe", fixture.ControlPipe, "--resource-id", resourceId,
@@ -174,7 +174,7 @@ internal static partial class OwnerServiceSmoke
             Console.WriteLine("PASS the owner-held recovery key opens the same vault and preserves the stored private data");
 
             var finalLock = await OwnerChannelClient.LockAsync(fixture.ControlPipe, CancellationToken.None).ConfigureAwait(false);
-            Require(finalLock.Outcome == OwnerVaultCommandOutcome.Completed, "The final owner-channel lock did not complete (" + finalLock + ").");
+            Require(finalLock.Outcome == OwnerCommandOutcome.Completed, "The final owner-channel lock did not complete (" + finalLock + ").");
 
             var draining = service;
             await StopServiceAsync(service).ConfigureAwait(false);
@@ -184,7 +184,7 @@ internal static partial class OwnerServiceSmoke
             Require(restarted.Availability == OwnerChannelAvailability.Reachable && restarted.VaultState == OwnerVaultState.Locked,
                 "A restarted service was not reported locked at startup (" + restarted + ").");
             var restartUnlock = await OwnerChannelClient.UnlockAsync(fixture.ControlPipe, passphrase, CancellationToken.None).ConfigureAwait(false);
-            Require(restartUnlock.Outcome == OwnerVaultCommandOutcome.Completed && restartUnlock.VaultState == OwnerVaultState.Unlocked,
+            Require(restartUnlock.Outcome == OwnerCommandOutcome.Completed && restartUnlock.VaultState == OwnerVaultState.Unlocked,
                 "The owner passphrase did not open the vault after a restart (" + restartUnlock + ").");
             Console.WriteLine("PASS a restart is locked at startup and the owner passphrase still opens the same vault");
 
@@ -218,10 +218,10 @@ internal static partial class OwnerServiceSmoke
 
             var absentPipe = "MetaBrainS5T2Absent" + Guid.NewGuid().ToString("N");
             var absentLock = await OwnerChannelClient.LockAsync(absentPipe, CancellationToken.None).ConfigureAwait(false);
-            Require(absentLock.Outcome == OwnerVaultCommandOutcome.Unavailable && absentLock.ErrorCode == "transport_unavailable",
+            Require(absentLock.Outcome == OwnerCommandOutcome.Unavailable && absentLock.ErrorCode == "transport_unavailable",
                 "An owner vault command with no service was not reported unavailable (" + absentLock + ").");
             var deniedProvision = await OwnerChannelClient.ProvisionAsync(fixture.AgentPipe, "synthetic-not-a-vault-key", CancellationToken.None).ConfigureAwait(false);
-            Require(deniedProvision.Outcome == OwnerVaultCommandOutcome.OwnerAuthorityDenied && deniedProvision.ErrorCode == "forbidden",
+            Require(deniedProvision.Outcome == OwnerCommandOutcome.OwnerAuthorityDenied && deniedProvision.ErrorCode == "forbidden",
                 "The agent channel did not refuse an owner provisioning command (" + deniedProvision + ").");
             var stillLockedAfterDenials = await OwnerChannelClient.ReadStatusAsync(fixture.ControlPipe, CancellationToken.None).ConfigureAwait(false);
             Require(stillLockedAfterDenials.VaultState == OwnerVaultState.Unlocked,
