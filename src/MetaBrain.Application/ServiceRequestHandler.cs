@@ -709,6 +709,7 @@ public sealed class ServiceRequestHandler
     public const string OwnerIndexStatusOperation = "owner.index.status";
     public const string OwnerIndexRebuildOperation = "owner.index.rebuild";
     public const string OwnerLibrarySearchOperation = "owner.library.search";
+    public const string OwnerRelationListOperation = "owner.relation.list";
     public const string OwnerProposalPublishOperation = "owner.proposal.publish";
     public const string OwnerProposalRejectOperation = "owner.proposal.reject";
     public const string SourceEnrollOperation = "source.enroll";
@@ -933,6 +934,11 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, OwnerLibrarySearchOperation, StringComparison.Ordinal))
         {
             return HandleOwnerLibrarySearch(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerRelationListOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerRelationList(context, request, operation);
         }
 
         if (string.Equals(request.Operation, OwnerProposalPublishOperation, StringComparison.Ordinal))
@@ -2378,8 +2384,9 @@ public sealed class ServiceRequestHandler
     /// S2-T4 owner relation store: create-only over the shared encrypted
     /// canonical store. Both endpoints must exist at the live revision the link
     /// pins and must decode as the declared kind (memory item or registered
-    /// source); derivation cycles are refused. A duplicate create fails closed
-    /// through the vault revision gate.
+    /// source); derivation cycles are refused with their own code so an owner
+    /// caller can say which rule rejected the link. A duplicate create fails
+    /// closed through the vault revision gate.
     /// </summary>
     private ServiceReply HandleRelationCreate(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
     {
@@ -2403,6 +2410,10 @@ public sealed class ServiceRequestHandler
         {
             return Error("invalid_request");
         }
+        catch (RelationCycleException)
+        {
+            return Error("relation_cycle");
+        }
         catch (ArgumentException)
         {
             return Error("invalid_request");
@@ -2424,7 +2435,9 @@ public sealed class ServiceRequestHandler
     /// S2-T4 owner relation lifecycle: accept, reject, unlink, relink. Every
     /// transition is a revision-gated write of the same record; endpoints, kind
     /// and the original reason never change, and reject/unlink require an
-    /// explicit recorded rationale instead of a silent edit.
+    /// explicit recorded rationale instead of a silent edit. Reactivating a
+    /// derivation edge is re-checked against the current graph and refused with
+    /// the cycle code when the graph has moved since the link was retracted.
     /// </summary>
     private ServiceReply HandleRelationTransition(
         AuthenticatedContext context,
@@ -2464,6 +2477,10 @@ public sealed class ServiceRequestHandler
         catch (FormatException)
         {
             return Error("invalid_request");
+        }
+        catch (RelationCycleException)
+        {
+            return Error("relation_cycle");
         }
         catch (ArgumentException)
         {
@@ -4319,6 +4336,37 @@ public sealed class ServiceRequestHandler
                 limit,
                 offset + hits.Length < page.Total,
                 hits));
+    }
+
+    /// <summary>
+    /// S5-T5 owner relation workbench read: the whole relation set of this
+    /// owner's vault, each record with its live revision and its computed review
+    /// state. Owner authority is this vault's owner, so every endpoint is in
+    /// scope; the relation store, the revision gate and the review evaluation
+    /// stay exactly the shared ones, so this view can never disagree with the
+    /// scoped agent projection about a relation.
+    /// </summary>
+    private ServiceReply HandleOwnerRelationList(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || HasRelationListExtras(request))
+        {
+            return Error("invalid_request");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        var listed = new RelationService().List(context, operation, _ => true);
+        var wires = new RelationWire[listed.Length];
+        for (var index = 0; index < listed.Length; index++)
+        {
+            var entry = listed[index];
+            wires[index] = ToRelationWire(entry.Relation!, entry.Review!, includeRequestEvidence: true);
+        }
+
+        return new ServiceReply(CurrentProtocolVersion, "relations", "owner", null, Relations: wires);
     }
 
     /// <summary>
@@ -6519,6 +6567,16 @@ public sealed class ServiceRequestHandler
         request.CatalogIds is not null || request.Purpose is not null ||
         request.AgentId is not null || request.AgentContext is not null ||
         request.DisclosureContext is not null || request.RequestId is not null;
+
+    /// <summary>
+    /// The owner relation list carries no filter and no identity: it reads this
+    /// owner's own relation set, so a request that names a resource, a revision,
+    /// a zone, a query, a session, a credential or an egress claim is refused
+    /// rather than silently narrowed.
+    /// </summary>
+    private static bool HasRelationListExtras(ServiceRequest request) =>
+        request.ResourceId is not null || request.ResourceRevision is not null ||
+        HasContentReadExtras(request);
 
     /// <summary>
     /// Agent link creation carries only the session bearer, the access

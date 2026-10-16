@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using MetaBrain.Application;
+using MetaBrain.Core.Domain;
 
 namespace MetaBrain.Connections;
 
@@ -390,6 +391,76 @@ public sealed record OwnerLifecycleResult(
     OwnerCommandOutcome Outcome,
     string? ErrorCode,
     OwnerLifecycleState? Lifecycle);
+
+/// <summary>
+/// One relation endpoint as the service projected it: the exact opaque ID and
+/// verified kind the link pinned, the revision it was made against, and the
+/// optional evidence span. Only the owner's own view names resources the owner
+/// can already read; an agent view is filtered by that session's scope.
+/// </summary>
+public sealed record OwnerRelationEndpoint(
+    string ResourceId,
+    string EndpointKind,
+    long Revision,
+    long? SpanStart,
+    long? SpanEnd);
+
+/// <summary>
+/// One caller-reported relation request that accompanied a create, unlink or
+/// restore. It is the words the caller sent, recorded as a claim with its
+/// executor and time: it is never owner confirmation, authorization or
+/// declassification.
+/// </summary>
+public sealed record OwnerRelationRequestEvidence(
+    string Action,
+    string Text,
+    string Executor,
+    DateTimeOffset RecordedAtUtc);
+
+/// <summary>
+/// The service's computed review state of one relation: whether the link can
+/// still be trusted as recorded, which rules flagged it, and which endpoints of
+/// this relation are the reason. It never rewrites the stored link.
+/// </summary>
+public sealed record OwnerRelationReview(
+    string State,
+    string[] Reasons,
+    string[] StaleResourceIds);
+
+/// <summary>
+/// One relation exactly as the service served it: identity, live revision,
+/// kind, lifecycle state, both pinned endpoints, its provenance (executor,
+/// creation method, reason, and the act that last changed its state) and any
+/// request evidence an agent path recorded.
+/// </summary>
+public sealed record OwnerRelation(
+    string Id,
+    string ZoneId,
+    long Revision,
+    string Kind,
+    string State,
+    OwnerRelationEndpoint From,
+    OwnerRelationEndpoint To,
+    string Executor,
+    string CreationMethod,
+    string Reason,
+    string? StateReason,
+    DateTimeOffset? OccurredAtUtc,
+    DateTimeOffset RecordedAtUtc,
+    string StateExecutor,
+    DateTimeOffset StateRecordedAtUtc,
+    OwnerRelationReview Review,
+    OwnerRelationRequestEvidence[] RequestEvidence);
+
+public sealed record OwnerRelationListResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerRelation[]? Relations);
+
+public sealed record OwnerRelationResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerRelation? Relation);
 
 /// <summary>
 /// The owner-application client of the authenticated owner control channel.
@@ -901,6 +972,196 @@ public static class OwnerChannelClient
         TransitionLifecycleAsync(
             controlPipe, lifecycle, ServiceRequestHandler.LifecycleReProposeOperation, "lifecycle_reproposed", rationale, cancellationToken);
 
+    // ---- S5-T5 explicit relations ----
+
+    /// <summary>
+    /// Lists every relation of the unlocked vault with its live revision, its
+    /// provenance and the service's computed review state. Owner authority is
+    /// this vault's owner, so the service filters no endpoint here: an agent
+    /// session reads its own scoped projection instead of this one.
+    /// </summary>
+    public static async Task<OwnerRelationListResult> ListRelationsAsync(
+        string controlPipe,
+        CancellationToken cancellationToken)
+    {
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerRelationListOperation),
+            "relations",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerRelationListResult(reply.Outcome, reply.ErrorCode, ProjectRelations(reply));
+    }
+
+    /// <summary>
+    /// Reads one relation at the named live revision (or the current one) with
+    /// its computed review state, so an opened link is the record the vault
+    /// holds and its staleness is the service's evaluation, never this client's
+    /// guess.
+    /// </summary>
+    public static async Task<OwnerRelationResult> ReadRelationAsync(
+        string controlPipe,
+        string relationId,
+        long? revision,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(relationId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.RelationReadOperation,
+                ResourceId: relationId,
+                ResourceRevision: revision),
+            "relation",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerRelationResult(reply.Outcome, reply.ErrorCode, ProjectRelation(reply));
+    }
+
+    /// <summary>
+    /// Creates one typed owner link between two pinned endpoints. The draft is
+    /// encoded by the shared relation codec, so this client cannot introduce a
+    /// second draft schema; the service verifies both endpoints at their live
+    /// revisions, refuses a derivation cycle with its own code and stores the
+    /// link as one revision-gated canonical write.
+    /// </summary>
+    public static async Task<OwnerRelationResult> CreateRelationAsync(
+        string controlPipe,
+        string relationId,
+        string zoneId,
+        RelationKind kind,
+        RelationState state,
+        RelationEndpoint from,
+        RelationEndpoint to,
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(from);
+        ArgumentNullException.ThrowIfNull(to);
+        ArgumentNullException.ThrowIfNull(relationId);
+        ArgumentNullException.ThrowIfNull(zoneId);
+        ArgumentNullException.ThrowIfNull(reason);
+        var draft = RelationCodec.EncodeDraft(new RelationDraft(
+            kind,
+            state,
+            from,
+            to,
+            CreationMethod.DirectWrite,
+            reason,
+            StateReason: null,
+            OccurredAtUtc: null,
+            // The owner path records the link when the act is sent; the shared
+            // validator requires a UTC recorded instant, and only the agent path
+            // stamps one server-side.
+            RecordedAtUtc: DateTimeOffset.UtcNow));
+        try
+        {
+            var reply = await ReadReplyAsync(
+                controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.RelationCreateOperation,
+                    ResourceId: relationId,
+                    ZoneId: zoneId,
+                    ContentBase64: Convert.ToBase64String(draft)),
+                "relation_created",
+                cancellationToken).ConfigureAwait(false);
+
+            return new OwnerRelationResult(reply.Outcome, reply.ErrorCode, ProjectRelation(reply));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(draft);
+        }
+    }
+
+    /// <summary>
+    /// Accepts a proposed link as the owner's own conclusion. The stored record
+    /// keeps the claim that accompanied it; only the state, its executor and its
+    /// time change, so confirming an agent's link never rewrites what the agent
+    /// reported.
+    /// </summary>
+    public static Task<OwnerRelationResult> AcceptRelationAsync(
+        string controlPipe,
+        OwnerRelation relation,
+        CancellationToken cancellationToken) =>
+        TransitionRelationAsync(
+            controlPipe, ServiceRequestHandler.RelationAcceptOperation, "relation_accepted", relation, rationale: null, cancellationToken);
+
+    /// <summary>
+    /// Rejects the link with the owner's explicit rationale, which the shared
+    /// core records in the relation's history.
+    /// </summary>
+    public static Task<OwnerRelationResult> RejectRelationAsync(
+        string controlPipe,
+        OwnerRelation relation,
+        string rationale,
+        CancellationToken cancellationToken) =>
+        TransitionRelationAsync(
+            controlPipe, ServiceRequestHandler.RelationRejectOperation, "relation_rejected", relation, rationale, cancellationToken);
+
+    /// <summary>Removes the link (retracted) with the owner's explicit rationale.</summary>
+    public static Task<OwnerRelationResult> UnlinkRelationAsync(
+        string controlPipe,
+        OwnerRelation relation,
+        string rationale,
+        CancellationToken cancellationToken) =>
+        TransitionRelationAsync(
+            controlPipe, ServiceRequestHandler.RelationUnlinkOperation, "relation_unlinked", relation, rationale, cancellationToken);
+
+    /// <summary>
+    /// Undoes a removal: the link returns to proposed, never accepted, because
+    /// the shared core refuses to re-assert an acceptance silently. A relink
+    /// carries no rationale; the original link rationale stays the record's
+    /// basis.
+    /// </summary>
+    public static Task<OwnerRelationResult> RelinkRelationAsync(
+        string controlPipe,
+        OwnerRelation relation,
+        CancellationToken cancellationToken) =>
+        TransitionRelationAsync(
+            controlPipe, ServiceRequestHandler.RelationRelinkOperation, "relation_relinked", relation, rationale: null, cancellationToken);
+
+    private static async Task<OwnerRelationResult> TransitionRelationAsync(
+        string controlPipe,
+        string operation,
+        string expectedStatus,
+        OwnerRelation relation,
+        string? rationale,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(relation);
+        byte[]? draft = null;
+        try
+        {
+            if (rationale is not null)
+            {
+                draft = RelationCodec.EncodeTransitionDraft(new RelationTransitionDraft(rationale));
+            }
+
+            var reply = await ReadReplyAsync(
+                controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    operation,
+                    ResourceId: relation.Id,
+                    ResourceRevision: relation.Revision,
+                    ContentBase64: draft is null ? null : Convert.ToBase64String(draft)),
+                expectedStatus,
+                cancellationToken).ConfigureAwait(false);
+
+            return new OwnerRelationResult(reply.Outcome, reply.ErrorCode, ProjectRelation(reply));
+        }
+        finally
+        {
+            if (draft is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(draft);
+            }
+        }
+    }
+
     private static async Task<OwnerLifecycleResult> TransitionLifecycleAsync(
         string controlPipe,
         OwnerLifecycleState lifecycle,
@@ -1377,6 +1638,115 @@ public static class OwnerChannelClient
             Int64(review, "lifecycleRevision"),
             Flag(review, "decisionApplied"));
     }
+
+    /// <summary>
+    /// The relation list the service served, in the order it served it. A reply
+    /// that carries no array is no list, so the caller reports no relation list
+    /// instead of an empty vault.
+    /// </summary>
+    private static OwnerRelation[]? ProjectRelations(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            reply.Payload.ValueKind != JsonValueKind.Object ||
+            !reply.Payload.TryGetProperty("relations", out var relations) ||
+            relations.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var projected = new List<OwnerRelation>();
+        foreach (var element in relations.EnumerateArray())
+        {
+            if (element.ValueKind == JsonValueKind.Object && ProjectRelationElement(element) is { } relation)
+            {
+                projected.Add(relation);
+            }
+        }
+
+        return projected.ToArray();
+    }
+
+    private static OwnerRelation? ProjectRelation(OwnerReply reply) =>
+        reply.Outcome == OwnerCommandOutcome.Completed &&
+        reply.Payload.ValueKind == JsonValueKind.Object &&
+        reply.Payload.TryGetProperty("relation", out var relation) &&
+        relation.ValueKind == JsonValueKind.Object
+            ? ProjectRelationElement(relation)
+            : null;
+
+    /// <summary>
+    /// One relation element as the wire carried it. An element that does not
+    /// carry both endpoints is not a relation this client can render, so it is
+    /// reported as no relation rather than as a link with invented sides.
+    /// </summary>
+    private static OwnerRelation? ProjectRelationElement(JsonElement relation)
+    {
+        if (!relation.TryGetProperty("from", out var from) || from.ValueKind != JsonValueKind.Object ||
+            !relation.TryGetProperty("to", out var to) || to.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var review = relation.TryGetProperty("review", out var reviewElement) && reviewElement.ValueKind == JsonValueKind.Object
+            ? new OwnerRelationReview(
+                Text(reviewElement, "state") ?? "unknown",
+                Strings(reviewElement, "reasons"),
+                Strings(reviewElement, "staleResourceIds"))
+            : new OwnerRelationReview("unknown", Array.Empty<string>(), Array.Empty<string>());
+
+        var evidence = new List<OwnerRelationRequestEvidence>();
+        if (relation.TryGetProperty("requestEvidence", out var entries) && entries.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var entry in entries.EnumerateArray())
+            {
+                if (entry.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                evidence.Add(new OwnerRelationRequestEvidence(
+                    Text(entry, "action") ?? "unknown",
+                    Text(entry, "text") ?? string.Empty,
+                    Text(entry, "executor") ?? "unknown",
+                    Timestamp(entry, "recordedAtUtc") ?? default));
+            }
+        }
+
+        return new OwnerRelation(
+            Text(relation, "id") ?? string.Empty,
+            Text(relation, "zoneId") ?? string.Empty,
+            Int64(relation, "revision"),
+            Text(relation, "kind") ?? "unknown",
+            Text(relation, "state") ?? "unknown",
+            ProjectRelationEndpoint(from),
+            ProjectRelationEndpoint(to),
+            Text(relation, "executor") ?? "unknown",
+            Text(relation, "creationMethod") ?? "unknown",
+            Text(relation, "reason") ?? string.Empty,
+            Text(relation, "stateReason"),
+            Timestamp(relation, "occurredAtUtc"),
+            Timestamp(relation, "recordedAtUtc") ?? default,
+            Text(relation, "stateExecutor") ?? "unknown",
+            Timestamp(relation, "stateRecordedAtUtc") ?? default,
+            review,
+            evidence.ToArray());
+    }
+
+    private static OwnerRelationEndpoint ProjectRelationEndpoint(JsonElement endpoint) =>
+        new(
+            Text(endpoint, "resourceId") ?? string.Empty,
+            Text(endpoint, "endpointKind") ?? "unknown",
+            Int64(endpoint, "revision"),
+            SpanStart(endpoint),
+            SpanEnd(endpoint));
+
+    private static string[] Strings(JsonElement element, string property) =>
+        element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.Array
+            ? value.EnumerateArray()
+                .Where(item => item.ValueKind == JsonValueKind.String)
+                .Select(item => item.GetString()!)
+                .ToArray()
+            : Array.Empty<string>();
 
     /// <summary>One item's live publication record.</summary>
     private static OwnerLifecycleState? ProjectLifecycle(OwnerReply reply)

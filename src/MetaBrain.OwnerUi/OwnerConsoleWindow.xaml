@@ -32,13 +32,14 @@
                                Foreground="#FF6B7280" Margin="2,0,0,8" />
                     <TextBlock DockPanel.Dock="Bottom" TextWrapping="Wrap" FontSize="11" Foreground="#FF6B7280" Margin="2,12,2,0"
                                Text="Only delivered views appear here. This host ships no placeholder screen and no control without a real backing operation." />
-                    <ListBox x:Name="Navigation" BorderThickness="0" Background="Transparent" Height="126"
+                    <ListBox x:Name="Navigation" BorderThickness="0" Background="Transparent" Height="156"
                              SelectionChanged="OnNavigationChanged">
                         <ListBoxItem Content="Owner session" Padding="8,6" />
                         <ListBoxItem Content="Vault status" Padding="8,6" />
                         <ListBoxItem Content="Vault &amp; key" Padding="8,6" />
                         <ListBoxItem Content="Library" Padding="8,6" />
                         <ListBoxItem Content="Inbox" Padding="8,6" />
+                        <ListBoxItem Content="Relations" Padding="8,6" />
                     </ListBox>
                 </DockPanel>
             </Border>
@@ -475,6 +476,133 @@
                                    Text="• No provider, network call or URL fetch happens on this screen, and no plaintext draft is written to disk: the editor text lives in this process until you save it, clear it, or lock the vault." />
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
                                    Text="• Keyboard: Ctrl+F focuses the search box of Library, Ctrl+L locks the vault (and asks first when the capture editor still holds unsaved text)." />
+                    </StackPanel>
+
+                    <StackPanel x:Name="RelationsPanel" Visibility="Collapsed">
+                        <TextBlock Text="Relations" FontSize="19" FontWeight="SemiBold" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,8,0,0"
+                                   Text="Every typed link below is a record of your vault: the service mints its identity, verifies both endpoints at the exact revisions the link pins, decides the derivation graph and computes whether the link can still be trusted. This console sends your draft and renders the answer; it keeps no link store, no visibility policy of its own and no file. A related_to association and an evidence-bearing supports link stay different records, and only your explicit act turns an agent's proposal into a confirmed link." />
+
+                        <TextBlock Text="Service reports" FontWeight="SemiBold" Margin="0,16,0,0" />
+                        <TextBlock x:Name="RelationsStateText" TextWrapping="Wrap" Margin="0,4,0,0" FontSize="16" />
+                        <TextBlock x:Name="RelationsMessageText" TextWrapping="Wrap" Margin="0,8,0,0" Foreground="#FF6B7280" />
+
+                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                            <Button x:Name="RelationsRefreshButton" Content="Read relation set" Padding="14,7" Click="OnRelationsRefreshClicked" />
+                            <Button x:Name="RelationsInspectButton" Content="Inspect selected relation" Padding="14,7" Margin="8,0,0,0" Click="OnRelationsInspectClicked" />
+                            <TextBlock Text="Show" Foreground="#FF6B7280" VerticalAlignment="Center" Margin="16,0,6,0" />
+                            <ComboBox x:Name="RelationsFilterInput" Width="170" AutomationProperties.AutomationId="RelationsFilterInput"
+                                      SelectionChanged="OnRelationsFilterChanged" />
+                        </StackPanel>
+
+                        <ListBox x:Name="RelationsList" Height="170" Margin="0,8,0,0" Background="White" BorderBrush="#FFD5D8DC"
+                                 AutomationProperties.AutomationId="RelationsList"
+                                 SelectionChanged="OnRelationsSelectionChanged" KeyDown="OnRelationsListKeyDown" />
+
+                        <Border x:Name="RelationDetailPanel" Margin="0,14,0,0" Padding="14" Background="White"
+                                BorderBrush="#FFD5D8DC" BorderThickness="1" CornerRadius="3">
+                            <StackPanel>
+                                <TextBlock Text="Open relation (the exact revision the service served)" FontWeight="SemiBold" FontSize="15" />
+                                <TextBlock x:Name="RelationProvenanceText" TextWrapping="Wrap" Margin="0,8,0,0" FontFamily="Consolas" />
+                                <TextBlock x:Name="RelationEndpointsText" TextWrapping="Wrap" Margin="0,6,0,0" FontFamily="Consolas" />
+                                <TextBlock x:Name="RelationConfirmationText" TextWrapping="Wrap" Margin="0,8,0,0" />
+                                <TextBlock x:Name="RelationEvidenceText" TextWrapping="Wrap" Margin="0,6,0,0" FontFamily="Consolas" />
+                                <TextBlock x:Name="RelationReviewText" TextWrapping="Wrap" Margin="0,8,0,0" Foreground="#FF9A1C1C" />
+
+                                <TextBlock Text="Rationale (the shared core requires one to reject or to remove a link; a relink carries none)" Foreground="#FF6B7280" Margin="0,12,0,2" />
+                                <TextBox x:Name="RelationRationaleInput" AcceptsReturn="True" Height="48" TextWrapping="Wrap"
+                                         VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="RelationRationaleInput" />
+
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                    <Button x:Name="RelationConfirmButton" Content="Confirm link (owner)" Padding="14,7" Click="OnRelationConfirmClicked" />
+                                    <Button x:Name="RelationRejectButton" Content="Reject link" Padding="14,7" Margin="8,0,0,0" Click="OnRelationRejectClicked" />
+                                    <Button x:Name="RelationRemoveButton" Content="Remove link" Padding="14,7" Margin="8,0,0,0" Click="OnRelationRemoveClicked" />
+                                    <Button x:Name="RelationUndoButton" Content="Undo removal" Padding="14,7" Margin="8,0,0,0" Click="OnRelationUndoClicked" />
+                                </StackPanel>
+
+                                <TextBlock x:Name="RelationMessageText" TextWrapping="Wrap" Margin="0,12,0,0" FontWeight="SemiBold" />
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Text="Create a link between two endpoints you name" FontWeight="SemiBold" Margin="0,20,0,0" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
+                                   Text="Memory items come from the service's own library search (rebuild the library index first); a registered source is named directly by its ID and live registry revision. Nothing here decides the kind for you: related_to is an association, supports asserts that one endpoint is evidence for the other, and the service refuses a derivation cycle while allowing related_to to repeat." />
+
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBox x:Name="RelationCandidateQueryInput" Width="260" VerticalContentAlignment="Center"
+                                     AutomationProperties.AutomationId="RelationCandidateQueryInput" KeyDown="OnRelationCandidateQueryKeyDown" />
+                            <Button x:Name="RelationCandidateSearchButton" Content="Find endpoints in library" Padding="14,7" Margin="10,0,0,0" Click="OnRelationCandidateSearchClicked" />
+                        </StackPanel>
+                        <TextBlock x:Name="RelationCandidateMessageText" TextWrapping="Wrap" Margin="0,8,0,0" Foreground="#FF6B7280" />
+                        <ListBox x:Name="RelationCandidates" Height="110" Margin="0,8,0,0" Background="White" BorderBrush="#FFD5D8DC"
+                                 AutomationProperties.AutomationId="RelationCandidates"
+                                 SelectionChanged="OnRelationCandidateSelectionChanged" KeyDown="OnRelationCandidateKeyDown" />
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <Button x:Name="RelationSetSubjectButton" Content="Use selected as subject" Padding="14,7" Click="OnRelationSetSubjectClicked" />
+                            <Button x:Name="RelationSetObjectButton" Content="Use selected as object" Padding="14,7" Margin="8,0,0,0" Click="OnRelationSetObjectClicked" />
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBox x:Name="RelationSourceIdInput" Width="220" VerticalContentAlignment="Center"
+                                     AutomationProperties.AutomationId="RelationSourceIdInput" />
+                            <TextBlock Text="revision" Foreground="#FF6B7280" VerticalAlignment="Center" Margin="10,0,6,0" />
+                            <TextBox x:Name="RelationSourceRevisionInput" Width="60" VerticalContentAlignment="Center"
+                                     AutomationProperties.AutomationId="RelationSourceRevisionInput" />
+                            <Button x:Name="RelationUseSourceSubjectButton" Content="Use source as subject" Padding="14,7" Margin="10,0,0,0" Click="OnRelationUseSourceSubjectClicked" />
+                            <Button x:Name="RelationUseSourceObjectButton" Content="Use source as object" Padding="14,7" Margin="8,0,0,0" Click="OnRelationUseSourceObjectClicked" />
+                        </StackPanel>
+
+                        <TextBlock x:Name="RelationSubjectText" TextWrapping="Wrap" Margin="0,10,0,0" FontFamily="Consolas" />
+                        <TextBlock x:Name="RelationObjectText" TextWrapping="Wrap" Margin="0,4,0,0" FontFamily="Consolas" />
+
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Relation ID (you name it)" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="RelationIdInput" Margin="0,0,10,6"
+                                     AutomationProperties.AutomationId="RelationIdInput" />
+                            <TextBlock Grid.Row="0" Grid.Column="2" Text="Zone" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="0" Grid.Column="3" x:Name="RelationZoneInput" Margin="0,0,0,6"
+                                     AutomationProperties.AutomationId="RelationZoneInput" />
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Kind" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <ComboBox Grid.Row="1" Grid.Column="1" x:Name="RelationKindInput" Margin="0,0,10,6"
+                                      AutomationProperties.AutomationId="RelationKindInput" />
+                            <TextBlock Grid.Row="1" Grid.Column="2" Text="Record as" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <ComboBox Grid.Row="1" Grid.Column="3" x:Name="RelationStateInput" Margin="0,0,0,6"
+                                      AutomationProperties.AutomationId="RelationStateInput" />
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Reason" Foreground="#FF6B7280" />
+                            <TextBox Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="3" x:Name="RelationReasonInput"
+                                     AutomationProperties.AutomationId="RelationReasonInput" />
+                        </Grid>
+                        <TextBlock TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280"
+                                   Text="“accepted” records the link as your own conclusion, “proposed” leaves it for your later confirmation. The service stores the choice with its executor and time; a link an agent proposed can be confirmed here and keeps the agent's words as a claim." />
+
+                        <Button x:Name="RelationCreateButton" Content="Create link" Padding="14,7"
+                                Margin="0,10,0,0" HorizontalAlignment="Left" Click="OnRelationCreateClicked" />
+
+                        <TextBlock Text="Scope and limits of this view" FontWeight="SemiBold" Margin="0,20,0,6" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• The relation set shown here is your own vault seen as its owner: the service filters nothing from you. A link an agent wrote is the same canonical record, with its own executor, its reported words and its proposed state, and it is never presented as your confirmation." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• An endpoint the link pinned at a revision that has since changed, a missing endpoint, an unavailable cited source or a changed dependency appear as the service's own review state with the reasons it evaluated — this console never re-evaluates the link or repairs it silently." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Removing a link retracts it (with your rationale) instead of deleting it; undo returns it to proposed, never straight to accepted, because re-asserting an acceptance is your explicit act." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Nothing on this screen fetches a source, calls a provider, writes a vault file or stores a link of its own: every act is one request to the running service, and what an agent session can see is decided by that session's grant, not here." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Keyboard: Enter in the relation list inspects the selected link, Enter in the candidate list picks it as the subject, F5 in this view reads the relation set again, Ctrl+L locks the vault." />
                     </StackPanel>
                 </Grid>
             </ScrollViewer>

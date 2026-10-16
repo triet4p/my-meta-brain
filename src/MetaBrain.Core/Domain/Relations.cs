@@ -250,6 +250,31 @@ public static class RelationCodec
         return draft ?? new RelationTransitionDraft(null);
     }
 
+    /// <summary>
+    /// Encodes one client-supplied relation draft with exactly the schema
+    /// <see cref="DecodeDraft"/> reads, so a caller (owner console or CLI) never
+    /// hand-builds JSON that this codec would decode differently. Encoding is
+    /// not validation: the shared validator still runs on the server, which is
+    /// the only place a draft becomes a record.
+    /// </summary>
+    public static byte[] EncodeDraft(RelationDraft draft)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+        return JsonSerializer.SerializeToUtf8Bytes(draft, JsonOptions);
+    }
+
+    /// <summary>
+    /// Encodes one client-supplied lifecycle rationale with exactly the schema
+    /// <see cref="DecodeTransitionDraft"/> reads. A null rationale is an
+    /// explicit "no rationale"; the server still decides whether the target
+    /// state requires one.
+    /// </summary>
+    public static byte[] EncodeTransitionDraft(RelationTransitionDraft transition)
+    {
+        ArgumentNullException.ThrowIfNull(transition);
+        return JsonSerializer.SerializeToUtf8Bytes(transition, JsonOptions);
+    }
+
     public static byte[] EncodeStored(StoredRelation relation)
     {
         ArgumentNullException.ThrowIfNull(relation);
@@ -591,6 +616,32 @@ public static class RelationValidator
 
             previousRecordedAtUtc = entry.RecordedAtUtc;
         }
+    }
+}
+
+/// <summary>
+/// The derivation graph refuses a link (or a lifecycle transition that would
+/// reactivate one) because adding it would make an item derive from, or
+/// replace, something that already depends on it. It is a distinct refusal so
+/// an owner-facing caller can say which rule rejected the act instead of
+/// reporting an undifferentiated invalid request; the derivation graph itself
+/// is still decided only here, never by a caller.
+/// </summary>
+public sealed class RelationCycleException : ArgumentException
+{
+    public RelationCycleException()
+        : base("A derivation relation would create a cycle.")
+    {
+    }
+
+    public RelationCycleException(string message)
+        : base(message)
+    {
+    }
+
+    public RelationCycleException(string message, Exception innerException)
+        : base(message, innerException)
+    {
     }
 }
 

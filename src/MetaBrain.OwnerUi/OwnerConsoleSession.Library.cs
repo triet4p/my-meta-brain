@@ -348,6 +348,7 @@ internal sealed partial class OwnerConsoleSession
         ClearSensitiveState();
         ClearPrivateLibraryState();
         ClearPrivateInboxState();
+        ClearPrivateRelationsState();
         // The service dropped the index generation with the lock, so the console
         // stops reporting one.
         LibraryIndex = null;

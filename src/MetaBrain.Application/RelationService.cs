@@ -692,7 +692,7 @@ public sealed class RelationService
 
             if (string.Equals(node, fromResourceId, StringComparison.Ordinal))
             {
-                throw new ArgumentException("A derivation relation would create a cycle.");
+                throw new RelationCycleException();
             }
 
             if (edges.TryGetValue(node, out var targets))

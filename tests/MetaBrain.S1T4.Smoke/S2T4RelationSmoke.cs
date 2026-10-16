@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -119,20 +119,22 @@ internal static partial class OwnerServiceSmoke
             Console.WriteLine("PASS owner creates a multi-source relation chain keeping pinned revisions, spans and current review state");
 
             // Cycle constraints: derived_from and supersedes are one derivation
-            // DAG; pure and mixed cycles are refused, related_to may cycle.
+            // DAG; pure and mixed cycles are refused with the relation's own
+            // cycle code (refined from the generic invalid_request so an owner
+            // caller can say which rule refused the link), related_to may cycle.
             var derivedCycle = await CreateS2T4RelationResultAsync(connectionsExecutable, fixture, "rel-s2t4-cycle-derived", zoneAlpha,
                 S2T4RelationDraft("derivedFrom", "accepted", lesson, "memoryItem", 1L, null, synth, "memoryItem", 1L, null, reasonOne, now)).ConfigureAwait(false);
-            Require(derivedCycle.ExitCode == 4 && derivedCycle.StandardError.Contains("invalid_request", StringComparison.Ordinal),
+            Require(derivedCycle.ExitCode == 4 && derivedCycle.StandardError.Contains("relation_cycle", StringComparison.Ordinal),
                 "A derived_from cycle was accepted.");
             await CreateS2T4RelationAsync(connectionsExecutable, fixture, relSupersedeOld, zoneAlpha,
                 S2T4RelationDraft("supersedes", "accepted", oldItem, "memoryItem", 1L, null, newItem, "memoryItem", 1L, null, "Synthetic S2-T4 supersession reason; never a real owner secret.", now)).ConfigureAwait(false);
             var supersedeCycle = await CreateS2T4RelationResultAsync(connectionsExecutable, fixture, "rel-s2t4-cycle-supersede", zoneAlpha,
                 S2T4RelationDraft("supersedes", "accepted", newItem, "memoryItem", 1L, null, oldItem, "memoryItem", 1L, null, reasonTwo, now)).ConfigureAwait(false);
-            Require(supersedeCycle.ExitCode == 4 && supersedeCycle.StandardError.Contains("invalid_request", StringComparison.Ordinal),
+            Require(supersedeCycle.ExitCode == 4 && supersedeCycle.StandardError.Contains("relation_cycle", StringComparison.Ordinal),
                 "A supersedes cycle was accepted.");
             var mixedCycle = await CreateS2T4RelationResultAsync(connectionsExecutable, fixture, "rel-s2t4-cycle-mixed", zoneAlpha,
                 S2T4RelationDraft("derivedFrom", "accepted", newItem, "memoryItem", 1L, null, oldItem, "memoryItem", 1L, null, reasonOne, now)).ConfigureAwait(false);
-            Require(mixedCycle.ExitCode == 4 && mixedCycle.StandardError.Contains("invalid_request", StringComparison.Ordinal),
+            Require(mixedCycle.ExitCode == 4 && mixedCycle.StandardError.Contains("relation_cycle", StringComparison.Ordinal),
                 "A mixed derived_from/supersedes cycle was accepted.");
             var selfEndpoint = await CreateS2T4RelationResultAsync(connectionsExecutable, fixture, "rel-s2t4-self", zoneAlpha,
                 S2T4RelationDraft("relatedTo", "accepted", lesson, "memoryItem", 1L, null, lesson, "memoryItem", 1L, null, reasonOne, now)).ConfigureAwait(false);

@@ -182,3 +182,24 @@
 **Fix / workaround:** Resolve the review item as the item the decision is recorded on (derived from the proposal), read its record for the decision, and read the pinned item's record separately as context for what the publish would change.
 **Watch out for:** A derived identity that depends on the *act* rather than on the subject: when one entity is "the target of this decision" for a different act than for another, keep the resolution rule next to the act and never assume a single heuristic covers both.
 
+## [2026-10-16] A write path that reuses the shared draft schema still has to fill the fields only the other path's server code stamps
+
+**Symptom:** The first S5-T5 scenario run failed at the owner's first link: the service refused the create as `invalid_request` although the console had two live-revision endpoints, a kind, a state and a reason.
+**Root cause:** The owner-plane client built the draft from the shared `RelationCodec` schema and left `recordedAtUtc` null. The shared validator requires a UTC recorded instant, and only the agent path stamps one server-side (it assigns the time before validating, precisely because the agent body may not carry it). The owner path had no equivalent stamp, so the request was valid-looking but incomplete.
+**Fix / workaround:** The owner client records the instant of the act in the draft it encodes, and the comment next to the field states that only the agent path stamps one on the server.
+**Watch out for:** Any client that reuses a server's shared draft schema: the two paths may be validated by the same rule while only one of them is filled in by the server. Read the validator for the fields it requires *and* check which caller is supposed to supply each one before assuming a second writer is complete.
+
+## [2026-10-16] A whole-window automation snapshot made a detail assertion read another record's row
+
+**Symptom:** An S5-T5 proof assertion "the opened association carries no review flag of its own" failed although the opened link was current, because the token `endpointRevisionChanged` was still present in the window.
+**Root cause:** The text snapshot the harness uses collects every text element of the window, so a relation list row that carries the service's review reason ("[NEEDS REVIEW:endpointRevisionChanged]") was indistinguishable from the detail panel the assertion meant to read.
+**Fix / workaround:** Assert on phrasing only the detail panel produces (`NEEDS REVIEW: the service flagged`, `Review state: current` plus the opened relation's own `id=<id>  revision=<n>` line) instead of on the reason token, and wait on the panel-specific sentence rather than on a phrase a list row can already satisfy.
+**Watch out for:** Window-wide automation text in any proof that also renders a list: rows, static guidance and panel answers share one snapshot. Pick needles that are structurally unique to the surface being asserted, and re-read the panel after the act instead of trusting a snapshot taken before it.
+
+## [2026-10-16] The proof harness's own scaffolding tripped the plaintext leak check it runs
+
+**Symptom:** The S5-T5 proof passed every relation assertion and then failed on its final hygiene check: a synthetic private body marker was found in plaintext under the fixture root.
+**Root cause:** The harness itself wrote a memory-item revise draft (containing the synthetic body marker) for the CLI act and never deleted it; the check scans the whole fixture root, which includes the harness's own files.
+**Fix / workaround:** Delete every draft immediately after the act that consumes it (the harness now removes its revise draft, and the fixture scenario deletes the source and relation drafts it writes), and treat the marker check as covering the harness scaffolding as well as the product.
+**Watch out for:** A leak check whose own inputs are plaintext by construction: harness drafts, prompts and scratch files live in the same tree the product is asked not to leak into.
+

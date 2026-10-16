@@ -447,6 +447,7 @@ internal static partial class OwnerServiceSmoke
             foreach (var ownerOperation in new[]
                      {
                          ServiceRequestHandler.OwnerLibrarySearchOperation,
+                         ServiceRequestHandler.OwnerRelationListOperation,
                          ServiceRequestHandler.MemoryReadOperation,
                          ServiceRequestHandler.SourceReadOperation,
                          ServiceRequestHandler.OwnerIndexRebuildOperation

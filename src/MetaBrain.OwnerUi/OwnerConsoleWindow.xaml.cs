@@ -53,6 +53,12 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     private bool _syncingInboxEditors;
     private OwnerProposalIdentity[]? _renderedProposals;
     private OwnerSourceDetail? _renderedCaptureSource;
+    private long _relationFormVersion;
+    private OwnerRelation[]? _renderedRelations;
+    private string? _renderedRelationFilter;
+    private OwnerConsoleSession.RelationEndpointPick[]? _renderedRelationCandidates;
+    private OwnerConsoleSession.RelationEndpointPick? _relationSubject;
+    private OwnerConsoleSession.RelationEndpointPick? _relationObject;
 
     internal OwnerConsoleWindow(OwnerConsoleSession session)
     {
@@ -62,8 +68,10 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         ActivityList.ItemsSource = _session.Activity;
         InitializeLibraryControls();
         InitializeInboxControls();
+        InitializeRelationControls();
         LibraryTitleInput.TextChanged += (_, _) => Render();
         LibraryResults.MouseDoubleClick += async (_, _) => await OpenSelectedLibraryResultAsync();
+        RelationsList.MouseDoubleClick += async (_, _) => await InspectSelectedRelationAsync();
         _session.Changed += OnSessionChanged;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
         _timer.Tick += OnTimerTick;
@@ -142,6 +150,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         VaultKeyPanel.Visibility = Navigation.SelectedIndex == 2 ? Visibility.Visible : Visibility.Collapsed;
         LibraryPanel.Visibility = Navigation.SelectedIndex == 3 ? Visibility.Visible : Visibility.Collapsed;
         InboxPanel.Visibility = Navigation.SelectedIndex == 4 ? Visibility.Visible : Visibility.Collapsed;
+        RelationsPanel.Visibility = Navigation.SelectedIndex == 5 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void Render()
@@ -197,10 +206,21 @@ public partial class OwnerConsoleWindow : System.Windows.Window
             SyncInboxEditors();
         }
 
+        if (_relationFormVersion != _session.RelationFormVersion)
+        {
+            // The session dropped the relation draft of the epoch that ended
+            // (lock, lost service, end of session): the relation controls of
+            // this window go with it, so no draft of a finished epoch stays on
+            // screen and none of it can be sent later as if it were current.
+            _relationFormVersion = _session.RelationFormVersion;
+            SyncRelationForm();
+        }
+
         RenderVaultStatus(attached, status);
         RenderVaultKey(attached);
         RenderLibrary(attached);
         RenderInbox(attached);
+        RenderRelations(attached);
     }
 
     private string LastCheckText_Value() => _session.LastCheckLocal is { } last
@@ -454,6 +474,12 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         {
             e.Handled = true;
             _ = SearchLibraryFromInputsAsync(0);
+        }
+
+        if (e.Key == System.Windows.Input.Key.F5 && Navigation.SelectedIndex == 5)
+        {
+            e.Handled = true;
+            _ = _session.RefreshRelationsAsync();
         }
     }
 
@@ -1123,6 +1149,437 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         ReviewPublishButton.IsEnabled = unlocked && !inFlight && proposal is not null;
         ReviewRejectButton.IsEnabled = unlocked && !inFlight && proposal is not null;
         ReviewUndoButton.IsEnabled = unlocked && !inFlight && _session.ReviewDecisionIsUndoable;
+    }
+
+    // ---- S5-T5 explicit relations workbench ----
+
+    private const string RelationFilterAll = "all";
+    private const string RelationFilterProposed = "proposed";
+    private const string RelationFilterAccepted = "accepted";
+    private const string RelationFilterRetracted = "retracted";
+    private const string RelationFilterNeedsReview = "needs review";
+
+    /// <summary>
+    /// The kinds, recorded states and display filters this view offers are the
+    /// shared domain spellings: the owner picks the kind explicitly, and the
+    /// service still validates whatever is sent and computes the review state.
+    /// </summary>
+    private void InitializeRelationControls()
+    {
+        foreach (var kind in new[]
+                 {
+                     "relatedTo", "supports", "derivedFrom", "contradicts", "supersedes", "appliesTo", "addresses"
+                 })
+        {
+            RelationKindInput.Items.Add(kind);
+        }
+
+        foreach (var state in new[] { "accepted", "proposed" })
+        {
+            RelationStateInput.Items.Add(state);
+        }
+
+        foreach (var filter in new[]
+                 {
+                     RelationFilterAll, RelationFilterProposed, RelationFilterAccepted,
+                     RelationFilterRetracted, RelationFilterNeedsReview
+                 })
+        {
+            RelationsFilterInput.Items.Add(filter);
+        }
+
+        RelationKindInput.SelectedItem = "relatedTo";
+        RelationStateInput.SelectedItem = "accepted";
+        RelationsFilterInput.SelectedItem = RelationFilterAll;
+    }
+
+    /// <summary>
+    /// Empties the relation form: the link draft, the picked endpoints, the
+    /// typed source anchor and the candidate query. Always the whole draft, so
+    /// no part of a finished epoch can be sent as if it belonged to this one.
+    /// </summary>
+    private void SyncRelationForm()
+    {
+        _relationSubject = null;
+        _relationObject = null;
+        RelationIdInput.Text = string.Empty;
+        RelationZoneInput.Text = string.Empty;
+        RelationReasonInput.Text = string.Empty;
+        RelationRationaleInput.Text = string.Empty;
+        RelationSourceIdInput.Text = string.Empty;
+        RelationSourceRevisionInput.Text = string.Empty;
+        RelationCandidateQueryInput.Text = string.Empty;
+        RelationKindInput.SelectedItem = "relatedTo";
+        RelationStateInput.SelectedItem = "accepted";
+    }
+
+    private async void OnRelationsRefreshClicked(object sender, RoutedEventArgs e) =>
+        await _session.RefreshRelationsAsync();
+
+    private async void OnRelationsInspectClicked(object sender, RoutedEventArgs e) =>
+        await InspectSelectedRelationAsync();
+
+    private void OnRelationsFilterChanged(object sender, SelectionChangedEventArgs e) => Render();
+
+    private void OnRelationsSelectionChanged(object sender, SelectionChangedEventArgs e) => Render();
+
+    private async void OnRelationsListKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Enter)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        await InspectSelectedRelationAsync();
+    }
+
+    private async Task InspectSelectedRelationAsync()
+    {
+        if (RelationsList.SelectedItem is RelationRow row)
+        {
+            await _session.OpenRelationAsync(row.Relation);
+        }
+    }
+
+    private async void OnRelationConfirmClicked(object sender, RoutedEventArgs e) =>
+        await _session.AcceptRelationAsync();
+
+    private async void OnRelationRejectClicked(object sender, RoutedEventArgs e) =>
+        await _session.RejectRelationAsync(RelationRationaleInput.Text);
+
+    private async void OnRelationRemoveClicked(object sender, RoutedEventArgs e) =>
+        await _session.UnlinkRelationAsync(RelationRationaleInput.Text);
+
+    private async void OnRelationUndoClicked(object sender, RoutedEventArgs e) =>
+        await _session.RelinkRelationAsync();
+
+    private async void OnRelationCandidateSearchClicked(object sender, RoutedEventArgs e) =>
+        await _session.SearchRelationCandidatesAsync(RelationCandidateQueryInput.Text);
+
+    private async void OnRelationCandidateQueryKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Enter)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        await _session.SearchRelationCandidatesAsync(RelationCandidateQueryInput.Text);
+    }
+
+    private void OnRelationCandidateSelectionChanged(object sender, SelectionChangedEventArgs e) => Render();
+
+    private void OnRelationCandidateKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Enter)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        SetEndpointFromCandidate(asSubject: true);
+    }
+
+    private void OnRelationSetSubjectClicked(object sender, RoutedEventArgs e) => SetEndpointFromCandidate(asSubject: true);
+
+    private void OnRelationSetObjectClicked(object sender, RoutedEventArgs e) => SetEndpointFromCandidate(asSubject: false);
+
+    private void OnRelationUseSourceSubjectClicked(object sender, RoutedEventArgs e) => SetEndpointFromTypedSource(asSubject: true);
+
+    private void OnRelationUseSourceObjectClicked(object sender, RoutedEventArgs e) => SetEndpointFromTypedSource(asSubject: false);
+
+    /// <summary>
+    /// Pins one candidate the service's library search ranked. The candidate
+    /// already carries the live revision and the zone the service reported, so
+    /// the link's zone box is prefilled from it (and stays editable: the
+    /// service validates the request, this console only proposes it).
+    /// </summary>
+    private void SetEndpointFromCandidate(bool asSubject)
+    {
+        if (RelationCandidates.SelectedItem is not OwnerConsoleSession.RelationEndpointPick pick)
+        {
+            return;
+        }
+
+        if (asSubject)
+        {
+            _relationSubject = pick;
+            if (string.IsNullOrWhiteSpace(RelationZoneInput.Text))
+            {
+                RelationZoneInput.Text = pick.ZoneId;
+            }
+        }
+        else
+        {
+            _relationObject = pick;
+        }
+
+        Render();
+    }
+
+    /// <summary>
+    /// Pins a registered source the owner named by ID and live registry
+    /// revision. The console does not look the source up itself: the service
+    /// verifies that the registry holds it at exactly that revision when the
+    /// link is written, and refuses the link otherwise.
+    /// </summary>
+    private void SetEndpointFromTypedSource(bool asSubject)
+    {
+        var sourceId = RelationSourceIdInput.Text.Trim();
+        var revisionText = RelationSourceRevisionInput.Text.Trim();
+        if (sourceId.Length == 0 ||
+            !long.TryParse(revisionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var revision) ||
+            revision < 1)
+        {
+            _session.ReportRelationFormProblem(
+                "This console did not pin the registered source: name its ID and its live registry revision (a positive number). Nothing was written.");
+            return;
+        }
+
+        var pick = new OwnerConsoleSession.RelationEndpointPick(
+            sourceId,
+            "registeredSource",
+            revision,
+            string.Empty,
+            "source " + sourceId + "@" + revision.ToString(CultureInfo.InvariantCulture) + "  endpointKind=registeredSource");
+        if (asSubject)
+        {
+            _relationSubject = pick;
+        }
+        else
+        {
+            _relationObject = pick;
+        }
+
+        Render();
+    }
+
+    private async void OnRelationCreateClicked(object sender, RoutedEventArgs e)
+    {
+        if (_relationSubject is not { } subject || _relationObject is not { } target)
+        {
+            _session.ReportRelationFormProblem(
+                "This console did not send the link: pick the subject endpoint and the object endpoint first. Nothing was written.");
+            return;
+        }
+
+        var relationId = RelationIdInput.Text.Trim();
+        var zoneId = RelationZoneInput.Text.Trim();
+        var reason = RelationReasonInput.Text.Trim();
+        if (relationId.Length == 0 || zoneId.Length == 0 || reason.Length == 0)
+        {
+            _session.ReportRelationFormProblem(
+                "This console did not send the link: it needs the relation ID you name, the zone the link belongs to and the reason the shared validator requires. Nothing was written and your draft is unchanged.");
+            return;
+        }
+
+        await _session.CreateRelationAsync(
+            relationId,
+            zoneId,
+            RelationKindInput.SelectedItem as string ?? string.Empty,
+            RelationStateInput.SelectedItem as string ?? string.Empty,
+            subject,
+            target,
+            reason);
+    }
+
+    /// <summary>
+    /// Renders the relation workbench from the service's answers only: the
+    /// relation set, the opened link with its provenance and review state, and
+    /// the endpoints the owner picked. When the vault is not unlocked no
+    /// relation content is shown at all.
+    /// </summary>
+    private void RenderRelations(bool attached)
+    {
+        var state = _session.ReportedVaultState;
+        var inFlight = _session.RelationsActInFlight;
+        var unlocked = state == OwnerVaultState.Unlocked;
+
+        RelationsStateText.Text = state switch
+        {
+            OwnerVaultState.Unlocked =>
+                "Vault: unlocked — the service serves this vault's relation set. Each link pins the revisions it was made against, so a changed endpoint is reported instead of hidden.",
+            OwnerVaultState.Locked =>
+                "Vault: locked — no relation is available or shown. Unlock in Vault & key to read the relation set.",
+            OwnerVaultState.Locking =>
+                "Vault: locking — the service is draining private work; the relation view of this screen is cleared.",
+            OwnerVaultState.Uninitialized =>
+                "Vault: not provisioned — there is no vault and therefore no link.",
+            _ => attached
+                ? "Vault: unknown — no usable owner-channel answer, so no relation view is shown."
+                : "Vault: not reported — this console holds no owner session."
+        };
+
+        var filter = RelationsFilterInput.SelectedItem as string ?? RelationFilterAll;
+        if (!ReferenceEquals(_renderedRelations, _session.Relations) ||
+            !string.Equals(_renderedRelationFilter, filter, StringComparison.Ordinal))
+        {
+            _renderedRelations = _session.Relations;
+            _renderedRelationFilter = filter;
+            var previousId = (RelationsList.SelectedItem as RelationRow)?.Relation.Id;
+            var rows = _session.Relations
+                .Where(relation => MatchesRelationFilter(relation, filter))
+                .Select(relation => new RelationRow(relation))
+                .ToArray();
+            RelationsList.ItemsSource = rows;
+            RelationsList.SelectedItem = previousId is null
+                ? null
+                : rows.FirstOrDefault(row => string.Equals(row.Relation.Id, previousId, StringComparison.Ordinal));
+        }
+
+        RelationsMessageText.Text = _session.RelationsMessage ?? (unlocked
+            ? "No relation set has been read in this session. Read it to see every link, including the proposals agents left for your review."
+            : "No private relation act is offered while the service does not report the vault unlocked.");
+
+        var open = _session.OpenRelation;
+        RelationProvenanceText.Text = open is null
+            ? "No relation is open. Read the relation set, choose a row and inspect it."
+            : "id=" + open.Id + "  revision=" + open.Revision.ToString(CultureInfo.InvariantCulture) +
+                "  zone=" + open.ZoneId + "  kind=" + open.Kind + "  state=" + open.State +
+                "  executor=" + open.Executor + "  creation=" + open.CreationMethod +
+                "  recorded=" + Stamp(open.RecordedAtUtc) + "  occurred=" + Stamp(open.OccurredAtUtc) +
+                "  stateExecutor=" + open.StateExecutor + "  stateRecorded=" + Stamp(open.StateRecordedAtUtc) +
+                "\nreason: " + open.Reason +
+                (open.StateReason is null ? string.Empty : "\nstate reason: " + open.StateReason);
+        RelationEndpointsText.Text = open is null
+            ? string.Empty
+            : "subject: " + DescribeRelationEndpoint(open.From) + "\nobject:  " + DescribeRelationEndpoint(open.To);
+        RelationConfirmationText.Text = open is null ? string.Empty : DescribeRelationConfirmation(open);
+        RelationEvidenceText.Text = open is null ? string.Empty : DescribeRelationEvidence(open);
+        RelationReviewText.Text = open is null ? string.Empty : DescribeRelationReview(open);
+        RelationMessageText.Text = _session.RelationMessage ?? (unlocked
+            ? "No relation act has been sent in this session. Confirming records your own conclusion; removing and rejecting record your rationale."
+            : "No private relation act is offered while the service does not report the vault unlocked.");
+
+        if (!ReferenceEquals(_renderedRelationCandidates, _session.RelationCandidates))
+        {
+            _renderedRelationCandidates = _session.RelationCandidates;
+            RelationCandidates.ItemsSource = _session.RelationCandidates;
+        }
+
+        RelationCandidateMessageText.Text = _session.RelationCandidateMessage ?? (unlocked
+            ? "No endpoint search has been sent in this session. The service's library index answers the search, and a registered source is named by ID and revision."
+            : "No private endpoint search is offered while the service does not report the vault unlocked.");
+
+        var selectedRelation = RelationsList.SelectedItem as RelationRow;
+        var candidateSelected = RelationCandidates.SelectedItem is OwnerConsoleSession.RelationEndpointPick;
+
+        RelationsRefreshButton.IsEnabled = unlocked && !inFlight;
+        RelationsInspectButton.IsEnabled = unlocked && !inFlight && selectedRelation is not null;
+        RelationsList.IsEnabled = unlocked && !inFlight;
+        RelationsFilterInput.IsEnabled = !inFlight;
+        RelationConfirmButton.IsEnabled = unlocked && !inFlight && open is { State: "proposed" };
+        RelationRejectButton.IsEnabled = unlocked && !inFlight && open is { State: "proposed" or "accepted" };
+        RelationRemoveButton.IsEnabled = unlocked && !inFlight && open is { State: "proposed" or "accepted" };
+        RelationUndoButton.IsEnabled = unlocked && !inFlight && open is { State: "retracted" };
+        RelationRationaleInput.IsEnabled = unlocked && !inFlight && open is { State: "proposed" or "accepted" };
+        RelationCandidateSearchButton.IsEnabled = unlocked && !inFlight;
+        RelationCandidateQueryInput.IsEnabled = unlocked && !inFlight;
+        RelationCandidates.IsEnabled = unlocked && !inFlight;
+        RelationSetSubjectButton.IsEnabled = unlocked && !inFlight && candidateSelected;
+        RelationSetObjectButton.IsEnabled = unlocked && !inFlight && candidateSelected;
+        RelationSourceIdInput.IsEnabled = unlocked && !inFlight;
+        RelationSourceRevisionInput.IsEnabled = unlocked && !inFlight;
+        RelationUseSourceSubjectButton.IsEnabled = unlocked && !inFlight;
+        RelationUseSourceObjectButton.IsEnabled = unlocked && !inFlight;
+        RelationIdInput.IsEnabled = unlocked && !inFlight;
+        RelationZoneInput.IsEnabled = unlocked && !inFlight;
+        RelationKindInput.IsEnabled = unlocked && !inFlight;
+        RelationStateInput.IsEnabled = unlocked && !inFlight;
+        RelationReasonInput.IsEnabled = unlocked && !inFlight;
+        RelationCreateButton.IsEnabled = unlocked && !inFlight;
+
+        RelationSubjectText.Text = "subject: " + (_relationSubject is { } subject ? subject.Label : "(none picked yet)");
+        RelationObjectText.Text = "object:  " + (_relationObject is { } target ? target.Label : "(none picked yet)");
+    }
+
+    private static bool MatchesRelationFilter(OwnerRelation relation, string filter) => filter switch
+    {
+        RelationFilterProposed => string.Equals(relation.State, "proposed", StringComparison.Ordinal),
+        RelationFilterAccepted => string.Equals(relation.State, "accepted", StringComparison.Ordinal),
+        RelationFilterRetracted => string.Equals(relation.State, "retracted", StringComparison.Ordinal),
+        RelationFilterNeedsReview => string.Equals(relation.Review.State, "needsReview", StringComparison.Ordinal),
+        _ => true
+    };
+
+    private static string DescribeRelationEndpoint(OwnerRelationEndpoint endpoint)
+    {
+        var span = endpoint.SpanStart is { } start && endpoint.SpanEnd is { } end
+            ? "  span=" + start.ToString(CultureInfo.InvariantCulture) + "-" + end.ToString(CultureInfo.InvariantCulture)
+            : "  span=none";
+        return endpoint.ResourceId + "@" + endpoint.Revision.ToString(CultureInfo.InvariantCulture) +
+            "  endpointKind=" + endpoint.EndpointKind + span;
+    }
+
+    /// <summary>
+    /// Who recorded the link, who last changed its state and what that means.
+    /// An agent's proposed link is never rendered as the owner's confirmation.
+    /// </summary>
+    private static string DescribeRelationConfirmation(OwnerRelation relation)
+    {
+        var byAgent = string.Equals(relation.Executor, "agent", StringComparison.Ordinal);
+        var stateExecutor = relation.StateExecutor;
+        return relation.State switch
+        {
+            "proposed" when byAgent =>
+                "NOT CONFIRMED BY YOU: this link was recorded by an agent session (executor=agent), so the reported words below are that caller's claim, never your confirmation. Confirm link records your own conclusion; Reject link records your decision instead.",
+            "proposed" =>
+                "PROPOSED: the link is stored as a proposal (executor=" + relation.Executor + "). Confirming it records your own conclusion.",
+            "accepted" when byAgent && string.Equals(stateExecutor, "owner", StringComparison.Ordinal) =>
+                "CONFIRMED BY YOU (owner): the link was proposed by an agent session and you accepted it. The acceptance is recorded as your act and the agent's claim below stays unchanged.",
+            "accepted" =>
+                "ACCEPTED by " + stateExecutor + " (recorded by executor=" + relation.Executor + "). Acceptance records the link as a conclusion of " + stateExecutor + "; it never asserts that the linked statement is true.",
+            "rejected" =>
+                "REJECTED by " + stateExecutor + ": your review decision is recorded and the link is not asserted.",
+            "retracted" =>
+                "RETRACTED by " + stateExecutor + ": the link is removed, not deleted. Undo removal returns it to proposed so you confirm it explicitly again.",
+            _ => "state=" + relation.State + " (state executor=" + stateExecutor + ")"
+        };
+    }
+
+    private static string DescribeRelationEvidence(OwnerRelation relation) =>
+        relation.RequestEvidence.Length == 0
+            ? "caller-reported words: none on this link"
+            : "caller-reported words (a claim of the caller, never your confirmation):\n" +
+                string.Join("\n", relation.RequestEvidence.Select(entry =>
+                    "  " + entry.Action + " by executor=" + entry.Executor + " at " +
+                    entry.RecordedAtUtc.ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture) +
+                    ": \"" + entry.Text + "\""));
+
+    /// <summary>
+    /// The service's computed review state in the owner's words: a current link
+    /// and a link that needs review are different answers, and the reasons come
+    /// from the service, never from this console's reading of the revisions.
+    /// </summary>
+    private static string DescribeRelationReview(OwnerRelation relation)
+    {
+        var review = relation.Review;
+        if (string.Equals(review.State, "current", StringComparison.Ordinal))
+        {
+            return "Review state: current — the service found no missing endpoint, no changed pinned revision and no unavailable cited source for this link.";
+        }
+
+        var reasons = review.Reasons.Length == 0 ? "(reason not named)" : string.Join(", ", review.Reasons);
+        var stale = review.StaleResourceIds.Length == 0 ? "(none named to you)" : string.Join(", ", review.StaleResourceIds);
+        return "NEEDS REVIEW: the service flagged this link (" + reasons + "). Endpoint(s) it names to you: " + stale +
+            ". A changed revision means the link pinned evidence that has since moved; the stored link is not rewritten, so the record stays the truthful history — read the named endpoint and remove or re-link it if it no longer holds.";
+    }
+
+    /// <summary>One relation exactly as the service listed it, rendered as one line.</summary>
+    private sealed record RelationRow(OwnerRelation Relation)
+    {
+        public override string ToString()
+        {
+            var review = string.Equals(Relation.Review.State, "needsReview", StringComparison.Ordinal)
+                ? "  [NEEDS REVIEW:" + string.Join("/", Relation.Review.Reasons) + "]"
+                : string.Empty;
+            return Relation.Kind + "  " + Relation.From.ResourceId + "@" + Relation.From.Revision.ToString(CultureInfo.InvariantCulture) +
+                " -> " + Relation.To.ResourceId + "@" + Relation.To.Revision.ToString(CultureInfo.InvariantCulture) +
+                "  state=" + Relation.State + "  executor=" + Relation.Executor +
+                "  id=" + Relation.Id + "  rev=" + Relation.Revision.ToString(CultureInfo.InvariantCulture) +
+                "  review=" + Relation.Review.State + review;
+        }
     }
 
     private static string Stamp(DateTimeOffset? value) =>
