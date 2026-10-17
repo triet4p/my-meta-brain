@@ -203,3 +203,10 @@
 **Fix / workaround:** Delete every draft immediately after the act that consumes it (the harness now removes its revise draft, and the fixture scenario deletes the source and relation drafts it writes), and treat the marker check as covering the harness scaffolding as well as the product.
 **Watch out for:** A leak check whose own inputs are plaintext by construction: harness drafts, prompts and scratch files live in the same tree the product is asked not to leak into.
 
+
+## [2026-10-18] Stopping a fixture service for the build can strand its encrypted outputs
+
+**Symptom:** A build targeting the shared output directory failed with `MSB3027` while the fixture service held a copied application assembly. Stopping the task-owned WPF/service process released the DLL and the build passed, but the encrypted fixture could no longer be unlocked because its generated passphrase and one-time recovery key had existed only in the setup PowerShell process.
+**Root cause:** The build overwrote an assembly loaded by the live service, while the owner-vault contract deliberately returns recovery material once and persists it nowhere; terminating the process that held the fixture credential removed the only available recovery path.
+**Fix / workaround:** The observed build-lock workaround was to stop only the task-owned UI/service and rebuild, but that did not restore fixture access. For future fixture work, complete builds before launching the runtime or direct builds to an isolated output directory; keep authorized recovery material available in a protected, non-logging owner session before any required restart. Never replace the fixture with a blank ledger to recover test progress.
+**Watch out for:** A runtime fixture whose encrypted output or spend ledger must be reviewed after a build/restart. Independent fixtures have independent encrypted ledgers, so a new fixture cannot stand in for the locked one or carry forward its budget by default.

@@ -1,8 +1,8 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-
 namespace MetaBrain.Core.Domain;
 
 public enum JobState
@@ -24,9 +24,10 @@ public static class StructuringProfiles
 {
     public const string CodingSession = "coding-session";
     public const string ResearchNote = "research-note";
+    public const string Trend = "trend";
 
     public static bool IsSupported(string? profile) =>
-        profile is null or "" or CodingSession or ResearchNote;
+        profile is null or "" or CodingSession or ResearchNote or Trend;
 }
 
 /// <summary>
@@ -95,7 +96,8 @@ public sealed record ModelJobStructuredItem(
     string Title,
     string Body,
     string Excerpt,
-    MemoryApplicability? Applicability = null);
+    MemoryApplicability? Applicability = null,
+    string? OccurredAtSourceText = null);
 public sealed record ModelJobOutput(
     string Summary,
     ModelJobStructuredItem[] Items);
@@ -164,7 +166,7 @@ public static class JobOutputValidator
     private static readonly HashSet<string> AllowedKinds = new(StringComparer.OrdinalIgnoreCase)
     {
         "claim", "observation", "question", "hypothesis", "decision", "lesson",
-        "problem", "attempt", "result"
+        "problem", "attempt", "result", "intention"
     };
 
     public static bool TryValidate(
@@ -248,6 +250,21 @@ public static class JobOutputValidator
                 errorMessage = "Item excerpt is not grounded in verbatim source text.";
                 return false;
             }
+
+            if (item.OccurredAtSourceText is { } occurredAtSourceText &&
+                (!item.Excerpt.Contains(occurredAtSourceText, StringComparison.Ordinal) ||
+                 !HasExplicitTimestampOffset(occurredAtSourceText) ||
+                 !DateTimeOffset.TryParse(
+                     occurredAtSourceText,
+                     CultureInfo.InvariantCulture,
+                     DateTimeStyles.None,
+                     out _)))
+            {
+                errorCode = "timestamp_ungrounded";
+                errorMessage = "Item occurrence time must be an exact, offset-qualified timestamp in its verbatim excerpt.";
+                return false;
+            }
+
             if (item.Applicability is not null)
             {
                 if (!string.IsNullOrWhiteSpace(item.Applicability.Version) &&
@@ -303,5 +320,33 @@ public static class JobOutputValidator
 
         validatedOutput = parsed;
         return true;
+    }
+
+    private static bool HasExplicitTimestampOffset(string value)
+    {
+        var timeStart = value.IndexOf('T');
+        if (timeStart < 0)
+        {
+            timeStart = value.IndexOf(' ');
+        }
+
+        if (timeStart < 0 || value.IndexOf(':', timeStart + 1) < 0)
+        {
+            return false;
+        }
+
+        if (value.EndsWith('Z') || value.EndsWith('z'))
+        {
+            return true;
+        }
+
+        var offsetStart = value.Length - 6;
+        return offsetStart > timeStart &&
+            (value[offsetStart] is '+' or '-') &&
+            char.IsAsciiDigit(value[offsetStart + 1]) &&
+            char.IsAsciiDigit(value[offsetStart + 2]) &&
+            value[offsetStart + 3] == ':' &&
+            char.IsAsciiDigit(value[offsetStart + 4]) &&
+            char.IsAsciiDigit(value[offsetStart + 5]);
     }
 }

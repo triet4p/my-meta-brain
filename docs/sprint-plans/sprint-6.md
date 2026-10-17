@@ -6,7 +6,7 @@ Cấu trúc hóa code/research/trend theo yêu cầu, tổng hợp phân tầng 
 
 ## Status and Dependencies
 
-- Status: In progress — S6-T1 complete with accepted evidence review and exact-snapshot checkpoint `74e2b1f0`; S6-T2 in progress; S6-T3–T7 not started. Owner authorizes necessary provider calls for assigned work without repeated per-call confirmation, using the existing provider/model and synthetic or explicitly approved source scope under S6-T1 consent/egress/cost controls. This does not authorize new private-session access, secret disclosure, provider changes, or push.
+- Status: In progress — S6-T1 complete with accepted evidence review and exact-snapshot checkpoint `74e2b1f0`; S6-T2 complete with owner ACCEPT v3, independent evidence PASS and exact-snapshot checkpoint `1e9327c5`; S6-T3 in progress; S6-T4–T7 not started. Owner authorizes necessary provider calls for assigned work without repeated per-call confirmation, using the existing provider/model and synthetic or explicitly approved source scope under S6-T1 consent/egress/cost controls. This does not authorize new private-session access, secret disclosure, provider changes, or push.
 - [Global plan](../PLAN.md), [specification](../META-BRAIN.md), [requirements](../REQUIREMENTS.md).
 - Requirements: R01, R07, R08, R09, R13, R20, R21, R22; bảo toàn R03–R06, R12, R14, R19, R30, R36.
 
@@ -22,21 +22,24 @@ S6-T1 workflow: full route; owner-selected Gold implementation, independent evid
 
 S6-T2 workflow: full route; owner-selected Gold implementation and same-task corrections, independent evidence review, then separate Bronze-only exact-snapshot checkpoint on `main` before S6-T3. Worker has no commit permission; checkpoint is limited to reviewed task-owned scope and explicitly owned Main plan updates, preserving unrelated changes. Actual model evidence and owner source/output comparison are required; no new provider send or private-session read is authorized by role selection.
 
+S6-T3 workflow: full route; owner-selected Silver implementation and same-task corrections, independent evidence review, then separate Bronze-only exact-snapshot checkpoint on `main` before S6-T4. Worker has no commit permission; checkpoint includes only reviewed task-owned scope and explicitly Main-owned plan updates, preserving unrelated changes. Real-model and actual UI review evidence are required under existing provider authorization; no new private-session access or push.
+
 - [x] **S6-T1 — Scoped model job execution và provider controls.** Requirements: R07, R09, R22.
     - Scope: bounded job lifecycle, provider adapter/configuration, consent/cost limit và validated output boundary; không định nghĩa nhiều profile ở đây.
     - Acceptance: exact provider/model/pricing, whole-job 10k input/2k output, $0.25/job và $5/rolling30days pre-send caps; unknown cost/context deny. Input/output scope và status thật, no shell/grant/key authority. Lock/revoke/cancel/fail/restart chặn send/commit tiếp, không source loss/fake success; encrypted job/temp/output, no raw key/model context.
     - Evidence: actual owner-consented provider call trên synthetic/non-sensitive note, numeric usage/cost/reservation, denied/unknown egress, malformed/timeout/cancel/lock/restart; no fake summary fallback hoặc kế thừa historical test-key allowance.
 
-- [~] **S6-T2 — Coding-session structuring profile.** Requirements: R12, R20, R22.
+- [x] **S6-T2 — Coding-session structuring profile.** Requirements: R12, R20, R22.
     - Scope: normalized source spans → proposals về problem/attempt/result/decision/lesson/applicability.
     - Acceptance: assistant claim khác observed tool result; không nói deployed vì test pass; giữ điều kiện/commit/version khi biết và unknown khi không; mỗi proposition quan trọng có đoạn nguồn; output chưa verified không nâng trạng thái tự động.
     - Evidence: chạy real model trên session được phép có thử thất bại rồi thành công; owner review đối chiếu nguồn, ghi lỗi nghĩa và sửa profile nếu cần; output injection không có authority.
-    - Current status: [R3 FAIL](../../artifacts/sprint-6/reviews/S6-T2-S6T2-REVIEW-20261017-R3.md) verified corrected live grounding/attribution and snapshot lifecycle but requires owner comparison and fixture alignment. Fixture correction and local smoke are recorded in [worker evidence](../../artifacts/sprint-6/task-2.md); owner explicitly deferred reviewing [authentic comparison v3](../../artifacts/sprint-6/s6-t2-owner-review-packet-v3.md) and may paste a verdict later. Fresh evidence PASS and Bronze checkpoint remain pending; no task commit/push or S6-T3 launch.
+    - Accepted: owner ACCEPT for [authentic comparison v3](../../artifacts/sprint-6/s6-t2-owner-review-packet-v3.md), [worker evidence](../../artifacts/sprint-6/task-2.md), [independent R4 PASS](../../artifacts/sprint-6/reviews/S6-T2-S6T2-REVIEW-20261017-R4.md), and [Bronze exact-snapshot checkpoint](../../artifacts/sprint-6/checkpoints/S6-T2-S6T2-CHECKPOINT-20261017-C1.md), commit `1e9327c5cadcf50062f22200ebf97e3e9a8d891d`. Deployment guard remains lexical, not general semantic proof; costs are local rate-card accounting, not invoice reconciliation. No push. Final Main status-only updates follow the product checkpoint.
 
-- [ ] **S6-T3 — Research và trend structuring profiles.** Requirements: R12, R19, R20.
+- [~] **S6-T3 — Research và trend structuring profiles.** Requirements: R12, R19, R20.
     - Scope: text notes → source claims/limitations/user hypotheses/questions/observations/intention proposals; không crawler.
     - Acceptance: paper claim không thành project result; câu hỏi user không thành belief; URL không thành bài đã đọc; trend giới hạn corpus, nhiều bản nhắc cùng nguồn không thành nhiều xác nhận; provenance và thời điểm/độ chính xác giữ đúng.
     - Evidence: real model + UI review ghi chú Việt–Anh có mixed voices, mâu thuẫn và duplicate citation; ghi nguyên văn input vẫn còn khi job fail.
+    - In progress: implementation build and source-preservation UI evidence recorded in [worker evidence](../../artifacts/sprint-6/task-3.md). After unrecoverable synthetic fixture credential loss, owner explicitly authorized a separate replacement verification fixture with at most $0.50 total settled/reserved exposure under existing controls; preserve the old vault and count its two calls conservatively at $0.50 plus prior commitment $0.016068012, combined ceiling $1.016068012. No claim of recovered old ledger, no budget-policy bypass or increased $5 ceiling. Actual output/UI review, independent evidence PASS and Bronze checkpoint remain required; S6-T4 not started.
 
 - [ ] **S6-T4 — Explicit bounded synthesis nhiều tầng.** Requirements: R13, R21.
     - Scope: user chọn nguồn/items và mục tiêu, tạo synthesis proposal L2/L3+; không tự tìm agenda hoặc viết lại toàn vault.
