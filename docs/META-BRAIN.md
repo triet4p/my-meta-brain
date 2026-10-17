@@ -257,6 +257,19 @@ Không extraction mọi token. Agent đang làm việc có thể gửi lesson pr
 
 Summary phải giữ điều kiện, ngoại lệ, mâu thuẫn, độ thiếu bằng chứng và lineage. Không generalize từ vài dự án nhỏ thành nguyên tắc tuyệt đối. AI-written không đổi thành user-written khi owner lưu lại.
 
+Implementation (S6-T1): scoped model job execution và provider controls (`owner job-create`, `job-start`, `job-cancel`, `job-status`, `job-list`, `job-ledger`, `provider-config`).
+Scope snapshot revalidated trước khi đọc nguồn, gọi provider và commit proposal; kiểm tra chặt chẽ destination zone, source zone, và tính toàn vẹn trạng thái enrollment (`ValidateSourceEnrollment`: hỏng/không đọc được metadata fail-closed trung thực).
+Toàn bộ lifecycle job gắn vault mã hóa (`job-*`), không second truth store.
+Enforce pre-send caps với grounded full-request bound (khớp trực tiếp wire JSON serialization `OpenAiCompatibleProviderAdapter.BuildRequestJson`): 10,000 input tokens, 2,000 output tokens, $0.25/job, và $5.00 rolling 30 ngày (giữ $0.0054 historical reserve).
+
+Tokenizer & context window facts từ primary source chính thức của DeepSeek-V4.1-Flash (không trích dẫn V3/R1 hay middle dot):
+- Context window: 1M tokens (1,000,000) cho `deepseek-flash` theo DeepSeek pricing docs (`https://api-docs.deepseek.com/quick_start/pricing`).
+- Tokenizer: `PreTrainedTokenizerFast` với ByteLevel BPE (`deepseek-v4.1-bpe`) từ `deepseek-ai/DeepSeek-V4.1-Flash` (`tokenizer.json`, `tokenizer_config.json`). Toàn bộ 256 giá trị byte (`0x00`..`0xFF`) đều có token đơn lẻ trong vocabulary 128,000 entries (xác minh 0 missing byte). Vì phép merge BPE chỉ gộp $\ge 2$ token thành 1 mà không bao giờ chia nhỏ hoặc sinh thêm token, mỗi byte UTF-8 tương ứng tối đa 1 token: `tokens(S) <= utf8_bytes(S)` là định lý toán học bảo toàn cho mọi chuỗi UTF-8.
+- Chat template: Jinja2 chat template chính thức (`chat_template.jinja`) và reference implementation (`encoding/encoding.py`) dùng delimiters `<｜begin▁of▁sentence｜>` (ký tự phân cách `▁` U+2581 LOWER ONE EIGHTH BLOCK, không phải middle dot `·`), `<｜System｜>`, `<｜User｜>`, `<｜Assistant｜>`, `<think>` / `</think>`. Trong thinking mode (mặc định), reasoning effort prefix thêm 25 token; tổng framing token cho single-turn prompt là đúng 30 token (hoặc 5 token trong chat mode); cận bảo thủ đặt là 32 token.
+
+Price card chính xác từ primary source (`deepseek:deepseek-flash` với Tokenizer `deepseek-v4.1-bpe`, peak rates $0.30/1M in, $1.20/1M out, $0.006/1M cache hit); unknown provider/pricing/context/tokenizer deny closed (`unknown_context` với tokenizer chưa được xác minh hoặc định danh cũ).
+Model output boundary kiểm tra strict schema và grounding excerpt nguyên văn; output chỉ tạo `StoredProposal` mang attribution `SpeakerRole.Assistant` và `ClaimedUserConfirmed = false`, structurally không có shell, grant hay key authority.
+Phân định rõ ràng giữa proven-not-sent (từ chối trước khi gửi byte ra mạng: release reservation) và possibly-sent/ambiguous post-send (TCP drop sau accept, lỗi HTTP, bad JSON, missing usage: retain reservation bảo vệ ceiling $5/30d). Các lệnh gọi hoàn thành ghi nhận billable spend vào ledger; cap violation fail closed mà không xóa spend; true source-revoke và metadata enrollment hỏng giữa create và start fail closed và release reservation; mid-flight revocation hoặc metadata hỏng trước commit chặn ghi proposal, bảo tồn nguồn và commit billable spend; in-flight cancel, timeout và restart recovery dừng commit và retain unknown reservation; credentials lưu encrypted trong vault không nhận qua argv.
 ## 11. Retrieval và MCP
 
 Retrieval ưu tiên lexical/full-text + metadata, thời gian, trạng thái và phạm vi áp dụng. Bổ sung embedding local khi bằng chứng dùng thật cho thấy cần, đặc biệt dữ liệu Việt–Anh; không buộc dependency vector DB nặng từ đầu. Search cần đánh giá truy vấn paraphrase và tên symbol, không chỉ exact match.

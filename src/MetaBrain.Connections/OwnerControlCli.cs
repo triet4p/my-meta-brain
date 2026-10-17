@@ -124,6 +124,13 @@ internal static class OwnerControlCli
                 "index-rebuild" => await IndexRebuildAsync(options).ConfigureAwait(false),
                 "revoke-session" => await RevokeSessionAsync(options).ConfigureAwait(false),
                 "authorize" => await AuthorizeAsync(options).ConfigureAwait(false),
+                "job-create" => await JobCreateAsync(options).ConfigureAwait(false),
+                "job-start" => await JobStartAsync(options).ConfigureAwait(false),
+                "job-cancel" => await JobCancelAsync(options).ConfigureAwait(false),
+                "job-status" => await JobStatusAsync(options).ConfigureAwait(false),
+                "job-list" => await JobListAsync(options).ConfigureAwait(false),
+                "job-ledger" => await JobLedgerAsync(options).ConfigureAwait(false),
+                "provider-config" => await ProviderConfigAsync(options).ConfigureAwait(false),
                 "migrate" => Migrate(options),
                 _ => Usage()
             };
@@ -4502,6 +4509,272 @@ internal static class OwnerControlCli
     {
         Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|agent-search --query [--offset --limit --kind --current]|source-enroll --source-id --zone-id --format --format-version --input-file|source-relocate --source-id --source-generation --input-file|source-revoke --source-id|source-status --source-id|source-ingest --source-id|source-pause --source-id|source-resume --source-id|source-refresh-optin --source-id|source-refresh-optout --source-id|source-list|source-refresh|source-snapshot-list --source-id|source-snapshot-preserve --source-id --source-revision --retain-until-utc|source-snapshot-read --snapshot-id --snapshot-revision --output-file|source-snapshot-retain --snapshot-id --expected-revision --retain-until-utc|source-snapshot-purge --snapshot-id --expected-revision|research-capture --resource-id --zone-id --input-file [--title --source-url --source-author --source-date]|research-read --resource-id [--resource-revision --output-file]|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|relation-list|lifecycle-create|lifecycle-read|lifecycle-retained-read --resource-revision|lifecycle-publish --expected-revision|lifecycle-reject --expected-revision|lifecycle-withdraw --expected-revision|lifecycle-repropose --expected-revision|lifecycle-question-resolve --expected-revision|lifecycle-question-reopen --expected-revision|lifecycle-intention-complete --expected-revision|lifecycle-intention-cancel --expected-revision|lifecycle-intention-supersede --expected-revision|lifecycle-intention-notify --expected-revision|lifecycle-intention-acknowledge --expected-revision|lifecycle-validity-set --expected-revision|lifecycle-retain --expected-revision|proposal-read --resource-id [--resource-revision]|proposal-list|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read|agent-collection-view|agent-search|agent-brief|agent-feedback|agent-feedback-read|agent-propose|agent-relation-resolve|agent-relation-list|agent-relation-create|agent-relation-supersede|agent-relation-unlink|agent-relation-restore}; lifecycle --resource-id is the subject item ID; relation/lifecycle transitions need --expected-revision and an optional --input-file draft; agent-propose --session-file --input-file carries one proposal draft JSON (kind create/revise, idempotencyKey, inbox destinationResourceId/destinationRevision, revise subjectResourceId/subjectRevision, proposed item draft) and never publishes; agent-relation-create/supersede --session-file --input-file carries typed endpoints/revisions, kind, reason and requestEvidence; agent-relation-unlink/restore --session-file --resource-id --resource-revision --input-file carries stateReason/requestEvidence; restore returns only to proposed; source-enroll and source-relocate --input-file are JSON objects holding the private locator ({\"locator\": \"C:/exact/path\"}), never a command argument; source-snapshot-read requires an explicit --output-file export");
         return 2;
+    }
+
+    private static async Task<int> JobCreateAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--source-id", "--source-revision", "--zone-id",
+            "--destination-id", "--destination-revision", "--provider", "--model", "--max-cost-usd");
+        var controlPipe = ControlPipe(options);
+        var sourceId = options.Required("--source-id");
+        if (!long.TryParse(options.Required("--source-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var sourceRevision) || sourceRevision < 1)
+        {
+            return Usage();
+        }
+        var zoneId = options.Required("--zone-id");
+        var destinationId = options.Required("--destination-id");
+        if (!long.TryParse(options.Required("--destination-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var destinationRevision) || destinationRevision < 1)
+        {
+            return Usage();
+        }
+        var provider = options.Required("--provider");
+        var model = options.Required("--model");
+        decimal? maxCostUsd = null;
+        if (options.Optional("--max-cost-usd") is { } costStr)
+        {
+            if (!decimal.TryParse(costStr, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsedCost))
+            {
+                return Usage();
+            }
+            maxCostUsd = parsedCost;
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerJobCreateOperation,
+                ResourceId: sourceId, ResourceRevision: sourceRevision,
+                ZoneId: zoneId, DestinationResourceId: destinationId, DestinationRevision: destinationRevision,
+                Provider: provider, Model: model, MaximumCostUsd: maxCostUsd)).ConfigureAwait(false);
+
+        if (!result.Success || !HasStatus(result.Reply, "job_created"))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        PrintJob(result.Reply);
+        return 0;
+    }
+
+    private static async Task<int> JobStartAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--job-id");
+        var controlPipe = ControlPipe(options);
+        var jobId = options.Required("--job-id");
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerJobStartOperation,
+                JobId: jobId)).ConfigureAwait(false);
+
+        if (!result.Success || (!HasStatus(result.Reply, "job_completed") && !HasStatus(result.Reply, "job_failed") && !HasStatus(result.Reply, "job_cancelled")))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        PrintJob(result.Reply);
+        return HasStatus(result.Reply, "job_completed") ? 0 : 5;
+    }
+
+    private static async Task<int> JobCancelAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--job-id");
+        var controlPipe = ControlPipe(options);
+        var jobId = options.Required("--job-id");
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerJobCancelOperation,
+                JobId: jobId)).ConfigureAwait(false);
+
+        if (!result.Success || !HasStatus(result.Reply, "job_cancelled"))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        PrintJob(result.Reply);
+        return 0;
+    }
+
+    private static async Task<int> JobStatusAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--job-id");
+        var controlPipe = ControlPipe(options);
+        var jobId = options.Required("--job-id");
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerJobStatusOperation,
+                JobId: jobId)).ConfigureAwait(false);
+
+        if (!result.Success || !HasStatus(result.Reply, "job_status"))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        PrintJob(result.Reply);
+        return 0;
+    }
+
+    private static async Task<int> JobListAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var controlPipe = ControlPipe(options);
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerJobListOperation)).ConfigureAwait(false);
+
+        if (!result.Success || !HasStatus(result.Reply, "job_list"))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        if (result.Reply.TryGetProperty("jobs", out var jobs) && jobs.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var job in jobs.EnumerateArray())
+            {
+                PrintJobElement(job);
+            }
+        }
+        return 0;
+    }
+
+    private static async Task<int> JobLedgerAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var controlPipe = ControlPipe(options);
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerJobLedgerOperation)).ConfigureAwait(false);
+
+        if (!result.Success || !HasStatus(result.Reply, "job_ledger"))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        if (result.Reply.TryGetProperty("spendLedger", out var ledger))
+        {
+            Console.WriteLine($"LEDGER historicalReservation={JsonValueText(ledger, "historicalReservationUsd")} rollingSpend={JsonValueText(ledger, "rollingSpendUsd")}");
+            if (ledger.TryGetProperty("entries", out var entries) && entries.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var entry in entries.EnumerateArray())
+                {
+                    Console.WriteLine($"ENTRY id={JsonValueText(entry, "entryId")} job={JsonValueText(entry, "jobId")} cost={JsonValueText(entry, "costUsd")} isReservation={JsonValueText(entry, "isReservation")} input={JsonValueText(entry, "inputTokens")} output={JsonValueText(entry, "outputTokens")} note={JsonValueText(entry, "note")}");
+                }
+            }
+        }
+        return 0;
+    }
+
+    private static async Task<int> ProviderConfigAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--provider", "--model", "--base-url", "--api-key-stdin", "--from-env");
+        var controlPipe = ControlPipe(options);
+        var provider = options.Required("--provider");
+        var model = options.Required("--model");
+        var baseUrl = options.Optional("--base-url") ?? "auto";
+
+        string? apiKey = null;
+        if (string.Equals(options.Optional("--from-env"), "true", StringComparison.OrdinalIgnoreCase))
+        {
+            apiKey = LoadOpenAiKeyFromEnv();
+            if (baseUrl == "auto")
+            {
+                baseUrl = LoadOpenAiBaseUrlFromEnv() ?? "https://api.deepseek.com";
+            }
+        }
+        else if (string.Equals(options.Optional("--api-key-stdin"), "true", StringComparison.OrdinalIgnoreCase))
+        {
+            apiKey = Console.In.ReadLine()?.Trim();
+        }
+        else
+        {
+            apiKey = ReadSecret("Provider API key: ");
+        }
+
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            Console.Error.WriteLine("ERROR missing_api_key");
+            return 4;
+        }
+
+        if (baseUrl == "auto")
+        {
+            baseUrl = LoadOpenAiBaseUrlFromEnv() ?? "https://api.deepseek.com";
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerProviderConfigOperation,
+                Provider: provider, Model: model, BaseUrl: baseUrl, ApiKey: apiKey)).ConfigureAwait(false);
+
+        if (!result.Success || !HasStatus(result.Reply, "provider_configured"))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        Console.WriteLine($"PROVIDER configured provider={provider} model={model} baseUrl={baseUrl}");
+        return 0;
+    }
+
+    private static void PrintJob(JsonElement reply)
+    {
+        if (reply.TryGetProperty("job", out var job))
+        {
+            PrintJobElement(job);
+        }
+    }
+
+    private static void PrintJobElement(JsonElement job)
+    {
+        var id = JsonValueText(job, "id");
+        var state = JsonValueText(job, "state");
+        var provider = job.TryGetProperty("scope", out var scope) ? JsonValueText(scope, "provider") : "(none)";
+        var model = scope.ValueKind == JsonValueKind.Object ? JsonValueText(scope, "model") : "(none)";
+        var usageStr = job.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object
+            ? $"in={JsonValueText(usage, "inputTokens")} out={JsonValueText(usage, "outputTokens")} cost={JsonValueText(usage, "costUsd")}"
+            : "in=0 out=0 cost=0";
+        var failure = job.TryGetProperty("failure", out var f) && f.ValueKind == JsonValueKind.Object
+            ? $" fail={JsonValueText(f, "code")}"
+            : "";
+        Console.WriteLine($"JOB id={id} state={state} provider={provider} model={model} {usageStr}{failure}");
+    }
+
+    private static string? LoadOpenAiKeyFromEnv()
+    {
+        var envPath = Path.Combine(Directory.GetCurrentDirectory(), ".env");
+        if (!File.Exists(envPath)) return null;
+
+        foreach (var line in File.ReadLines(envPath))
+        {
+            var trimmed = line.Trim();
+            if (trimmed.StartsWith("#", StringComparison.Ordinal) || !trimmed.Contains('=')) continue;
+            var parts = trimmed.Split('=', 2);
+            if (string.Equals(parts[0].Trim(), "OPENAI_API_KEY", StringComparison.Ordinal))
+            {
+                return parts[1].Trim().Trim('"', '\'');
+            }
+        }
+        return null;
+    }
+
+    private static string? LoadOpenAiBaseUrlFromEnv()
+    {
+        var envPath = Path.Combine(Directory.GetCurrentDirectory(), ".env");
+        if (!File.Exists(envPath)) return null;
+
+        foreach (var line in File.ReadLines(envPath))
+        {
+            var trimmed = line.Trim();
+            if (trimmed.StartsWith("#", StringComparison.Ordinal) || !trimmed.Contains('=')) continue;
+            var parts = trimmed.Split('=', 2);
+            if (string.Equals(parts[0].Trim(), "OPENAI_BASE_URL", StringComparison.Ordinal))
+            {
+                return parts[1].Trim().Trim('"', '\'');
+            }
+        }
+        return null;
     }
 
     private sealed class CommandOptions

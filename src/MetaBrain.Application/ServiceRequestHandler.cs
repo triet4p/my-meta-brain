@@ -58,7 +58,10 @@ public sealed record ServiceRequest(
     DateTimeOffset? SnapshotRetainUntilUtc = null,
     string? SearchLevel = null,
     DateTimeOffset? SearchFromUtc = null,
-    DateTimeOffset? SearchToUtc = null);
+    DateTimeOffset? SearchToUtc = null,
+    string? JobId = null,
+    string? BaseUrl = null,
+    string? ApiKey = null);
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
     ScopeResourceRevision[] Resources,
@@ -562,6 +565,25 @@ public sealed record PrivateIndexWire(
     bool CanonicalMoved,
     PrivateIndexRowWire[] Rows);
 
+public sealed record JobWire(
+    string Id,
+    string ZoneId,
+    long Revision,
+    string Kind,
+    string State,
+    JobScopeSnapshot Scope,
+    JobUsage? Usage,
+    JobFailureReason? Failure,
+    string[]? OutputProposalIds,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset? StartedAtUtc,
+    DateTimeOffset? CompletedAtUtc);
+
+public sealed record SpendLedgerWire(
+    decimal HistoricalReservationUsd,
+    decimal RollingSpendUsd,
+    SpendLedgerEntry[] Entries);
+
 public sealed record ServiceReply(
     int ProtocolVersion,
     string? Status,
@@ -614,7 +636,10 @@ public sealed record ServiceReply(
     RelationWire[]? Relations = null,
     RelationEndpointCandidateWire[]? RelationCandidates = null,
     bool? RelationCandidatesTruncated = null,
-    ProposalReviewWire? ProposalReview = null);
+    ProposalReviewWire? ProposalReview = null,
+    JobWire? Job = null,
+    JobWire[]? Jobs = null,
+    SpendLedgerWire? SpendLedger = null);
 
 public sealed class ServiceRequestHandler
 {
@@ -631,6 +656,13 @@ public sealed class ServiceRequestHandler
     public const string SourceReadOperation = "source.read";
     public const string ResourceWriteOperation = "resource.write";
     public const string OwnerScopePreviewOperation = "owner.scope.preview";
+    public const string OwnerJobCreateOperation = "owner.job.create";
+    public const string OwnerJobStartOperation = "owner.job.start";
+    public const string OwnerJobCancelOperation = "owner.job.cancel";
+    public const string OwnerJobStatusOperation = "owner.job.status";
+    public const string OwnerJobListOperation = "owner.job.list";
+    public const string OwnerJobLedgerOperation = "owner.job.ledger";
+    public const string OwnerProviderConfigOperation = "owner.provider.config";
     public const string OwnerScopeIssueOperation = "owner.scope.issue";
     public const string OwnerScopeListOperation = "owner.scope.list";
     public const string OwnerScopeCollectionSetOperation = "owner.scope.collection.set";
@@ -754,6 +786,7 @@ public sealed class ServiceRequestHandler
     private readonly ISourceSnapshotReader? _sourceReader;
     private readonly SourceSnapshotService _sourceSnapshots = new();
     private PrivateIndexSnapshot? _privateIndexMaterialized;
+    private readonly ModelJobService _modelJobs;
 
     public ServiceRequestHandler(
         GrantAuthority grantAuthority,
@@ -764,8 +797,10 @@ public sealed class ServiceRequestHandler
         ICatalogProjectionStore? projections = null,
         IPrivateIndexStore? privateIndex = null,
         SourceNormalizerRegistry? sourceNormalizers = null,
-        ISourceSnapshotReader? sourceReader = null)
+        ISourceSnapshotReader? sourceReader = null,
+        IModelProviderAdapter? modelProvider = null)
     {
+        _modelJobs = new ModelJobService(vault, modelProvider);
         _grantAuthority = grantAuthority ?? throw new ArgumentNullException(nameof(grantAuthority));
         _vault = vault ?? throw new ArgumentNullException(nameof(vault));
         _ownerScopeGrants = ownerScopeGrants ?? throw new ArgumentNullException(nameof(ownerScopeGrants));
@@ -988,8 +1023,8 @@ public sealed class ServiceRequestHandler
 
         if (string.Equals(request.Operation, OwnerVaultLockOperation, StringComparison.Ordinal))
         {
+            _modelJobs.AbortInFlightOnLockOrRestart();
             await _vault.LockAsync().ConfigureAwait(false);
-            _ownerScopeGrants.ClearPreviews();
             _ownerScopeGrants.ClearRequestPreviews();
             _agentSessions.ClearSessions();
             ResetPrivateIndex();
@@ -1287,9 +1322,370 @@ public sealed class ServiceRequestHandler
         {
             return HandleResourceWrite(context, request, operation);
         }
+        if (string.Equals(request.Operation, OwnerJobCreateOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerJobCreate(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerJobStartOperation, StringComparison.Ordinal))
+        {
+            return await HandleOwnerJobStartAsync(context, request, operation, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (string.Equals(request.Operation, OwnerJobCancelOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerJobCancel(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerJobStatusOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerJobStatus(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerJobListOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerJobList(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerJobLedgerOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerJobLedger(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerProviderConfigOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerProviderConfig(context, request, operation);
+        }
+
 
         return Error("unknown_operation");
     }
+
+    private ServiceReply HandleOwnerJobCreate(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.ResourceId) ||
+            request.ResourceRevision is not { } sourceRevision || sourceRevision < 1 ||
+            string.IsNullOrWhiteSpace(request.ZoneId) ||
+            string.IsNullOrWhiteSpace(request.DestinationResourceId) ||
+            request.DestinationRevision is not { } destRevision || destRevision < 1 ||
+            string.IsNullOrWhiteSpace(request.Provider) ||
+            string.IsNullOrWhiteSpace(request.Model))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var job = _modelJobs.CreateJob(
+                context,
+                request.ResourceId,
+                sourceRevision,
+                request.ZoneId,
+                request.DestinationResourceId,
+                destRevision,
+                request.Provider,
+                request.Model,
+                request.MaximumCostUsd,
+                operation);
+
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "job_created",
+                "owner",
+                null,
+                Job: ToJobWire(job));
+        }
+        catch (ArgumentException ex)
+        {
+            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+        }
+        catch (InvalidDataException ex)
+        {
+            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+        }
+        catch (ManagedResourceUnavailableException)
+        {
+            return Error("vault_locked");
+        }
+    }
+
+    private async Task<ServiceReply> HandleOwnerJobStartAsync(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation,
+        CancellationToken cancellationToken)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.JobId))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var job = await _modelJobs.StartJobAsync(context, request.JobId, operation, cancellationToken).ConfigureAwait(false);
+            var status = job.State switch
+            {
+                JobState.Succeeded => "job_completed",
+                JobState.Cancelled => "job_cancelled",
+                _ => "job_failed"
+            };
+
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                status,
+                "owner",
+                job.Failure?.Message,
+                Job: ToJobWire(job));
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (InvalidOperationException ex)
+        {
+            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+        }
+        catch (InvalidDataException ex)
+        {
+            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+        }
+        catch (ManagedResourceUnavailableException)
+        {
+            return Error("vault_locked");
+        }
+    }
+
+    private ServiceReply HandleOwnerJobCancel(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.JobId))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var job = _modelJobs.CancelJob(context, request.JobId, operation);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "job_cancelled",
+                "owner",
+                null,
+                Job: ToJobWire(job));
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (ManagedResourceUnavailableException)
+        {
+            return Error("vault_locked");
+        }
+    }
+
+    private ServiceReply HandleOwnerJobStatus(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.JobId))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var job = _modelJobs.GetJob(request.JobId, operation);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "job_status",
+                "owner",
+                null,
+                Job: ToJobWire(job));
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (ManagedResourceUnavailableException)
+        {
+            return Error("vault_locked");
+        }
+    }
+
+    private ServiceReply HandleOwnerJobList(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        try
+        {
+            var jobs = _modelJobs.ListJobs(operation);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "job_list",
+                "owner",
+                null,
+                Jobs: jobs.Select(ToJobWire).ToArray());
+        }
+        catch (ManagedResourceUnavailableException)
+        {
+            return Error("vault_locked");
+        }
+    }
+
+    private ServiceReply HandleOwnerJobLedger(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        try
+        {
+            var ledger = _modelJobs.LoadSpendLedger(operation);
+            var rollingSpend = ledger.CalculateRollingSpend(DateTimeOffset.UtcNow);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "job_ledger",
+                "owner",
+                null,
+                SpendLedger: new SpendLedgerWire(
+                    HistoricalReservationUsd: ledger.HistoricalReservationUsd,
+                    RollingSpendUsd: rollingSpend,
+                    Entries: ledger.Entries.ToArray()));
+        }
+        catch (ManagedResourceUnavailableException)
+        {
+            return Error("vault_locked");
+        }
+    }
+
+    private ServiceReply HandleOwnerProviderConfig(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Provider) ||
+            string.IsNullOrWhiteSpace(request.Model) ||
+            string.IsNullOrWhiteSpace(request.BaseUrl) ||
+            string.IsNullOrWhiteSpace(request.ApiKey))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            _modelJobs.SaveProviderConfig(
+                context,
+                request.Provider.Trim(),
+                request.Model.Trim(),
+                request.BaseUrl.Trim(),
+                request.ApiKey.Trim(),
+                operation);
+
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "provider_configured",
+                "owner",
+                null);
+        }
+        catch (ManagedResourceUnavailableException)
+        {
+            return Error("vault_locked");
+        }
+    }
+
+    private static JobWire ToJobWire(JobRecord job) => new(
+        Id: job.Id,
+        ZoneId: job.ZoneId,
+        Revision: job.Revision,
+        Kind: job.Kind.ToString(),
+        State: job.State.ToString(),
+        Scope: job.Scope,
+        Usage: job.Usage,
+        Failure: job.Failure,
+        OutputProposalIds: job.OutputProposalIds,
+        CreatedAtUtc: job.CreatedAtUtc,
+        StartedAtUtc: job.StartedAtUtc,
+        CompletedAtUtc: job.CompletedAtUtc);
 
     private ServiceReply HandleMemoryCreate(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
     {

@@ -6,7 +6,7 @@ Cấu trúc hóa code/research/trend theo yêu cầu, tổng hợp phân tầng 
 
 ## Status and Dependencies
 
-- Status: Not started — CR01 updated. Entry: Sprint 5 PASS, vault unlocked; owner chọn actual provider/model và input scope/egress/budget. Historical deepseek proof/test key không production prerequisite hoặc consent tự động.
+- Status: In progress — S6-T1 implementation and local corrections delivered; Sprint 5 PASS. Owner explicitly authorized one additional synthetic-only provider call for final same-job readback/restart/ledger proof, with a $0.0054 worst-case reservation within unchanged task caps; no automatic retries or further sends. Final evidence review and separate checkpoint remain pending.
 - [Global plan](../PLAN.md), [specification](../META-BRAIN.md), [requirements](../REQUIREMENTS.md).
 - Requirements: R01, R07, R08, R09, R13, R20, R21, R22; bảo toàn R03–R06, R12, R14, R19, R30, R36.
 
@@ -18,7 +18,9 @@ Jobs dùng encrypted source/proposals/revision/lineage chung và review UI; khô
 
 Status legend: [ ] pending / [~] in progress / [x] done. OMP role selection, evidence review, record ownership, and exact-snapshot checkpoints follow the [canonical execution contract](../PLAN.md#planning-and-execution-contract). Worker artifact for S6-T<M>: `artifacts/sprint-6/task-<M>.md`; reviewers and checkpoint executors own their separate records under the sprint artifact tree.
 
-- [ ] **S6-T1 — Scoped model job execution và provider controls.** Requirements: R07, R09, R22.
+S6-T1 workflow: full route; owner-selected Gold implementation, independent evidence review, then separate Bronze-only exact-snapshot checkpoint on `main` before S6-T2. Worker has no commit permission; checkpoint may include only reviewed S6-T1-owned scope, with no push. Task remains [~] until all acceptance evidence and checkpoint succeed.
+
+- [~] **S6-T1 — Scoped model job execution và provider controls.** Requirements: R07, R09, R22.
     - Scope: bounded job lifecycle, provider adapter/configuration, consent/cost limit và validated output boundary; không định nghĩa nhiều profile ở đây.
     - Acceptance: exact provider/model/pricing, whole-job 10k input/2k output, $0.25/job và $5/rolling30days pre-send caps; unknown cost/context deny. Input/output scope và status thật, no shell/grant/key authority. Lock/revoke/cancel/fail/restart chặn send/commit tiếp, không source loss/fake success; encrypted job/temp/output, no raw key/model context.
     - Evidence: actual owner-consented provider call trên synthetic/non-sensitive note, numeric usage/cost/reservation, denied/unknown egress, malformed/timeout/cancel/lock/restart; no fake summary fallback hoặc kế thừa historical test-key allowance.
@@ -63,4 +65,4 @@ Cần provider/local model thực khả dụng và user egress consent. Không c
 
 ## Gate Record
 
-Pending. Chưa có model/job/synthesis verification.
+S6-T1 remains [~]: [review R5](../../artifacts/sprint-6/reviews/S6-T1-S6T1-REVIEW-20261017-R5.md) closed code/tokenizer/enrollment findings; full verdict remains FAIL solely for missing authentic live readback/restart/ledger proof. Owner authorized one fresh bounded synthetic call to complete that proof; fresh evidence review and Bronze checkpoint remain required. Earlier failures remain historical; other Sprint 6 task gates are pending.

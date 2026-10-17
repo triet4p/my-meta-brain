@@ -26,7 +26,10 @@ internal sealed class NamedPipeService
     private readonly SqlitePrivateIndexStore _privateIndex;
     private readonly SourceRefreshBackgroundService _backgroundRefresh;
 
-    public NamedPipeService(ServiceSettings settings, SourceNormalizerRegistry? sourceNormalizers = null)
+    public NamedPipeService(
+        ServiceSettings settings,
+        SourceNormalizerRegistry? sourceNormalizers = null,
+        IModelProviderAdapter? modelProvider = null)
     {
         _settings = settings;
         var store = new EncryptedVaultStore(settings.VaultDirectoryPath, settings.OwnerSid);
@@ -41,9 +44,13 @@ internal sealed class NamedPipeService
         _handler = new ServiceRequestHandler(authority, _vault, new OwnerScopeGrantAuthority(),
             projections: new FileCatalogProjectionStore(store), privateIndex: _privateIndex,
             sourceNormalizers: sourceNormalizers ?? SourceNormalizerFactory.CreateShipped(),
-            sourceReader: new EnrolledSourceFileReader());
+            sourceReader: new EnrolledSourceFileReader(),
+            modelProvider: modelProvider ?? CreateDefaultModelProvider());
         _backgroundRefresh = new SourceRefreshBackgroundService(_handler, _vault);
     }
+    private static IModelProviderAdapter CreateDefaultModelProvider() =>
+        new OpenAiCompatibleProviderAdapter();
+
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -267,7 +274,14 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.FeedbackReadOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.AgentProposeOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.ProposalReadOperation, StringComparison.Ordinal) ||
-                    string.Equals(request.Operation, ServiceRequestHandler.ProposalListOperation, StringComparison.Ordinal);
+                    string.Equals(request.Operation, ServiceRequestHandler.ProposalListOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerJobCreateOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerJobStartOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerJobCancelOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerJobStatusOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerJobListOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerJobLedgerOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerProviderConfigOperation, StringComparison.Ordinal);
                 using var operation = needsVaultOperation ? _vault.TryBeginOperation() : null;
                 if (needsVaultOperation && operation is not null)
                 {

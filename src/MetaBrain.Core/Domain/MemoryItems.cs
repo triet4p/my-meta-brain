@@ -669,6 +669,16 @@ internal static class DomainIdentifiers
     /// item, and no other product surface mints an ID with this prefix.
     /// </summary>
     public const string ReviewedItemIdPrefix = "mi-";
+    /// <summary>
+    /// Reserved resource-ID prefix for S6-T1 model jobs.
+    /// </summary>
+    public const string JobIdPrefix = "job-";
+
+    /// <summary>
+    /// Reserved resource-ID prefix for internal encrypted system records (e.g. spend ledger, provider configuration).
+    /// </summary>
+    public const string SystemResourceIdPrefix = "sec-";
+
 
     public static bool IsSafeIdentifier(string? value)
     {
@@ -703,6 +713,9 @@ internal static class DomainIdentifiers
 
     public static bool IsProposalId(string? value) =>
         value is not null && value.StartsWith(ProposalIdPrefix, StringComparison.Ordinal) && IsSafeIdentifier(value);
+    public static bool IsJobId(string? value) =>
+        value is not null && value.StartsWith(JobIdPrefix, StringComparison.Ordinal) && IsSafeIdentifier(value);
+
     /// <summary>
     /// An identifier that names a memory item or a registered source: never a
     /// relation, lifecycle record, retained revision, ingestion journal,
@@ -716,7 +729,9 @@ internal static class DomainIdentifiers
         !value.StartsWith(IngestIdPrefix, StringComparison.Ordinal) &&
         !value.StartsWith(SourceSnapshotIdPrefix, StringComparison.Ordinal) &&
         !value.StartsWith(FeedbackIdPrefix, StringComparison.Ordinal) &&
-        !value.StartsWith(ProposalIdPrefix, StringComparison.Ordinal);
+        !value.StartsWith(ProposalIdPrefix, StringComparison.Ordinal) &&
+        !value.StartsWith(JobIdPrefix, StringComparison.Ordinal) &&
+        !value.StartsWith(SystemResourceIdPrefix, StringComparison.Ordinal);
 
     /// <summary>
     /// Lifecycle record ID derived from its subject: the ID is never chosen by
