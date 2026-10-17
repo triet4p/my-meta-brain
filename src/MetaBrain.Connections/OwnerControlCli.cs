@@ -4514,7 +4514,7 @@ internal static class OwnerControlCli
     private static async Task<int> JobCreateAsync(CommandOptions options)
     {
         options.RequireOnly("--control-pipe", "--source-id", "--source-revision", "--zone-id",
-            "--destination-id", "--destination-revision", "--provider", "--model", "--max-cost-usd");
+            "--destination-id", "--destination-revision", "--provider", "--model", "--max-cost-usd", "--profile");
         var controlPipe = ControlPipe(options);
         var sourceId = options.Required("--source-id");
         if (!long.TryParse(options.Required("--source-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var sourceRevision) || sourceRevision < 1)
@@ -4538,12 +4538,13 @@ internal static class OwnerControlCli
             }
             maxCostUsd = parsedCost;
         }
+        var profile = options.Optional("--profile");
 
         var result = await InvokeOwnerAsync(controlPipe,
             new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerJobCreateOperation,
                 ResourceId: sourceId, ResourceRevision: sourceRevision,
                 ZoneId: zoneId, DestinationResourceId: destinationId, DestinationRevision: destinationRevision,
-                Provider: provider, Model: model, MaximumCostUsd: maxCostUsd)).ConfigureAwait(false);
+                Provider: provider, Model: model, MaximumCostUsd: maxCostUsd, Profile: profile)).ConfigureAwait(false);
 
         if (!result.Success || !HasStatus(result.Reply, "job_created"))
         {
@@ -4732,13 +4733,15 @@ internal static class OwnerControlCli
         var state = JsonValueText(job, "state");
         var provider = job.TryGetProperty("scope", out var scope) ? JsonValueText(scope, "provider") : "(none)";
         var model = scope.ValueKind == JsonValueKind.Object ? JsonValueText(scope, "model") : "(none)";
+        var profile = scope.ValueKind == JsonValueKind.Object && scope.TryGetProperty("profile", out var p) ? p.GetString() : null;
+        var profileStr = string.IsNullOrEmpty(profile) ? "" : $" profile={profile}";
         var usageStr = job.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object
             ? $"in={JsonValueText(usage, "inputTokens")} out={JsonValueText(usage, "outputTokens")} cost={JsonValueText(usage, "costUsd")}"
             : "in=0 out=0 cost=0";
         var failure = job.TryGetProperty("failure", out var f) && f.ValueKind == JsonValueKind.Object
-            ? $" fail={JsonValueText(f, "code")}"
+            ? $" fail={JsonValueText(f, "code")}: {JsonValueText(f, "message")}"
             : "";
-        Console.WriteLine($"JOB id={id} state={state} provider={provider} model={model} {usageStr}{failure}");
+        Console.WriteLine($"JOB id={id} state={state}{profileStr} provider={provider} model={model} {usageStr}{failure}");
     }
 
     private static string? LoadOpenAiKeyFromEnv()

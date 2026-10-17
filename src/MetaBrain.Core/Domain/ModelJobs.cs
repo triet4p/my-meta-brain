@@ -20,6 +20,14 @@ public enum JobKind
     Unknown = 0,
     Structuring = 1
 }
+public static class StructuringProfiles
+{
+    public const string CodingSession = "coding-session";
+    public const string ResearchNote = "research-note";
+
+    public static bool IsSupported(string? profile) =>
+        profile is null or "" or CodingSession or ResearchNote;
+}
 
 /// <summary>
 /// Immutable snapshot of the approved scope boundaries for one model job.
@@ -35,8 +43,8 @@ public sealed record JobScopeSnapshot(
     string Model,
     decimal MaximumCostUsd,
     long MaxInputTokens,
-    long MaxOutputTokens);
-
+    long MaxOutputTokens,
+    string? Profile = null);
 public sealed record JobUsage(
     long InputTokens,
     long OutputTokens,
@@ -86,8 +94,8 @@ public sealed record ModelJobStructuredItem(
     string Kind,
     string Title,
     string Body,
-    string Excerpt);
-
+    string Excerpt,
+    MemoryApplicability? Applicability = null);
 public sealed record ModelJobOutput(
     string Summary,
     ModelJobStructuredItem[] Items);
@@ -155,7 +163,8 @@ public static class JobOutputValidator
 {
     private static readonly HashSet<string> AllowedKinds = new(StringComparer.OrdinalIgnoreCase)
     {
-        "claim", "observation", "question", "hypothesis", "decision", "lesson"
+        "claim", "observation", "question", "hypothesis", "decision", "lesson",
+        "problem", "attempt", "result"
     };
 
     public static bool TryValidate(
@@ -182,9 +191,10 @@ public static class JobOutputValidator
         {
             // Some models enclose JSON in ```json ... ``` code blocks; strip code fences cleanly if present
             var cleanJson = rawOutput.Trim();
-            if (cleanJson.StartsWith("```", StringComparison.Ordinal))
+            var firstFence = cleanJson.IndexOf("```", StringComparison.Ordinal);
+            if (firstFence >= 0)
             {
-                var firstNewline = cleanJson.IndexOf('\n');
+                var firstNewline = cleanJson.IndexOf('\n', firstFence);
                 var lastFence = cleanJson.LastIndexOf("```", StringComparison.Ordinal);
                 if (firstNewline > 0 && lastFence > firstNewline)
                 {
@@ -237,6 +247,50 @@ public static class JobOutputValidator
                 errorCode = "grounding_failure";
                 errorMessage = "Item excerpt is not grounded in verbatim source text.";
                 return false;
+            }
+            if (item.Applicability is not null)
+            {
+                if (!string.IsNullOrWhiteSpace(item.Applicability.Version) &&
+                    !sourceText.Contains(item.Applicability.Version, StringComparison.Ordinal))
+                {
+                    errorCode = "applicability_ungrounded";
+                    errorMessage = $"Item applicability version '{item.Applicability.Version}' is not grounded in verbatim source text.";
+                    return false;
+                }
+
+                if (!string.IsNullOrWhiteSpace(item.Applicability.Project) &&
+                    !sourceText.Contains(item.Applicability.Project, StringComparison.OrdinalIgnoreCase))
+                {
+                    errorCode = "applicability_ungrounded";
+                    errorMessage = $"Item applicability project '{item.Applicability.Project}' is not grounded in source text.";
+                    return false;
+                }
+
+                if (!string.IsNullOrWhiteSpace(item.Applicability.Environment) &&
+                    !sourceText.Contains(item.Applicability.Environment, StringComparison.OrdinalIgnoreCase))
+                {
+                    errorCode = "applicability_ungrounded";
+                    errorMessage = $"Item applicability environment '{item.Applicability.Environment}' is not grounded in source text.";
+                    return false;
+                }
+            }
+
+            // No deployed inference from test pass:
+            // A result item cannot claim deployed / deployment if source text only contains test execution without deployment tool evidence.
+            if (string.Equals(item.Kind, "result", StringComparison.OrdinalIgnoreCase) &&
+                (item.Title.Contains("deployed", StringComparison.OrdinalIgnoreCase) ||
+                 item.Body.Contains("deployed to production", StringComparison.OrdinalIgnoreCase) ||
+                 item.Body.Contains("deployed and active", StringComparison.OrdinalIgnoreCase)))
+            {
+                var containsDeploymentToolOutput = sourceText.Contains("[TOOL: deploy", StringComparison.OrdinalIgnoreCase) ||
+                                                    sourceText.Contains("deployment succeeded", StringComparison.OrdinalIgnoreCase) ||
+                                                    sourceText.Contains("published to production", StringComparison.OrdinalIgnoreCase);
+                if (!containsDeploymentToolOutput)
+                {
+                    errorCode = "unverified_inference";
+                    errorMessage = "Item describes deployment as an observed result, but source text only records test execution without deployment tool evidence.";
+                    return false;
+                }
             }
 
             // Note on authority boundary: Output cannot gain shell, grant, or key authority.

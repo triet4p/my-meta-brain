@@ -61,7 +61,8 @@ public sealed record ServiceRequest(
     DateTimeOffset? SearchToUtc = null,
     string? JobId = null,
     string? BaseUrl = null,
-    string? ApiKey = null);
+    string? ApiKey = null,
+    string? Profile = null);
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
     ScopeResourceRevision[] Resources,
@@ -1399,8 +1400,8 @@ public sealed class ServiceRequestHandler
                 request.Provider,
                 request.Model,
                 request.MaximumCostUsd,
-                operation);
-
+                operation,
+                request.Profile);
             return new ServiceReply(
                 CurrentProtocolVersion,
                 "job_created",

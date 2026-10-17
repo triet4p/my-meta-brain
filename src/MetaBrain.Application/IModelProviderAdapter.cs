@@ -69,6 +69,14 @@ public sealed class OpenAiCompatibleProviderAdapter : IModelProviderAdapter
             }
         };
 
+        if (model.Contains("deepseek", StringComparison.OrdinalIgnoreCase))
+        {
+            requestObj["thinking"] = new JsonObject
+            {
+                ["type"] = "disabled"
+            };
+        }
+
         return requestObj.ToJsonString();
     }
 
