@@ -323,7 +323,20 @@ public sealed record ProposalWire(
     ProposalItemWire Item,
     string Executor,
     DateTimeOffset RecordedAtUtc,
-    bool ClaimedUserConfirmed);
+    bool ClaimedUserConfirmed,
+    ProposalCitationReviewWire? CitationReview = null);
+
+/// <summary>
+/// Computed review state of the sources one pending proposal cites, beside the
+/// live state it was read against: whether a cited source moved, disappeared,
+/// became unavailable, or was revoked since the proposal was recorded. It
+/// reports staleness of the cited evidence only; it never rewrites the
+/// proposal, its declared level or evidence, or an owner's conclusion.
+/// </summary>
+public sealed record ProposalCitationReviewWire(
+    string State,
+    string[] Reasons,
+    string[] StaleSourceIds);
 
 /// <summary>
 /// One lean inbox identity: the proposal ID, its live revision, and the
@@ -1377,9 +1390,7 @@ public sealed class ServiceRequestHandler
             return Error("vault_locked");
         }
 
-        if (string.IsNullOrWhiteSpace(request.ResourceId) ||
-            request.ResourceRevision is not { } sourceRevision || sourceRevision < 1 ||
-            string.IsNullOrWhiteSpace(request.ZoneId) ||
+        if (string.IsNullOrWhiteSpace(request.ZoneId) ||
             string.IsNullOrWhiteSpace(request.DestinationResourceId) ||
             request.DestinationRevision is not { } destRevision || destRevision < 1 ||
             string.IsNullOrWhiteSpace(request.Provider) ||
@@ -1388,12 +1399,62 @@ public sealed class ServiceRequestHandler
             return Error("invalid_request");
         }
 
+        // The owner's selected input set arrives either as one explicit
+        // resource/revision pair (single-input profiles) or as an encoded
+        // selection draft on the content field (multi-input synthesis): the
+        // selected inputs, the owner objective, and the requested level. Both
+        // forms feed exactly one recorded scope shape.
+        JobInputReference[] inputs;
+        string? objective = null;
+        string? targetLevel = null;
+        if (request.ContentBase64 is { Length: > 0 } selectionBase64)
+        {
+            if (!string.IsNullOrWhiteSpace(request.ResourceId) || request.ResourceRevision is not null)
+            {
+                return Error("invalid_request");
+            }
+
+            byte[]? selection = null;
+            try
+            {
+                selection = Convert.FromBase64String(selectionBase64);
+                var draft = JobSelectionCodec.DecodeDraft(selection);
+                inputs = draft.Inputs ?? Array.Empty<JobInputReference>();
+                objective = draft.Objective;
+                targetLevel = draft.TargetLevel;
+            }
+            catch (FormatException)
+            {
+                return Error("invalid_request");
+            }
+            catch (ArgumentException ex)
+            {
+                return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+            }
+            finally
+            {
+                if (selection is { Length: > 0 })
+                {
+                    CryptographicOperations.ZeroMemory(selection);
+                }
+            }
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(request.ResourceId) ||
+                request.ResourceRevision is not { } sourceRevision || sourceRevision < 1)
+            {
+                return Error("invalid_request");
+            }
+
+            inputs = new[] { new JobInputReference(request.ResourceId, sourceRevision) };
+        }
+
         try
         {
             var job = _modelJobs.CreateJob(
                 context,
-                request.ResourceId,
-                sourceRevision,
+                inputs,
                 request.ZoneId,
                 request.DestinationResourceId,
                 destRevision,
@@ -1401,7 +1462,9 @@ public sealed class ServiceRequestHandler
                 request.Model,
                 request.MaximumCostUsd,
                 operation,
-                request.Profile);
+                request.Profile,
+                objective,
+                targetLevel);
             return new ServiceReply(
                 CurrentProtocolVersion,
                 "job_created",
@@ -1933,7 +1996,7 @@ public sealed class ServiceRequestHandler
         {
             var proposal = new ProposalService().Read(request.ResourceId, request.ResourceRevision, operation);
             return new ServiceReply(CurrentProtocolVersion, "proposal", "owner", null,
-                ResourceRevision: proposal.Revision, Proposal: ToProposalWire(proposal));
+                ResourceRevision: proposal.Revision, Proposal: ToProposalWire(proposal, operation));
         }
         catch (ArgumentException)
         {
@@ -3957,22 +4020,64 @@ public sealed class ServiceRequestHandler
         ToWireToken(feedback.CreationMethod.ToString()),
         feedback.RecordedAtUtc);
 
-    private static ProposalWire ToProposalWire(Core.Domain.Proposal proposal) => new(
-        proposal.Id,
-        proposal.ZoneId,
-        proposal.Revision,
-        proposal.SchemaVersion,
-        ToWireToken(proposal.Kind.ToString()),
-        proposal.DestinationResourceId,
-        proposal.DestinationRevision,
-        proposal.SubjectResourceId,
-        proposal.SubjectRevision,
-        proposal.IdempotencyKey,
-        proposal.PayloadHash,
-        ToProposalItemWire(proposal.Item),
-        ToWireToken(proposal.Executor.ToString()),
-        proposal.RecordedAtUtc,
-        proposal.ClaimedUserConfirmed);
+    /// <summary>
+    /// Projects one proposal for its served audience. The computed citation
+    /// review is produced only when a store is supplied, which is the owner
+    /// review surface: the agent proposal reply carries none, because live
+    /// citation state is owner-facing information and the agent's scope
+    /// authorizes the proposal, not an existence oracle over its sources.
+    /// </summary>
+    private static ProposalWire ToProposalWire(Core.Domain.Proposal proposal, IManagedResourceStore? store)
+    {
+        return new ProposalWire(
+            proposal.Id,
+            proposal.ZoneId,
+            proposal.Revision,
+            proposal.SchemaVersion,
+            ToWireToken(proposal.Kind.ToString()),
+            proposal.DestinationResourceId,
+            proposal.DestinationRevision,
+            proposal.SubjectResourceId,
+            proposal.SubjectRevision,
+            proposal.IdempotencyKey,
+            proposal.PayloadHash,
+            ToProposalItemWire(proposal.Item),
+            ToWireToken(proposal.Executor.ToString()),
+            proposal.RecordedAtUtc,
+            proposal.ClaimedUserConfirmed,
+            store is null ? null : ToProposalCitationReviewWire(ProposalService.EvaluateReview(proposal, store)));
+    }
+
+    private static ProposalCitationReviewWire ToProposalCitationReviewWire(Core.Domain.ProposalReview review) => new(
+        review.NeedsReview ? "needsReview" : "current",
+        ProposalReviewTokens(review.Reasons),
+        review.StaleSourceIds);
+
+    private static string[] ProposalReviewTokens(Core.Domain.ProposalReviewReason reasons)
+    {
+        var tokens = new List<string>();
+        if (reasons.HasFlag(Core.Domain.ProposalReviewReason.CitedSourceMissing))
+        {
+            tokens.Add("citedSourceMissing");
+        }
+
+        if (reasons.HasFlag(Core.Domain.ProposalReviewReason.CitedSourceRevisionChanged))
+        {
+            tokens.Add("citedSourceRevisionChanged");
+        }
+
+        if (reasons.HasFlag(Core.Domain.ProposalReviewReason.CitedSourceUnavailable))
+        {
+            tokens.Add("citedSourceUnavailable");
+        }
+
+        if (reasons.HasFlag(Core.Domain.ProposalReviewReason.CitedSourceLineageChanged))
+        {
+            tokens.Add("citedSourceLineageChanged");
+        }
+
+        return tokens.ToArray();
+    }
 
     /// <summary>
     /// Projects the proposed item content verbatim: declared kind, author,
@@ -5392,7 +5497,7 @@ public sealed class ServiceRequestHandler
                 Decision: recheck,
                 PolicyGeneration: recheck.PolicyGeneration,
                 ResourceRevision: created.Revision,
-                Proposal: ToProposalWire(created));
+                Proposal: ToProposalWire(created, store: null));
         }
         catch (FormatException)
         {

@@ -411,6 +411,8 @@
                                 <TextBlock Text="Review — the cited source beside the content" FontWeight="SemiBold" FontSize="15" />
                                 <TextBlock x:Name="ReviewProvenanceText" TextWrapping="Wrap" Margin="0,8,0,0" FontFamily="Consolas" />
                                 <TextBlock x:Name="ReviewItemStateText" TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280" />
+                                <TextBlock x:Name="ReviewStalenessText" TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF9A3412"
+                                           AutomationProperties.AutomationId="ReviewStalenessText" />
 
                                 <Grid Margin="0,12,0,0">
                                     <Grid.ColumnDefinitions>
@@ -420,7 +422,7 @@
                                     </Grid.ColumnDefinitions>
 
                                     <StackPanel Grid.Column="0">
-                                        <TextBlock Text="Cited source as the service served it" FontWeight="SemiBold" />
+                                        <TextBlock Text="Cited evidence as the service served it" FontWeight="SemiBold" />
                                         <TextBlock x:Name="ReviewSourceMetaText" TextWrapping="Wrap" Margin="0,6,0,0" FontFamily="Consolas" />
                                         <TextBlock x:Name="ReviewSourceMessageText" TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280" />
                                         <TextBox x:Name="ReviewSourceText" Height="200" Margin="0,8,0,0" IsReadOnly="True" AcceptsReturn="True"

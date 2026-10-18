@@ -281,6 +281,25 @@ internal sealed partial class OwnerConsoleSession
 
     public string? ReviewSourceMessage { get; private set; }
 
+    /// <summary>
+    /// The first cited memory item the service served at the revision the
+    /// citation pins, when that citation names an item rather than a registered
+    /// source. The pane shows its exact body text, the same detail the owner
+    /// library serves; a citation the service does not serve at its pinned
+    /// revision leaves this unset and is reported as such instead of being
+    /// replaced with another revision or another resource.
+    /// </summary>
+    public OwnerItemDetail? ReviewCitedItem { get; private set; }
+
+    /// <summary>
+    /// What the service's computed review state says about the sources this
+    /// pending proposal cites: unchanged, or moved/missing/unavailable/revoked
+    /// since the proposal was recorded. A stale citation means the output needs
+    /// review before any decision; the proposal content itself is never
+    /// rewritten.
+    /// </summary>
+    public string? ReviewStalenessMessage { get; private set; }
+
     /// <summary>The last decision this console recorded in this session.</summary>
     public OwnerReviewOutcome? ReviewOutcome { get; private set; }
 
@@ -360,41 +379,82 @@ internal sealed partial class OwnerConsoleSession
         }
 
         OwnerSourceDetail? source = null;
+        OwnerItemDetail? citedItem = null;
         string? sourceText = null;
         string? sourceMessage = null;
-        var citation = proposal.Item.Sources.FirstOrDefault(cited => !string.IsNullOrEmpty(cited.SourceId));
-        if (citation is null)
+        var citations = proposal.Item.Sources
+            .Where(cited => !string.IsNullOrEmpty(cited.SourceId))
+            .ToArray();
+        if (citations.Length == 0)
         {
             sourceMessage = "This proposal cites no source, so there is no evidence to read beside the content.";
         }
         else
         {
-            var note = await ExecuteInboxAsync(
-                token => OwnerChannelClient.ReadResearchNoteAsync(ControlPipe, citation.SourceId!, citation.SourceRevision, token),
-                code => new OwnerResearchNoteResult(OwnerCommandOutcome.Unavailable, code, null, null)).ConfigureAwait(true);
-            if (note.Outcome == OwnerCommandOutcome.Completed && note.Source is not null)
+            // A multi-source synthesis cites several inputs; the pane serves the
+            // first one the service can actually read beside the content, while
+            // every citation stays listed with its pinned revision. The proposal
+            // itself is never rewritten to make a citation resolvable.
+            foreach (var citation in citations)
             {
-                source = note.Source;
-                sourceText = note.Text;
-                sourceMessage = note.Text is null
-                    ? "The service holds " + citation.SourceId + " as registry metadata only: this citation keeps no captured text."
-                    : "The service served the exact text of " + note.Source.Id +
-                        " revision " + note.Source.Revision.ToString(CultureInfo.InvariantCulture) + " as the evidence this proposal cites.";
-            }
-            else
-            {
+                var note = await ExecuteInboxAsync(
+                    token => OwnerChannelClient.ReadResearchNoteAsync(ControlPipe, citation.SourceId!, citation.SourceRevision, token),
+                    code => new OwnerResearchNoteResult(OwnerCommandOutcome.Unavailable, code, null, null)).ConfigureAwait(true);
+                if (note.Outcome == OwnerCommandOutcome.Completed && note.Source is not null)
+                {
+                    source = note.Source;
+                    sourceText = note.Text;
+                    sourceMessage = (note.Text is null
+                            ? "The service holds " + citation.SourceId + " as registry metadata only: this citation keeps no captured text."
+                            : "The service served the exact text of " + note.Source.Id +
+                                " revision " + note.Source.Revision.ToString(CultureInfo.InvariantCulture) +
+                                " as the evidence this proposal cites") +
+                        (citations.Length > 1
+                            ? " (first of " + citations.Length.ToString(CultureInfo.InvariantCulture) + " cited inputs; every citation is listed above)."
+                            : ".");
+                    break;
+                }
+
                 var metadata = await ExecuteInboxAsync(
                     token => OwnerChannelClient.ReadSourceAsync(ControlPipe, citation.SourceId!, citation.SourceRevision, token),
                     code => new OwnerSourceReadResult(OwnerCommandOutcome.Unavailable, code, null)).ConfigureAwait(true);
-                source = metadata.Source;
-                sourceMessage = metadata.Source is null
-                    ? DescribeInboxAnswer("cited source", note.Outcome, note.ErrorCode)
-                    : "The citation names " + citation.SourceId + " and the service served registry metadata for it without captured text.";
+                if (metadata.Source is not null)
+                {
+                    source = metadata.Source;
+                    sourceMessage = "The citation names " + citation.SourceId + " and the service served registry metadata for it without captured text.";
+                    break;
+                }
+
+                // A citation can also name a memory item instead of a registered
+                // source: a higher-level synthesis cites the lower-level item it
+                // stands on. The service serves that item at exactly the revision
+                // the citation pins, through the same owner detail read the
+                // library uses, so the owner compares the proposal with the cited
+                // item's own text. A revision the service does not serve stays
+                // reported as a refusal — it is never swapped for a newer one,
+                // and the pane never shows another resource in its place.
+                var item = await ExecuteInboxAsync(
+                    token => OwnerChannelClient.ReadMemoryItemAsync(ControlPipe, citation.SourceId!, citation.SourceRevision, token),
+                    code => new OwnerItemReadResult(OwnerCommandOutcome.Unavailable, code, null)).ConfigureAwait(true);
+                if (item.Outcome == OwnerCommandOutcome.Completed && item.Item is not null)
+                {
+                    citedItem = item.Item;
+                    sourceText = item.Item.Body;
+                    sourceMessage = DescribeCitedItem(citation.SourceRevision, item.Item, citations.Length);
+                    break;
+                }
+
+                sourceMessage = "No evidence was served beside the content for the citation " + citation.SourceId +
+                    (citation.SourceRevision is { } pinned
+                        ? "@" + pinned.ToString(CultureInfo.InvariantCulture)
+                        : " (no revision pinned)") +
+                    ": the service answered neither registered-source text nor a memory item at that revision (memory read: " +
+                    (item.ErrorCode ?? "unknown") + "), and nothing was substituted for it.";
             }
         }
 
         await ProbeAsync().ConfigureAwait(true);
-        ApplyProposalAnswer(epoch, proposal, itemId, lifecycle, subject.Lifecycle, source, sourceText, sourceMessage);
+        ApplyProposalAnswer(epoch, proposal, itemId, lifecycle, subject.Lifecycle, source, citedItem, sourceText, sourceMessage);
         Append(DescribeInboxActForLog("open proposal", OwnerCommandOutcome.Completed, null));
         RaiseChanged();
     }
@@ -533,6 +593,7 @@ internal sealed partial class OwnerConsoleSession
         OwnerLifecycleResult lifecycle,
         OwnerLifecycleState? subjectLifecycle,
         OwnerSourceDetail? source,
+        OwnerItemDetail? citedItem,
         string? sourceText,
         string? sourceMessage)
     {
@@ -549,8 +610,10 @@ internal sealed partial class OwnerConsoleSession
         ReviewItemLifecycle = lifecycle.Lifecycle;
         ReviewSubjectLifecycle = subjectLifecycle;
         ReviewSource = source;
+        ReviewCitedItem = citedItem;
         ReviewSourceText = sourceText;
         ReviewSourceMessage = sourceMessage;
+        ReviewStalenessMessage = DescribeProposalStaleness(proposal);
         ReviewOutcome = null;
         _reviewDraftVersion++;
         ReviewItemStateMessage = DescribeReviewItemState(proposal, itemId, lifecycle.Lifecycle, subjectLifecycle);
@@ -590,6 +653,64 @@ internal sealed partial class OwnerConsoleSession
         return revise
             ? "No decision has been recorded for this proposal yet." + context
             : "No item has been written for this proposal yet: it is still exactly what the agent submitted.";
+    }
+
+    /// <summary>
+    /// What the review pane says about the live state of the sources a pending
+    /// proposal cites: whether the output still matches the evidence it was
+    /// recorded against. A citation that moved, disappeared, became unavailable,
+    /// or was revoked is reported as needing review, and so is a source that
+    /// changed underneath a cited memory item's own pinned lineage; the proposal
+    /// is never silently updated to match.
+    /// </summary>
+    private static string DescribeProposalStaleness(OwnerProposalDetail proposal)
+    {
+        ArgumentNullException.ThrowIfNull(proposal);
+        var review = proposal.CitationReview;
+        if (review is null)
+        {
+            return "The service reported no review state for the sources this proposal cites.";
+        }
+
+        if (!string.Equals(review.State, "needsReview", StringComparison.Ordinal))
+        {
+            return "Citations unchanged: every source this proposal cites is still at the revision it names.";
+        }
+
+        var reasons = review.Reasons.Length == 0 ? "(none reported)" : string.Join(", ", review.Reasons);
+        var stale = review.StaleSourceIds.Length == 0 ? "(none named to you)" : string.Join(", ", review.StaleSourceIds);
+        var lineage = Array.IndexOf(review.Reasons, "citedSourceLineageChanged") >= 0
+            ? " The report also names a source below a cited memory item: the cited item is still at the revision this proposal pins, but one of the sources that item's own citations pin no longer matches live state, so the item cannot be traced to its recorded roots as it stands."
+            : string.Empty;
+        return "NEEDS REVIEW: a source this proposal cites changed since the proposal was recorded (" + reasons +
+            "). Cited source(s): " + stale + "." + lineage +
+            " The proposal's content and citations are unchanged — re-read the cited evidence before you publish, edit, or reject it.";
+    }
+
+    /// <summary>
+    /// What the pane says about a cited memory item the service served: the item
+    /// identity, the revision actually served and how it relates to the revision
+    /// the citation pins, and the stored attribution the comparison must not
+    /// lose. A citation that pins no revision is stated as such instead of being
+    /// presented as pinned.
+    /// </summary>
+    private static string DescribeCitedItem(long? pinnedRevision, OwnerItemDetail item, int citationCount)
+    {
+        var revision = pinnedRevision is { } pinned
+            ? pinned == item.Revision
+                ? "revision " + item.Revision.ToString(CultureInfo.InvariantCulture) + ", exactly the revision the citation pins"
+                : "revision " + item.Revision.ToString(CultureInfo.InvariantCulture) +
+                    " served for pinned revision " + pinned.ToString(CultureInfo.InvariantCulture)
+            : "revision " + item.Revision.ToString(CultureInfo.InvariantCulture) +
+                ", the revision the vault holds now because the citation pins none";
+        var detail = "The service served the cited memory item " + item.Id + " at " + revision +
+            " (kind=" + item.Kind + ", level=" + item.Level + ", author=" + item.Author +
+            ", creationMethod=" + item.CreationMethod + ", evidence=" + item.Evidence +
+            ") as the evidence this proposal cites";
+        return citationCount > 1
+            ? detail + " (first of " + citationCount.ToString(CultureInfo.InvariantCulture) +
+                " cited inputs; every citation is listed above)."
+            : detail + ".";
     }
 
     /// <summary>Applies one failed open requested under <paramref name="epoch"/>.</summary>
@@ -701,8 +822,10 @@ internal sealed partial class OwnerConsoleSession
         ReviewSubjectLifecycle = null;
         ReviewItemStateMessage = null;
         ReviewSource = null;
+        ReviewCitedItem = null;
         ReviewSourceText = null;
         ReviewSourceMessage = null;
+        ReviewStalenessMessage = null;
         ReviewOutcome = null;
         ReviewMessage = null;
         _lockWarnedText = null;

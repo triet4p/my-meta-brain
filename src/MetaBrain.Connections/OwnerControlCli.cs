@@ -886,7 +886,21 @@ internal static class OwnerControlCli
                 }
             }
         }
+
+        if (proposal.TryGetProperty("citationReview", out var citationReview) && citationReview.ValueKind == JsonValueKind.Object)
+        {
+            Console.WriteLine(
+                $"CITATIONS state={JsonValueText(citationReview, "state")} " +
+                $"reasons=[{JsonStringList(citationReview, "reasons")}] stale=[{JsonStringList(citationReview, "staleSourceIds")}]");
+        }
     }
+
+    private static string JsonStringList(JsonElement element, string property) =>
+        element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.Array
+            ? string.Join(",", value.EnumerateArray()
+                .Where(item => item.ValueKind == JsonValueKind.String)
+                .Select(item => item.GetString()))
+            : string.Empty;
 
     private static void PrintMemoryItem(JsonElement reply)
     {
@@ -4514,13 +4528,9 @@ internal static class OwnerControlCli
     private static async Task<int> JobCreateAsync(CommandOptions options)
     {
         options.RequireOnly("--control-pipe", "--source-id", "--source-revision", "--zone-id",
-            "--destination-id", "--destination-revision", "--provider", "--model", "--max-cost-usd", "--profile");
+            "--destination-id", "--destination-revision", "--provider", "--model", "--max-cost-usd", "--profile",
+            "--input-file");
         var controlPipe = ControlPipe(options);
-        var sourceId = options.Required("--source-id");
-        if (!long.TryParse(options.Required("--source-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var sourceRevision) || sourceRevision < 1)
-        {
-            return Usage();
-        }
         var zoneId = options.Required("--zone-id");
         var destinationId = options.Required("--destination-id");
         if (!long.TryParse(options.Required("--destination-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var destinationRevision) || destinationRevision < 1)
@@ -4540,11 +4550,45 @@ internal static class OwnerControlCli
         }
         var profile = options.Optional("--profile");
 
+        // A single-input profile names one source/revision pair directly. A
+        // multi-input synthesis job names its whole selection in one draft file
+        // instead: the explicit input set with pinned revisions, the owner
+        // objective, and the requested level.
+        string? sourceId = null;
+        long sourceRevision = 0;
+        string? selectionBase64 = null;
+        if (options.Optional("--input-file") is { } selectionPath)
+        {
+            if (options.Optional("--source-id") is not null || options.Optional("--source-revision") is not null)
+            {
+                return Usage();
+            }
+
+            try
+            {
+                selectionBase64 = Convert.ToBase64String(
+                    await File.ReadAllBytesAsync(selectionPath).ConfigureAwait(false));
+            }
+            catch (IOException)
+            {
+                return Usage();
+            }
+        }
+        else
+        {
+            sourceId = options.Required("--source-id");
+            if (!long.TryParse(options.Required("--source-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out sourceRevision) || sourceRevision < 1)
+            {
+                return Usage();
+            }
+        }
+
         var result = await InvokeOwnerAsync(controlPipe,
             new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerJobCreateOperation,
-                ResourceId: sourceId, ResourceRevision: sourceRevision,
+                ResourceId: sourceId, ResourceRevision: sourceId is null ? null : sourceRevision,
                 ZoneId: zoneId, DestinationResourceId: destinationId, DestinationRevision: destinationRevision,
-                Provider: provider, Model: model, MaximumCostUsd: maxCostUsd, Profile: profile)).ConfigureAwait(false);
+                Provider: provider, Model: model, MaximumCostUsd: maxCostUsd, Profile: profile,
+                ContentBase64: selectionBase64)).ConfigureAwait(false);
 
         if (!result.Success || !HasStatus(result.Reply, "job_created"))
         {
@@ -4735,13 +4779,48 @@ internal static class OwnerControlCli
         var model = scope.ValueKind == JsonValueKind.Object ? JsonValueText(scope, "model") : "(none)";
         var profile = scope.ValueKind == JsonValueKind.Object && scope.TryGetProperty("profile", out var p) ? p.GetString() : null;
         var profileStr = string.IsNullOrEmpty(profile) ? "" : $" profile={profile}";
+        var selectionStr = PrintJobSelection(scope);
         var usageStr = job.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object
             ? $"in={JsonValueText(usage, "inputTokens")} out={JsonValueText(usage, "outputTokens")} cost={JsonValueText(usage, "costUsd")}"
             : "in=0 out=0 cost=0";
         var failure = job.TryGetProperty("failure", out var f) && f.ValueKind == JsonValueKind.Object
             ? $" fail={JsonValueText(f, "code")}: {JsonValueText(f, "message")}"
             : "";
-        Console.WriteLine($"JOB id={id} state={state}{profileStr} provider={provider} model={model} {usageStr}{failure}");
+        Console.WriteLine($"JOB id={id} state={state}{profileStr}{selectionStr} provider={provider} model={model} {usageStr}{failure}");
+    }
+
+    /// <summary>
+    /// The explicitly selected inputs of a job, each with the revision it is
+    /// pinned to, plus the owner objective and requested level for a synthesis
+    /// job. This is what the job is allowed to read: no query, no discovery.
+    /// </summary>
+    private static string PrintJobSelection(JsonElement scope)
+    {
+        if (scope.ValueKind != JsonValueKind.Object ||
+            !scope.TryGetProperty("inputs", out var inputs) ||
+            inputs.ValueKind != JsonValueKind.Array)
+        {
+            return string.Empty;
+        }
+
+        var pinned = inputs.EnumerateArray()
+            .Select(input => JsonValueText(input, "resourceId") + "@" + JsonValueText(input, "revision"))
+            .ToArray();
+        var selection = " inputs=" + inputs.GetArrayLength().ToString(CultureInfo.InvariantCulture) +
+            "[" + string.Join(",", pinned) + "]";
+        if (scope.TryGetProperty("targetLevel", out var level) && level.ValueKind == JsonValueKind.String)
+        {
+            selection += " level=" + level.GetString();
+        }
+
+        if (scope.TryGetProperty("objective", out var objective) &&
+            objective.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrEmpty(objective.GetString()))
+        {
+            selection += " objective=" + objective.GetString();
+        }
+
+        return selection;
     }
 
     private static string? LoadOpenAiKeyFromEnv()

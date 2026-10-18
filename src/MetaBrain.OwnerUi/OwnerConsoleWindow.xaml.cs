@@ -1149,6 +1149,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
                     : "  pin=" + proposal.SubjectResourceId + "@" + (proposal.SubjectRevision ?? 0).ToString(CultureInfo.InvariantCulture)) +
                 "  claimedUserConfirmed=" + (proposal.ClaimedUserConfirmed ? "claimed (never verified here)" : "no claim");
         ReviewItemStateText.Text = proposal is null ? string.Empty : _session.ReviewItemStateMessage ?? string.Empty;
+        ReviewStalenessText.Text = proposal is null ? string.Empty : _session.ReviewStalenessMessage ?? string.Empty;
         ReviewAttributionText.Text = proposal is null
             ? string.Empty
             : "author=" + proposal.Item.Author + "  creation=" + proposal.Item.CreationMethod +
@@ -1165,7 +1166,13 @@ public partial class OwnerConsoleWindow : System.Windows.Window
                 "  zone=" + reviewSource.ZoneId + "  availability=" + reviewSource.Availability +
                 "  title=" + (reviewSource.Title ?? "(none)") + "  captured=" + Stamp(reviewSource.CapturedAtUtc) +
                 "  locator=" + (reviewSource.Locator ?? "(none)")
-            : string.Empty;
+            : _session.ReviewCitedItem is { } citedItem
+                ? "memory item id=" + citedItem.Id + "  revision=" + citedItem.Revision.ToString(CultureInfo.InvariantCulture) +
+                    "  zone=" + citedItem.ZoneId + "  kind=" + citedItem.Kind + "  level=" + citedItem.Level +
+                    "  author=" + citedItem.Author + "  executor=" + citedItem.Executor +
+                    "  creation=" + citedItem.CreationMethod + "  evidence=" + citedItem.Evidence +
+                    "  title=" + (citedItem.Title ?? "(none)") + "  recorded=" + Stamp(citedItem.RecordedAtUtc)
+                : string.Empty;
         ReviewSourceMessageText.Text = proposal is null ? string.Empty : _session.ReviewSourceMessage ?? string.Empty;
         ReviewSourceText.Text = _session.ReviewSourceText ?? string.Empty;
         ReviewMessageText.Text = _session.ReviewMessage ?? (unlocked

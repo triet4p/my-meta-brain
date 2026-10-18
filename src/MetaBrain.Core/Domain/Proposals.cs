@@ -91,6 +91,33 @@ public sealed record Proposal(
 /// </summary>
 public sealed record ProposalIdentity(string Id, long Revision, string ZoneId);
 
+/// <summary>
+/// Reasons a pending proposal needs review before it can still be trusted as
+/// recorded. Several can combine on one record. The flags name why the cited
+/// evidence moved — directly, or deeper in a cited memory item's own pinned
+/// lineage — never whether the proposed content is true.
+/// </summary>
+[Flags]
+public enum ProposalReviewReason
+{
+    None = 0,
+    CitedSourceMissing = 1,
+    CitedSourceRevisionChanged = 2,
+    CitedSourceUnavailable = 4,
+    CitedSourceLineageChanged = 8
+}
+
+/// <summary>
+/// Computed read-time review state of one served proposal: whether the pending
+/// output still matches the evidence it cited. This is a truthful evaluation
+/// over live state; it never rewrites the proposal, the cited source, or an
+/// owner's conclusion, and it never upgrades or downgrades declared evidence.
+/// </summary>
+public sealed record ProposalReview(
+    bool NeedsReview,
+    ProposalReviewReason Reasons,
+    string[] StaleSourceIds);
+
 public static class ProposalCodec
 {
     public const int CurrentSchemaVersion = 1;

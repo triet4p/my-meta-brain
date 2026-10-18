@@ -187,7 +187,7 @@ internal static partial class OwnerServiceSmoke
                 "--zone-id", S6T1Zone, "--destination-id", S6T1DestinationInboxId,
                 "--destination-revision", "1",
                 "--provider", "deepseek", "--model", "deepseek-flash").ConfigureAwait(false);
-            Require(unregSource.ExitCode != 0 && (unregSource.StandardError.Contains("source resource is not registered", StringComparison.Ordinal) || unregSource.StandardOutput.Contains("source resource is not registered", StringComparison.Ordinal)),
+            Require(unregSource.ExitCode != 0 && (unregSource.StandardError.Contains("is not registered in any zone", StringComparison.Ordinal) || unregSource.StandardOutput.Contains("is not registered in any zone", StringComparison.Ordinal)),
                 "Job creation with unregistered source resource did not fail closed.");
             Console.WriteLine("PASS negative: unregistered source resource denied");
 
@@ -1086,8 +1086,7 @@ internal static partial class OwnerServiceSmoke
                 var controlledJobService = new ModelJobService(midflightLifecycle, controlledAdapter);
                 var createdRecord = controlledJobService.CreateJob(
                     AuthenticatedContext.ForOwner(),
-                    sourceResourceId: "midflight-source",
-                    sourceRevision: 1,
+                    inputs: new[] { new JobInputReference("midflight-source", 1) },
                     destinationZoneId: S6T1Zone,
                     destinationResourceId: "midflight-inbox",
                     destinationRevision: 1,
@@ -1154,8 +1153,7 @@ internal static partial class OwnerServiceSmoke
                     var testJobService = new ModelJobService(midflightLifecycle, dummyAdapter);
                     testJobService.CreateJob(
                         AuthenticatedContext.ForOwner(),
-                        sourceResourceId: "corrupt-source",
-                        sourceRevision: 1,
+                        inputs: new[] { new JobInputReference("corrupt-source", 1) },
                         destinationZoneId: S6T1Zone,
                         destinationResourceId: "midflight-inbox",
                         destinationRevision: 1,
@@ -1176,8 +1174,7 @@ internal static partial class OwnerServiceSmoke
                 var sendJobService = new ModelJobService(midflightLifecycle, sendTestAdapter);
                 var preSendRecord = sendJobService.CreateJob(
                     AuthenticatedContext.ForOwner(),
-                    sourceResourceId: "corrupt-source",
-                    sourceRevision: 1,
+                    inputs: new[] { new JobInputReference("corrupt-source", 1) },
                     destinationZoneId: S6T1Zone,
                     destinationResourceId: "midflight-inbox",
                     destinationRevision: 1,
@@ -1218,8 +1215,7 @@ internal static partial class OwnerServiceSmoke
                 var commitJobService = new ModelJobService(midflightLifecycle, commitTestAdapter);
                 var preCommitRecord = commitJobService.CreateJob(
                     AuthenticatedContext.ForOwner(),
-                    sourceResourceId: "corrupt-source",
-                    sourceRevision: 1,
+                    inputs: new[] { new JobInputReference("corrupt-source", 1) },
                     destinationZoneId: S6T1Zone,
                     destinationResourceId: "midflight-inbox",
                     destinationRevision: 1,

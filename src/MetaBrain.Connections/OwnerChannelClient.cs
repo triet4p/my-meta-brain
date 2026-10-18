@@ -334,11 +334,23 @@ public sealed record OwnerReviewDraft(
     string? Version);
 
 /// <summary>
+/// Computed review state of one pending proposal as the service reported it:
+/// whether a source the proposal cites moved, disappeared, became unavailable,
+/// or was revoked since the proposal was recorded. It reports the staleness of
+/// the cited evidence only; it never rewrites the proposal, its declared level
+/// or evidence, or an owner's conclusion.
+/// </summary>
+public sealed record OwnerProposalCitationReview(
+    string State,
+    string[] Reasons,
+    string[] StaleSourceIds);
+
+/// <summary>
 /// One pending proposal as the owner reviews it: its zone, kind, pinned
 /// subject, approved inbox destination, idempotency identity, payload hash,
 /// executor and recorded time, the agent's confirmation claim (a claim only,
-/// never verified by this surface) and the proposed item draft exactly as the
-/// agent wrote it.
+/// never verified by this surface), the proposed item draft exactly as the
+/// agent wrote it, and the computed review state of the sources it cites.
 /// </summary>
 public sealed record OwnerProposalDetail(
     string Id,
@@ -354,7 +366,8 @@ public sealed record OwnerProposalDetail(
     string Executor,
     DateTimeOffset RecordedAtUtc,
     bool ClaimedUserConfirmed,
-    OwnerReviewDraft Item);
+    OwnerReviewDraft Item,
+    OwnerProposalCitationReview? CitationReview = null);
 
 public sealed record OwnerProposalReadResult(
     OwnerCommandOutcome Outcome,
@@ -2624,6 +2637,15 @@ public static class OwnerChannelClient
             version = Text(applicability, "version");
         }
 
+        OwnerProposalCitationReview? review = null;
+        if (proposal.TryGetProperty("citationReview", out var reviewElement) && reviewElement.ValueKind == JsonValueKind.Object)
+        {
+            review = new OwnerProposalCitationReview(
+                Text(reviewElement, "state") ?? "unknown",
+                Strings(reviewElement, "reasons"),
+                Strings(reviewElement, "staleSourceIds"));
+        }
+
         return new OwnerProposalDetail(
             Text(proposal, "id") ?? string.Empty,
             Text(proposal, "zoneId") ?? string.Empty,
@@ -2650,7 +2672,8 @@ public static class OwnerChannelClient
                 Timestamp(item, "occurredAtUtc"),
                 project,
                 environment,
-                version));
+                version),
+            review);
     }
 
     /// <summary>One review outcome as the service reported it.</summary>
