@@ -462,6 +462,28 @@
                                 </StackPanel>
 
                                 <TextBlock x:Name="ReviewMessageText" TextWrapping="Wrap" Margin="0,12,0,0" FontWeight="SemiBold" />
+                                <Border Margin="0,14,0,0" Padding="14" Background="#FFF7F9FC" BorderBrush="#FFD5D8DC" BorderThickness="1">
+                                    <StackPanel>
+                                        <TextBlock Text="Declassify — publish a sanitized copy into an explicit shared zone" FontWeight="SemiBold" FontSize="14" />
+                                        <TextBlock TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280"
+                                                   Text="The shared copy carries the edited title, body and metadata above with no citations. Private lineage stays encrypted and unreadable from the shared zone. Preview first, then type PUBLISH to approve exactly that content." />
+                                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                            <TextBlock Text="Shared item ID" Foreground="#FF6B7280" VerticalAlignment="Center" Margin="0,0,6,0" />
+                                            <TextBox x:Name="DeclassifyDestinationInput" Width="220" AutomationProperties.AutomationId="DeclassifyDestinationInput" />
+                                            <TextBlock Text="Shared zone" Foreground="#FF6B7280" VerticalAlignment="Center" Margin="12,0,6,0" />
+                                            <TextBox x:Name="DeclassifyZoneInput" Width="200" AutomationProperties.AutomationId="DeclassifyZoneInput" />
+                                            <Button x:Name="DeclassifyPreviewButton" Content="Preview sanitized publication" Padding="14,7" Margin="12,0,0,0" Click="OnDeclassifyPreviewClicked" />
+                                        </StackPanel>
+                                        <TextBlock x:Name="DeclassifyPreviewText" TextWrapping="Wrap" Margin="0,8,0,0" FontFamily="Consolas" AutomationProperties.AutomationId="DeclassifyPreviewText" />
+                                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                            <TextBlock Text="Type PUBLISH to approve" Foreground="#FF6B7280" VerticalAlignment="Center" Margin="0,0,6,0" />
+                                            <TextBox x:Name="DeclassifyConfirmInput" Width="120" AutomationProperties.AutomationId="DeclassifyConfirmInput" />
+                                            <Button x:Name="DeclassifyPublishButton" Content="Publish sanitized copy" Padding="14,7" Margin="12,0,0,0" Click="OnDeclassifyPublishClicked" />
+                                        </StackPanel>
+                                        <TextBlock x:Name="DeclassifyMessageText" TextWrapping="Wrap" Margin="0,8,0,0" FontWeight="SemiBold" AutomationProperties.AutomationId="DeclassifyMessageText" />
+                                    </StackPanel>
+                                </Border>
+
                             </StackPanel>
                         </Border>
 

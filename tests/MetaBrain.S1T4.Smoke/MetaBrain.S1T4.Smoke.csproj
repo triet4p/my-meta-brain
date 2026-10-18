@@ -6,6 +6,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- S6-T5 renders the real WPF owner window offscreen for visual proof.
+         Only the S6-T5 render helper touches presentation types; the suite
+         itself stays a console program. -->
+    <UseWPF>true</UseWPF>
   </PropertyGroup>
   <ItemGroup>
     <!-- The suite drives the owner console session in process (the exact class

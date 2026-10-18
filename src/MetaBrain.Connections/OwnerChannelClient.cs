@@ -406,6 +406,46 @@ public sealed record OwnerLifecycleResult(
     OwnerLifecycleState? Lifecycle);
 
 /// <summary>
+/// One private evidence pin a declassification stands on, as the service
+/// reported it on the owner channel only.
+/// </summary>
+public sealed record OwnerDeclassifyPin(string ResourceId, long Revision);
+
+/// <summary>
+/// Owner-only preview of a sanitized cross-zone publication: the exact content
+/// the shared zone would receive beside the private pins it would stand on.
+/// </summary>
+public sealed record OwnerDeclassifyPreview(
+    string DestinationResourceId,
+    string DestinationZoneId,
+    OwnerReviewDraft Item,
+    OwnerDeclassifyPin[] Pins,
+    bool PinsCurrent,
+    string[] MismatchedResourceIds);
+
+public sealed record OwnerDeclassifyPreviewResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerDeclassifyPreview? Preview);
+
+/// <summary>
+/// One completed owner declassification: the shared destination, its revision,
+/// the publication record revision, the encrypted lineage relation IDs and
+/// whether this call is what wrote them.
+/// </summary>
+public sealed record OwnerDeclassifyOutcome(
+    string DestinationResourceId,
+    long DestinationRevision,
+    long LifecycleRevision,
+    string[] LineageRelationIds,
+    bool DecisionApplied);
+
+public sealed record OwnerDeclassifyResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerDeclassifyOutcome? Published);
+
+/// <summary>
 /// One relation endpoint as the service projected it: the exact opaque ID and
 /// verified kind the link pinned, the revision it was made against, and the
 /// optional evidence span. Only the owner's own view names resources the owner
@@ -1310,6 +1350,122 @@ public static class OwnerChannelClient
             CryptographicOperations.ZeroMemory(draft);
         }
     }
+
+    /// <summary>
+    /// Previews one sanitized cross-zone publication: the exact content the
+    /// shared zone would receive beside the private pins it would stand on.
+    /// Mutates nothing and mints no access.
+    /// </summary>
+    public static async Task<OwnerDeclassifyPreviewResult> PreviewDeclassifyAsync(
+        string controlPipe,
+        string destinationResourceId,
+        string destinationZoneId,
+        OwnerDeclassifyPin[] pins,
+        OwnerReviewDraft sanitized,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(destinationResourceId);
+        ArgumentNullException.ThrowIfNull(destinationZoneId);
+        ArgumentNullException.ThrowIfNull(pins);
+        ArgumentNullException.ThrowIfNull(sanitized);
+        var draft = BuildDeclassifyDraft(pins, sanitized);
+        try
+        {
+            var reply = await ReadReplyAsync(
+                controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.OwnerDeclassifyPreviewOperation,
+                    ResourceId: destinationResourceId,
+                    ZoneId: destinationZoneId,
+                    ContentBase64: Convert.ToBase64String(draft)),
+                "declassify_preview",
+                cancellationToken).ConfigureAwait(false);
+
+            return new OwnerDeclassifyPreviewResult(reply.Outcome, reply.ErrorCode, ProjectDeclassifyPreview(reply));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(draft);
+        }
+    }
+
+    /// <summary>
+    /// Publishes one sanitized cross-zone publication with explicit private
+    /// pins: the sanitized shared copy plus encrypted derived_from lineage.
+    /// </summary>
+    public static async Task<OwnerDeclassifyResult> PublishDeclassifyAsync(
+        string controlPipe,
+        string destinationResourceId,
+        string destinationZoneId,
+        OwnerDeclassifyPin[] pins,
+        OwnerReviewDraft sanitized,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(destinationResourceId);
+        ArgumentNullException.ThrowIfNull(destinationZoneId);
+        ArgumentNullException.ThrowIfNull(pins);
+        ArgumentNullException.ThrowIfNull(sanitized);
+        var draft = BuildDeclassifyDraft(pins, sanitized);
+        try
+        {
+            var reply = await ReadReplyAsync(
+                controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.OwnerDeclassifyPublishOperation,
+                    ResourceId: destinationResourceId,
+                    ZoneId: destinationZoneId,
+                    ContentBase64: Convert.ToBase64String(draft)),
+                "declassified",
+                cancellationToken).ConfigureAwait(false);
+
+            return new OwnerDeclassifyResult(reply.Outcome, reply.ErrorCode, ProjectDeclassify(reply));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(draft);
+        }
+    }
+
+    /// <summary>
+    /// Publishes one pending create proposal as a sanitized shared derivative:
+    /// the proposal's cited sources become the encrypted lineage pins.
+    /// </summary>
+    public static async Task<OwnerDeclassifyResult> PublishDeclassifyProposalAsync(
+        string controlPipe,
+        OwnerProposalDetail proposal,
+        string destinationResourceId,
+        string destinationZoneId,
+        OwnerReviewDraft sanitized,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(proposal);
+        ArgumentNullException.ThrowIfNull(destinationResourceId);
+        ArgumentNullException.ThrowIfNull(destinationZoneId);
+        ArgumentNullException.ThrowIfNull(sanitized);
+        var draft = BuildDeclassifyProposalDraft(destinationResourceId, destinationZoneId, sanitized);
+        try
+        {
+            var reply = await ReadReplyAsync(
+                controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.OwnerDeclassifyProposalPublishOperation,
+                    ResourceId: proposal.Id,
+                    ResourceRevision: proposal.Revision,
+                    ContentBase64: Convert.ToBase64String(draft)),
+                "declassified",
+                cancellationToken).ConfigureAwait(false);
+
+            return new OwnerDeclassifyResult(reply.Outcome, reply.ErrorCode, ProjectDeclassify(reply));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(draft);
+        }
+    }
+
 
     /// <summary>
     /// Reads the publication record of one memory item: the live revision of
@@ -2288,6 +2444,52 @@ public static class OwnerChannelClient
                 : new { project, environment, version }
         });
 
+    private static byte[] BuildDeclassifyDraft(OwnerDeclassifyPin[] pins, OwnerReviewDraft sanitized) =>
+        JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            pins = pins.Select(pin => new { resourceId = pin.ResourceId, revision = pin.Revision }).ToArray(),
+            item = new
+            {
+                kind = sanitized.Kind,
+                author = sanitized.Author,
+                creationMethod = sanitized.CreationMethod,
+                evidence = sanitized.Evidence,
+                level = sanitized.Level,
+                title = sanitized.Title,
+                body = sanitized.Body,
+                sources = Array.Empty<object>(),
+                occurredAtUtc = sanitized.OccurredAtUtc?.ToUniversalTime(),
+                recordedAtUtc = DateTimeOffset.UtcNow,
+                applicability = sanitized.Project is null && sanitized.Environment is null && sanitized.Version is null
+                    ? null
+                    : new { project = sanitized.Project, environment = sanitized.Environment, version = sanitized.Version }
+            }
+        });
+
+    private static byte[] BuildDeclassifyProposalDraft(string destinationResourceId, string destinationZoneId, OwnerReviewDraft sanitized) =>
+        JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            destinationResourceId,
+            destinationZoneId,
+            item = new
+            {
+                kind = sanitized.Kind,
+                author = sanitized.Author,
+                creationMethod = sanitized.CreationMethod,
+                evidence = sanitized.Evidence,
+                level = sanitized.Level,
+                title = sanitized.Title,
+                body = sanitized.Body,
+                sources = Array.Empty<object>(),
+                occurredAtUtc = sanitized.OccurredAtUtc?.ToUniversalTime(),
+                recordedAtUtc = DateTimeOffset.UtcNow,
+                applicability = sanitized.Project is null && sanitized.Environment is null && sanitized.Version is null
+                    ? null
+                    : new { project = sanitized.Project, environment = sanitized.Environment, version = sanitized.Version }
+            }
+        });
+
+
     /// <summary>One lifecycle transition draft: the owner's words, nothing else.</summary>
     private static byte[] EncodeTransition(string rationale, string? replacementResourceId) =>
         JsonSerializer.SerializeToUtf8Bytes(new { rationale, replacementResourceId });
@@ -2697,6 +2899,82 @@ public static class OwnerChannelClient
             Int64(review, "lifecycleRevision"),
             Flag(review, "decisionApplied"));
     }
+
+    private static OwnerDeclassifyPreview? ProjectDeclassifyPreview(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            reply.Payload.ValueKind != JsonValueKind.Object ||
+            !reply.Payload.TryGetProperty("declassifyPreview", out var preview) ||
+            preview.ValueKind != JsonValueKind.Object ||
+            !preview.TryGetProperty("item", out var item) ||
+            item.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var pins = preview.TryGetProperty("pins", out var pinElements) && pinElements.ValueKind == JsonValueKind.Array
+            ? pinElements.EnumerateArray()
+                .Where(element => element.ValueKind == JsonValueKind.Object)
+                .Select(element => new OwnerDeclassifyPin(
+                    Text(element, "resourceId") ?? string.Empty,
+                    Int64(element, "revision")))
+                .ToArray()
+            : Array.Empty<OwnerDeclassifyPin>();
+
+        return new OwnerDeclassifyPreview(
+            Text(preview, "destinationResourceId") ?? string.Empty,
+            Text(preview, "destinationZoneId") ?? string.Empty,
+            ProjectDeclassifyDraft(item),
+            pins,
+            Flag(preview, "pinsCurrent"),
+            Strings(preview, "mismatchedResourceIds"));
+    }
+
+    private static OwnerReviewDraft ProjectDeclassifyDraft(JsonElement item)
+    {
+        string? project = null;
+        string? environment = null;
+        string? version = null;
+        if (item.TryGetProperty("applicability", out var applicability) && applicability.ValueKind == JsonValueKind.Object)
+        {
+            project = Text(applicability, "project");
+            environment = Text(applicability, "environment");
+            version = Text(applicability, "version");
+        }
+
+        return new OwnerReviewDraft(
+            Text(item, "kind") ?? string.Empty,
+            Text(item, "author") ?? string.Empty,
+            Text(item, "creationMethod") ?? string.Empty,
+            Text(item, "evidence") ?? string.Empty,
+            Text(item, "level") ?? string.Empty,
+            Text(item, "title"),
+            Text(item, "body") ?? string.Empty,
+            Array.Empty<OwnerItemSource>(),
+            Timestamp(item, "occurredAtUtc"),
+            project,
+            environment,
+            version);
+    }
+
+    private static OwnerDeclassifyOutcome? ProjectDeclassify(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            reply.Payload.ValueKind != JsonValueKind.Object ||
+            !reply.Payload.TryGetProperty("declassify", out var published) ||
+            published.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return new OwnerDeclassifyOutcome(
+            Text(published, "destinationResourceId") ?? string.Empty,
+            Int64(published, "destinationRevision"),
+            Int64(published, "lifecycleRevision"),
+            Strings(published, "lineageRelationIds"),
+            Flag(published, "decisionApplied"));
+    }
+
 
     /// <summary>
     /// The relation list the service served, in the order it served it. A reply

@@ -345,6 +345,38 @@ public sealed record ProposalCitationReviewWire(
 public sealed record ProposalIdentityWire(string Id, long Revision, string ZoneId);
 
 /// <summary>
+/// One private evidence pin a declassification stands on, served on the owner
+/// channel only: the opaque private resource and the reviewed revision. Never
+/// served to discovery or to an agent session.
+/// </summary>
+public sealed record DeclassifyPinWire(string ResourceId, long Revision);
+
+/// <summary>
+/// Owner-only preview of a sanitized cross-zone publication: the exact content
+/// the shared zone would receive beside the private pins it would stand on.
+/// Writes nothing and mints no access.
+/// </summary>
+public sealed record DeclassifyPreviewWire(
+    string DestinationResourceId,
+    string DestinationZoneId,
+    ProposalItemWire Item,
+    DeclassifyPinWire[] Pins,
+    bool PinsCurrent,
+    string[] MismatchedResourceIds);
+
+/// <summary>
+/// One completed owner declassification: the shared destination, its revision,
+/// the publication record revision, the encrypted lineage relation IDs and
+/// whether this call is what wrote them. No private body crosses this record.
+/// </summary>
+public sealed record DeclassifyWire(
+    string DestinationResourceId,
+    long DestinationRevision,
+    long LifecycleRevision,
+    string[] LineageRelationIds,
+    bool DecisionApplied);
+
+/// <summary>
 /// Registered source metadata as served to its granted audience. The wire
 /// carries the declared origin role (<see cref="RegisteredSourceWire.Author"/>,
 /// "unknown" when the registrant omitted it) but never the captured research
@@ -651,6 +683,8 @@ public sealed record ServiceReply(
     RelationEndpointCandidateWire[]? RelationCandidates = null,
     bool? RelationCandidatesTruncated = null,
     ProposalReviewWire? ProposalReview = null,
+    DeclassifyPreviewWire? DeclassifyPreview = null,
+    DeclassifyWire? Declassify = null,
     JobWire? Job = null,
     JobWire[]? Jobs = null,
     SpendLedgerWire? SpendLedger = null);
@@ -758,6 +792,9 @@ public sealed class ServiceRequestHandler
     public const string OwnerRelationListOperation = "owner.relation.list";
     public const string OwnerProposalPublishOperation = "owner.proposal.publish";
     public const string OwnerProposalRejectOperation = "owner.proposal.reject";
+    public const string OwnerDeclassifyPreviewOperation = "owner.declassify.preview";
+    public const string OwnerDeclassifyPublishOperation = "owner.declassify.publish";
+    public const string OwnerDeclassifyProposalPublishOperation = "owner.declassify.proposal.publish";
     public const string SourceEnrollOperation = "source.enroll";
     public const string SourceRevokeOperation = "source.revoke";
     public const string SourceStatusOperation = "source.status";
@@ -1000,6 +1037,21 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, OwnerProposalRejectOperation, StringComparison.Ordinal))
         {
             return HandleOwnerProposalReview(context, request, operation, publish: false);
+        }
+
+        if (string.Equals(request.Operation, OwnerDeclassifyPreviewOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerDeclassifyPreview(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerDeclassifyPublishOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerDeclassifyPublish(context, request, operation, fromProposal: false);
+        }
+
+        if (string.Equals(request.Operation, OwnerDeclassifyProposalPublishOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerDeclassifyPublish(context, request, operation, fromProposal: true);
         }
 
         if (string.Equals(request.Operation, OwnerVaultProvisionOperation, StringComparison.Ordinal))
@@ -4152,7 +4204,7 @@ public sealed class ServiceRequestHandler
         item.RecordedAtUtc,
         item.Applicability,
         ProjectCitations(item.Sources, manifest),
-        ProjectCitationWarnings(item.Sources, manifest));
+        ProjectCitationWarnings(item, item.Sources, manifest, manifest as IManagedResourceStore));
 
     private static MemoryCitationWire[]? ProjectCitations(Core.Domain.MemorySourceReference[] sources, IManagedResourceReader? manifest)
     {
@@ -4209,6 +4261,25 @@ public sealed class ServiceRequestHandler
             : new MemoryCitationWire(
                 source.SourceId, source.Locator, availability, source.SourceRevision, source.Span,
                 "superseded", "citation_source_superseded");
+    }
+
+    private static string[]? ProjectCitationWarnings(
+        Core.Domain.MemoryItem item,
+        Core.Domain.MemorySourceReference[] sources,
+        IManagedResourceReader? manifest,
+        IManagedResourceStore? lineageStore)
+    {
+        var warnings = ProjectCitationWarnings(sources, manifest);
+        if (lineageStore is not null && DeclassifyService.EvaluateDerivative(item.Id, lineageStore))
+        {
+            // Generic fail-closed staleness only: the private lineage moved, but
+            // no ancestor identity, name, locator, title or count crosses this
+            // wire for either audience. The owner resolves the exact lineage
+            // through the existing relation surface they can already read.
+            warnings = (warnings ?? Array.Empty<string>()).Append(DeclassifyService.DerivativeStaleWarning).ToArray();
+        }
+
+        return warnings;
     }
 
     private static string[]? ProjectCitationWarnings(Core.Domain.MemorySourceReference[] sources, IManagedResourceReader? manifest)
@@ -4707,6 +4778,141 @@ public sealed class ServiceRequestHandler
         }
     }
 
+    /// S6-T5 owner declassification preview/publication into an explicit shared
+    /// destination zone. Preview renders the exact sanitized content beside the
+    /// private pins it would stand on; publish writes the sanitized shared copy
+    /// (create-only, empty citations) plus accepted encrypted derived_from
+    /// lineage and the published lifecycle record. The proposal path pins the
+    /// lineage to a pending create proposal's cited sources. Owner-only, needs
+    /// an unlocked vault, and refuses every field its contract does not name.
+    /// </summary>
+    private ServiceReply HandleOwnerDeclassifyPreview(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || operation is null || HasDeclassifyExtras(request) ||
+            string.IsNullOrEmpty(request.ResourceId) || string.IsNullOrEmpty(request.ZoneId) ||
+            string.IsNullOrEmpty(request.ContentBase64))
+        {
+            return Error("invalid_request");
+        }
+
+        byte[]? draft = null;
+        try
+        {
+            draft = Convert.FromBase64String(request.ContentBase64);
+            var service = new DeclassifyService();
+            var preview = service.Preview(context, request.ResourceId, request.ZoneId, draft, operation);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "declassify_preview",
+                "owner",
+                null,
+                ResourceRevision: null,
+                DeclassifyPreview: ToDeclassifyPreviewWire(preview));
+        }
+        catch (FormatException)
+        {
+            return Error("invalid_request");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        finally
+        {
+            if (draft is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(draft);
+            }
+        }
+    }
+
+    private ServiceReply HandleOwnerDeclassifyPublish(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation,
+        bool fromProposal)
+    {
+        if (context.Kind != PrincipalKind.Owner || operation is null || HasDeclassifyExtras(request) ||
+            string.IsNullOrEmpty(request.ContentBase64) ||
+            (fromProposal
+                ? string.IsNullOrEmpty(request.ResourceId) ||
+                    request.ResourceRevision is not { } fromRevision || fromRevision < 1
+                : string.IsNullOrEmpty(request.ResourceId) || string.IsNullOrEmpty(request.ZoneId)))
+        {
+            return Error("invalid_request");
+        }
+
+        byte[]? draft = null;
+        try
+        {
+            draft = Convert.FromBase64String(request.ContentBase64);
+            var service = new DeclassifyService();
+            var result = fromProposal
+                ? service.PublishFromProposal(context, request.ResourceId!, request.ResourceRevision!.Value, draft, operation)
+                : service.Publish(context, request.ResourceId!, request.ZoneId!, draft, operation);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "declassified",
+                "owner",
+                null,
+                ResourceRevision: result.DestinationRevision,
+                MemoryItem: ToMemoryWire(result.Item, operation),
+                Declassify: ToDeclassifyWire(result));
+        }
+        catch (FormatException)
+        {
+            return Error("invalid_request");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        finally
+        {
+            if (draft is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(draft);
+            }
+        }
+    }
+
+    private static DeclassifyPreviewWire ToDeclassifyPreviewWire(DeclassifyPreview preview) => new(
+        preview.DestinationResourceId,
+        preview.DestinationZoneId,
+        ToProposalItemWire(new MemoryItemDraft(
+            preview.Sanitized.Kind,
+            preview.Sanitized.Author,
+            preview.Sanitized.CreationMethod,
+            preview.Sanitized.Evidence,
+            preview.Sanitized.Level,
+            preview.Sanitized.Title,
+            preview.Sanitized.Body ?? string.Empty,
+            preview.Sanitized.Sources,
+            preview.Sanitized.OccurredAtUtc,
+            preview.Sanitized.RecordedAtUtc ?? DateTimeOffset.MinValue,
+            preview.Sanitized.Applicability)),
+        preview.Pins.Select(pin => new DeclassifyPinWire(pin.ResourceId, pin.Revision)).ToArray(),
+        preview.PinsCurrent,
+        preview.MismatchedResourceIds);
+
+    private static DeclassifyWire ToDeclassifyWire(DeclassifyResult result) => new(
+        result.DestinationResourceId,
+        result.DestinationRevision,
+        result.LifecycleRevision,
+        result.LineageRelationIds,
+        result.DecisionApplied);
+
     private static ProposalReviewWire ToProposalReviewWire(ProposalReviewResult review) => new(
         review.ProposalId,
         review.ProposalRevision,
@@ -5074,7 +5280,7 @@ public sealed class ServiceRequestHandler
                 budget,
                 approvedScope,
                 approved => ReadBriefItem(operation, approved),
-                (item, manifest) => (ProjectCitations(item.Sources, manifest), ProjectCitationWarnings(item.Sources, manifest)),
+                (item, manifest) => (ProjectCitations(item.Sources, manifest), ProjectCitationWarnings(item, item.Sources, manifest, operation)),
                 operation,
                 resourceId => liveRevisions.TryGetValue(resourceId, out var live) &&
                     session.Resources.Any(resource =>
@@ -6747,6 +6953,42 @@ public sealed class ServiceRequestHandler
         request.PreviewId is not null || request.CollectionId is not null ||
         request.Token is not null || request.SessionToken is not null ||
         request.SessionId is not null || request.AccessOperation is not null ||
+        request.DestinationResourceId is not null || request.DestinationRevision is not null ||
+        request.EstimatedCostUsd is not null || request.InputTokens is not null ||
+        request.OutputTokens is not null || request.CatalogId is not null ||
+        request.Label is not null || request.Description is not null ||
+        request.Query is not null || request.CatalogIds is not null ||
+        request.SearchOffset is not null || request.SearchLimit is not null ||
+        request.SearchKind is not null || request.SearchCurrent is not null ||
+        request.BudgetChars is not null || request.Purpose is not null ||
+        request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null ||
+        request.SourceLocator is not null || request.SourceFormat is not null ||
+        request.SourceFormatVersion is not null || request.SourceTitle is not null ||
+        request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
+        request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null ||
+        request.SearchLevel is not null || request.SearchFromUtc is not null ||
+        request.SearchToUtc is not null;
+
+    /// <summary>
+    /// S6-T5 owner declassification carries the shared destination (resource ID
+    /// for all three acts, zone for the two explicit-pins acts, proposal
+    /// revision for the proposal act) and the sanitized/body draft — and
+    /// nothing else. Credentials, scope selection, sessions, catalog, egress,
+    /// source and snapshot fields are refused, so a declassification body can
+    /// never steer another flow or mint authority. Identity-shaped body fields
+    /// are inert: authority comes from the owner pipe plus the explicit pins
+    /// the service revalidates, never from an agent claim.
+    /// </summary>
+    private static bool HasDeclassifyExtras(ServiceRequest request) =>
+        request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ResourceIds is not null || request.Operations is not null ||
+        request.DestinationResourceIds is not null || request.ExpiresAtUtc is not null ||
+        request.Provider is not null || request.Model is not null ||
+        request.MaximumCostUsd is not null || request.PreviewId is not null ||
+        request.CollectionId is not null || request.Token is not null ||
+        request.SessionToken is not null || request.SessionId is not null ||
+        request.AccessOperation is not null ||
         request.DestinationResourceId is not null || request.DestinationRevision is not null ||
         request.EstimatedCostUsd is not null || request.InputTokens is not null ||
         request.OutputTokens is not null || request.CatalogId is not null ||

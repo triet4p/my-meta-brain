@@ -49,6 +49,9 @@ internal static class OwnerControlCli
                 "feedback-read" => await FeedbackReadAsync(options).ConfigureAwait(false),
                 "proposal-read" => await ProposalReadAsync(options).ConfigureAwait(false),
                 "proposal-list" => await ProposalListAsync(options).ConfigureAwait(false),
+                "declassify-preview" => await DeclassifyPreviewAsync(options).ConfigureAwait(false),
+                "declassify-publish" => await DeclassifyPublishAsync(options, fromProposal: false).ConfigureAwait(false),
+                "declassify-proposal-publish" => await DeclassifyPublishAsync(options, fromProposal: true).ConfigureAwait(false),
                 "source-create" => await SourceCreateAsync(options).ConfigureAwait(false),
                 "source-revise" => await SourceReviseAsync(options).ConfigureAwait(false),
                 "source-read" => await SourceReadAsync(options).ConfigureAwait(false),
@@ -841,6 +844,256 @@ internal static class OwnerControlCli
 
         return 0;
     }
+
+    /// <summary>
+    /// S6-T5 owner declassification preview: the exact sanitized content the
+    /// shared zone would receive beside the private pins it would stand on.
+    /// The request file carries the pins and the sanitized item draft;
+    /// redirected output is refused for body display, like request preview.
+    /// </summary>
+    private static async Task<int> DeclassifyPreviewAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--destination-id", "--destination-zone", "--input-file");
+        var controlPipe = ControlPipe(options);
+        var destinationId = options.Required("--destination-id");
+        var destinationZone = options.Required("--destination-zone");
+        var inputPath = options.Required("--input-file");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(destinationId) || !ServiceSettingsLoader.IsSafeIdentifier(destinationZone))
+        {
+            return Usage();
+        }
+
+        var content = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        try
+        {
+            if (content.Length is <= 0 or > 1024 * 1024)
+            {
+                Console.Error.WriteLine("ERROR invalid_declassify_size");
+                return 4;
+            }
+
+            var result = await InvokeOwnerAsync(controlPipe,
+                new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerDeclassifyPreviewOperation,
+                    ResourceId: destinationId, ZoneId: destinationZone, ContentBase64: Convert.ToBase64String(content))).ConfigureAwait(false);
+            if (!result.Success || !HasStatus(result.Reply, "declassify_preview") ||
+                !result.Reply.TryGetProperty("declassifyPreview", out var preview) ||
+                preview.ValueKind != JsonValueKind.Object)
+            {
+                WriteServiceError(result);
+                return 3;
+            }
+
+            PrintDeclassifyPreview(result.Reply);
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(content);
+        }
+    }
+
+    private static async Task<int> DeclassifyPublishAsync(CommandOptions options, bool fromProposal)
+    {
+        if (fromProposal)
+        {
+            options.RequireOnly("--control-pipe", "--resource-id", "--resource-revision", "--destination-id", "--destination-zone", "--input-file");
+        }
+        else
+        {
+            options.RequireOnly("--control-pipe", "--destination-id", "--destination-zone", "--input-file");
+        }
+
+        var controlPipe = ControlPipe(options);
+        var inputPath = options.Required("--input-file");
+        string? destinationId = options.Required("--destination-id");
+        string? destinationZone = options.Required("--destination-zone");
+        string? proposalId = fromProposal ? options.Required("--resource-id") : null;
+        long proposalRevision = 0;
+        if (fromProposal)
+        {
+            if (!long.TryParse(options.Required("--resource-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out proposalRevision) || proposalRevision < 1)
+            {
+                return Usage();
+            }
+        }
+
+        if ((destinationId is not null && !ServiceSettingsLoader.IsSafeIdentifier(destinationId)) ||
+            (destinationZone is not null && !ServiceSettingsLoader.IsSafeIdentifier(destinationZone)) ||
+            (proposalId is not null && !ServiceSettingsLoader.IsSafeIdentifier(proposalId)))
+        {
+            return Usage();
+        }
+
+        var content = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        try
+        {
+            if (content.Length is <= 0 or > 1024 * 1024)
+            {
+                Console.Error.WriteLine("ERROR invalid_declassify_size");
+                return 4;
+            }
+
+            Console.WriteLine(fromProposal
+                ? $"DECLASSIFY PROPOSAL PREVIEW proposal={proposalId} revision={proposalRevision}: only the exact sanitized content in the input file will enter the shared zone; private lineage stays encrypted. The published shared copy carries no citations: no private identifier, locator, span, title, name or backlink crosses into shared readability."
+                : $"DECLASSIFY PREVIEW destination={destinationId} zone={destinationZone}: only the exact sanitized content in the input file will enter the shared zone; private lineage stays encrypted. The published shared copy carries no citations: no private identifier, locator, span, title, name or backlink crosses into shared readability.");
+            if (!Console.IsInputRedirected)
+            {
+                Console.Write("Type PUBLISH to approve this exact shared content: ");
+            }
+
+            if (!string.Equals(Console.ReadLine(), "PUBLISH", StringComparison.Ordinal))
+            {
+                Console.WriteLine("CANCELLED; shared zone unchanged");
+                return 3;
+            }
+            byte[] payload = content;
+            bool wrapped = false;
+            try
+            {
+                if (fromProposal)
+                {
+                    payload = WrapDeclassifyProposalBody(destinationId!, destinationZone!, content);
+                    wrapped = true;
+                }
+
+                var request = fromProposal
+                    ? new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerDeclassifyProposalPublishOperation,
+                        ResourceId: proposalId, ResourceRevision: proposalRevision, ContentBase64: Convert.ToBase64String(payload))
+                    : new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerDeclassifyPublishOperation,
+                        ResourceId: destinationId, ZoneId: destinationZone, ContentBase64: Convert.ToBase64String(payload));
+                var result = await InvokeOwnerAsync(controlPipe, request).ConfigureAwait(false);
+                if (!result.Success || !HasStatus(result.Reply, "declassified"))
+                {
+                    WriteServiceError(result);
+                    return 3;
+                }
+
+                PrintDeclassify(result.Reply);
+                return 0;
+            }
+            finally
+            {
+                if (wrapped)
+                {
+                    CryptographicOperations.ZeroMemory(payload);
+                }
+            }
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(content);
+        }
+    }
+
+
+    private static void PrintDeclassifyPreview(JsonElement reply)
+    {
+        if (!reply.TryGetProperty("declassifyPreview", out var preview) || preview.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        Console.WriteLine($"DECLASSIFY PREVIEW destination={JsonValueText(preview, "destinationResourceId")} zone={JsonValueText(preview, "destinationZoneId")} pinsCurrent={JsonValueText(preview, "pinsCurrent")}");
+        if (preview.TryGetProperty("pins", out var pins) && pins.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var pin in pins.EnumerateArray())
+            {
+                Console.WriteLine($"pin id={JsonValueText(pin, "resourceId")} revision={JsonValueText(pin, "revision")}");
+            }
+        }
+
+        if (preview.TryGetProperty("mismatchedResourceIds", out var mismatched) && mismatched.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var id in mismatched.EnumerateArray())
+            {
+                if (id.ValueKind == JsonValueKind.String)
+                {
+                    Console.WriteLine($"mismatched pin id={id.GetString()}");
+                }
+            }
+        }
+
+        if (preview.TryGetProperty("item", out var item) && item.ValueKind == JsonValueKind.Object)
+        {
+            Console.WriteLine($"SANITIZED kind={JsonValueText(item, "kind")} author={JsonValueText(item, "author")} method={JsonValueText(item, "creationMethod")} evidence={JsonValueText(item, "evidence")} level={JsonValueText(item, "level")}");
+            Console.WriteLine($"title={JsonValueText(item, "title")}");
+            Console.WriteLine($"body={JsonValueText(item, "body")}");
+            if (item.TryGetProperty("sources", out var sources) && sources.ValueKind == JsonValueKind.Array)
+            {
+                Console.WriteLine($"shared citations={sources.GetArrayLength()} (a sanitized copy must carry zero)");
+            }
+        }
+    }
+
+    private static byte[] WrapDeclassifyProposalBody(string destinationId, string destinationZone, byte[] itemJson)
+    {
+        var preamble = StripCliPreamble(itemJson);
+        var offset = itemJson.Length - preamble.Length;
+        using var document = JsonDocument.Parse(new ReadOnlyMemory<byte>(itemJson, offset, preamble.Length));
+        var wrapper = new
+        {
+            destinationResourceId = destinationId,
+            destinationZoneId = destinationZone,
+            item = document.RootElement.Clone()
+        };
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(wrapper, JsonOptions);
+        if (bytes.Length is <= 0 or > 1024 * 1024)
+        {
+            CryptographicOperations.ZeroMemory(bytes);
+            throw new ArgumentException("The sanitized shared content exceeds its storage limit.");
+        }
+
+        return bytes;
+    }
+
+    private static ReadOnlySpan<byte> StripCliPreamble(byte[] json) =>
+        json.Length >= 3 && json[0] == 0xEF && json[1] == 0xBB && json[2] == 0xBF
+            ? new ReadOnlySpan<byte>(json, 3, json.Length - 3)
+            : json;
+
+
+    private static void PrintDeclassify(JsonElement reply)
+    {
+        if (!reply.TryGetProperty("declassify", out var published) || published.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        if (reply.TryGetProperty("memoryItem", out var item) && item.ValueKind == JsonValueKind.Object)
+        {
+            PrintMemoryItemElement(item);
+            Console.WriteLine($"shared citations={SharedCitationCount(item)} (a sanitized copy must carry zero)");
+        }
+
+        Console.WriteLine($"DECLASSIFIED destination={JsonValueText(published, "destinationResourceId")} revision={JsonValueText(published, "destinationRevision")} lifecycle={JsonValueText(published, "lifecycleRevision")} applied={JsonValueText(published, "decisionApplied")}");
+
+        if (published.TryGetProperty("lineageRelationIds", out var lineage) && lineage.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var id in lineage.EnumerateArray())
+            {
+                if (id.ValueKind == JsonValueKind.String)
+                {
+                    Console.WriteLine($"lineage relation={id.GetString()}");
+                }
+            }
+        }
+    }
+    private static int SharedCitationCount(JsonElement item)
+    {
+        if (item.TryGetProperty("citations", out var citations) && citations.ValueKind == JsonValueKind.Array)
+        {
+            return citations.GetArrayLength();
+        }
+
+        if (item.TryGetProperty("sources", out var sources) && sources.ValueKind == JsonValueKind.Array)
+        {
+            return sources.GetArrayLength();
+        }
+
+        return 0;
+    }
+
+
 
     private static void PrintProposal(JsonElement reply)
     {

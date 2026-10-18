@@ -89,6 +89,17 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     }
 
     /// <summary>
+    /// Stops this view from following the session: no timer tick and no
+    /// re-render on later session answers. The session itself is untouched.
+    /// </summary>
+    internal void DetachView()
+    {
+        _timer.Stop();
+        _session.Changed -= OnSessionChanged;
+        ActivityList.ItemsSource = null;
+    }
+
+    /// <summary>
     /// The two fixed enumerations this view filters by are the service's own
     /// spellings, and the "(any)" item means the filter is not sent at all. The
     /// free-text boxes carry IDs the owner already knows (a zone or a collection
@@ -1053,6 +1064,68 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         await _session.UndoReviewDecisionAsync(ReviewRationaleInput.Text);
 
     /// <summary>
+    /// Previews the sanitized publication of the open proposal into the
+    /// explicit destination: the exact shared content beside its private pins.
+    /// </summary>
+    private async void OnDeclassifyPreviewClicked(object sender, RoutedEventArgs e)
+    {
+        if (BuildSanitizedDraft() is not { } sanitized)
+        {
+            _session.ReportInboxInputProblem("This console did not send the preview: open a proposal and choose a kind and a level for the sanitized copy.");
+            return;
+        }
+
+        await _session.PreviewDeclassifiedAsync(DeclassifyDestinationInput.Text.Trim(), DeclassifyZoneInput.Text.Trim(), sanitized);
+    }
+
+    /// <summary>
+    /// Publishes the sanitized content into the explicit destination once the
+    /// owner types PUBLISH for exactly that content. The shared copy carries
+    /// no citations; private lineage stays encrypted.
+    /// </summary>
+    private async void OnDeclassifyPublishClicked(object sender, RoutedEventArgs e)
+    {
+        if (BuildSanitizedDraft() is not { } sanitized)
+        {
+            _session.ReportInboxInputProblem("This console did not send the publication: open a proposal and choose a kind and a level for the sanitized copy.");
+            return;
+        }
+
+        await _session.PublishDeclassifiedAsync(
+            DeclassifyDestinationInput.Text.Trim(), DeclassifyZoneInput.Text.Trim(), sanitized, DeclassifyConfirmInput.Text.Trim());
+    }
+
+    /// <summary>
+    /// The sanitized content this console sends: the owner's edited title,
+    /// body and metadata with no citations, keeping the proposal's author,
+    /// creation method and evidence level. This view offers no control that
+    /// changes attribution, and the service refuses a sanitized draft that
+    /// names different ones or carries any citation.
+    /// </summary>
+    private OwnerReviewDraft? BuildSanitizedDraft()
+    {
+        var proposal = _session.ReviewProposal;
+        if (proposal is null || ReviewKindInput.SelectedItem is not string kind || ReviewLevelInput.SelectedItem is not string level)
+        {
+            return null;
+        }
+
+        return new OwnerReviewDraft(
+            kind,
+            proposal.Item.Author,
+            proposal.Item.CreationMethod,
+            proposal.Item.Evidence,
+            level,
+            ReviewTitleInput.Text,
+            ReviewBodyInput.Text,
+            Array.Empty<OwnerItemSource>(),
+            proposal.Item.OccurredAtUtc,
+            proposal.Item.Project,
+            proposal.Item.Environment,
+            proposal.Item.Version);
+    }
+
+    /// <summary>
     /// The reviewed content this console sends: the owner's edits for the content
     /// fields, and the attribution and citations exactly as the proposal carried
     /// them. This view offers no control that changes an author, a creation
@@ -1178,6 +1251,18 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         ReviewMessageText.Text = _session.ReviewMessage ?? (unlocked
             ? "No review act has been sent in this session. Publishing writes the content you see; rejecting records your decision without applying the proposal."
             : "No private review act is offered while the service does not report the vault unlocked.");
+        var declassified = _session.DeclassifyPreview;
+        DeclassifyPreviewText.Text = declassified is null
+            ? string.Empty
+            : "shared=" + declassified.DestinationResourceId + "  zone=" + declassified.DestinationZoneId +
+                "  pins=" + string.Join("; ", declassified.Pins.Select(pin => pin.ResourceId + "@" + pin.Revision.ToString(CultureInfo.InvariantCulture))) +
+                "  pinsCurrent=" + declassified.PinsCurrent.ToString(CultureInfo.InvariantCulture) +
+                (declassified.MismatchedResourceIds.Length == 0 ? string.Empty : "  mismatched=" + string.Join(";", declassified.MismatchedResourceIds)) +
+                "  title=" + (declassified.Item.Title ?? "(none)") + "  bodyChars=" + declassified.Item.Body.Length.ToString(CultureInfo.InvariantCulture) +
+                "  sharedCitations=0";
+        DeclassifyMessageText.Text = _session.DeclassifyMessage ?? (unlocked
+            ? "No sanitized publication has been previewed in this session. The shared copy carries the edited content above with no citations."
+            : "No private declassification act is offered while the service does not report the vault unlocked.");
 
         CaptureSaveButton.IsEnabled = unlocked && !inFlight;
         CaptureClearButton.IsEnabled = !inFlight;
@@ -1200,6 +1285,11 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         ReviewPublishButton.IsEnabled = unlocked && !inFlight && proposal is not null;
         ReviewRejectButton.IsEnabled = unlocked && !inFlight && proposal is not null;
         ReviewUndoButton.IsEnabled = unlocked && !inFlight && _session.ReviewDecisionIsUndoable;
+        DeclassifyDestinationInput.IsEnabled = unlocked && !inFlight && proposal is not null;
+        DeclassifyZoneInput.IsEnabled = unlocked && !inFlight && proposal is not null;
+        DeclassifyPreviewButton.IsEnabled = unlocked && !inFlight && proposal is not null;
+        DeclassifyConfirmInput.IsEnabled = unlocked && !inFlight && proposal is not null;
+        DeclassifyPublishButton.IsEnabled = unlocked && !inFlight && proposal is not null;
     }
 
     // ---- S5-T5 explicit relations workbench ----
