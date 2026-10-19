@@ -274,6 +274,9 @@
                             <ComboBox x:Name="LibraryPageSizeInput" Width="70" AutomationProperties.AutomationId="LibraryPageSizeInput" SelectionChanged="OnLibraryPageSizeChanged" />
                             <Button x:Name="LibraryPreviousButton" Content="Previous page" Padding="14,7" Margin="8,0,0,0" Click="OnLibraryPreviousClicked" />
                             <Button x:Name="LibraryNextButton" Content="Next page" Padding="14,7" Margin="8,0,0,0" Click="OnLibraryNextClicked" />
+                            <CheckBox x:Name="LibraryIncludeArchivedInput" Margin="16,0,0,0" VerticalAlignment="Center"
+                                      Content="Include items I set aside in this search"
+                                      AutomationProperties.AutomationId="LibraryIncludeArchivedInput" />
                         </StackPanel>
 
                         <TextBlock x:Name="LibraryMessageText" TextWrapping="Wrap" Margin="0,12,0,0" FontWeight="SemiBold" />
@@ -316,6 +319,23 @@
                                         Margin="8,0,0,0" HorizontalAlignment="Left" Click="OnLibraryRetainedClicked" />
                                 </StackPanel>
                                 <TextBlock x:Name="LibraryRetainedText" TextWrapping="Wrap" Margin="0,6,0,0" FontFamily="Consolas" />
+
+                                <TextBlock Text="Recall policy (how this item is offered; never what it says)" FontWeight="SemiBold" Margin="0,14,0,0" />
+                                <TextBlock x:Name="LibraryRecallText" TextWrapping="Wrap" Margin="0,6,0,0" FontFamily="Consolas" />
+                                <TextBox x:Name="LibraryRecallReasonInput" Width="360" Margin="0,8,0,0" VerticalContentAlignment="Center"
+                                         AutomationProperties.AutomationId="LibraryRecallReasonInput" />
+                                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                    <Button x:Name="LibraryRecallReadButton" Content="Read recall state" Padding="14,7"
+                                        HorizontalAlignment="Left" Click="OnLibraryRecallReadClicked" />
+                                    <Button x:Name="LibraryRecallDemoteButton" Content="Demote priority" Padding="14,7"
+                                        Margin="8,0,0,0" HorizontalAlignment="Left" Click="OnLibraryRecallDemoteClicked" />
+                                    <Button x:Name="LibraryRecallPinButton" Content="Pin (protect)" Padding="14,7"
+                                        Margin="8,0,0,0" HorizontalAlignment="Left" Click="OnLibraryRecallPinClicked" />
+                                    <Button x:Name="LibraryRecallArchiveButton" Content="Set aside" Padding="14,7"
+                                        Margin="8,0,0,0" HorizontalAlignment="Left" Click="OnLibraryRecallArchiveClicked" />
+                                    <Button x:Name="LibraryRecallRestoreButton" Content="Restore" Padding="14,7"
+                                        Margin="8,0,0,0" HorizontalAlignment="Left" Click="OnLibraryRecallRestoreClicked" />
+                                </StackPanel>
                             </StackPanel>
                         </Border>
 

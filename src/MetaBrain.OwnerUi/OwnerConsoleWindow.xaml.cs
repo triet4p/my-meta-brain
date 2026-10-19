@@ -683,6 +683,25 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     private async void OnLibraryHistoryClicked(object sender, RoutedEventArgs e) =>
         await _session.ReadLibraryTimelineAsync();
 
+    /// <summary>
+    /// S7-T4 the owner asks the service what recall decision the open item
+    /// carries. The console shows the answer; it never derives one.
+    /// </summary>
+    private async void OnLibraryRecallReadClicked(object sender, RoutedEventArgs e) =>
+        await _session.ReadRecallStateAsync();
+
+    private async void OnLibraryRecallDemoteClicked(object sender, RoutedEventArgs e) =>
+        await _session.ApplyRecallActAsync("demote", LibraryRecallReasonInput.Text);
+
+    private async void OnLibraryRecallPinClicked(object sender, RoutedEventArgs e) =>
+        await _session.ApplyRecallActAsync("pin", LibraryRecallReasonInput.Text);
+
+    private async void OnLibraryRecallArchiveClicked(object sender, RoutedEventArgs e) =>
+        await _session.ApplyRecallActAsync("archive", LibraryRecallReasonInput.Text);
+
+    private async void OnLibraryRecallRestoreClicked(object sender, RoutedEventArgs e) =>
+        await _session.ApplyRecallActAsync("restore", LibraryRecallReasonInput.Text);
+
     private async void OnLibraryRetainedClicked(object sender, RoutedEventArgs e)
     {
         if (_session.LibraryTimeline is { RetainedRevisions.Length: > 0 } timeline)
@@ -766,7 +785,8 @@ public partial class OwnerConsoleWindow : System.Windows.Window
             ToUtc: toUtc,
             Offset: offset,
             Limit: CurrentPageSize(),
-            AsOfUtc: asOfUtc);
+            AsOfUtc: asOfUtc,
+            IncludeArchived: LibraryIncludeArchivedInput.IsChecked == true);
         return true;
     }
 
@@ -944,6 +964,34 @@ public partial class OwnerConsoleWindow : System.Windows.Window
                 " kind=" + retained.Kind + " title=" + (retained.Title ?? "(none)") + " author=" + retained.Author +
                 " evidence=" + retained.Evidence + " occurred=" + Stamp(retained.OccurredAtUtc) +
                 " recorded=" + Stamp(retained.RecordedAtUtc) + "\n" + retained.Body;
+
+        var recall = _session.LibraryRecall;
+        LibraryRecallText.Text = recall is null
+            ? (unlocked
+                ? "No recall decision is open. Open an item, then read its recall state."
+                : "No private recall decision is shown.")
+            : "state=" + recall.Disposition +
+                " actor=" + (recall.Actor ?? "(none)") +
+                " recorded=" + Stamp(recall.RecordedAtUtc) +
+                (string.IsNullOrWhiteSpace(recall.Rationale) ? string.Empty : "\nreason: " + recall.Rationale) +
+                (recall.History.Length == 0
+                    ? string.Empty
+                    : "\nacts: " + string.Join(" | ", recall.History.Select(change =>
+                        change.From + " -> " + change.To + " (" + change.Actor + " at " + Stamp(change.RecordedAtUtc) + ")" +
+                        (string.IsNullOrWhiteSpace(change.Rationale) ? string.Empty : ": " + change.Rationale))));
+
+        // The recall acts act on the open item only, and only while the vault
+        // is unlocked. A protected item cannot be demoted or set aside without
+        // being released first, so the console does not offer that act as
+        // available: the service refuses it and the owner sees why.
+        var canAct = unlocked && detail is not null && !inFlight;
+        var recallState = recall?.Disposition ?? "normal";
+        LibraryRecallReadButton.IsEnabled = canAct;
+        LibraryRecallDemoteButton.IsEnabled = canAct && recallState is not ("demoted" or "archived");
+        LibraryRecallPinButton.IsEnabled = canAct && recallState is not ("pinned" or "archived");
+        LibraryRecallArchiveButton.IsEnabled = canAct && recallState is not ("archived" or "pinned");
+        LibraryRecallRestoreButton.IsEnabled = canAct && recallState != "normal";
+        LibraryRecallReasonInput.IsEnabled = canAct;
 
         LibraryMessageText.Text = _session.LibraryMessage ?? (unlocked
             ? "No library act has been sent in this session. Nothing private is read until you search."
@@ -1891,6 +1939,8 @@ public partial class OwnerConsoleWindow : System.Windows.Window
                 " rev=" + Hit.Revision.ToString(CultureInfo.InvariantCulture) +
                 "  |  occurred=" + ShortStamp(Hit.OccurredAtUtc) + " recorded=" + ShortStamp(Hit.RecordedAtUtc) +
                 "  |  publication=" + Hit.Publication +
+                "  |  recall=" + Hit.RecallState +
+                (string.IsNullOrWhiteSpace(Hit.RankingReason) ? string.Empty : " (" + Hit.RankingReason + ")") +
                 " score=" + Hit.Score.ToString("0.###", CultureInfo.InvariantCulture);
         }
 

@@ -52,6 +52,13 @@ internal sealed partial class OwnerConsoleSession
     /// <summary>Last library index generation the service reported.</summary>
     public OwnerIndexReport? LibraryIndex { get; private set; }
 
+    /// <summary>
+    /// S7-T4 the owner's own recall decision for the open item, as the service
+    /// reported it. It is the owner's curation state, never a fact about the
+    /// item's truth.
+    /// </summary>
+    public OwnerRecallState? LibraryRecall { get; private set; }
+
     /// <summary>S7-T1 decision history of the open item, exactly as the service served it.</summary>
     public OwnerTimelineDetail? LibraryTimeline { get; private set; }
 
@@ -230,6 +237,86 @@ internal sealed partial class OwnerConsoleSession
     }
 
     /// <summary>
+    /// S7-T4 applies one owner recall act to the open item: the owner demotes,
+    /// pins, sets aside or restores it.
+    /// <para>
+    /// The service decides what the act means and refuses an act that would
+    /// cross a protection the owner set. This console only sends the act the
+    /// owner chose and the reason the owner typed; it never derives an act,
+    /// never guesses a rationale and never touches the item's content.
+    /// </para>
+    /// </summary>
+    public async Task ApplyRecallActAsync(string act, string? rationale)
+    {
+        var item = LibraryItem;
+        if (item is null || string.IsNullOrWhiteSpace(act) || TryBeginLibraryAct() is not { } epoch)
+        {
+            return;
+        }
+
+        var result = await ExecuteLibraryRequestAsync(
+            LibraryActTimeout,
+            token => OwnerChannelClient.ApplyRecallActAsync(ControlPipe, item.Id, act, rationale, token),
+            errorCode => new OwnerRecallResult(OwnerCommandOutcome.Unavailable, errorCode, null)).ConfigureAwait(true);
+
+        await ProbeAsync().ConfigureAwait(true);
+        ApplyRecallAnswer(epoch, result, act);
+        Append(DescribeLibraryActForLog("recall " + act, result.Outcome, result.ErrorCode));
+        RaiseChanged();
+    }
+
+    /// <summary>
+    /// S7-T4 reads the owner's own recall decision for the open item, so the
+    /// console can show what the owner decided and why before changing it.
+    /// </summary>
+    public async Task ReadRecallStateAsync()
+    {
+        var item = LibraryItem;
+        if (item is null || TryBeginLibraryAct() is not { } epoch)
+        {
+            return;
+        }
+
+        var result = await ExecuteLibraryRequestAsync(
+            LibraryActTimeout,
+            token => OwnerChannelClient.ReadRecallStateAsync(ControlPipe, item.Id, token),
+            errorCode => new OwnerRecallResult(OwnerCommandOutcome.Unavailable, errorCode, null)).ConfigureAwait(true);
+
+        await ProbeAsync().ConfigureAwait(true);
+        ApplyRecallAnswer(epoch, result, "read");
+        Append(DescribeLibraryActForLog("recall read", result.Outcome, result.ErrorCode));
+        RaiseChanged();
+    }
+
+    /// <summary>
+    /// Applies one recall answer requested under <paramref name="epoch"/>, with
+    /// the same epoch guard as every other library answer.
+    /// </summary>
+    internal bool ApplyRecallAnswer(long epoch, OwnerRecallResult result, string act)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        if (epoch != _privateEpoch)
+        {
+            AppendIgnoredStaleAnswer("recall " + act);
+            return false;
+        }
+
+        if (result.Outcome == OwnerCommandOutcome.Completed && result.Recall is not null)
+        {
+            LibraryRecall = result.Recall;
+            LibraryMessage = "The service recorded the owner's recall decision: this item is now " +
+                result.Recall.Disposition + " and the service reports it that way in recall." +
+                (string.IsNullOrWhiteSpace(result.Recall.Rationale) ? string.Empty : " Reason: " + result.Recall.Rationale);
+            return true;
+        }
+
+        LibraryMessage = "The service refused the recall act (code: " + (result.ErrorCode ?? "unknown") +
+            "). The item keeps the recall decision it already had.";
+        ApplyPrivateRefusal(result.Outcome, result.ErrorCode);
+        return true;
+    }
+
+    /// <summary>
     /// Materializes the library index generation for the unlocked vault. The
     /// service requires this explicit owner act before it can answer a search;
     /// a successful rebuild drops any page that came from an earlier generation
@@ -276,6 +363,7 @@ internal sealed partial class OwnerConsoleSession
             LibrarySource = null;
             LibraryTimeline = null;
             LibraryRetained = null;
+            LibraryRecall = null;
             LibraryMessage = DescribeLibraryAnswer("search", result.Outcome, result.ErrorCode, true);
         }
         else
@@ -482,6 +570,7 @@ internal sealed partial class OwnerConsoleSession
         LibrarySource = null;
         LibraryTimeline = null;
         LibraryRetained = null;
+        LibraryRecall = null;
     }
 
     private void ApplyPrivateRefusal(OwnerCommandOutcome outcome, string? errorCode)

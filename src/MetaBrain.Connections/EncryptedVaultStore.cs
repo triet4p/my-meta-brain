@@ -44,6 +44,8 @@ internal sealed class EncryptedVaultStore
     private const int MaximumCatalogEnvelopeBytes = 768 * 1024;
     private const int MaximumSourceEnrollmentBytes = SourceIngestionLimits.MaximumSourceStateBytes;
     private const int MaximumSourceEnrollmentEnvelopeBytes = SourceIngestionLimits.MaximumSourceStateBytes + (256 * 1024);
+    private const int MaximumRecallPolicyBytes = 4 * 1024 * 1024;
+    private const int MaximumRecallPolicyEnvelopeBytes = 6 * 1024 * 1024;
     private const int MaximumProjectionBytes = 1024 * 1024;
     private const int MaximumResourceBytes = SourceSnapshotCodec.MaximumStoredBytes;
     private const int KeyBytes = 32;
@@ -68,6 +70,7 @@ internal sealed class EncryptedVaultStore
     private readonly string _scopeGrantsPath;
     private readonly string _catalogPath;
     private readonly string _sourceEnrollmentPath;
+    private readonly string _recallPolicyPath;
     private readonly string _projectionPath;
 
     private sealed record KeyWrapper(int KdfIterations, string Salt, string Nonce, string Ciphertext, string Tag);
@@ -90,6 +93,7 @@ internal sealed class EncryptedVaultStore
         _scopeGrantsPath = Path.Combine(_root, "scope-grants.enc");
         _catalogPath = Path.Combine(_root, "owner-catalog.enc");
         _sourceEnrollmentPath = Path.Combine(_root, "source-enrollment.enc");
+        _recallPolicyPath = Path.Combine(_root, "recall-policy.enc");
         _projectionPath = Path.Combine(_serviceDirectory, "published-catalog.json");
     }
 
@@ -402,6 +406,100 @@ internal sealed class EncryptedVaultStore
             var envelope = EncryptPayload(plaintext, dataKey, associatedData);
             envelopeBytes = JsonSerializer.SerializeToUtf8Bytes(envelope, JsonOptions);
             AtomicWrite(_catalogPath, envelopeBytes);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(plaintext);
+            CryptographicOperations.ZeroMemory(associatedData);
+            if (envelopeBytes is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(envelopeBytes);
+            }
+        }
+    }
+
+    /// <summary>
+    /// S7-T4 owner recall policy state. Same dedicated-file pattern as the
+    /// scope-grant, catalog and source-enrollment states: one encrypted file
+    /// beside them in the vault, bound to the vault ID and the state schema
+    /// version through the associated data, written atomically. The file is
+    /// never a canonical manifest resource, so a policy act never changes an
+    /// item's revision and never invalidates the private index.
+    /// </summary>
+    public OwnerRecallPolicyState LoadRecallPolicyState(VaultManifest manifest, ReadOnlySpan<byte> dataKey)
+    {
+        FileAttributes attributes;
+        try
+        {
+            attributes = File.GetAttributes(_recallPolicyPath);
+        }
+        catch (FileNotFoundException)
+        {
+            return OwnerRecallPolicyState.Empty;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return OwnerRecallPolicyState.Empty;
+        }
+
+        if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+        {
+            throw new InvalidDataException("The encrypted owner recall policy must be a regular file.");
+        }
+
+        byte[]? associatedData = null;
+        byte[]? plaintext = null;
+        try
+        {
+            var json = ProtectedFile.ReadPrivateFile(_recallPolicyPath, _ownerSid, MaximumRecallPolicyEnvelopeBytes).Text;
+            var envelope = JsonSerializer.Deserialize<EncryptedPayload>(json, JsonOptions)
+                ?? throw new InvalidDataException("Invalid encrypted owner recall policy envelope.");
+            associatedData = ResourceAssociatedData(
+                manifest.VaultId, "recall-policy", OwnerRecallPolicyState.CurrentSchemaVersion, 1);
+            plaintext = DecryptPayload(
+                envelope, dataKey, associatedData, OwnerRecallPolicyState.CurrentSchemaVersion, 1, MaximumRecallPolicyBytes);
+            return JsonSerializer.Deserialize<OwnerRecallPolicyState>(plaintext, JsonOptions)
+                ?? throw new InvalidDataException("Invalid encrypted owner recall policy.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or
+                                   CryptographicException or ArgumentException or FormatException or OverflowException)
+        {
+            throw new InvalidDataException("The encrypted owner recall policy is unavailable.", ex);
+        }
+        finally
+        {
+            if (associatedData is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(associatedData);
+            }
+
+            if (plaintext is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(plaintext);
+            }
+        }
+    }
+
+    public void SaveRecallPolicyState(
+        VaultManifest manifest,
+        ReadOnlySpan<byte> dataKey,
+        OwnerRecallPolicyState state)
+    {
+        var plaintext = JsonSerializer.SerializeToUtf8Bytes(state, JsonOptions);
+        if (plaintext.Length is <= 0 or > MaximumRecallPolicyBytes)
+        {
+            CryptographicOperations.ZeroMemory(plaintext);
+            throw new InvalidDataException("The owner recall policy exceeds its storage limit.");
+        }
+
+        var associatedData = ResourceAssociatedData(
+            manifest.VaultId, "recall-policy", OwnerRecallPolicyState.CurrentSchemaVersion, 1);
+        byte[]? envelopeBytes = null;
+        try
+        {
+            var envelope = EncryptPayload(plaintext, dataKey, associatedData);
+            envelopeBytes = JsonSerializer.SerializeToUtf8Bytes(envelope, JsonOptions);
+            AtomicWrite(_recallPolicyPath, envelopeBytes);
         }
         finally
         {
@@ -1064,6 +1162,7 @@ internal sealed class EncryptedVaultStore
         known.Add("manifest.enc");
         known.Add("scope-grants.enc");
         known.Add("owner-catalog.enc");
+        known.Add("recall-policy.enc");
         known.Add("vault-header.json");
         var reaped = 0;
         if (Directory.Exists(_resourcesPath))

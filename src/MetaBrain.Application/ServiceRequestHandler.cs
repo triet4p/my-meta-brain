@@ -68,7 +68,8 @@ public sealed record ServiceRequest(
     string? Profile = null,
     int? IntervalMinutes = null,
     string? ContextProject = null,
-    string? ContextTask = null);
+    string? ContextTask = null,
+    bool? IncludeArchived = null);
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
     ScopeResourceRevision[] Resources,
@@ -140,7 +141,18 @@ public sealed record MemorySearchHitWire(
     string Snippet,
     DateTimeOffset? OccurredAtUtc,
     DateTimeOffset RecordedAtUtc,
-    bool Stale);
+    bool Stale)
+{
+    /// <summary>
+    /// S7-T4 the owner's own recall decision for this item and the reason it
+    /// is ordered where it is. The reason names only the facts that moved this
+    /// hit, and it never speaks about the item's truth.
+    /// </summary>
+    public string RecallState { get; init; } = RecallTokens.Disposition(RecallDisposition.Normal);
+
+    /// <summary>Why this hit ranks where it does, in the service's own words.</summary>
+    public string RankingReason { get; init; } = string.Empty;
+}
 
 /// <summary>
 /// One S4-T2 scoped search page over the session's frozen snapshot. Total is
@@ -175,7 +187,45 @@ public sealed record LibraryHitWire(
     string Snippet,
     DateTimeOffset? OccurredAtUtc,
     DateTimeOffset RecordedAtUtc,
-    string Publication);
+    string Publication)
+{
+    /// <summary>
+    /// S7-T4 the owner's own recall decision for this item and the reason it
+    /// is ordered where it is. The reason names only the facts that moved this
+    /// hit, and it never speaks about the item's truth.
+    /// </summary>
+    public string RecallState { get; init; } = RecallTokens.Disposition(RecallDisposition.Normal);
+
+    /// <summary>Why this hit ranks where it does, in the service's own words.</summary>
+    public string RankingReason { get; init; } = string.Empty;
+}
+
+/// <summary>
+/// One S7-T4 owner recall decision for a subject memory item: the owner's own
+/// disposition, the reason the owner gave, who acted and when, and the bounded
+/// act history that explains how the decision was reached. It never carries
+/// the item's body and never says the item is less true: a demoted or archived
+/// item keeps every byte, every citation and every piece of evidence it had.
+/// </summary>
+public sealed record RecallPolicyWire(
+    string SubjectResourceId,
+    string Disposition,
+    string? Rationale,
+    string? Actor,
+    DateTimeOffset? RecordedAtUtc,
+    RecallPolicyChangeWire[] History);
+
+/// <summary>
+/// One recorded S7-T4 owner recall act: the disposition the act moved the
+/// subject from, the disposition it moved it to, the actor, the UTC time and
+/// the owner's own reason.
+/// </summary>
+public sealed record RecallPolicyChangeWire(
+    string From,
+    string To,
+    string Actor,
+    DateTimeOffset RecordedAtUtc,
+    string? Rationale);
 
 /// <summary>
 /// One S5-T4 owner review outcome. It names the pending proposal that was
@@ -241,7 +291,15 @@ public sealed record BriefEntryWire(
     DateTimeOffset RecordedAtUtc,
     Core.Domain.MemoryApplicability? Applicability,
     MemoryCitationWire[]? Citations,
-    string[]? Warnings);
+    string[]? Warnings)
+{
+    /// <summary>
+    /// S7-T4 the owner's own recall decision for this item, so the brief says
+    /// why the item is surfaced and in what order, without ever saying the
+    /// item is less true.
+    /// </summary>
+    public string RecallState { get; init; } = RecallTokens.Disposition(RecallDisposition.Normal);
+}
 
 /// <summary>
 /// A reminder projected only from an owner-enabled contextual trigger on the
@@ -798,7 +856,8 @@ public sealed record ServiceReply(
     ProviderStatusWire? ProviderStatus = null,
     ScheduleRunWire? ScheduleRun = null,
     IntentionScheduleWire? IntentionSchedule = null,
-    IntentionSchedulePassWire? IntentionSchedulePass = null);
+    IntentionSchedulePassWire? IntentionSchedulePass = null,
+    RecallPolicyWire? Recall = null);
 
 public sealed class ServiceRequestHandler
 {
@@ -909,6 +968,8 @@ public sealed class ServiceRequestHandler
     public const string OwnerIndexStatusOperation = "owner.index.status";
     public const string OwnerIndexRebuildOperation = "owner.index.rebuild";
     public const string OwnerLibrarySearchOperation = "owner.library.search";
+    public const string OwnerRecallApplyOperation = "owner.recall.apply";
+    public const string OwnerRecallReadOperation = "owner.recall.read";
     public const string OwnerRelationListOperation = "owner.relation.list";
     public const string OwnerProposalPublishOperation = "owner.proposal.publish";
     public const string OwnerProposalRejectOperation = "owner.proposal.reject";
@@ -1029,6 +1090,17 @@ public sealed class ServiceRequestHandler
         if (request.SearchAsOfUtc is not null &&
             !string.Equals(request.Operation, OwnerLibrarySearchOperation, StringComparison.Ordinal) &&
             !string.Equals(request.Operation, AgentMemorySearchOperation, StringComparison.Ordinal))
+        {
+            return Error("invalid_request");
+        }
+
+        // S7-T4: the archive expansion flag belongs to the three recall
+        // surfaces only. It is a request to *see* what the owner set aside; it
+        // never adds a resource to any scope and never changes a right.
+        if (request.IncludeArchived is not null &&
+            !string.Equals(request.Operation, OwnerLibrarySearchOperation, StringComparison.Ordinal) &&
+            !string.Equals(request.Operation, AgentMemorySearchOperation, StringComparison.Ordinal) &&
+            !string.Equals(request.Operation, AgentMemoryBriefOperation, StringComparison.Ordinal))
         {
             return Error("invalid_request");
         }
@@ -1160,6 +1232,16 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, OwnerLibrarySearchOperation, StringComparison.Ordinal))
         {
             return HandleOwnerLibrarySearch(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerRecallApplyOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerRecallApply(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerRecallReadOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerRecallRead(context, request, operation);
         }
 
         if (string.Equals(request.Operation, OwnerRelationListOperation, StringComparison.Ordinal))
@@ -5339,8 +5421,14 @@ public sealed class ServiceRequestHandler
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            total = authority.Count(session, request.Query, request.SearchKind, request.SearchCurrent, materialized, _privateIndexStore, operation, request.SearchAsOfUtc);
-            page = authority.Search(session, request.Query, request.SearchKind, request.SearchCurrent, offset, limit, materialized, _privateIndexStore, operation, request.SearchAsOfUtc);
+            // The owner's recall policy is owner-side curation applied to the
+            // frozen scope's own hits. It can only reorder or hide a subject
+            // that is already approved in this session's scope: it never adds
+            // a member, never widens an operation and never revokes a right.
+            var recall = LoadRecallPolicy(operation);
+            var includeArchived = request.IncludeArchived == true;
+            total = authority.Count(session, request.Query, request.SearchKind, request.SearchCurrent, materialized, _privateIndexStore, operation, request.SearchAsOfUtc, recall, includeArchived);
+            page = authority.Search(session, request.Query, request.SearchKind, request.SearchCurrent, offset, limit, materialized, _privateIndexStore, operation, request.SearchAsOfUtc, recall, includeArchived);
         }
         catch (OperationCanceledException)
         {
@@ -5401,7 +5489,11 @@ public sealed class ServiceRequestHandler
             snippet,
             hit.Item.OccurredAtUtc,
             hit.Item.RecordedAtUtc,
-            hit.Stale);
+            hit.Stale)
+        {
+            RecallState = RecallTokens.Disposition(hit.Disposition),
+            RankingReason = hit.RankingReason,
+        };
     }
 
     /// <summary>
@@ -5630,6 +5722,166 @@ public sealed class ServiceRequestHandler
     /// index generation and every served hit is read at its own revision
     /// through the revision-gated owner operation, so a row whose canonical
     /// revision moved is dropped instead of serving other bytes.
+    /// <summary>
+    /// S7-T4 owner recall act: the owner demotes, pins, sets aside or
+    /// restores one subject memory item.
+    /// <para>
+    /// The act is owner-only, needs an unlocked vault, and names a subject
+    /// that must be a live memory item now. It changes only how that item is
+    /// offered: the item's body, evidence, verification, revision, citations
+    /// and attribution are untouched, nothing is deleted, and no grant,
+    /// collection or session scope is read or written. A demote or an archive
+    /// requires the owner's own reason, so the ranking can always be
+    /// explained. A protected subject cannot be demoted or set aside until the
+    /// owner releases that protection with an explicit restore.
+    /// </para>
+    /// </summary>
+    private ServiceReply HandleOwnerRecallApply(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || HasRecallApplyExtras(request))
+        {
+            return Error("invalid_request");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        var subjectId = request.ResourceId;
+        if (subjectId is null || !DomainIdentifiers.IsDomainIdentifier(subjectId))
+        {
+            return Error("invalid_request");
+        }
+
+        if (!RecallTokens.TryParseAct(request.Label, out var act) || act == RecallAct.Unknown)
+        {
+            return Error("invalid_request");
+        }
+
+        var rationale = request.Description;
+        if (rationale is { Length: > OwnerRecallPolicyAuthority.MaximumRationaleLength })
+        {
+            return Error("invalid_request");
+        }
+
+        RecallPolicyEntry entry;
+        try
+        {
+            entry = new RecallPolicyService().Apply(context, subjectId, act, rationale, operation);
+        }
+        catch (ArgumentException ex)
+        {
+            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (IOException)
+        {
+            return Error("recall_unavailable");
+        }
+
+        return new ServiceReply(
+            CurrentProtocolVersion,
+            "recall_applied",
+            "owner",
+            null,
+            Recall: new RecallPolicyWire(
+                entry.SubjectResourceId,
+                RecallTokens.Disposition(entry.Disposition),
+                entry.Rationale,
+                ToWireToken(entry.Executor.ToString()),
+                entry.RecordedAtUtc,
+                entry.History.Select(change => new RecallPolicyChangeWire(
+                    RecallTokens.Disposition(change.From),
+                    RecallTokens.Disposition(change.To),
+                    ToWireToken(change.Executor.ToString()),
+                    change.RecordedAtUtc,
+                    change.Rationale)).ToArray()));
+    }
+
+    /// <summary>
+    /// S7-T4 owner recall read: the owner's own decision for one subject,
+    /// with the recorded act history that explains how it was reached. A
+    /// subject the owner never decided about is reported as ordinary.
+    /// </summary>
+    private ServiceReply HandleOwnerRecallRead(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || HasRecallReadExtras(request))
+        {
+            return Error("invalid_request");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        var subjectId = request.ResourceId;
+        if (subjectId is null || !DomainIdentifiers.IsDomainIdentifier(subjectId))
+        {
+            return Error("invalid_request");
+        }
+
+        RecallPolicyEntry? entry;
+        try
+        {
+            entry = new RecallPolicyService().Read(context, subjectId, operation);
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (IOException)
+        {
+            return Error("recall_unavailable");
+        }
+
+        if (entry is null)
+        {
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "recall_read",
+                "owner",
+                null,
+                Recall: new RecallPolicyWire(
+                    subjectId,
+                    RecallTokens.Disposition(RecallDisposition.Normal),
+                    null,
+                    null,
+                    null,
+                    Array.Empty<RecallPolicyChangeWire>()));
+        }
+
+        return new ServiceReply(
+            CurrentProtocolVersion,
+            "recall_read",
+            "owner",
+            null,
+            Recall: new RecallPolicyWire(
+                entry.SubjectResourceId,
+                RecallTokens.Disposition(entry.Disposition),
+                entry.Rationale,
+                ToWireToken(entry.Executor.ToString()),
+                entry.RecordedAtUtc,
+                entry.History.Select(change => new RecallPolicyChangeWire(
+                    RecallTokens.Disposition(change.From),
+                    RecallTokens.Disposition(change.To),
+                    ToWireToken(change.Executor.ToString()),
+                    change.RecordedAtUtc,
+                    change.Rationale)).ToArray()));
+    }
+
+    /// <summary>
+    /// S5-T3 owner library search: the owner's own search over their unlocked
+    /// vault. The service applies every filter, ranks the matches and serves
+    /// the exact IDs, revisions and states it served.
     /// </summary>
     private ServiceReply HandleOwnerLibrarySearch(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
     {
@@ -5780,7 +6032,9 @@ public sealed class ServiceRequestHandler
                     request.Query, kind, current, level, request.SearchFromUtc, request.SearchToUtc, offset, limit, request.SearchAsOfUtc),
                 materialized,
                 _privateIndexStore,
-                operation);
+                operation,
+                LoadRecallPolicy(operation),
+                request.IncludeArchived == true);
         }
         catch (OperationCanceledException)
         {
@@ -5805,7 +6059,11 @@ public sealed class ServiceRequestHandler
             BuildSnippet(hit.Item.Body, hit.Document.Tokens),
             hit.Item.OccurredAtUtc,
             hit.Item.RecordedAtUtc,
-            hit.Document.Publication)).ToArray();
+            hit.Document.Publication)
+        {
+            RecallState = RecallTokens.Disposition(hit.Disposition),
+            RankingReason = hit.RankingReason,
+        }).ToArray();
 
         return new ServiceReply(
             CurrentProtocolVersion,
@@ -6004,7 +6262,14 @@ public sealed class ServiceRequestHandler
                 operation,
                 resourceId => liveRevisions.TryGetValue(resourceId, out var live) &&
                     session.Resources.Any(resource =>
-                        string.Equals(resource.ResourceId, resourceId, StringComparison.Ordinal) && resource.Revision == live));
+                        string.Equals(resource.ResourceId, resourceId, StringComparison.Ordinal) && resource.Revision == live),
+                null,
+                // The owner's recall policy applies to the brief exactly as it
+                // applies to scoped search: it reorders or hides subjects that
+                // are already in this session's frozen scope, and it never
+                // adds a member or widens a right.
+                LoadRecallPolicy(operation),
+                request.IncludeArchived == true);
             var contextual = ProjectContextualIntentions(contextualCandidates, contextualBudget, operation);
             var state = operation.LoadScopeGrantState();
             var recheck = _agentSessions.AuthorizeSession(
@@ -7772,6 +8037,70 @@ public sealed class ServiceRequestHandler
         request.SearchLevel is not null || request.SearchFromUtc is not null || request.SearchToUtc is not null;
 
     /// <summary>
+    /// S7-T4 owner recall act carries exactly the subject, the named act and
+    /// the owner's reason — and nothing else. Credentials, scope selection,
+    /// sessions, catalog, egress, source and snapshot fields are refused, so a
+    /// recall body can never steer another flow or mint authority.
+    /// </summary>
+    private static bool HasRecallApplyExtras(ServiceRequest request) =>
+        request.ZoneId is not null || request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ResourceIds is not null || request.Operations is not null ||
+        request.DestinationResourceIds is not null || request.ExpiresAtUtc is not null ||
+        request.Provider is not null || request.Model is not null ||
+        request.MaximumCostUsd is not null || request.PreviewId is not null ||
+        request.CollectionId is not null || request.Token is not null ||
+        request.SessionToken is not null || request.SessionId is not null ||
+        request.AccessOperation is not null ||
+        request.DestinationResourceId is not null || request.DestinationRevision is not null ||
+        request.EstimatedCostUsd is not null || request.InputTokens is not null ||
+        request.OutputTokens is not null || request.CatalogId is not null ||
+        request.CatalogIds is not null || request.BudgetChars is not null ||
+        request.Purpose is not null || request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null ||
+        request.SourceLocator is not null || request.SourceFormat is not null ||
+        request.SourceFormatVersion is not null || request.SourceTitle is not null ||
+        request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
+        request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null ||
+        request.SearchOffset is not null || request.SearchLimit is not null ||
+        request.SearchKind is not null || request.SearchCurrent is not null ||
+        request.SearchLevel is not null || request.SearchFromUtc is not null ||
+        request.SearchToUtc is not null || request.SearchAsOfUtc is not null ||
+        request.ContextProject is not null || request.ContextTask is not null ||
+        request.IncludeArchived is not null || request.ResourceRevision is not null;
+
+    /// <summary>
+    /// S7-T4 owner recall read carries exactly the subject — and nothing else.
+    /// The read never returns a body, a scope, a session or a grant.
+    /// </summary>
+    private static bool HasRecallReadExtras(ServiceRequest request) =>
+        request.ZoneId is not null || request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ContentBase64 is not null || request.ResourceIds is not null ||
+        request.Operations is not null || request.DestinationResourceIds is not null ||
+        request.ExpiresAtUtc is not null || request.Provider is not null ||
+        request.Model is not null || request.MaximumCostUsd is not null ||
+        request.PreviewId is not null || request.CollectionId is not null ||
+        request.Token is not null || request.SessionToken is not null ||
+        request.SessionId is not null || request.AccessOperation is not null ||
+        request.DestinationResourceId is not null || request.DestinationRevision is not null ||
+        request.EstimatedCostUsd is not null || request.InputTokens is not null ||
+        request.OutputTokens is not null || request.CatalogId is not null ||
+        request.Label is not null || request.Description is not null ||
+        request.CatalogIds is not null || request.Query is not null ||
+        request.SearchOffset is not null || request.SearchLimit is not null ||
+        request.SearchKind is not null || request.SearchCurrent is not null ||
+        request.SearchLevel is not null || request.SearchFromUtc is not null ||
+        request.SearchToUtc is not null || request.SearchAsOfUtc is not null ||
+        request.BudgetChars is not null || request.Purpose is not null ||
+        request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null ||
+        request.SourceLocator is not null || request.SourceFormat is not null ||
+        request.SourceFormatVersion is not null || request.SourceTitle is not null ||
+        request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
+        request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null ||
+        request.ContextProject is not null || request.ContextTask is not null ||
+        request.IncludeArchived is not null || request.ResourceRevision is not null;
+
+    /// <summary>
     /// S5-T3 owner library search carries the query text, paging, the zone and
     /// collection selectors, the kind/level/currentness filters and the time
     /// window — and nothing else. Credentials, content, scope selection,
@@ -8540,4 +8869,15 @@ public sealed class ServiceRequestHandler
         new(CurrentProtocolVersion, "no_match", null, "catalog_no_match");
 
     private static ServiceReply Error(string error) => new(CurrentProtocolVersion, null, null, error);
+
+    /// <summary>
+    /// Reads the owner's recall policy for this unlocked epoch. A policy that
+    /// cannot be read is a refusal, not an empty policy: an unreadable policy
+    /// must never silently look like "the owner decided nothing".
+    /// </summary>
+    private static RecallPolicyIndex LoadRecallPolicy(IVaultOperation operation)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        return RecallPolicyIndex.From(operation.LoadRecallPolicyState());
+    }
 }

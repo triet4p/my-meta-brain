@@ -38,7 +38,14 @@ public sealed class ScopedBriefAuthority
         MemoryItem Item,
         MemoryCitationWire[]? Citations,
         string[]? Warnings,
-        bool Stale);
+        bool Stale)
+    {
+        /// <summary>
+        /// The owner's recall decision for this subject. It changes only the
+        /// order this entry is projected in, never what the entry says.
+        /// </summary>
+        public RecallDisposition Disposition { get; init; } = RecallDisposition.Normal;
+    }
 
     public MemoryBriefWire Build(
         AgentSessionSnapshot session,
@@ -49,7 +56,9 @@ public sealed class ScopedBriefAuthority
         Func<MemoryItem, IManagedResourceReader?, (MemoryCitationWire[]? Citations, string[]? Warnings)> projectCitations,
         IManagedResourceReader manifest,
         Func<string, bool>? isLiveRevision = null,
-        Func<string, string[]?>? expandQuery = null)
+        Func<string, string[]?>? expandQuery = null,
+        RecallPolicyIndex? recall = null,
+        bool includeArchived = false)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(approvedScope);
@@ -60,7 +69,7 @@ public sealed class ScopedBriefAuthority
             throw new ArgumentException("The brief budget must be 0-8000 characters.");
         }
 
-        var candidates = PlanCandidates(session, query, approvedScope, readApproved, isLiveRevision, expandQuery);
+        var candidates = PlanCandidates(session, query, approvedScope, readApproved, isLiveRevision, expandQuery, recall, includeArchived);
         var entries = new List<BriefEntryWire>();
         var omitted = new List<BriefOmissionWire>();
         var uncertain = new List<string>();
@@ -69,6 +78,15 @@ public sealed class ScopedBriefAuthority
 
         foreach (var candidate in candidates)
         {
+            if (candidate.Disposition == RecallDisposition.Archived && !includeArchived)
+            {
+                // The owner set this item aside: it is not projected, but it is
+                // named in the omission trace so the caller can see that the
+                // scope member exists and was deliberately not offered.
+                omitted.Add(new BriefOmissionWire(candidate.ResourceId, candidate.Revision, "owner_archived"));
+                continue;
+            }
+
             var (citations, warnings) = projectCitations(candidate.Item, manifest);
             var excerptBudget = Math.Max(120, budgetChars / Math.Max(1, Math.Min(candidates.Count, MaximumEntries)) / 2);
             var remaining = budgetChars - used;
@@ -104,7 +122,10 @@ public sealed class ScopedBriefAuthority
                 candidate.Item.RecordedAtUtc,
                 candidate.Item.Applicability,
                 citations,
-                warnings));
+                warnings)
+            {
+                RecallState = RecallTokens.Disposition(candidate.Disposition),
+            });
             MarkUncertain(uncertain, candidate, citations, warnings);
             if (entries.Count >= MaximumEntries && candidates.Count > entries.Count)
             {
@@ -138,7 +159,9 @@ public sealed class ScopedBriefAuthority
         IReadOnlyList<ScopeResourceRevision> approvedScope,
         Func<ScopeResourceRevision, MemoryItem?> readApproved,
         Func<string, bool>? isLiveRevision,
-        Func<string, string[]?>? expandQuery)
+        Func<string, string[]?>? expandQuery,
+        RecallPolicyIndex? recall,
+        bool includeArchived)
     {
         var scope = approvedScope
             .Where(resource => !IsProtectedNamespace(resource.ResourceId))
@@ -185,11 +208,24 @@ public sealed class ScopedBriefAuthority
             }
 
             var stale = IsStaleHint(item) || (isLiveRevision is not null && !isLiveRevision(approved.ResourceId));
-            planned.Add(new PlannedEntry(approved.ResourceId, approved.Revision, score, item, null, null, stale));
+
+            // The owner's recall decision applies to the brief exactly as it
+            // applies to scoped recall: a demoted item is still projected when
+            // the budget allows it, but it sorts below the items the owner did
+            // not demote, and an item the owner set aside is not projected
+            // unless the caller explicitly expands the archive. The projected
+            // content itself is unchanged, and a set-aside item is named in
+            // the omission trace rather than disappearing silently.
+            var disposition = recall?.DispositionOf(approved.ResourceId) ?? RecallDisposition.Normal;
+            planned.Add(new PlannedEntry(approved.ResourceId, approved.Revision, score, item, null, null, stale)
+            {
+                Disposition = disposition,
+            });
         }
 
         return planned
-            .OrderByDescending(entry => entry.Score)
+            .OrderBy(entry => RecallPolicyIndex.TierOf(entry.Disposition))
+            .ThenByDescending(entry => entry.Score)
             .ThenBy(entry => entry.ResourceId, StringComparer.Ordinal)
             .Take(MaximumEntries * 2)
             .ToList();

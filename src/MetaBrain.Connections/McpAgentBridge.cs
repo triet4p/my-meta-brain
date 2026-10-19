@@ -199,7 +199,7 @@ internal static class McpAgentBridge
                     ["required"] = new JsonArray("sessionFile", "operation"),
                     ["additionalProperties"] = false,
                 }),
-            Tool("metabrain_memory_search", "Search approved memory items by text (scoped lexical recall, lean hits only; current excludes expired/superseded, history keeps them; asOf replays recorded history through an instant).",
+            Tool("metabrain_memory_search", "Search approved memory items by text (scoped lexical recall, lean hits only; current excludes expired/superseded, history keeps them; asOf replays recorded history through an instant; includeArchived also returns items the owner set aside and never widens the approved scope).",
                 new JsonObject
                 {
                     ["type"] = "object",
@@ -212,6 +212,7 @@ internal static class McpAgentBridge
                         ["kind"] = new JsonObject { ["type"] = "string" },
                         ["current"] = new JsonObject { ["type"] = "string" },
                         ["asOf"] = new JsonObject { ["type"] = "string" },
+                        ["includeArchived"] = new JsonObject { ["type"] = "string", ["description"] = "Also return items the owner set aside; expands visibility only, never the approved scope." },
                     },
                     ["required"] = new JsonArray("sessionFile", "query"),
                     ["additionalProperties"] = false,
@@ -266,6 +267,7 @@ internal static class McpAgentBridge
                         ["budgetChars"] = new JsonObject { ["type"] = "string" },
                         ["contextProject"] = new JsonObject { ["type"] = "string", ["maxLength"] = 160, ["description"] = "Explicit project label; no context is inferred." },
                         ["contextTask"] = new JsonObject { ["type"] = "string", ["maxLength"] = 160, ["description"] = "Explicit task label; no context is inferred." },
+                        ["includeArchived"] = new JsonObject { ["type"] = "string", ["description"] = "Also project items the owner set aside; expands visibility only, never the approved scope." },
                     },
                     ["required"] = new JsonArray("sessionFile"),
                     ["additionalProperties"] = false,
@@ -624,6 +626,12 @@ internal static class McpAgentBridge
             }
         }
 
+        if (IsFlagSet(args, "includeArchived"))
+        {
+            full.Add("--include-archived");
+            full.Add("true");
+        }
+
         return full.ToArray();
     }
 
@@ -663,7 +671,30 @@ internal static class McpAgentBridge
             }
         }
 
+        if (IsFlagSet(args, "includeArchived"))
+        {
+            full.Add("--include-archived");
+            full.Add("true");
+        }
+
         return full.ToArray();
+    }
+
+    /// <summary>
+    /// Reads one optional boolean tool argument. The bridge accepts the
+    /// explicit strings "true" and "false" so a caller can turn a flag off
+    /// again; any other value is treated as not set, and the flag then
+    /// changes nothing.
+    /// </summary>
+    private static bool IsFlagSet(JsonObject args, string key)
+    {
+        if (args[key] is not JsonValue value)
+        {
+            return false;
+        }
+
+        var text = value.GetValue<string>();
+        return string.Equals(text, "true", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string[] BuildProposeArgs(string agentPipe, JsonObject args)

@@ -41,7 +41,21 @@ public sealed class ScopedSearchAuthority
         bool DirectHit,
         SearchIndexDocument Document,
         MemoryItem Item,
-        bool Stale);
+        bool Stale)
+    {
+        /// <summary>
+        /// The owner's recall decision for this subject. An ordinary item the
+        /// owner never decided about is Normal.
+        /// </summary>
+        public RecallDisposition Disposition { get; init; } = RecallDisposition.Normal;
+
+        /// <summary>
+        /// Why this hit ranks where it does. The reason names only the facts
+        /// that actually moved this hit, so it never claims a fact the ranking
+        /// did not use.
+        /// </summary>
+        public string RankingReason { get; init; } = string.Empty;
+    }
 
     public IReadOnlyList<ScoredHit> Search(
         AgentSessionSnapshot session,
@@ -53,7 +67,9 @@ public sealed class ScopedSearchAuthority
         PrivateIndexSnapshot? materialized,
         IPrivateIndexStore index,
         IManagedResourceStore vault,
-        DateTimeOffset? asOfUtc = null)
+        DateTimeOffset? asOfUtc = null,
+        RecallPolicyIndex? recall = null,
+        bool includeArchived = false)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(index);
@@ -119,11 +135,28 @@ public sealed class ScopedSearchAuthority
                 continue;
             }
 
-            scored.Add(new ScoredHit(approved.ResourceId, approved.Revision, ApplyStatePenalty(score, document, stale), directHit, document, item, stale));
+            // The owner's recall decision: a demoted item is still offered and
+            // still findable, but it sorts below the items the owner did not
+            // demote; a pinned item sorts with the protected items first. An
+            // archived item is not offered at all unless the caller explicitly
+            // expands the archive. None of this touches the item's content,
+            // evidence, verification or revision.
+            var disposition = recall?.DispositionOf(approved.ResourceId) ?? RecallDisposition.Normal;
+            if (disposition == RecallDisposition.Archived && !includeArchived)
+            {
+                continue;
+            }
+
+            scored.Add(new ScoredHit(approved.ResourceId, approved.Revision, ApplyStatePenalty(score, document, stale), directHit, document, item, stale)
+            {
+                Disposition = disposition,
+                RankingReason = RecallRankingReason.Of(disposition, stale, document),
+            });
         }
 
         return scored
-            .OrderByDescending(hit => hit.Score)
+            .OrderBy(hit => RecallPolicyIndex.TierOf(hit.Disposition))
+            .ThenByDescending(hit => hit.Score)
             .ThenBy(hit => hit.ResourceId, StringComparer.Ordinal)
             .Skip(offset)
             .Take(limit)
@@ -138,10 +171,12 @@ public sealed class ScopedSearchAuthority
         PrivateIndexSnapshot? materialized,
         IPrivateIndexStore index,
         IManagedResourceStore vault,
-        DateTimeOffset? asOfUtc = null)
+        DateTimeOffset? asOfUtc = null,
+        RecallPolicyIndex? recall = null,
+        bool includeArchived = false)
     {
         // Total over the frozen scope: same filters, full ranking, no paging.
-        var all = Search(session, query, kind, current, 0, int.MaxValue, materialized, index, vault, asOfUtc);
+        var all = Search(session, query, kind, current, 0, int.MaxValue, materialized, index, vault, asOfUtc, recall, includeArchived);
         return all.Count;
     }
 
@@ -199,7 +234,9 @@ public sealed class ScopedSearchAuthority
         OwnerLibraryQuery query,
         PrivateIndexSnapshot? materialized,
         IPrivateIndexStore index,
-        IManagedResourceStore vault)
+        IManagedResourceStore vault,
+        RecallPolicyIndex? recall = null,
+        bool includeArchived = false)
     {
         ArgumentNullException.ThrowIfNull(ownerScope);
         ArgumentNullException.ThrowIfNull(query);
@@ -261,6 +298,17 @@ public sealed class ScopedSearchAuthority
                 continue;
             }
 
+            // The owner's own recall decision applies to the owner's library
+            // exactly as it applies to scoped recall: an archived subject is
+            // not offered unless the owner explicitly expands the archive, and
+            // a demoted or pinned subject keeps its own order. The item's
+            // bytes, evidence and revision are untouched.
+            var disposition = recall?.DispositionOf(resource.ResourceId) ?? RecallDisposition.Normal;
+            if (disposition == RecallDisposition.Archived && !includeArchived)
+            {
+                continue;
+            }
+
             var score = 0.0;
             var directHit = false;
             if (terms.Length > 0)
@@ -287,15 +335,17 @@ public sealed class ScopedSearchAuthority
                 }
             }
 
-            matched.Add(new OwnerCandidate(resource, document, score, directHit, item));
+            matched.Add(new OwnerCandidate(resource, document, score, directHit, item, disposition));
         }
 
         var ordered = terms.Length > 0
             ? matched
-                .OrderByDescending(candidate => candidate.Score)
+                .OrderBy(candidate => RecallPolicyIndex.TierOf(candidate.Disposition))
+                .ThenByDescending(candidate => candidate.Score)
                 .ThenBy(candidate => candidate.Resource.ResourceId, StringComparer.Ordinal)
             : matched
-                .OrderByDescending(candidate => candidate.Document.OccurredAtUtc ?? candidate.Document.RecordedAtUtc)
+                .OrderBy(candidate => RecallPolicyIndex.TierOf(candidate.Disposition))
+                .ThenByDescending(candidate => candidate.Document.OccurredAtUtc ?? candidate.Document.RecordedAtUtc)
                 .ThenBy(candidate => candidate.Resource.ResourceId, StringComparer.Ordinal);
 
         var hits = new List<ScoredHit>();
@@ -318,7 +368,11 @@ public sealed class ScopedSearchAuthority
                 candidate.DirectHit,
                 candidate.Document,
                 item,
-                stale));
+                stale)
+            {
+                Disposition = candidate.Disposition,
+                RankingReason = RecallRankingReason.Of(candidate.Disposition, stale, candidate.Document),
+            });
         }
 
         return new OwnerLibraryPage(matched.Count, hits);
@@ -329,7 +383,8 @@ public sealed class ScopedSearchAuthority
         SearchIndexDocument Document,
         double Score,
         bool DirectHit,
-        MemoryItem? Item);
+        MemoryItem? Item,
+        RecallDisposition Disposition);
 
     private static bool PassesWindow(SearchIndexDocument document, DateTimeOffset? fromUtc, DateTimeOffset? toUtc)
     {

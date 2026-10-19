@@ -319,6 +319,43 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
         }
     }
 
+    private OwnerRecallPolicyState LoadRecallPolicyState()
+    {
+        lock (_contentGate)
+        {
+            if (_manifest is null || _dataKey is null)
+            {
+                throw new ManagedResourceUnavailableException();
+            }
+
+            return OwnerRecallPolicyAuthority.ValidateAndNormalizeState(
+                _store.LoadRecallPolicyState(_manifest, _dataKey));
+        }
+    }
+
+    private T UpdateRecallPolicyState<T>(
+        Func<OwnerRecallPolicyState, (OwnerRecallPolicyState State, T Result)> update)
+    {
+        lock (_contentGate)
+        {
+            if (_manifest is null || _dataKey is null)
+            {
+                throw new ManagedResourceUnavailableException();
+            }
+
+            var state = OwnerRecallPolicyAuthority.ValidateAndNormalizeState(
+                _store.LoadRecallPolicyState(_manifest, _dataKey));
+            var (nextState, result) = update(state);
+            if (!ReferenceEquals(nextState, state))
+            {
+                nextState = OwnerRecallPolicyAuthority.ValidateAndNormalizeState(nextState);
+                _store.SaveRecallPolicyState(_manifest, _dataKey, nextState);
+            }
+
+            return result;
+        }
+    }
+
     private byte[] ReadContent(string resourceId, long? expectedRevision = null)
     {
         lock (_contentGate)
@@ -523,6 +560,10 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
         public T UpdateSourceEnrollmentState<T>(
             Func<SourceEnrollmentState, (SourceEnrollmentState State, T Result)> update) =>
             GetOwner().UpdateSourceEnrollmentState(update);
+        public OwnerRecallPolicyState LoadRecallPolicyState() => GetOwner().LoadRecallPolicyState();
+        public T UpdateRecallPolicyState<T>(
+            Func<OwnerRecallPolicyState, (OwnerRecallPolicyState State, T Result)> update) =>
+            GetOwner().UpdateRecallPolicyState(update);
         public bool TryGetZone(string resourceId, out string? zoneId) => GetOwner().TryGetZone(resourceId, out zoneId);
         public byte[] ReadContent(string resourceId, long? expectedRevision = null) => GetOwner().ReadContent(resourceId, expectedRevision);
         public byte[][] ReadBatch(IReadOnlyList<ScopeResourceRevision> batch, int maxDegreeOfParallelism, CancellationToken cancellationToken) => GetOwner().ReadBatch(batch, maxDegreeOfParallelism, cancellationToken);

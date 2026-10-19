@@ -1588,6 +1588,8 @@ internal static partial class OwnerServiceSmoke
         public T UpdateScopeGrantState<T>(Func<OwnerScopeGrantState, (OwnerScopeGrantState State, T Result)> update) => _inner.UpdateScopeGrantState(update);
         public OwnerCatalogState LoadCatalogState() => _inner.LoadCatalogState();
         public T UpdateCatalogState<T>(Func<OwnerCatalogState, (OwnerCatalogState State, T Result)> update) => _inner.UpdateCatalogState(update);
+        public OwnerRecallPolicyState LoadRecallPolicyState() => _inner.LoadRecallPolicyState();
+        public T UpdateRecallPolicyState<T>(Func<OwnerRecallPolicyState, (OwnerRecallPolicyState State, T Result)> update) => _inner.UpdateRecallPolicyState(update);
         public void Dispose() => _inner.Dispose();
     }
 }

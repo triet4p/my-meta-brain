@@ -130,7 +130,8 @@ public enum OwnerLibraryCurrentness
         DateTimeOffset? ToUtc = null,
         int Offset = 0,
         int Limit = 10,
-        DateTimeOffset? AsOfUtc = null);
+        DateTimeOffset? AsOfUtc = null,
+        bool IncludeArchived = false);
 
 /// <summary>
 /// One owner library hit exactly as the service ranked and described it. The
@@ -147,7 +148,18 @@ public sealed record OwnerLibraryHit(
     string Snippet,
     DateTimeOffset? OccurredAtUtc,
     DateTimeOffset RecordedAtUtc,
-    string Publication);
+    string Publication)
+{
+    /// <summary>
+    /// The owner's own recall decision for this item and the reason it is
+    /// ordered where it is. The reason names only the facts that moved the
+    /// hit; it never says the item is less true.
+    /// </summary>
+    public string RecallState { get; init; } = "normal";
+
+    /// <summary>Why this hit ranks where it does, in the service's own words.</summary>
+    public string RankingReason { get; init; } = string.Empty;
+}
 
     /// <summary>
     /// One owner library page. A generation behind the vault is never served as a
@@ -409,6 +421,41 @@ public sealed record OwnerLifecycleResult(
     OwnerCommandOutcome Outcome,
     string? ErrorCode,
     OwnerLifecycleState? Lifecycle);
+
+/// <summary>
+/// S7-T4 the owner's own recall decision for one subject memory item, as the
+/// service reported it: the disposition, the reason the owner gave, who acted
+/// and when, and the bounded act history that explains how the decision was
+/// reached. It never carries the item's body and never says the item is less
+/// true.
+/// </summary>
+public sealed record OwnerRecallState(
+    string SubjectResourceId,
+    string Disposition,
+    string? Rationale,
+    string? Actor,
+    DateTimeOffset? RecordedAtUtc,
+    OwnerRecallChange[] History);
+
+/// <summary>
+/// One recorded S7-T4 owner recall act: the disposition the act moved the
+/// subject from, the disposition it moved it to, the actor, the UTC time and
+/// the owner's own reason.
+/// </summary>
+public sealed record OwnerRecallChange(
+    string From,
+    string To,
+    string Actor,
+    DateTimeOffset RecordedAtUtc,
+    string? Rationale);
+
+/// <summary>
+/// The outcome of one S7-T4 owner recall act or read on the owner channel.
+/// </summary>
+public sealed record OwnerRecallResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerRecallState? Recall);
 
 /// <summary>
 /// One private evidence pin a declassification stands on, as the service
@@ -1116,11 +1163,62 @@ public static class OwnerChannelClient
                 SearchCurrent: CurrentToken(query.Current),
                 SearchFromUtc: query.FromUtc,
                 SearchToUtc: query.ToUtc,
-                SearchAsOfUtc: query.AsOfUtc),
+                SearchAsOfUtc: query.AsOfUtc,
+                IncludeArchived: query.IncludeArchived),
             "library_page",
             cancellationToken).ConfigureAwait(false);
 
         return new OwnerLibrarySearchResult(reply.Outcome, reply.ErrorCode, ProjectLibraryPage(reply));
+    }
+
+    /// <summary>
+    /// Applies one S7-T4 owner recall act through the owner control pipe: the
+    /// owner demotes, pins, sets aside or restores one subject memory item.
+    /// The act is owner-only and needs an unlocked vault; it changes only how
+    /// that item is offered and never touches its content, evidence, revision
+    /// or any grant.
+    /// </summary>
+    public static async Task<OwnerRecallResult> ApplyRecallActAsync(
+        string controlPipe,
+        string resourceId,
+        string act,
+        string? rationale,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(resourceId);
+        ArgumentNullException.ThrowIfNull(act);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerRecallApplyOperation,
+                ResourceId: resourceId,
+                Label: act,
+                Description: rationale),
+            "recall_applied",
+            cancellationToken).ConfigureAwait(false);
+        return new OwnerRecallResult(reply.Outcome, reply.ErrorCode, ProjectRecallState(reply));
+    }
+
+    /// <summary>
+    /// Reads the owner's own S7-T4 recall decision for one subject memory
+    /// item, with the recorded act history that explains it.
+    /// </summary>
+    public static async Task<OwnerRecallResult> ReadRecallStateAsync(
+        string controlPipe,
+        string resourceId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(resourceId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerRecallReadOperation,
+                ResourceId: resourceId),
+            "recall_read",
+            cancellationToken).ConfigureAwait(false);
+        return new OwnerRecallResult(reply.Outcome, reply.ErrorCode, ProjectRecallState(reply));
     }
 
     /// <summary>
@@ -3518,6 +3616,33 @@ public static class OwnerChannelClient
             Timestamp(payload, "asOfUtc"));
     }
 
+    private static OwnerRecallState? ProjectRecallState(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            !reply.Payload.TryGetProperty("recall", out var payload) ||
+            payload.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var history = payload.TryGetProperty("history", out var historyElements) && historyElements.ValueKind == JsonValueKind.Array
+            ? historyElements.EnumerateArray().Select(change => new OwnerRecallChange(
+                Text(change, "from") ?? string.Empty,
+                Text(change, "to") ?? string.Empty,
+                Text(change, "actor") ?? string.Empty,
+                Timestamp(change, "recordedAtUtc") ?? DateTimeOffset.MinValue,
+                Text(change, "rationale"))).ToArray()
+            : Array.Empty<OwnerRecallChange>();
+
+        return new OwnerRecallState(
+            Text(payload, "subjectResourceId") ?? string.Empty,
+            Text(payload, "disposition") ?? "normal",
+            Text(payload, "rationale"),
+            Text(payload, "actor"),
+            Timestamp(payload, "recordedAtUtc"),
+            history);
+    }
+
     private static OwnerLibraryHit ProjectLibraryHit(JsonElement hit) => new(
         Text(hit, "id") ?? string.Empty,
         Int64(hit, "revision"),
@@ -3529,7 +3654,11 @@ public static class OwnerChannelClient
         Text(hit, "snippet") ?? string.Empty,
         Timestamp(hit, "occurredAtUtc"),
         Timestamp(hit, "recordedAtUtc") ?? DateTimeOffset.MinValue,
-        Text(hit, "publication") ?? string.Empty);
+        Text(hit, "publication") ?? string.Empty)
+    {
+        RecallState = Text(hit, "recallState") ?? "normal",
+        RankingReason = Text(hit, "rankingReason") ?? string.Empty,
+    };
 
     private static OwnerItemDetail? ProjectItem(OwnerReply reply)
     {

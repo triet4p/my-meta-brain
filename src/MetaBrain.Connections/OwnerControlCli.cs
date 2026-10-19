@@ -124,6 +124,8 @@ internal static class OwnerControlCli
                 "redeem" => await RedeemAsync(options).ConfigureAwait(false),
                 "sessions" => await ListSessionsAsync(options).ConfigureAwait(false),
                 "index-status" => await IndexStatusAsync(options).ConfigureAwait(false),
+                "recall-apply" => await RecallApplyAsync(options).ConfigureAwait(false),
+                "recall-read" => await RecallReadAsync(options).ConfigureAwait(false),
                 "index-rebuild" => await IndexRebuildAsync(options).ConfigureAwait(false),
                 "revoke-session" => await RevokeSessionAsync(options).ConfigureAwait(false),
                 "authorize" => await AuthorizeAsync(options).ConfigureAwait(false),
@@ -3751,7 +3753,7 @@ internal static class OwnerControlCli
     /// </summary>
     private static async Task<int> AgentSearchAsync(CommandOptions options)
     {
-        options.RequireOnly("--agent-pipe", "--session-file", "--query", "--offset", "--limit", "--kind", "--current", "--as-of");
+        options.RequireOnly("--agent-pipe", "--session-file", "--query", "--offset", "--limit", "--kind", "--current", "--as-of", "--include-archived");
         var agentPipe = PipeName(options, "--agent-pipe");
         var sessionPath = options.Required("--session-file");
         var query = options.Required("--query");
@@ -3825,7 +3827,8 @@ internal static class OwnerControlCli
                 SearchLimit: limit,
                 SearchKind: kind,
                 SearchCurrent: current,
-                SearchAsOfUtc: asOfUtc)).ConfigureAwait(false);
+                SearchAsOfUtc: asOfUtc,
+                IncludeArchived: IsTrueFlag(options, "--include-archived"))).ConfigureAwait(false);
         if (!result.Success || !HasStatus(result.Reply, "memory_search") ||
             !result.Reply.TryGetProperty("memorySearch", out var page) ||
             page.ValueKind != JsonValueKind.Object)
@@ -3851,8 +3854,15 @@ internal static class OwnerControlCli
         {
             Console.WriteLine(
                 $"HIT id={JsonValueText(hit, "id")} revision={JsonValueText(hit, "revision")} kind={JsonValueText(hit, "kind")} " +
-                $"score={JsonValueText(hit, "score")} stale={JsonFlagText(hit, "stale")} title={JsonValueText(hit, "title")}");
+                $"score={JsonValueText(hit, "score")} stale={JsonFlagText(hit, "stale")} title={JsonValueText(hit, "title")} " +
+                $"recall={JsonValueText(hit, "recallState")}");
             Console.WriteLine($"snippet={JsonValueText(hit, "snippet")}");
+            var rankingReason = JsonValueText(hit, "rankingReason");
+            if (!string.IsNullOrEmpty(rankingReason))
+            {
+                Console.WriteLine($"reason={rankingReason}");
+            }
+
             Console.WriteLine($"time occurred={JsonValueText(hit, "occurredAtUtc")} recorded={JsonValueText(hit, "recordedAtUtc")}");
         }
 
@@ -3872,7 +3882,7 @@ internal static class OwnerControlCli
     /// </summary>
     private static async Task<int> AgentBriefAsync(CommandOptions options)
     {
-        options.RequireOnly("--agent-pipe", "--session-file", "--query", "--budget-chars", "--context-project", "--context-task");
+        options.RequireOnly("--agent-pipe", "--session-file", "--query", "--budget-chars", "--context-project", "--context-task", "--include-archived");
         var agentPipe = PipeName(options, "--agent-pipe");
         var sessionPath = options.Required("--session-file");
         var query = options.Optional("--query") ?? string.Empty;
@@ -3924,7 +3934,8 @@ internal static class OwnerControlCli
                 Query: query,
                 BudgetChars: budget,
                 ContextProject: contextProject,
-                ContextTask: contextTask)).ConfigureAwait(false);
+                ContextTask: contextTask,
+                IncludeArchived: IsTrueFlag(options, "--include-archived"))).ConfigureAwait(false);
         if (!result.Success || !HasStatus(result.Reply, "memory_brief") ||
             !result.Reply.TryGetProperty("memoryBrief", out var brief) ||
             brief.ValueKind != JsonValueKind.Object)
@@ -3956,6 +3967,7 @@ internal static class OwnerControlCli
                 }
 
                 Console.WriteLine($"excerpt={JsonValueText(entry, "excerpt")}");
+                Console.WriteLine($"recall={JsonValueText(entry, "recallState")}");
                 if (entry.TryGetProperty("applicability", out var applicability) && applicability.ValueKind == JsonValueKind.Object)
                 {
                     Console.WriteLine($"applicability project={JsonValueText(applicability, "project")} environment={JsonValueText(applicability, "environment")} version={JsonValueText(applicability, "version")}");
@@ -4536,6 +4548,109 @@ internal static class OwnerControlCli
     }
 
     /// <summary>
+    /// S7-T4 owner recall act: demote, pin, archive or restore one subject
+    /// memory item. The act changes only how the item is offered; nothing is
+    /// deleted and no scope is touched.
+    /// </summary>
+    private static async Task<int> RecallApplyAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--act", "--reason");
+        var controlPipe = ControlPipe(options);
+        var resourceId = options.Required("--resource-id");
+        var act = options.Required("--act");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId))
+        {
+            return Usage();
+        }
+
+        var reason = options.Optional("--reason");
+        var result = await InvokeOwnerAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerRecallApplyOperation,
+                ResourceId: resourceId,
+                Label: act,
+                Description: reason)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "recall_applied"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintRecallState(result.Reply);
+        return 0;
+    }
+
+    /// <summary>
+    /// S7-T4 owner recall read: the owner's own decision for one subject
+    /// memory item and the act history that explains it.
+    /// </summary>
+    private static async Task<int> RecallReadAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id");
+        var controlPipe = ControlPipe(options);
+        var resourceId = options.Required("--resource-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerRecallReadOperation,
+                ResourceId: resourceId)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "recall_read"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintRecallState(result.Reply);
+        return 0;
+    }
+
+    /// <summary>
+    /// Reads one explicit boolean option. The option is present only when the
+    /// caller asked for it with the value "true"; anything else leaves the
+    /// behaviour unchanged.
+    /// </summary>
+    private static bool IsTrueFlag(CommandOptions options, string name) =>
+        string.Equals(options.Optional(name), "true", StringComparison.OrdinalIgnoreCase);
+
+    private static void PrintRecallState(JsonElement reply)
+    {
+        if (!reply.TryGetProperty("recall", out var recall) || recall.ValueKind != JsonValueKind.Object)
+        {
+            Console.WriteLine("RECALL state unavailable");
+            return;
+        }
+
+        Console.WriteLine(
+            $"RECALL subject={JsonValueText(recall, "subjectResourceId")} " +
+            $"state={JsonValueText(recall, "disposition")} " +
+            $"actor={JsonValueText(recall, "actor")} " +
+            $"recorded={JsonValueText(recall, "recordedAtUtc")}");
+        var reason = JsonValueText(recall, "rationale");
+        if (!string.IsNullOrEmpty(reason))
+        {
+            Console.WriteLine($"reason={reason}");
+        }
+
+        if (recall.TryGetProperty("history", out var history) && history.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var change in history.EnumerateArray())
+            {
+                Console.WriteLine(
+                    $"ACT from={JsonValueText(change, "from")} to={JsonValueText(change, "to")} " +
+                    $"actor={JsonValueText(change, "actor")} at={JsonValueText(change, "recordedAtUtc")}");
+            }
+        }
+    }
+
+    /// <summary>
     /// Owner private-index reconciliation status. Prints the materialized
     /// generation's fingerprint, row count and whether it still describes the
     /// live canonical set; nothing is materialized by this command.
@@ -4852,7 +4967,8 @@ internal static class OwnerControlCli
     private static int Usage()
     {
         Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|agent-search --query [--offset --limit --kind --current]|source-enroll --source-id --zone-id --format --format-version --input-file|source-relocate --source-id --source-generation --input-file|source-revoke --source-id|source-status --source-id|source-ingest --source-id|source-pause --source-id|source-resume --source-id|source-refresh-optin --source-id|source-refresh-optout --source-id|source-list|source-refresh|source-snapshot-list --source-id|source-snapshot-preserve --source-id --source-revision --retain-until-utc|source-snapshot-read --snapshot-id --snapshot-revision --output-file|source-snapshot-retain --snapshot-id --expected-revision --retain-until-utc|source-snapshot-purge --snapshot-id --expected-revision|research-capture --resource-id --zone-id --input-file [--title --source-url --source-author --source-date]|research-read --resource-id [--resource-revision --output-file]|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|relation-list|lifecycle-create|lifecycle-read|lifecycle-retained-read --resource-revision|lifecycle-publish --expected-revision|lifecycle-reject --expected-revision|lifecycle-withdraw --expected-revision|lifecycle-repropose --expected-revision|lifecycle-question-resolve --expected-revision|lifecycle-question-reopen --expected-revision|lifecycle-intention-complete --expected-revision|lifecycle-intention-cancel --expected-revision|lifecycle-intention-supersede --expected-revision|lifecycle-intention-notify --expected-revision|lifecycle-intention-acknowledge --expected-revision|lifecycle-validity-set --expected-revision|lifecycle-retain --expected-revision|proposal-read --resource-id [--resource-revision]|proposal-list|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read|agent-collection-view|agent-search|agent-brief|agent-feedback|agent-feedback-read|agent-propose|agent-relation-resolve|agent-relation-list|agent-relation-create|agent-relation-supersede|agent-relation-unlink|agent-relation-restore}; lifecycle --resource-id is the subject item ID; relation/lifecycle transitions need --expected-revision and an optional --input-file draft; agent-propose --session-file --input-file carries one proposal draft JSON (kind create/revise, idempotencyKey, inbox destinationResourceId/destinationRevision, revise subjectResourceId/subjectRevision, proposed item draft) and never publishes; agent-relation-create/supersede --session-file --input-file carries typed endpoints/revisions, kind, reason and requestEvidence; agent-relation-unlink/restore --session-file --resource-id --resource-revision --input-file carries stateReason/requestEvidence; restore returns only to proposed; source-enroll and source-relocate --input-file are JSON objects holding the private locator ({\"locator\": \"C:/exact/path\"}), never a command argument; source-snapshot-read requires an explicit --output-file export");
-        Console.Error.WriteLine("Agent brief: owner agent-brief --agent-pipe --session-file [--query] [--budget-chars 200..8000] [--context-project explicit-label] [--context-task explicit-label]; contextual intentions are returned only from the frozen memory.context grant.");
+        Console.Error.WriteLine("Agent brief: owner agent-brief --agent-pipe --session-file [--query] [--budget-chars 200..8000] [--context-project explicit-label] [--context-task explicit-label] [--include-archived]; contextual intentions are returned only from the frozen memory.context grant.");
+        Console.Error.WriteLine("Recall policy: owner recall-apply --resource-id --act {demote|pin|archive|restore} [--reason text] | owner recall-read --resource-id; the act changes only how an item is offered, never its content, evidence, revision or any scope.");
         Console.Error.WriteLine("Model/egress and schedule commands: owner {provider-config --provider --model [--base-url] [--api-key-stdin|--from-env]|provider-status|job-create|job-start --job-id|job-cancel --job-id|job-status --job-id|job-list|job-ledger|schedule-set --interval-minutes --zone-id --destination-id --destination-revision --provider --model --input-file|schedule-disable|schedule-status}");
         return 2;
     }

@@ -350,6 +350,8 @@ Quên gồm:
 
 Không tự xóa chỉ vì ít truy cập; bài học hiếm có thể rất quan trọng. Tần suất đọc chỉ là tiện ích, không phải độ tin cậy. Pin, restore archive và lý do xếp hạng phải giải thích được. Quyền xóa dữ liệu nguồn ngoài vault là riêng, không mặc định xóa session runtime.
 
+Implementation (S7-T4): quên ở mức 1 và 2 chạy bằng recall policy của owner, lưu trong một encrypted owner state riêng (`recall-policy.enc`) cạnh scope-grant/catalog/source-enrollment, không ghi vào canonical content nên không đổi revision, evidence, verification, citation hay attribution của item và không làm index cũ. Mỗi thay đổi là một owner act tường minh có rationale, actor và UTC time: `owner recall-apply --resource-id --act {demote|pin|archive|restore} [--reason]`, `owner recall-read --resource-id`; demote và archive bắt buộc có lý do, và item đang pin bị từ chối demote/archive cho tới khi owner restore (bảo vệ bài học hiếm). Không ghi nhận read count: đọc nhiều lần không nâng truth, không nâng ưu tiên, không tự hạ ưu tiên. Policy chỉ áp cho subject mà caller đã có trong scope: archived không được mặc định trong scoped search, scoped brief và library của owner, và trở lại qua mở rộng tường minh (`includeArchived` trên search/brief/library) hoặc qua history; demoted vẫn được tìm thấy nhưng xếp dưới item khác; pinned xếp cùng nhóm được bảo vệ. Trong brief, item bị set aside không được project nhưng vẫn được nêu tên trong omission trace (`owner_archived`) để không biến mất âm thầm. Mỗi hit trả kèm disposition của owner và lý do xếp hạng chỉ nêu đúng sự thật đã dùng để xếp, còn rationale của owner chỉ nằm trên owner channel. Restore chỉ trả lại visibility, không mở rộng quyền.
+
 ## 13. Owner application
 
 UI tối thiểu về phạm vi sản phẩm, không phải MVP:
