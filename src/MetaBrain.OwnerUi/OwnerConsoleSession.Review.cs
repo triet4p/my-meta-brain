@@ -829,6 +829,7 @@ internal sealed partial class OwnerConsoleSession
         ReviewOutcome = null;
         ReviewMessage = null;
         ClearPrivateDeclassifyState();
+        ClearPrivateJobsState();
         _lockWarnedText = null;
     }
 

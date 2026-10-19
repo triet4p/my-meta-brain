@@ -828,6 +828,129 @@ public sealed record OwnerSourceSnapshotResult(
     string? ErrorCode,
     OwnerSourceSnapshotEntry? Snapshot);
 
+/// <summary>One explicitly selected job input, pinned to the revision the job may read.</summary>
+public sealed record OwnerJobInput(string ResourceId, long Revision);
+
+/// <summary>
+/// The recorded scope boundaries of one model job: the selected inputs, the
+/// destination inbox, the provider/model, and the caps that applied. It is the
+/// service's own record, never a choice this client makes.
+/// </summary>
+public sealed record OwnerJobScope(
+    OwnerJobInput[] Inputs,
+    string DestinationZoneId,
+    string DestinationResourceId,
+    long DestinationRevision,
+    string Provider,
+    string Model,
+    decimal MaximumCostUsd,
+    long MaxInputTokens,
+    long MaxOutputTokens,
+    string? Profile,
+    string? Objective,
+    string? TargetLevel);
+
+public sealed record OwnerJobUsage(long InputTokens, long OutputTokens, decimal CostUsd);
+
+public sealed record OwnerJobFailure(string Code, string Message);
+
+/// <summary>
+/// One model job exactly as the service stored it: identity, state, recorded
+/// scope, reported usage, failure reason and the proposals it committed. It is
+/// never a proposed body and never evidence that output was published.
+/// </summary>
+public sealed record OwnerJob(
+    string Id,
+    string ZoneId,
+    long Revision,
+    string Kind,
+    string State,
+    OwnerJobScope Scope,
+    OwnerJobUsage? Usage,
+    OwnerJobFailure? Failure,
+    string[] OutputProposalIds,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset? StartedAtUtc,
+    DateTimeOffset? CompletedAtUtc);
+
+public sealed record OwnerJobResult(OwnerCommandOutcome Outcome, string? ErrorCode, OwnerJob? Job);
+
+public sealed record OwnerJobListResult(OwnerCommandOutcome Outcome, string? ErrorCode, OwnerJob[]? Jobs);
+
+/// <summary>
+/// The model/egress settings the service would use for a job, and the frozen
+/// pre-send caps it enforces. The API key is never part of this answer.
+/// </summary>
+public sealed record OwnerProviderSettings(
+    bool Configured,
+    string? Provider,
+    string? Model,
+    string? BaseUrl,
+    decimal MaximumJobCostUsd,
+    long MaximumJobInputTokens,
+    long MaximumJobOutputTokens,
+    decimal MaximumRolling30DayCostUsd);
+
+public sealed record OwnerProviderResult(OwnerCommandOutcome Outcome, string? ErrorCode, OwnerProviderSettings? Settings);
+
+/// <summary>
+/// The owner's stored synthesis schedule exactly as the service holds it: the
+/// explicit selection, the interval, the destination, the provider/model, and
+/// the observed timing of the last scheduled attempt.
+/// </summary>
+public sealed record OwnerSchedule(
+    bool Enabled,
+    int IntervalMinutes,
+    OwnerJobInput[] Inputs,
+    string Objective,
+    string TargetLevel,
+    string DestinationZoneId,
+    string DestinationResourceId,
+    long DestinationRevision,
+    string Provider,
+    string Model,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset UpdatedAtUtc,
+    DateTimeOffset? NextDueAtUtc,
+    DateTimeOffset? LastRunAtUtc,
+    string? LastRunJobId,
+    string? LastRunOutcome);
+
+/// <summary>
+/// A schedule answer: <see cref="Schedule"/> is null only when the service
+/// reported that no schedule is configured.
+/// </summary>
+public sealed record OwnerScheduleResult(OwnerCommandOutcome Outcome, string? ErrorCode, OwnerSchedule? Schedule);
+
+/// <summary>What one evaluation of the owner's schedule did, and nothing more.</summary>
+public sealed record OwnerScheduleRun(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    string? RunOutcome,
+    string? JobId,
+    string? JobState,
+    string? FailureCode,
+    DateTimeOffset? NextDueAtUtc,
+    string? Message);
+
+public sealed record OwnerSpendEntry(
+    string EntryId,
+    string JobId,
+    DateTimeOffset TimestampUtc,
+    string Provider,
+    string Model,
+    long InputTokens,
+    long OutputTokens,
+    decimal CostUsd,
+    bool IsReservation);
+
+public sealed record OwnerSpendLedger(
+    decimal HistoricalReservationUsd,
+    decimal RollingSpendUsd,
+    OwnerSpendEntry[] Entries);
+
+public sealed record OwnerSpendLedgerResult(OwnerCommandOutcome Outcome, string? ErrorCode, OwnerSpendLedger? Ledger);
+
 
 /// <summary>
 /// The owner-application client of the authenticated owner control channel.
@@ -2329,6 +2452,257 @@ public static class OwnerChannelClient
     }
 
 
+    /// <summary>
+    /// Reports the model/egress settings the service would use for a job and the
+    /// frozen pre-send caps it enforces. The API key is never part of the answer,
+    /// and a missing configuration is reported as unconfigured.
+    /// </summary>
+    public static async Task<OwnerProviderResult> ReadProviderSettingsAsync(string controlPipe, CancellationToken cancellationToken)
+    {
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerProviderStatusOperation),
+            "provider_status",
+            cancellationToken).ConfigureAwait(false);
+        return new OwnerProviderResult(reply.Outcome, reply.ErrorCode, ProjectProviderSettings(reply));
+    }
+
+    /// <summary>
+    /// Stores the owner's provider, model, endpoint and the credential the owner
+    /// typed. The credential is one request body: the service stores it encrypted
+    /// and neither echoes it nor includes it in any later status.
+    /// </summary>
+    public static async Task<OwnerProviderResult> SaveProviderSettingsAsync(
+        string controlPipe,
+        string provider,
+        string model,
+        string baseUrl,
+        string apiKey,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        ArgumentNullException.ThrowIfNull(model);
+        ArgumentNullException.ThrowIfNull(baseUrl);
+        ArgumentNullException.ThrowIfNull(apiKey);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerProviderConfigOperation,
+                Provider: provider,
+                Model: model,
+                BaseUrl: baseUrl,
+                ApiKey: apiKey),
+            "provider_configured",
+            cancellationToken).ConfigureAwait(false);
+        return new OwnerProviderResult(reply.Outcome, reply.ErrorCode, null);
+    }
+
+    /// <summary>Lists every model job the vault holds, newest first.</summary>
+    public static async Task<OwnerJobListResult> ListJobsAsync(string controlPipe, CancellationToken cancellationToken)
+    {
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerJobListOperation),
+            "job_list",
+            cancellationToken).ConfigureAwait(false);
+        return new OwnerJobListResult(reply.Outcome, reply.ErrorCode, ProjectJobs(reply));
+    }
+
+    /// <summary>Reads one job at its live revision: state, recorded scope, usage and failure.</summary>
+    public static async Task<OwnerJobResult> ReadJobAsync(string controlPipe, string jobId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(jobId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerJobStatusOperation,
+                JobId: jobId),
+            "job_status",
+            cancellationToken).ConfigureAwait(false);
+        return new OwnerJobResult(reply.Outcome, reply.ErrorCode, ProjectJob(reply));
+    }
+
+    /// <summary>
+    /// Creates one bounded job from the owner's explicit selection: each selected
+    /// input pinned to one revision, the objective and requested level for a
+    /// synthesis job, and the destination inbox. Nothing is discovered, expanded
+    /// or sent by this call.
+    /// </summary>
+    public static async Task<OwnerJobResult> CreateJobAsync(
+        string controlPipe,
+        OwnerJobInput[] inputs,
+        string zoneId,
+        string destinationResourceId,
+        long destinationRevision,
+        string provider,
+        string model,
+        string? profile,
+        string? objective,
+        string? targetLevel,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(inputs);
+        ArgumentNullException.ThrowIfNull(zoneId);
+        ArgumentNullException.ThrowIfNull(destinationResourceId);
+        ArgumentNullException.ThrowIfNull(provider);
+        ArgumentNullException.ThrowIfNull(model);
+        var draft = BuildSelectionDraft(inputs, objective, targetLevel);
+        try
+        {
+            var reply = await ReadReplyAsync(
+                controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.OwnerJobCreateOperation,
+                    ZoneId: zoneId,
+                    DestinationResourceId: destinationResourceId,
+                    DestinationRevision: destinationRevision,
+                    Provider: provider,
+                    Model: model,
+                    Profile: profile,
+                    ContentBase64: Convert.ToBase64String(draft)),
+                "job_created",
+                cancellationToken).ConfigureAwait(false);
+            return new OwnerJobResult(reply.Outcome, reply.ErrorCode, ProjectJob(reply));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(draft);
+        }
+    }
+
+    /// <summary>
+    /// Starts one created job through the shared lifecycle. The answer state is
+    /// the job's real state — succeeded, failed or cancelled — and never a
+    /// summary this client invents.
+    /// </summary>
+    public static async Task<OwnerJobResult> StartJobAsync(string controlPipe, string jobId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(jobId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerJobStartOperation,
+                JobId: jobId),
+            new[] { "job_completed", "job_failed", "job_cancelled" },
+            cancellationToken).ConfigureAwait(false);
+        return new OwnerJobResult(reply.Outcome, reply.ErrorCode, ProjectJob(reply));
+    }
+
+    /// <summary>
+    /// Cancels one job the owner selected: the shared lifecycle stops the next
+    /// send or commit, keeps billable spend recorded, and reports the state it
+    /// reached. A job that already finished is returned unchanged.
+    /// </summary>
+    public static async Task<OwnerJobResult> CancelJobAsync(string controlPipe, string jobId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(jobId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerJobCancelOperation,
+                JobId: jobId),
+            "job_cancelled",
+            cancellationToken).ConfigureAwait(false);
+        return new OwnerJobResult(reply.Outcome, reply.ErrorCode, ProjectJob(reply));
+    }
+
+    /// <summary>Reads the encrypted spend ledger: reservations, settlements and the rolling spend.</summary>
+    public static async Task<OwnerSpendLedgerResult> ReadSpendLedgerAsync(string controlPipe, CancellationToken cancellationToken)
+    {
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerJobLedgerOperation),
+            "job_ledger",
+            cancellationToken).ConfigureAwait(false);
+        return new OwnerSpendLedgerResult(reply.Outcome, reply.ErrorCode, ProjectSpendLedger(reply));
+    }
+
+    /// <summary>
+    /// Enables the owner's synthesis schedule as one encrypted record: the
+    /// explicit selection, the interval, the destination and the provider/model
+    /// the scheduled runs may use. The service's own policy bounds and the same
+    /// job contract validate it; nothing is scheduled by this call.
+    /// </summary>
+    public static async Task<OwnerScheduleResult> SaveScheduleAsync(
+        string controlPipe,
+        int intervalMinutes,
+        OwnerJobInput[] inputs,
+        string objective,
+        string targetLevel,
+        string zoneId,
+        string destinationResourceId,
+        long destinationRevision,
+        string provider,
+        string model,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(inputs);
+        ArgumentNullException.ThrowIfNull(objective);
+        ArgumentNullException.ThrowIfNull(targetLevel);
+        ArgumentNullException.ThrowIfNull(zoneId);
+        ArgumentNullException.ThrowIfNull(destinationResourceId);
+        ArgumentNullException.ThrowIfNull(provider);
+        ArgumentNullException.ThrowIfNull(model);
+        var draft = BuildSelectionDraft(inputs, objective, targetLevel);
+        try
+        {
+            var reply = await ReadReplyAsync(
+                controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.OwnerScheduleSetOperation,
+                    ZoneId: zoneId,
+                    DestinationResourceId: destinationResourceId,
+                    DestinationRevision: destinationRevision,
+                    Provider: provider,
+                    Model: model,
+                    IntervalMinutes: intervalMinutes,
+                    ContentBase64: Convert.ToBase64String(draft)),
+                "schedule_enabled",
+                cancellationToken).ConfigureAwait(false);
+            return new OwnerScheduleResult(reply.Outcome, reply.ErrorCode, ProjectSchedule(reply));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(draft);
+        }
+    }
+
+    /// <summary>
+    /// Disables the owner's stored schedule, keeping its configuration: a
+    /// disabled schedule is never due, so no scheduled run happens until the
+    /// owner enables it again.
+    /// </summary>
+    public static async Task<OwnerScheduleResult> DisableScheduleAsync(string controlPipe, CancellationToken cancellationToken)
+    {
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerScheduleDisableOperation),
+            "schedule_disabled",
+            cancellationToken).ConfigureAwait(false);
+        return new OwnerScheduleResult(reply.Outcome, reply.ErrorCode, ProjectSchedule(reply));
+    }
+
+    /// <summary>
+    /// Reads the owner's stored schedule. A completed answer with no schedule
+    /// means the service holds no schedule at all, which is reported as such
+    /// instead of as a disabled one.
+    /// </summary>
+    public static async Task<OwnerScheduleResult> ReadScheduleAsync(string controlPipe, CancellationToken cancellationToken)
+    {
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerScheduleStatusOperation),
+            new[] { "schedule_status", "schedule_absent" },
+            cancellationToken).ConfigureAwait(false);
+        return new OwnerScheduleResult(reply.Outcome, reply.ErrorCode, ProjectSchedule(reply));
+    }
+
     private static async Task<OwnerRelationResult> TransitionRelationAsync(
         string controlPipe,
         string operation,
@@ -2563,10 +2937,17 @@ public static class OwnerChannelClient
             new(OwnerCommandOutcome.Unavailable, OwnerVaultState.Unknown, errorCode, null, default);
     }
 
-    private static async Task<OwnerReply> ReadReplyAsync(
+    private static Task<OwnerReply> ReadReplyAsync(
         string controlPipe,
         ServiceRequest request,
         string expectedStatus,
+        CancellationToken cancellationToken) =>
+        ReadReplyAsync(controlPipe, request, new[] { expectedStatus }, cancellationToken);
+
+    private static async Task<OwnerReply> ReadReplyAsync(
+        string controlPipe,
+        ServiceRequest request,
+        string[] expectedStatuses,
         CancellationToken cancellationToken)
     {
         if (!IsValidControlPipe(controlPipe))
@@ -2611,7 +2992,7 @@ public static class OwnerChannelClient
                 };
             }
 
-            if (!HasText(reply, "status", expectedStatus))
+            if (!expectedStatuses.Any(status => HasText(reply, "status", status)))
             {
                 return OwnerReply.Unavailable("unexpected_reply");
             }
@@ -2632,6 +3013,185 @@ public static class OwnerChannelClient
                 : null;
             return new OwnerReply(OwnerCommandOutcome.Completed, state, null, recoveryCode, reply.Clone());
         }
+    }
+
+    /// <summary>
+    /// One selection draft in the shape the service decodes for a job or a
+    /// schedule: the explicit inputs with pinned revisions, the objective and
+    /// the requested level.
+    /// </summary>
+    private static byte[] BuildSelectionDraft(OwnerJobInput[] inputs, string? objective, string? targetLevel) =>
+        JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            inputs = inputs.Select(input => new { resourceId = input.ResourceId, revision = input.Revision }).ToArray(),
+            objective,
+            targetLevel
+        });
+
+    private static OwnerProviderSettings? ProjectProviderSettings(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            !reply.Payload.TryGetProperty("providerStatus", out var settings) ||
+            settings.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return new OwnerProviderSettings(
+            Flag(settings, "configured"),
+            Text(settings, "provider"),
+            Text(settings, "model"),
+            Text(settings, "baseUrl"),
+            DecimalValue(settings, "maximumJobCostUsd"),
+            Int64(settings, "maximumJobInputTokens"),
+            Int64(settings, "maximumJobOutputTokens"),
+            DecimalValue(settings, "maximumRolling30DayCostUsd"));
+    }
+
+    private static OwnerJob[]? ProjectJobs(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            !reply.Payload.TryGetProperty("jobs", out var jobs) ||
+            jobs.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        return jobs.EnumerateArray().Select(ProjectJobElement).ToArray();
+    }
+
+    private static OwnerJob? ProjectJob(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            !reply.Payload.TryGetProperty("job", out var job) ||
+            job.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return ProjectJobElement(job);
+    }
+
+    private static OwnerJob ProjectJobElement(JsonElement job)
+    {
+        var usage = job.TryGetProperty("usage", out var usageElement) && usageElement.ValueKind == JsonValueKind.Object
+            ? new OwnerJobUsage(Int64(usageElement, "inputTokens"), Int64(usageElement, "outputTokens"), DecimalValue(usageElement, "costUsd"))
+            : null;
+        var failure = job.TryGetProperty("failure", out var failureElement) && failureElement.ValueKind == JsonValueKind.Object
+            ? new OwnerJobFailure(Text(failureElement, "code") ?? "unknown", Text(failureElement, "message") ?? string.Empty)
+            : null;
+        var proposals = job.TryGetProperty("outputProposalIds", out var proposalElements) && proposalElements.ValueKind == JsonValueKind.Array
+            ? proposalElements.EnumerateArray()
+                .Where(id => id.ValueKind == JsonValueKind.String)
+                .Select(id => id.GetString()!)
+                .ToArray()
+            : Array.Empty<string>();
+
+        return new OwnerJob(
+            Text(job, "id") ?? string.Empty,
+            Text(job, "zoneId") ?? string.Empty,
+            Int64(job, "revision"),
+            Text(job, "kind") ?? string.Empty,
+            Text(job, "state") ?? "Unknown",
+            ProjectJobScope(job.TryGetProperty("scope", out var scopeElement) && scopeElement.ValueKind == JsonValueKind.Object ? scopeElement : null),
+            usage,
+            failure,
+            proposals,
+            Timestamp(job, "createdAtUtc") ?? DateTimeOffset.MinValue,
+            Timestamp(job, "startedAtUtc"),
+            Timestamp(job, "completedAtUtc"));
+    }
+
+    private static OwnerJobScope ProjectJobScope(JsonElement? scope)
+    {
+        var inputs = scope is { } scopeValue &&
+                     scopeValue.TryGetProperty("inputs", out var inputElements) &&
+                     inputElements.ValueKind == JsonValueKind.Array
+            ? inputElements.EnumerateArray()
+                .Where(input => input.ValueKind == JsonValueKind.Object)
+                .Select(input => new OwnerJobInput(Text(input, "resourceId") ?? string.Empty, Int64(input, "revision")))
+                .ToArray()
+            : Array.Empty<OwnerJobInput>();
+
+        return new OwnerJobScope(
+            inputs,
+            scope is { } zoneValue ? Text(zoneValue, "destinationZoneId") ?? string.Empty : string.Empty,
+            scope is { } destinationValue ? Text(destinationValue, "destinationResourceId") ?? string.Empty : string.Empty,
+            scope is { } destinationRevisionValue ? Int64(destinationRevisionValue, "destinationRevision") : 0,
+            scope is { } providerValue ? Text(providerValue, "provider") ?? string.Empty : string.Empty,
+            scope is { } modelValue ? Text(modelValue, "model") ?? string.Empty : string.Empty,
+            scope is { } costValue ? DecimalValue(costValue, "maximumCostUsd") : 0m,
+            scope is { } inputTokensValue ? Int64(inputTokensValue, "maxInputTokens") : 0,
+            scope is { } outputTokensValue ? Int64(outputTokensValue, "maxOutputTokens") : 0,
+            scope is { } profileValue ? Text(profileValue, "profile") : null,
+            scope is { } objectiveValue ? Text(objectiveValue, "objective") : null,
+            scope is { } levelValue ? Text(levelValue, "targetLevel") : null);
+    }
+
+    private static OwnerSchedule? ProjectSchedule(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            !reply.Payload.TryGetProperty("synthesisSchedule", out var schedule) ||
+            schedule.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var inputs = schedule.TryGetProperty("inputs", out var inputElements) && inputElements.ValueKind == JsonValueKind.Array
+            ? inputElements.EnumerateArray()
+                .Where(input => input.ValueKind == JsonValueKind.Object)
+                .Select(input => new OwnerJobInput(Text(input, "resourceId") ?? string.Empty, Int64(input, "revision")))
+                .ToArray()
+            : Array.Empty<OwnerJobInput>();
+
+        return new OwnerSchedule(
+            Flag(schedule, "enabled"),
+            Int32(schedule, "intervalMinutes"),
+            inputs,
+            Text(schedule, "objective") ?? string.Empty,
+            Text(schedule, "targetLevel") ?? string.Empty,
+            Text(schedule, "destinationZoneId") ?? string.Empty,
+            Text(schedule, "destinationResourceId") ?? string.Empty,
+            Int64(schedule, "destinationRevision"),
+            Text(schedule, "provider") ?? string.Empty,
+            Text(schedule, "model") ?? string.Empty,
+            Timestamp(schedule, "createdAtUtc") ?? DateTimeOffset.MinValue,
+            Timestamp(schedule, "updatedAtUtc") ?? DateTimeOffset.MinValue,
+            Timestamp(schedule, "nextDueAtUtc"),
+            Timestamp(schedule, "lastRunAtUtc"),
+            Text(schedule, "lastRunJobId"),
+            Text(schedule, "lastRunOutcome"));
+    }
+
+    private static OwnerSpendLedger? ProjectSpendLedger(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            !reply.Payload.TryGetProperty("spendLedger", out var ledger) ||
+            ledger.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var entries = ledger.TryGetProperty("entries", out var entryElements) && entryElements.ValueKind == JsonValueKind.Array
+            ? entryElements.EnumerateArray()
+                .Where(entry => entry.ValueKind == JsonValueKind.Object)
+                .Select(entry => new OwnerSpendEntry(
+                    Text(entry, "entryId") ?? string.Empty,
+                    Text(entry, "jobId") ?? string.Empty,
+                    Timestamp(entry, "timestampUtc") ?? DateTimeOffset.MinValue,
+                    Text(entry, "provider") ?? string.Empty,
+                    Text(entry, "model") ?? string.Empty,
+                    Int64(entry, "inputTokens"),
+                    Int64(entry, "outputTokens"),
+                    DecimalValue(entry, "costUsd"),
+                    Flag(entry, "isReservation")))
+                .ToArray()
+            : Array.Empty<OwnerSpendEntry>();
+
+        return new OwnerSpendLedger(
+            DecimalValue(ledger, "historicalReservationUsd"),
+            DecimalValue(ledger, "rollingSpendUsd"),
+            entries);
     }
 
     private static string CurrentToken(OwnerLibraryCurrentness currentness) => currentness switch
@@ -3762,6 +4322,11 @@ public static class OwnerChannelClient
         element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.Number
             ? value.GetDouble()
             : 0;
+
+    private static decimal DecimalValue(JsonElement element, string property) =>
+        element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.Number
+            ? value.GetDecimal()
+            : 0m;
 
     private static bool Flag(JsonElement element, string property) =>
         element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.True;

@@ -16,10 +16,24 @@ namespace MetaBrain.OwnerUi;
 /// </summary>
 public partial class OwnerConsoleWindow : System.Windows.Window
 {
-    private static readonly Brush NeutralBanner = new SolidColorBrush(Color.FromRgb(0x6B, 0x72, 0x80));
-    private static readonly Brush LockedBanner = new SolidColorBrush(Color.FromRgb(0xB4, 0x53, 0x09));
-    private static readonly Brush DeniedBanner = new SolidColorBrush(Color.FromRgb(0x9A, 0x1C, 0x1C));
-    private static readonly Brush UnlockedBanner = new SolidColorBrush(Color.FromRgb(0x15, 0x6B, 0x3B));
+    private static readonly Brush NeutralBanner = FrozenBrush(Color.FromRgb(0x6B, 0x72, 0x80));
+    private static readonly Brush LockedBanner = FrozenBrush(Color.FromRgb(0xB4, 0x53, 0x09));
+    private static readonly Brush DeniedBanner = FrozenBrush(Color.FromRgb(0x9A, 0x1C, 0x1C));
+    private static readonly Brush UnlockedBanner = FrozenBrush(Color.FromRgb(0x15, 0x6B, 0x3B));
+
+    /// <summary>
+    /// A brush for the state banner. The banner brushes are shared by every
+    /// window instance, and WPF only lets a Freezable be used from more than one
+    /// thread once it is frozen, so they are created frozen: this view never
+    /// mutates a brush, and freezing keeps the same rendering on the single UI
+    /// thread the application ships.
+    /// </summary>
+    private static SolidColorBrush FrozenBrush(Color color)
+    {
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+        return brush;
+    }
 
     private const int MinimumPassphraseLength = 12;
 
@@ -64,6 +78,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     private OwnerAccessRequestInfo[]? _renderedRequests;
     private OwnerAgentSessionInfo[]? _renderedSessions;
     private long _sourcesFormVersion;
+    private long _jobsFormVersion;
     private OwnerSourceEnrollment[]? _renderedSources;
     private OwnerSourceRefreshEntry[]? _renderedRefresh;
     private OwnerCollectionMapping[]? _renderedCollections;
@@ -78,6 +93,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         InitializeLibraryControls();
         InitializeInboxControls();
         InitializeRelationControls();
+        InitializeJobsControls();
         LibraryTitleInput.TextChanged += (_, _) => Render();
         LibraryResults.MouseDoubleClick += async (_, _) => await OpenSelectedLibraryResultAsync();
         RelationsList.MouseDoubleClick += async (_, _) => await InspectSelectedRelationAsync();
@@ -173,6 +189,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         RelationsPanel.Visibility = Navigation.SelectedIndex == 5 ? Visibility.Visible : Visibility.Collapsed;
         SharingPanel.Visibility = Navigation.SelectedIndex == 6 ? Visibility.Visible : Visibility.Collapsed;
         SourcesPanel.Visibility = Navigation.SelectedIndex == 7 ? Visibility.Visible : Visibility.Collapsed;
+        JobsPanel.Visibility = Navigation.SelectedIndex == 8 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void Render()
@@ -257,6 +274,15 @@ public partial class OwnerConsoleWindow : System.Windows.Window
             SyncSourcesForm();
         }
 
+        if (_jobsFormVersion != _session.JobsFormVersion)
+        {
+            // The session dropped the jobs drafts of the epoch that ended
+            // (lock, lost service, end of session): the selection, destination
+            // and schedule controls of this window go with them.
+            _jobsFormVersion = _session.JobsFormVersion;
+            SyncJobsForm();
+        }
+
         RenderVaultStatus(attached, status);
         RenderVaultKey(attached);
         RenderLibrary(attached);
@@ -264,6 +290,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         RenderRelations(attached);
         RenderSharing(attached);
         RenderSources(attached);
+        RenderJobs(attached);
     }
 
     private string LastCheckText_Value() => _session.LastCheckLocal is { } last
@@ -535,6 +562,12 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         {
             e.Handled = true;
             _ = RefreshSourcesForKeyboardAsync();
+        }
+
+        if (e.Key == System.Windows.Input.Key.F5 && Navigation.SelectedIndex == 8)
+        {
+            e.Handled = true;
+            _ = RefreshJobsForKeyboardAsync();
         }
     }
 

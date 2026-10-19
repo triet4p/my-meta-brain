@@ -134,6 +134,11 @@ internal static class OwnerControlCli
                 "job-list" => await JobListAsync(options).ConfigureAwait(false),
                 "job-ledger" => await JobLedgerAsync(options).ConfigureAwait(false),
                 "provider-config" => await ProviderConfigAsync(options).ConfigureAwait(false),
+                "provider-status" => await ProviderStatusAsync(options).ConfigureAwait(false),
+                "schedule-set" => await ScheduleSetAsync(options).ConfigureAwait(false),
+                "schedule-disable" => await ScheduleDisableAsync(options).ConfigureAwait(false),
+                "schedule-status" => await ScheduleStatusAsync(options).ConfigureAwait(false),
+                "schedule-run" => await ScheduleRunAsync(options).ConfigureAwait(false),
                 "migrate" => Migrate(options),
                 _ => Usage()
             };
@@ -4775,6 +4780,7 @@ internal static class OwnerControlCli
     private static int Usage()
     {
         Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|agent-search --query [--offset --limit --kind --current]|source-enroll --source-id --zone-id --format --format-version --input-file|source-relocate --source-id --source-generation --input-file|source-revoke --source-id|source-status --source-id|source-ingest --source-id|source-pause --source-id|source-resume --source-id|source-refresh-optin --source-id|source-refresh-optout --source-id|source-list|source-refresh|source-snapshot-list --source-id|source-snapshot-preserve --source-id --source-revision --retain-until-utc|source-snapshot-read --snapshot-id --snapshot-revision --output-file|source-snapshot-retain --snapshot-id --expected-revision --retain-until-utc|source-snapshot-purge --snapshot-id --expected-revision|research-capture --resource-id --zone-id --input-file [--title --source-url --source-author --source-date]|research-read --resource-id [--resource-revision --output-file]|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|relation-list|lifecycle-create|lifecycle-read|lifecycle-retained-read --resource-revision|lifecycle-publish --expected-revision|lifecycle-reject --expected-revision|lifecycle-withdraw --expected-revision|lifecycle-repropose --expected-revision|lifecycle-question-resolve --expected-revision|lifecycle-question-reopen --expected-revision|lifecycle-intention-complete --expected-revision|lifecycle-intention-cancel --expected-revision|lifecycle-intention-supersede --expected-revision|lifecycle-intention-notify --expected-revision|lifecycle-intention-acknowledge --expected-revision|lifecycle-validity-set --expected-revision|lifecycle-retain --expected-revision|proposal-read --resource-id [--resource-revision]|proposal-list|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read|agent-collection-view|agent-search|agent-brief|agent-feedback|agent-feedback-read|agent-propose|agent-relation-resolve|agent-relation-list|agent-relation-create|agent-relation-supersede|agent-relation-unlink|agent-relation-restore}; lifecycle --resource-id is the subject item ID; relation/lifecycle transitions need --expected-revision and an optional --input-file draft; agent-propose --session-file --input-file carries one proposal draft JSON (kind create/revise, idempotencyKey, inbox destinationResourceId/destinationRevision, revise subjectResourceId/subjectRevision, proposed item draft) and never publishes; agent-relation-create/supersede --session-file --input-file carries typed endpoints/revisions, kind, reason and requestEvidence; agent-relation-unlink/restore --session-file --resource-id --resource-revision --input-file carries stateReason/requestEvidence; restore returns only to proposed; source-enroll and source-relocate --input-file are JSON objects holding the private locator ({\"locator\": \"C:/exact/path\"}), never a command argument; source-snapshot-read requires an explicit --output-file export");
+        Console.Error.WriteLine("Model/egress and schedule commands: owner {provider-config --provider --model [--base-url] [--api-key-stdin|--from-env]|provider-status|job-create|job-start --job-id|job-cancel --job-id|job-status --job-id|job-list|job-ledger|schedule-set --interval-minutes --zone-id --destination-id --destination-revision --provider --model --input-file|schedule-disable|schedule-status}");
         return 2;
     }
 
@@ -5014,6 +5020,178 @@ internal static class OwnerControlCli
 
         Console.WriteLine($"PROVIDER configured provider={provider} model={model} baseUrl={baseUrl}");
         return 0;
+    }
+
+    /// <summary>
+    /// The model/egress settings the service would use, and the frozen caps it
+    /// enforces. The API key is never part of the answer.
+    /// </summary>
+    private static async Task<int> ProviderStatusAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(
+            ControlPipe(options),
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerProviderStatusOperation)).ConfigureAwait(false);
+
+        if (!result.Success || !HasStatus(result.Reply, "provider_status"))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        if (result.Reply.TryGetProperty("providerStatus", out var status))
+        {
+            Console.WriteLine(
+                $"PROVIDER configured={JsonValueText(status, "configured")} provider={OptionalText(status, "provider")} " +
+                $"model={OptionalText(status, "model")} baseUrl={OptionalText(status, "baseUrl")} " +
+                $"caps jobUsd={JsonValueText(status, "maximumJobCostUsd")} maxIn={JsonValueText(status, "maximumJobInputTokens")} " +
+                $"maxOut={JsonValueText(status, "maximumJobOutputTokens")} rolling30d={JsonValueText(status, "maximumRolling30DayCostUsd")}");
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// Enables the owner's synthesis schedule from one selection draft file: the
+    /// explicit inputs with pinned revisions, the objective, and the requested
+    /// level, beside the interval, destination and provider/model.
+    /// </summary>
+    private static async Task<int> ScheduleSetAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--interval-minutes", "--zone-id", "--destination-id",
+            "--destination-revision", "--provider", "--model", "--input-file");
+        var controlPipe = ControlPipe(options);
+        if (!int.TryParse(options.Required("--interval-minutes"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var intervalMinutes))
+        {
+            return Usage();
+        }
+
+        var zoneId = options.Required("--zone-id");
+        var destinationId = options.Required("--destination-id");
+        if (!long.TryParse(options.Required("--destination-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var destinationRevision) ||
+            destinationRevision < 1)
+        {
+            return Usage();
+        }
+
+        var provider = options.Required("--provider");
+        var model = options.Required("--model");
+
+        string selectionBase64;
+        try
+        {
+            selectionBase64 = Convert.ToBase64String(
+                await File.ReadAllBytesAsync(options.Required("--input-file")).ConfigureAwait(false));
+        }
+        catch (IOException)
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerScheduleSetOperation,
+                ZoneId: zoneId, DestinationResourceId: destinationId, DestinationRevision: destinationRevision,
+                Provider: provider, Model: model, IntervalMinutes: intervalMinutes,
+                ContentBase64: selectionBase64)).ConfigureAwait(false);
+
+        if (!result.Success || !HasStatus(result.Reply, "schedule_enabled"))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        PrintSchedule(result.Reply);
+        return 0;
+    }
+
+    /// <summary>Disables the owner's schedule, keeping its configuration.</summary>
+    private static async Task<int> ScheduleDisableAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(
+            ControlPipe(options),
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerScheduleDisableOperation)).ConfigureAwait(false);
+
+        if (!result.Success || !HasStatus(result.Reply, "schedule_disabled"))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        PrintSchedule(result.Reply);
+        return 0;
+    }
+
+    /// <summary>Reports the stored schedule, or that none is configured.</summary>
+    private static async Task<int> ScheduleStatusAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(
+            ControlPipe(options),
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerScheduleStatusOperation)).ConfigureAwait(false);
+
+        if (result.Success && HasStatus(result.Reply, "schedule_absent"))
+        {
+            Console.WriteLine("SCHEDULE none");
+            return 0;
+        }
+
+        if (!result.Success || !HasStatus(result.Reply, "schedule_status"))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        PrintSchedule(result.Reply);
+        return 0;
+    }
+
+    /// <summary>
+    /// Evaluates the owner's schedule once through the same policy the service's
+    /// background pass uses: at most one bounded job when it is enabled and due.
+    /// </summary>
+    private static async Task<int> ScheduleRunAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(
+            ControlPipe(options),
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerScheduleRunOperation)).ConfigureAwait(false);
+
+        if (!result.Success || !HasStatus(result.Reply, "schedule_run"))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        if (result.Reply.TryGetProperty("scheduleRun", out var run))
+        {
+            Console.WriteLine(
+                $"SCHEDULERUN outcome={JsonValueText(run, "outcome")} job={OptionalText(run, "jobId")} " +
+                $"state={OptionalText(run, "jobState")} failure={OptionalText(run, "failureCode")} " +
+                $"nextDue={OptionalText(run, "nextDueAtUtc")}");
+        }
+        return 0;
+    }
+
+    private static void PrintSchedule(JsonElement reply)
+    {
+        if (!reply.TryGetProperty("synthesisSchedule", out var schedule) || schedule.ValueKind != JsonValueKind.Object)
+        {
+            Console.WriteLine("SCHEDULE none");
+            return;
+        }
+
+        var inputs = schedule.TryGetProperty("inputs", out var inputElements) && inputElements.ValueKind == JsonValueKind.Array
+            ? string.Join(",", inputElements.EnumerateArray()
+                .Select(input => JsonValueText(input, "resourceId") + "@" + JsonValueText(input, "revision")))
+            : string.Empty;
+        Console.WriteLine(
+            $"SCHEDULE enabled={JsonValueText(schedule, "enabled")} intervalMinutes={JsonValueText(schedule, "intervalMinutes")} " +
+            $"enabledAt={OptionalText(schedule, "createdAtUtc")} updatedAt={OptionalText(schedule, "updatedAtUtc")} " +
+            $"provider={JsonValueText(schedule, "provider")} model={JsonValueText(schedule, "model")} " +
+            $"destination={JsonValueText(schedule, "destinationResourceId")}@{JsonValueText(schedule, "destinationRevision")} " +
+            $"zone={JsonValueText(schedule, "destinationZoneId")} level={JsonValueText(schedule, "targetLevel")} " +
+            $"inputs={inputs} nextDue={OptionalText(schedule, "nextDueAtUtc")} lastRun={OptionalText(schedule, "lastRunAtUtc")} " +
+            $"lastJob={OptionalText(schedule, "lastRunJobId")} lastOutcome={OptionalText(schedule, "lastRunOutcome")}");
     }
 
     private static void PrintJob(JsonElement reply)

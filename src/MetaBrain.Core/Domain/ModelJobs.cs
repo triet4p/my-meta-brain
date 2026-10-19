@@ -121,10 +121,15 @@ public static class JobSelectionCodec
             throw new ArgumentException("The job selection draft exceeds its size limit.");
         }
 
+        // A draft is an ordinary text file the owner or a client writes, and any
+        // other domain codec here accepts a UTF-8 preamble; this one does too
+        // instead of refusing a draft that was saved by a Windows text tool.
+        var span = JobCodec.StripUtf8Preamble(json);
+        var offset = json.Length - span.Length;
         JobSelectionDraft? draft;
         try
         {
-            draft = JsonSerializer.Deserialize<JobSelectionDraft>(json, JsonOptions);
+            draft = JsonSerializer.Deserialize<JobSelectionDraft>(new ReadOnlySpan<byte>(json, offset, span.Length), JsonOptions);
         }
         catch (JsonException ex)
         {

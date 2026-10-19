@@ -62,7 +62,8 @@ public sealed record ServiceRequest(
     string? JobId = null,
     string? BaseUrl = null,
     string? ApiKey = null,
-    string? Profile = null);
+    string? Profile = null,
+    int? IntervalMinutes = null);
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
     ScopeResourceRevision[] Resources,
@@ -630,6 +631,55 @@ public sealed record SpendLedgerWire(
     decimal RollingSpendUsd,
     SpendLedgerEntry[] Entries);
 
+/// <summary>
+/// The owner's synthesis schedule exactly as it is stored: the explicit
+/// selection, the interval, the destination, the provider/model, and the
+/// observed timing of the last scheduled attempt. It carries no provider
+/// credential and no content.
+/// </summary>
+public sealed record SynthesisScheduleWire(
+    bool Enabled,
+    int IntervalMinutes,
+    JobInputReference[] Inputs,
+    string Objective,
+    string TargetLevel,
+    string DestinationZoneId,
+    string DestinationResourceId,
+    long DestinationRevision,
+    string Provider,
+    string Model,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset UpdatedAtUtc,
+    DateTimeOffset? NextDueAtUtc,
+    DateTimeOffset? LastRunAtUtc,
+    string? LastRunJobId,
+    string? LastRunOutcome);
+
+/// <summary>
+/// The model/egress settings the owner configured, reported without the API key:
+/// the provider, model and endpoint the service would use, and the frozen
+/// pre-send caps it enforces. A configuration that exists is never presented as
+/// absent, and no credential is ever echoed.
+/// </summary>
+public sealed record ProviderStatusWire(
+    bool Configured,
+    string? Provider,
+    string? Model,
+    string? BaseUrl,
+    decimal MaximumJobCostUsd,
+    long MaximumJobInputTokens,
+    long MaximumJobOutputTokens,
+    decimal MaximumRolling30DayCostUsd);
+
+/// <summary>What one evaluation of the owner's schedule did, and nothing more.</summary>
+public sealed record ScheduleRunWire(
+    string Outcome,
+    string? JobId,
+    string? JobState,
+    string? FailureCode,
+    DateTimeOffset? NextDueAtUtc,
+    string? Message);
+
 public sealed record ServiceReply(
     int ProtocolVersion,
     string? Status,
@@ -687,7 +737,10 @@ public sealed record ServiceReply(
     DeclassifyWire? Declassify = null,
     JobWire? Job = null,
     JobWire[]? Jobs = null,
-    SpendLedgerWire? SpendLedger = null);
+    SpendLedgerWire? SpendLedger = null,
+    SynthesisScheduleWire? SynthesisSchedule = null,
+    ProviderStatusWire? ProviderStatus = null,
+    ScheduleRunWire? ScheduleRun = null);
 
 public sealed class ServiceRequestHandler
 {
@@ -711,6 +764,11 @@ public sealed class ServiceRequestHandler
     public const string OwnerJobListOperation = "owner.job.list";
     public const string OwnerJobLedgerOperation = "owner.job.ledger";
     public const string OwnerProviderConfigOperation = "owner.provider.config";
+    public const string OwnerProviderStatusOperation = "owner.provider.status";
+    public const string OwnerScheduleSetOperation = "owner.schedule.set";
+    public const string OwnerScheduleDisableOperation = "owner.schedule.disable";
+    public const string OwnerScheduleStatusOperation = "owner.schedule.status";
+    public const string OwnerScheduleRunOperation = "owner.schedule.run";
     public const string OwnerScopeIssueOperation = "owner.scope.issue";
     public const string OwnerScopeListOperation = "owner.scope.list";
     public const string OwnerScopeCollectionSetOperation = "owner.scope.collection.set";
@@ -838,6 +896,7 @@ public sealed class ServiceRequestHandler
     private readonly SourceSnapshotService _sourceSnapshots = new();
     private PrivateIndexSnapshot? _privateIndexMaterialized;
     private readonly ModelJobService _modelJobs;
+    private readonly SynthesisScheduleService _synthesisSchedule;
 
     public ServiceRequestHandler(
         GrantAuthority grantAuthority,
@@ -852,6 +911,7 @@ public sealed class ServiceRequestHandler
         IModelProviderAdapter? modelProvider = null)
     {
         _modelJobs = new ModelJobService(vault, modelProvider);
+        _synthesisSchedule = new SynthesisScheduleService(_modelJobs);
         _grantAuthority = grantAuthority ?? throw new ArgumentNullException(nameof(grantAuthority));
         _vault = vault ?? throw new ArgumentNullException(nameof(vault));
         _ownerScopeGrants = ownerScopeGrants ?? throw new ArgumentNullException(nameof(ownerScopeGrants));
@@ -1423,6 +1483,31 @@ public sealed class ServiceRequestHandler
             return HandleOwnerProviderConfig(context, request, operation);
         }
 
+        if (string.Equals(request.Operation, OwnerProviderStatusOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerProviderStatus(context, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerScheduleSetOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerScheduleSet(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerScheduleDisableOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerScheduleDisable(context, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerScheduleStatusOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerScheduleStatus(context, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerScheduleRunOperation, StringComparison.Ordinal))
+        {
+            return await HandleOwnerScheduleRunAsync(context, operation, cancellationToken).ConfigureAwait(false);
+        }
+
 
         return Error("unknown_operation");
     }
@@ -1788,6 +1873,277 @@ public sealed class ServiceRequestHandler
             return Error("vault_locked");
         }
     }
+
+    /// <summary>
+    /// Reports the model/egress settings the owner configured — provider, model,
+    /// endpoint and the frozen pre-send caps — and never the credential. A
+    /// configuration that exists is reported as configured; none is reported as
+    /// no configuration instead of a guessed one.
+    /// </summary>
+    private ServiceReply HandleOwnerProviderStatus(AuthenticatedContext context, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        try
+        {
+            var config = _modelJobs.LoadProviderConfig(operation);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "provider_status",
+                "owner",
+                null,
+                ProviderStatus: new ProviderStatusWire(
+                    Configured: config is not null,
+                    Provider: config?.Provider,
+                    Model: config?.Model,
+                    BaseUrl: config?.BaseUrl,
+                    MaximumJobCostUsd: SpendLedger.MaximumJobCostUsd,
+                    MaximumJobInputTokens: SpendLedger.MaximumJobInputTokens,
+                    MaximumJobOutputTokens: SpendLedger.MaximumJobOutputTokens,
+                    MaximumRolling30DayCostUsd: SpendLedger.MaximumRolling30DayCostUsd));
+        }
+        catch (ManagedResourceUnavailableException)
+        {
+            return Error("vault_locked");
+        }
+    }
+
+    /// <summary>
+    /// Enables the owner's synthesis schedule: one enabled encrypted record with
+    /// the explicit selection, interval, destination and provider/model. The
+    /// selection arrives in the same encoded draft shape a synthesis job uses, so
+    /// the schedule and a manual job share one selection contract.
+    /// </summary>
+    private ServiceReply HandleOwnerScheduleSet(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (request.IntervalMinutes is not { } interval ||
+            string.IsNullOrWhiteSpace(request.ZoneId) ||
+            string.IsNullOrWhiteSpace(request.DestinationResourceId) ||
+            request.DestinationRevision is not { } destinationRevision || destinationRevision < 1 ||
+            string.IsNullOrWhiteSpace(request.Provider) ||
+            string.IsNullOrWhiteSpace(request.Model) ||
+            request.ContentBase64 is not { Length: > 0 } selectionBase64)
+        {
+            return Error("invalid_request");
+        }
+
+        byte[]? selection = null;
+        try
+        {
+            selection = Convert.FromBase64String(selectionBase64);
+            var draft = JobSelectionCodec.DecodeDraft(selection);
+            var schedule = _synthesisSchedule.SaveEnabled(
+                context,
+                new SynthesisScheduleDraft(
+                    interval,
+                    draft,
+                    request.ZoneId,
+                    request.DestinationResourceId,
+                    destinationRevision,
+                    request.Provider,
+                    request.Model),
+                operation);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "schedule_enabled",
+                "owner",
+                null,
+                SynthesisSchedule: ToScheduleWire(schedule));
+        }
+        catch (FormatException)
+        {
+            return Error("invalid_request");
+        }
+        catch (ArgumentException ex)
+        {
+            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+        }
+        catch (InvalidDataException ex)
+        {
+            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+        }
+        catch (ManagedResourceUnavailableException)
+        {
+            return Error("vault_locked");
+        }
+        finally
+        {
+            if (selection is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(selection);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Disables the owner's schedule, keeping its configuration. This is what
+    /// stops scheduled runs: a due check on a disabled schedule creates nothing.
+    /// </summary>
+    private ServiceReply HandleOwnerScheduleDisable(AuthenticatedContext context, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        try
+        {
+            var schedule = _synthesisSchedule.Disable(context, operation);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "schedule_disabled",
+                "owner",
+                null,
+                SynthesisSchedule: ToScheduleWire(schedule));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+        }
+        catch (ArgumentException ex)
+        {
+            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+        }
+        catch (ManagedResourceUnavailableException)
+        {
+            return Error("vault_locked");
+        }
+    }
+
+    /// <summary>
+    /// Reports the owner's stored schedule, or states that none is configured.
+    /// Nothing is created by reading it.
+    /// </summary>
+    private ServiceReply HandleOwnerScheduleStatus(AuthenticatedContext context, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        try
+        {
+            var schedule = _synthesisSchedule.TryRead(operation);
+            return schedule is null
+                ? new ServiceReply(CurrentProtocolVersion, "schedule_absent", "owner", null)
+                : new ServiceReply(
+                    CurrentProtocolVersion,
+                    "schedule_status",
+                    "owner",
+                    null,
+                    SynthesisSchedule: ToScheduleWire(schedule));
+        }
+        catch (ManagedResourceUnavailableException)
+        {
+            return Error("vault_locked");
+        }
+    }
+
+    /// <summary>
+    /// Evaluates the owner's schedule once through the shared schedule policy and
+    /// the shared model job lifecycle: at most one bounded synthesis job when the
+    /// schedule is enabled and due, and nothing at all otherwise. The service's
+    /// own background loop calls exactly this path, so what the owner can trigger
+    /// by hand is what runs unattended — never a second, weaker policy.
+    /// </summary>
+    private async Task<ServiceReply> HandleOwnerScheduleRunAsync(
+        AuthenticatedContext context,
+        IVaultOperation? operation,
+        CancellationToken cancellationToken)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        try
+        {
+            var run = await _synthesisSchedule.RunDueAsync(context, operation, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "schedule_run",
+                "owner",
+                null,
+                ScheduleRun: new ScheduleRunWire(
+                    run.Outcome,
+                    run.JobId,
+                    run.JobState,
+                    run.FailureCode,
+                    run.NextDueAtUtc,
+                    run.Message));
+        }
+        catch (ArgumentException ex)
+        {
+            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+        }
+        catch (InvalidDataException ex)
+        {
+            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+        }
+        catch (ManagedResourceUnavailableException)
+        {
+            return Error("vault_locked");
+        }
+    }
+
+    private static SynthesisScheduleWire ToScheduleWire(StoredSynthesisSchedule schedule) => new(
+        Enabled: schedule.Enabled,
+        IntervalMinutes: schedule.IntervalMinutes,
+        Inputs: schedule.Inputs,
+        Objective: schedule.Objective,
+        TargetLevel: schedule.TargetLevel,
+        DestinationZoneId: schedule.DestinationZoneId,
+        DestinationResourceId: schedule.DestinationResourceId,
+        DestinationRevision: schedule.DestinationRevision,
+        Provider: schedule.Provider,
+        Model: schedule.Model,
+        CreatedAtUtc: schedule.CreatedAtUtc,
+        UpdatedAtUtc: schedule.UpdatedAtUtc,
+        NextDueAtUtc: schedule.NextDueAtUtc,
+        LastRunAtUtc: schedule.LastRunAtUtc,
+        LastRunJobId: schedule.LastRunJobId,
+        LastRunOutcome: schedule.LastRunOutcome);
 
     private static JobWire ToJobWire(JobRecord job) => new(
         Id: job.Id,

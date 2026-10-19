@@ -42,6 +42,7 @@
                         <ListBoxItem Content="Relations" Padding="8,6" />
                         <ListBoxItem Content="Sharing" Padding="8,6" />
                         <ListBoxItem Content="Sources" Padding="8,6" />
+                        <ListBoxItem Content="Jobs" Padding="8,6" />
                     </ListBox>
                 </DockPanel>
             </Border>
@@ -955,6 +956,144 @@
                                    Text="• Keyboard: Enter in a list opens the selected row, F5 in this view re-reads sources, collections and the refresh pass, Ctrl+L locks the vault." />
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
                                    Text="• Privacy: this view holds no on-disk cache and echoes no locator. Locking the vault (or losing the service, or ending the session) clears every source, collection, snapshot and draft above, and an answer already in flight is discarded instead of restoring them." />
+                    </StackPanel>
+
+                    <StackPanel x:Name="JobsPanel" Visibility="Collapsed">
+                        <TextBlock Text="Structuring jobs, egress and schedule" FontSize="19" FontWeight="SemiBold" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,8,0,0"
+                                   Text="Run the model jobs that turn a saved note into reviewed proposals, see each job's real state, and configure the model/egress settings and the synthesis schedule you enable. Every value here is an answer of the running service: the service owns the job lifecycle, the encrypted provider configuration, the encrypted schedule record and every due check. Saving a note never calls a model; only your explicit run does." />
+
+                        <TextBlock x:Name="JobsStateText" TextWrapping="Wrap" Margin="0,12,0,0" FontSize="16" />
+
+                        <TextBlock Text="Model and egress settings (stored encrypted; the key is never shown again)" FontWeight="SemiBold" Margin="0,16,0,0" />
+                        <Grid Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Provider" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="ProviderNameInput" Margin="0,0,10,6"
+                                     AutomationProperties.AutomationId="ProviderNameInput" />
+                            <TextBlock Grid.Row="0" Grid.Column="2" Text="Model" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="0" Grid.Column="3" x:Name="ProviderModelInput" Margin="0,0,0,6"
+                                     AutomationProperties.AutomationId="ProviderModelInput" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Endpoint" Foreground="#FF6B7280" />
+                            <TextBox Grid.Row="1" Grid.Column="1" x:Name="ProviderBaseUrlInput" Margin="0,0,10,0"
+                                     AutomationProperties.AutomationId="ProviderBaseUrlInput" />
+                            <TextBlock Grid.Row="1" Grid.Column="2" Text="API key" Foreground="#FF6B7280" />
+                            <PasswordBox Grid.Row="1" Grid.Column="3" x:Name="ProviderKeyInput"
+                                         AutomationProperties.AutomationId="ProviderKeyInput" />
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="ProviderSaveButton" Content="Save model settings" Padding="14,7" Click="OnProviderSaveClicked" />
+                            <Button x:Name="ProviderReadButton" Content="Read model settings" Padding="14,7" Margin="8,0,0,0" Click="OnProviderReadClicked" />
+                        </StackPanel>
+                        <TextBlock x:Name="ProviderSettingsText" TextWrapping="Wrap" Margin="0,8,0,0" FontFamily="Consolas" />
+                        <TextBlock x:Name="ProviderMessageText" TextWrapping="Wrap" Margin="0,6,0,0" FontWeight="SemiBold" />
+
+                        <TextBlock Text="Selection (explicit, one line per input: resourceId@revision)" FontWeight="SemiBold" Margin="0,18,0,0" />
+                        <Grid Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Profile" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <ComboBox Grid.Row="0" Grid.Column="1" x:Name="JobsProfileInput" Margin="0,0,10,6"
+                                      AutomationProperties.AutomationId="JobsProfileInput" SelectionChanged="OnJobsProfileChanged" />
+                            <TextBlock Grid.Row="0" Grid.Column="2" Text="Level" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <ComboBox Grid.Row="0" Grid.Column="3" x:Name="JobsLevelInput" Margin="0,0,0,6"
+                                      AutomationProperties.AutomationId="JobsLevelInput" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Objective" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="3" x:Name="JobsObjectiveInput" Margin="0,0,0,6"
+                                     AutomationProperties.AutomationId="JobsObjectiveInput" />
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Destination zone" Foreground="#FF6B7280" />
+                            <TextBox Grid.Row="2" Grid.Column="1" x:Name="JobsZoneInput" Margin="0,0,10,0"
+                                     AutomationProperties.AutomationId="JobsZoneInput" />
+                            <TextBlock Grid.Row="2" Grid.Column="2" Text="Destination ID" Foreground="#FF6B7280" />
+                            <TextBox Grid.Row="2" Grid.Column="3" x:Name="JobsDestinationInput"
+                                     AutomationProperties.AutomationId="JobsDestinationInput" />
+                        </Grid>
+                        <Grid Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Destination revision" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="JobsDestinationRevisionInput" Margin="0,0,10,6"
+                                     AutomationProperties.AutomationId="JobsDestinationRevisionInput" />
+                            <TextBlock Grid.Row="0" Grid.Column="2" Text="Interval (min)" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="0" Grid.Column="3" x:Name="ScheduleIntervalInput" Margin="0,0,0,6"
+                                     AutomationProperties.AutomationId="ScheduleIntervalInput" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Provider / model" Foreground="#FF6B7280" />
+                            <TextBox Grid.Row="1" Grid.Column="1" x:Name="JobsProviderInput" Margin="0,0,10,0"
+                                     AutomationProperties.AutomationId="JobsProviderInput" />
+                            <TextBox Grid.Row="1" Grid.Column="3" x:Name="JobsModelInput"
+                                     AutomationProperties.AutomationId="JobsModelInput" />
+                        </Grid>
+                        <TextBlock Text="Inputs (the job reads only these IDs at these revisions)" Foreground="#FF6B7280" Margin="0,8,0,2" />
+                        <TextBox x:Name="JobsInputsInput" Height="56" AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
+                                 FontFamily="Consolas" AutomationProperties.AutomationId="JobsInputsInput" />
+
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="JobsRunButton" Content="Run one job" Padding="14,7" Click="OnJobsRunClicked" />
+                            <Button x:Name="JobsBatchButton" Content="Run batch (one job per input)" Padding="14,7" Margin="8,0,0,0" Click="OnJobsBatchClicked" />
+                            <Button x:Name="JobsRefreshButton" Content="Refresh jobs" Padding="14,7" Margin="8,0,0,0" Click="OnJobsRefreshClicked" />
+                            <Button x:Name="JobsCancelButton" Content="Cancel selected job" Padding="14,7" Margin="8,0,0,0" Click="OnJobsCancelClicked" />
+                            <Button x:Name="JobsSpendButton" Content="Spend ledger" Padding="14,7" Margin="8,0,0,0" Click="OnJobsSpendClicked" />
+                        </StackPanel>
+                        <TextBlock x:Name="JobsMessageText" TextWrapping="Wrap" Margin="0,10,0,0" FontWeight="SemiBold" />
+                        <TextBlock x:Name="BatchMessageText" TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280" />
+                        <ListBox x:Name="JobsList" Height="120" Margin="0,8,0,0" Background="White" BorderBrush="#FFD5D8DC"
+                                 AutomationProperties.AutomationId="JobsList" SelectionChanged="OnJobsSelectionChanged"
+                                 KeyDown="OnJobsListKeyDown" />
+                        <TextBlock x:Name="JobDetailText" TextWrapping="Wrap" Margin="0,8,0,0" FontFamily="Consolas" />
+                        <TextBlock x:Name="SpendText" TextWrapping="Wrap" Margin="0,8,0,0" Foreground="#FF6B7280" />
+
+                        <TextBlock Text="Synthesis schedule (disabled until you enable it)" FontWeight="SemiBold" Margin="0,18,0,0" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,6,0,0"
+                                   Text="The schedule runs the same explicit selection, objective and level configured above, with the interval and provider/model you set. It runs only while the vault is unlocked; locking pauses it instead of unlocking anything, and a slot missed while locked or while the service was down is never replayed as extra runs. Every scheduled run is one bounded job whose output is pending proposals — never a publication, a resolution or a change to what you believe." />
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="ScheduleEnableButton" Content="Enable schedule" Padding="14,7" Click="OnScheduleEnableClicked" />
+                            <Button x:Name="ScheduleDisableButton" Content="Disable schedule" Padding="14,7" Margin="8,0,0,0" Click="OnScheduleDisableClicked" />
+                            <Button x:Name="ScheduleRefreshButton" Content="Read schedule" Padding="14,7" Margin="8,0,0,0" Click="OnScheduleRefreshClicked" />
+                        </StackPanel>
+                        <TextBlock x:Name="ScheduleStateText" TextWrapping="Wrap" Margin="0,8,0,0" FontFamily="Consolas" />
+                        <TextBlock x:Name="ScheduleMessageText" TextWrapping="Wrap" Margin="0,6,0,0" FontWeight="SemiBold" />
+
+                        <TextBlock Text="Boundary facts and limits" FontWeight="SemiBold" Margin="0,20,0,6" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Saving a note or reading it back calls no model: the capture screen writes one encrypted source, and only a run you start here reaches a provider." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Every job is bounded before send: exact provider/model pricing, 10,000 input tokens, 2,000 output tokens, $0.25 per job and $5.00 rolling 30 days. An unknown price or context refuses instead of sending." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Model output is validated and committed only as pending proposals in the destination inbox: nothing here publishes, confirms, resolves a question or rewrites a conclusion." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• A batch is one bounded job per selected note, not a wider job: each note keeps its own state and its own cost, and a refusal on one note leaves the others to you." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• The schedule is one encrypted record you can read back and disable. Disabling stops future runs; it does not retract context already sent to a provider, and it does not undo a proposal already committed." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Keyboard: Enter reads the selected job, F5 refreshes the job list, Ctrl+L locks the vault." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Privacy: this view holds no on-disk cache and never shows the API key. Locking the vault (or losing the service, or ending the session) clears every job, schedule and spend view above, and an answer already in flight is discarded instead of restoring them." />
                     </StackPanel>
                 </Grid>
             </ScrollViewer>
