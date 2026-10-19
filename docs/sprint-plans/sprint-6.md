@@ -6,7 +6,7 @@ Cấu trúc hóa code/research/trend theo yêu cầu, tổng hợp phân tầng 
 
 ## Status and Dependencies
 
-- Status: In progress — S6-T1 complete with accepted evidence review and exact-snapshot checkpoint `74e2b1f0`; S6-T2 complete with owner ACCEPT v3, independent evidence PASS and exact-snapshot checkpoint `1e9327c5`; S6-T3 complete with actual model/WPF review evidence, independent PASS and exact-snapshot checkpoint `6e921712`; S6-T4 complete with actual multi-level synthesis/WPF evidence, independent R3 PASS and exact-snapshot checkpoint `b29be9d6`; S6-T5 complete with actual owner WPF publication, ordinary OMP MCP evidence, independent R2 PASS and exact-snapshot checkpoint `7d4cbc8`; S6-T6 complete with actual WPF workflow, live manual/scheduled jobs, independent R1 PASS and exact-snapshot checkpoint `1c328468`; S6-T7 not started. Owner authorizes necessary provider calls for assigned work without repeated per-call confirmation, using the existing provider/model and synthetic or explicitly approved source scope under S6-T1 consent/egress/cost controls. This does not authorize new private-session access, secret disclosure, provider changes, or push.
+- Status: Complete — S6-T1–T7 have accepted independent evidence reviews and exact-snapshot checkpoints, latest `786267a0`; [sprint-end differential PASS](../../artifacts/sprint-6/reviews/Sprint-6-S6-DEEP-20261018-R1.md) has no actionable findings. Owner semantic ACCEPT exists for T2 v3 only; other outputs remain subject to owner review, including the pending T7 live proposal. Owner authorizes necessary provider calls for assigned work without repeated per-call confirmation, using the existing provider/model and synthetic or explicitly approved source scope under S6-T1 consent/egress/cost controls. This does not authorize new private-session access, secret disclosure, provider changes, or push.
 - [Global plan](../PLAN.md), [specification](../META-BRAIN.md), [requirements](../REQUIREMENTS.md).
 - Requirements: R01, R07, R08, R09, R13, R20, R21, R22; bảo toàn R03–R06, R12, R14, R19, R30, R36.
 
@@ -67,14 +67,17 @@ S6-T7 workflow: full route; owner-selected Silver implementation and same-task c
     - Evidence: UI capture → structure → compare → publish/reject → cancel, restart lịch opt-in và disable; quan sát network/provider calls để chứng minh không egress ngoài lựa chọn.
     - Accepted: [worker record](../../artifacts/sprint-6/task-6.md), [independent R1 PASS](../../artifacts/sprint-6/reviews/S6-T6-S6T6-REVIEW-20261018-R1.md), and [Bronze checkpoint](../../artifacts/sprint-6/checkpoints/S6-T6-S6T6-CHECKPOINT-20261018-C1.md), commit `1c328468`. Actual WPF capture/single/batch/review/cancel and schedule restart/lock/disable verified; live manual and scheduled jobs settled. Egress observation is endpoint-side, not packet capture; live schedule observed at a one-minute interval, not long-duration operation. No owner semantic ACCEPT or push claimed; final Main status-only updates follow the product checkpoint.
 
-- [~] **S6-T7 — Adversarial knowledge/authority boundary validation.** Requirements: R01, R07, R08, R09, R12, R20.
+- [x] **S6-T7 — Adversarial knowledge/authority boundary validation.** Requirements: R01, R07, R08, R09, R12, R20.
     - Scope: harden đường nguồn/model/UI/MCP đã có trước việc dùng synthesis thật; không thêm generic security framework.
     - Acceptance: hostile source/model/request không unlock, mint/redeem thêm scope, sửa grant, public catalog/body, declassify/purge hoặc fake owner confirmation. Shared application validators chặn tác động, không dựa chỉ prompt; không claim ngăn shell của external same-owner agent, LLM never influenced hoặc thu hồi context đã gửi.
     - Evidence: actual provider và deterministic hostile-output scenarios, cả UI review lẫn agent read; test regression bảo vệ authority transition, không assert prompt wording. Không claim LLM không bao giờ bị ảnh hưởng nội dung; chứng minh quyền/tác động bị chặn.
+    - Accepted: [worker record](../../artifacts/sprint-6/task-7.md), [independent R1 PASS](../../artifacts/sprint-6/reviews/S6-T7-S6T7-REVIEW-20261018-R1.md), and [Bronze checkpoint](../../artifacts/sprint-6/checkpoints/S6-T7-S6T7-CHECKPOINT-20261018-C1.md), commit `786267a0`. Deterministic/live provider output, shown WPF review and authoritative state invariance compose with final ordinary OMP MCP metadata/body read proof; no product boundary defect reproduced. Live proposal remains pending owner review; OMP turn cost unitemized. [Sprint-end differential PASS](../../artifacts/sprint-6/reviews/Sprint-6-S6-DEEP-20261018-R1.md) has no actionable findings; no owner semantic ACCEPT or push claimed.
 
 ## Sprint Acceptance Gate
 
 Coding lesson/research question/trend note qua actual provider, encrypted proposals, actual UI review và multi-level synthesis grounded. Cross-zone restrictive, catalog/body publication riêng, user-approved new token scope; no key/token provider disclosure. Egress pre-send caps và lock/revoke/injection negatives thật; no autonomous agenda và no OS-isolation claim.
+
+Assigned sprint-end differential review: [PASS, no actionable findings](../../artifacts/sprint-6/reviews/Sprint-6-S6-DEEP-20261018-R1.md). Residual limits: endpoint-side egress observation, one-minute live schedule, T7 MCP allowlist rather than default-tool dispatch, and reviewer-accepted composition rather than a final replay of the integrated T7 run. Final Main plan status updates follow the reviewed task checkpoint and remain uncommitted.
 
 ## Notes / Blockers
 

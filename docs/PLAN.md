@@ -27,7 +27,7 @@ Mỗi chặng có một sprint plan chi tiết. Hoàn thành chặng không đ�
 | [x] M3 — Faithful encrypted capture | Read-only allowlisted Codex/OMP sources, encrypted import/cache/snapshot và lock-aware refresh | M2 | [Sprint 3](sprint-plans/sprint-3.md) |
 | [x] M4 — Scoped agent memory access | Catalog/request/token + retrieval/evidence/brief/proposal/link qua MCP clients bình thường | M3 | [Sprint 4](sprint-plans/sprint-4.md) |
 | [x] M5 — Owner workbench | Unlock/recovery UI, library/review/relations, catalog publication/request approval/token/session console | M4 | [Sprint 5](sprint-plans/sprint-5.md) |
-| [ ] M6 — Grounded structuring | Profile code/research/trend, synthesis phân tầng, provider controls và share có owner duyệt | M5 | [Sprint 6](sprint-plans/sprint-6.md) |
+| [x] M6 — Grounded structuring | Profile code/research/trend, synthesis phân tầng, provider controls và share có owner duyệt | M5 | [Sprint 6](sprint-plans/sprint-6.md) |
 | [ ] M7 — Time and lifecycle | Intention, temporal recall, review-after, forgetting, archive và purge đúng lineage | M6 | [Sprint 7](sprint-plans/sprint-7.md) |
 | [ ] M8 — Daily production | Install startup locked, encrypted backup/recovery/restore/export/migration, CR01 security replay và owner acceptance | M7 | [Sprint 8](sprint-plans/sprint-8.md) |
 
@@ -44,7 +44,7 @@ S1-T9 [behavioral evidence A3](../artifacts/sprint-1/reviews/S1-T9-S1T9-REVIEW-2
 | 3 | Complete — M3 | S3-P0/S3-T1–T6 [x] | [Accepted task records](sprint-plans/sprint-3.md#gate-record), latest checkpoint `d71bd67b`; final differential `S3-DEEP-20261013-A1` PASS, zero actionable findings |
 | 4 | Complete — M4 | S4-T1–T7 [x], ENV1 [x] | [Accepted gates/checkpoints](sprint-plans/sprint-4.md#gate-record), latest checkpoint `1992621976a082104e01b08471a8ce5751781c4c`; [differential PASS](../artifacts/sprint-4/reviews/sprint-4-deep-d1.md), zero actionable findings |
 | 5 | Complete — M5 | S5-T1–T7 [x] | [Accepted evidence/checkpoints](sprint-plans/sprint-5.md#gate-record), latest commit `925cc3f2`; [final differential PASS](../artifacts/sprint-5/reviews/sprint-5-deep-d1.md), zero actionable findings |
-| 6 | In progress — M6 | S6-T1 [x]; S6-T2–T7 pending | [S6-T1 accepted records](sprint-plans/sprint-6.md#gate-record): final evidence PASS and Bronze checkpoint `74e2b1f0`; no push or further provider send |
+| 6 | Complete — M6 | S6-T1–T7 [x] | [Accepted task evidence/checkpoints](sprint-plans/sprint-6.md), latest `786267a0`; [final differential PASS](../artifacts/sprint-6/reviews/Sprint-6-S6-DEEP-20261018-R1.md), zero actionable findings. Owner semantic ACCEPT only T2 v3; no push. |
 | 7 | Not started | S7-T1…S7-T6 | Pending |
 | 8 | Not started | S8-T1…S8-T7 | Pending |
 
