@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+
 using MetaBrain.Core.Domain;
 using MetaBrain.Core.Index;
 using MetaBrain.Core.Security;
@@ -495,7 +497,26 @@ public sealed record LifecycleWire(
     string? Reason,
     DateTimeOffset RecordedAtUtc,
     LifecycleChangeWire[] History,
-    LifecycleRetainedRevisionWire[] RetainedRevisions);
+    LifecycleRetainedRevisionWire[] RetainedRevisions,
+    LifecycleStampWire? IntentionDueAt = null);
+
+public sealed record ScheduledIntentionWire(
+    string ResourceId,
+    string ZoneId,
+    long LifecycleRevision,
+    string State,
+    string? Title,
+    string BodyPreview,
+    DateTimeOffset DueAt,
+    bool IsDue,
+    bool Notified,
+    DateTimeOffset? NotifiedAtUtc,
+    bool Acknowledged,
+    DateTimeOffset? AcknowledgedAtUtc);
+
+public sealed record IntentionScheduleWire(ScheduledIntentionWire[] Items);
+
+public sealed record IntentionSchedulePassWire(int NotificationsRecorded);
 
 /// <summary>
 /// One retained historical revision read back through the archive resource:
@@ -742,7 +763,9 @@ public sealed record ServiceReply(
     SpendLedgerWire? SpendLedger = null,
     SynthesisScheduleWire? SynthesisSchedule = null,
     ProviderStatusWire? ProviderStatus = null,
-    ScheduleRunWire? ScheduleRun = null);
+    ScheduleRunWire? ScheduleRun = null,
+    IntentionScheduleWire? IntentionSchedule = null,
+    IntentionSchedulePassWire? IntentionSchedulePass = null);
 
 public sealed class ServiceRequestHandler
 {
@@ -844,6 +867,9 @@ public sealed class ServiceRequestHandler
     public const string LifecycleSupersedeIntentionOperation = "lifecycle.intention.supersede";
     public const string LifecycleNotifyOperation = "lifecycle.intention.notify";
     public const string LifecycleAcknowledgeOperation = "lifecycle.intention.acknowledge";
+    public const string OwnerIntentionScheduleListOperation = "owner.intentions.list";
+    public const string OwnerIntentionTriggerSetOperation = "owner.intention.trigger.set";
+    public const string OwnerIntentionScheduleRunOperation = "owner.intention.schedule.run";
     public const string LifecycleSetValidityOperation = "lifecycle.validity.set";
     public const string LifecycleRetainRevisionOperation = "lifecycle.retain";
     public const string OwnerIndexStatusOperation = "owner.index.status";
@@ -899,6 +925,7 @@ public sealed class ServiceRequestHandler
     private PrivateIndexSnapshot? _privateIndexMaterialized;
     private readonly ModelJobService _modelJobs;
     private readonly SynthesisScheduleService _synthesisSchedule;
+    private readonly IntentionScheduleService _intentionSchedule;
 
     public ServiceRequestHandler(
         GrantAuthority grantAuthority,
@@ -910,10 +937,12 @@ public sealed class ServiceRequestHandler
         IPrivateIndexStore? privateIndex = null,
         SourceNormalizerRegistry? sourceNormalizers = null,
         ISourceSnapshotReader? sourceReader = null,
-        IModelProviderAdapter? modelProvider = null)
+        IModelProviderAdapter? modelProvider = null,
+        TimeProvider? timeProvider = null)
     {
         _modelJobs = new ModelJobService(vault, modelProvider);
         _synthesisSchedule = new SynthesisScheduleService(_modelJobs);
+        _intentionSchedule = new IntentionScheduleService(timeProvider);
         _grantAuthority = grantAuthority ?? throw new ArgumentNullException(nameof(grantAuthority));
         _vault = vault ?? throw new ArgumentNullException(nameof(vault));
         _ownerScopeGrants = ownerScopeGrants ?? throw new ArgumentNullException(nameof(ownerScopeGrants));
@@ -1378,6 +1407,21 @@ public sealed class ServiceRequestHandler
         {
             return HandleLifecycleRead(context, request, operation);
         }
+        if (string.Equals(request.Operation, OwnerIntentionScheduleListOperation, StringComparison.Ordinal))
+        {
+            return HandleIntentionScheduleList(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerIntentionTriggerSetOperation, StringComparison.Ordinal))
+        {
+            return HandleIntentionTriggerSet(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerIntentionScheduleRunOperation, StringComparison.Ordinal))
+        {
+            return HandleIntentionScheduleRun(context, request, operation, cancellationToken);
+        }
+
 
         if (string.Equals(request.Operation, LifecycleRetainedRevisionReadOperation, StringComparison.Ordinal))
         {
@@ -3974,6 +4018,166 @@ public sealed class ServiceRequestHandler
         ReviewReasonTokens(review.Reasons),
         review.StaleResourceIds);
 
+    private ServiceReply HandleIntentionScheduleList(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || operation is null || !HasNoOptionalFields(request))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var rows = _intentionSchedule.ListScheduled(context, operation)
+                .Select(ToScheduledIntentionWire)
+                .ToArray();
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "intentions_listed",
+                "owner",
+                null,
+                IntentionSchedule: new IntentionScheduleWire(rows));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (InvalidDataException)
+        {
+            return Error("intention_schedule_unavailable");
+        }
+    }
+
+    private ServiceReply HandleIntentionTriggerSet(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || operation is null ||
+            !HasOnlyIntentionTriggerSetFields(request) || string.IsNullOrEmpty(request.ResourceId) ||
+            string.IsNullOrEmpty(request.ContentBase64))
+        {
+            return Error("invalid_request");
+        }
+
+        byte[]? draftBytes = null;
+        try
+        {
+            draftBytes = Convert.FromBase64String(request.ContentBase64);
+            if (draftBytes.Length is <= 0 or > 4096)
+            {
+                return Error("invalid_request");
+            }
+
+            var draft = JsonSerializer.Deserialize<IntentionTimeTriggerDraft>(draftBytes,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (draft is null || draft.Cancel == (draft.DueAt is not null) ||
+                draft.DueAt is { Length: > 64 })
+            {
+                return Error("invalid_request");
+            }
+
+            var lifecycle = _intentionSchedule.SetTimeTrigger(
+                context,
+                request.ResourceId,
+                draft.DueAt,
+                draft.ExpectedLifecycleRevision,
+                operation);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                draft.Cancel ? "intention_trigger_cleared" : "intention_trigger_set",
+                "owner",
+                null,
+                ResourceRevision: lifecycle.Revision,
+                Lifecycle: ToLifecycleWire(lifecycle));
+        }
+        catch (FormatException)
+        {
+            return Error("invalid_request");
+        }
+        catch (JsonException)
+        {
+            return Error("invalid_request");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        finally
+        {
+            if (draftBytes is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(draftBytes);
+            }
+        }
+    }
+
+    private ServiceReply HandleIntentionScheduleRun(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation,
+        CancellationToken cancellationToken)
+    {
+        if (context.Kind != PrincipalKind.Owner || operation is null || !HasNoOptionalFields(request))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var pass = _intentionSchedule.MarkDue(context, operation, cancellationToken);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "intention_schedule_pass",
+                "owner",
+                null,
+                IntentionSchedulePass: new IntentionSchedulePassWire(pass.NotificationsRecorded));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (InvalidDataException)
+        {
+            return Error("intention_schedule_unavailable");
+        }
+    }
+
+    private static ScheduledIntentionWire ToScheduledIntentionWire(ScheduledIntention intention) => new(
+        intention.ResourceId,
+        intention.ZoneId,
+        intention.LifecycleRevision,
+        intention.State,
+        intention.Title,
+        intention.BodyPreview,
+        intention.DueAt,
+        intention.IsDue,
+        intention.Notified,
+        intention.NotifiedAtUtc,
+        intention.Acknowledged,
+        intention.AcknowledgedAtUtc);
+
+    private static bool HasNoOptionalFields(ServiceRequest request) =>
+        request == new ServiceRequest(request.ProtocolVersion, request.Operation);
+
+    private static bool HasOnlyIntentionTriggerSetFields(ServiceRequest request) =>
+        (request with { ResourceId = null, ContentBase64 = null }) ==
+        new ServiceRequest(request.ProtocolVersion, request.Operation);
+
     /// <summary>
     /// S2-T5 owner lifecycle create. The subject item ID is the only identity
     /// the request carries: the record ID, the zone, the initial states and the
@@ -4213,7 +4417,8 @@ public sealed class ServiceRequestHandler
         record.Reason,
         record.RecordedAtUtc,
         record.History.Select(ToLifecycleChangeWire).ToArray(),
-        record.RetainedRevisions.Select(ToLifecycleRetainedRevisionWire).ToArray());
+        record.RetainedRevisions.Select(ToLifecycleRetainedRevisionWire).ToArray(),
+        ToLifecycleStampWire(record.IntentionDueAt));
 
     private static string[] ReviewReasonTokens(Core.Domain.RelationReviewReason reasons)
     {

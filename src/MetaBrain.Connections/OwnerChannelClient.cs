@@ -937,6 +937,29 @@ public sealed record OwnerScheduleRun(
     string? FailureCode,
     DateTimeOffset? NextDueAtUtc,
     string? Message);
+public sealed record OwnerScheduledIntention(
+    string ResourceId,
+    string ZoneId,
+    long LifecycleRevision,
+    string State,
+    string? Title,
+    string BodyPreview,
+    DateTimeOffset DueAt,
+    bool IsDue,
+    bool Notified,
+    DateTimeOffset? NotifiedAtUtc,
+    bool Acknowledged,
+    DateTimeOffset? AcknowledgedAtUtc);
+
+public sealed record OwnerIntentionScheduleListResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerScheduledIntention[]? Intentions);
+
+public sealed record OwnerIntentionSchedulePassResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    int? NotificationsRecorded);
 
 public sealed record OwnerSpendEntry(
     string EntryId,
@@ -2760,6 +2783,123 @@ public static class OwnerChannelClient
         return new OwnerScheduleResult(reply.Outcome, reply.ErrorCode, ProjectSchedule(reply));
     }
 
+    public static async Task<OwnerIntentionScheduleListResult> ListScheduledIntentionsAsync(
+        string controlPipe,
+        CancellationToken cancellationToken)
+    {
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerIntentionScheduleListOperation),
+            "intentions_listed",
+            cancellationToken).ConfigureAwait(false);
+        return new OwnerIntentionScheduleListResult(reply.Outcome, reply.ErrorCode, ProjectScheduledIntentions(reply));
+    }
+
+    /// <summary>
+    /// Creates, edits, or clears one explicit owner time trigger. The due text is
+    /// passed unchanged so the service can reject any timestamp without an explicit
+    /// UTC offset; the expected lifecycle revision prevents a stale list row from
+    /// overwriting a newer owner or scheduler act.
+    /// </summary>
+    public static async Task<OwnerLifecycleResult> SetIntentionTimeTriggerAsync(
+        string controlPipe,
+        string resourceId,
+        string? dueAt,
+        bool cancel,
+        long? expectedLifecycleRevision,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(resourceId);
+        if (cancel == (dueAt is not null) || expectedLifecycleRevision is < 1)
+        {
+            throw new ArgumentException("Set a due timestamp or explicitly cancel it; a supplied lifecycle revision must be positive.");
+        }
+
+        var draft = JsonSerializer.SerializeToUtf8Bytes(
+            new IntentionTimeTriggerDraft(dueAt, cancel, expectedLifecycleRevision));
+        try
+        {
+            var reply = await ReadReplyAsync(
+                controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.OwnerIntentionTriggerSetOperation,
+                    ResourceId: resourceId,
+                    ContentBase64: Convert.ToBase64String(draft)),
+                cancel ? "intention_trigger_cleared" : "intention_trigger_set",
+                cancellationToken).ConfigureAwait(false);
+            return new OwnerLifecycleResult(reply.Outcome, reply.ErrorCode, ProjectLifecycle(reply));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(draft);
+        }
+    }
+
+    public static async Task<OwnerIntentionSchedulePassResult> RunIntentionSchedulePassAsync(
+        string controlPipe,
+        CancellationToken cancellationToken)
+    {
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerIntentionScheduleRunOperation),
+            "intention_schedule_pass",
+            cancellationToken).ConfigureAwait(false);
+        var notifications = reply.Payload.TryGetProperty("intentionSchedulePass", out var pass) &&
+            pass.ValueKind == JsonValueKind.Object
+                ? Int32(pass, "notificationsRecorded")
+                : (int?)null;
+        return new OwnerIntentionSchedulePassResult(reply.Outcome, reply.ErrorCode, notifications);
+    }
+
+    public static async Task<OwnerLifecycleResult> AcknowledgeIntentionAsync(
+        string controlPipe,
+        OwnerScheduledIntention intention,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(intention);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.LifecycleAcknowledgeOperation,
+                ResourceId: intention.ResourceId,
+                ResourceRevision: intention.LifecycleRevision),
+            "lifecycle_intention_acknowledged",
+            cancellationToken).ConfigureAwait(false);
+        return new OwnerLifecycleResult(reply.Outcome, reply.ErrorCode, ProjectLifecycle(reply));
+    }
+
+    public static Task<OwnerLifecycleResult> CompleteIntentionAsync(
+        string controlPipe,
+        OwnerScheduledIntention intention,
+        string rationale,
+        CancellationToken cancellationToken) =>
+        TransitionLifecycleAsync(
+            controlPipe,
+            new OwnerLifecycleState(intention.ResourceId, intention.LifecycleRevision, "proposal"),
+            ServiceRequestHandler.LifecycleCompleteIntentionOperation,
+            "lifecycle_intention_completed",
+            rationale,
+            cancellationToken);
+
+    public static Task<OwnerLifecycleResult> CancelIntentionAsync(
+        string controlPipe,
+        OwnerScheduledIntention intention,
+        string rationale,
+        CancellationToken cancellationToken) =>
+        TransitionLifecycleAsync(
+            controlPipe,
+            new OwnerLifecycleState(intention.ResourceId, intention.LifecycleRevision, "proposal"),
+            ServiceRequestHandler.LifecycleCancelIntentionOperation,
+            "lifecycle_intention_cancelled",
+            rationale,
+            cancellationToken);
+
     private static async Task<OwnerRelationResult> TransitionRelationAsync(
         string controlPipe,
         string operation,
@@ -3219,6 +3359,44 @@ public static class OwnerChannelClient
             Text(schedule, "lastRunJobId"),
             Text(schedule, "lastRunOutcome"));
     }
+    private static OwnerScheduledIntention[]? ProjectScheduledIntentions(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            !reply.Payload.TryGetProperty("intentionSchedule", out var schedule) ||
+            schedule.ValueKind != JsonValueKind.Object ||
+            !schedule.TryGetProperty("items", out var items) ||
+            items.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var result = new OwnerScheduledIntention[items.GetArrayLength()];
+        var index = 0;
+        foreach (var item in items.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object || Timestamp(item, "dueAt") is not { } dueAt)
+            {
+                return null;
+            }
+
+            result[index++] = new OwnerScheduledIntention(
+                Text(item, "resourceId") ?? string.Empty,
+                Text(item, "zoneId") ?? string.Empty,
+                Int64(item, "lifecycleRevision"),
+                Text(item, "state") ?? string.Empty,
+                Text(item, "title"),
+                Text(item, "bodyPreview") ?? string.Empty,
+                dueAt,
+                Flag(item, "isDue"),
+                Flag(item, "notified"),
+                Timestamp(item, "notifiedAtUtc"),
+                Flag(item, "acknowledged"),
+                Timestamp(item, "acknowledgedAtUtc"));
+        }
+
+        return result;
+    }
+
 
     private static OwnerSpendLedger? ProjectSpendLedger(OwnerReply reply)
     {

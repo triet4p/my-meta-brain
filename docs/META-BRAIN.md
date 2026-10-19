@@ -339,6 +339,8 @@ Quản trị grant, declassification và purge nằm trên owner channel. Trả 
 
 Intention có pending/done/cancelled/superseded, trigger theo thời gian hoặc ngữ cảnh user chọn. Lịch chạy không cần LLM. Không có agent kết nối thì due item vẫn tồn tại. Đã nhắc không phải đã hoàn thành; lịch đã tắt không tiếp tục âm thầm nhắc. Việc hoàn thành cần thao tác/bằng chứng theo policy, không suy từ câu trả lời AI.
 
+Implementation (S7-T2): one-time triggers require an exact ISO-8601 date-time with `Z` or an explicit numeric offset (including minutes); date-only values and timezone-free local timestamps (including repeated DST hours) are rejected rather than guessed, while an explicit offset selects one instant even during a repeated wall-clock hour. Named zones and recurring rules are unsupported. Owner set/edit/cancel acts and the due instant live in the same encrypted, revision-gated lifecycle record; lifecycle schema v1 reads as v2 without a trigger and validity fields retain their meaning. A no-LLM service pass runs only under an unlocked counted vault operation, writes one notification marker per due pending intention, and resumes overdue markers after explicit unlock. The owner **Intentions** view shows pending due/scheduled state and supports acknowledgement, separate rationale-bearing completion/cancellation, and trigger cancellation; notifications and acknowledgements never mark an intention done. Locked state pauses schedule queries and private view state, does not expose due metadata, and never unlocks for a deadline. The clock is UTC system time: forward or backward corrections can make an unnotified deadline appear due earlier or later; a missed deadline remains due on the next unlocked pass.
+
 Quên gồm:
 
 1. Giảm ưu tiên trong recall/brief.

@@ -26,6 +26,7 @@ internal sealed class NamedPipeService
     private readonly SqlitePrivateIndexStore _privateIndex;
     private readonly SourceRefreshBackgroundService _backgroundRefresh;
     private readonly SynthesisScheduleBackgroundService _scheduleLoop;
+    private readonly IntentionScheduleBackgroundService _intentionScheduleLoop;
 
     public NamedPipeService(
         ServiceSettings settings,
@@ -49,6 +50,7 @@ internal sealed class NamedPipeService
             modelProvider: modelProvider ?? CreateDefaultModelProvider());
         _backgroundRefresh = new SourceRefreshBackgroundService(_handler, _vault);
         _scheduleLoop = new SynthesisScheduleBackgroundService(_handler, _vault);
+        _intentionScheduleLoop = new IntentionScheduleBackgroundService(_handler, _vault);
     }
     private static IModelProviderAdapter CreateDefaultModelProvider() =>
         new OpenAiCompatibleProviderAdapter();
@@ -65,7 +67,8 @@ internal sealed class NamedPipeService
                 ListenAsync(ownerListener, PrincipalKind.Owner, WindowsPipeServer.Create, cancellationToken),
                 ListenAsync(agentListener, PrincipalKind.Agent, WindowsPipeServer.CreateAgent, cancellationToken),
                 _backgroundRefresh.RunAsync(cancellationToken),
-                _scheduleLoop.RunAsync(cancellationToken)).ConfigureAwait(false);
+                _scheduleLoop.RunAsync(cancellationToken),
+                _intentionScheduleLoop.RunAsync(cancellationToken)).ConfigureAwait(false);
         }
         finally
         {
@@ -292,7 +295,10 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerScheduleSetOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerScheduleDisableOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerScheduleStatusOperation, StringComparison.Ordinal) ||
-                    string.Equals(request.Operation, ServiceRequestHandler.OwnerScheduleRunOperation, StringComparison.Ordinal);
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerScheduleRunOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerIntentionScheduleListOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerIntentionTriggerSetOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerIntentionScheduleRunOperation, StringComparison.Ordinal);
                 using var operation = needsVaultOperation ? _vault.TryBeginOperation() : null;
                 if (needsVaultOperation && operation is not null)
                 {

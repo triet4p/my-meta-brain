@@ -6,7 +6,7 @@ Nhớ đúng thời điểm, nhắc đúng ý định đã được yêu cầu, 
 
 ## Status and Dependencies
 
-- Status: In progress — S7-T1 đang triển khai; S7-T2 pending sau checkpoint S7-T1. Entry: Sprint 6 PASS; encrypted domain/lineage và lock/session APIs. Private scheduler/notifications không tự unlock vault.
+- Status: In progress — S7-T1 accepted với evidence PASS và checkpoint; S7-T2 đang triển khai. Entry: Sprint 6 PASS; encrypted domain/lineage và lock/session APIs. Private scheduler/notifications không tự unlock vault.
 - [Global plan](../PLAN.md), [specification](../META-BRAIN.md), [requirements](../REQUIREMENTS.md).
 - Requirements: R26–R29; bảo toàn R01, R03–R06, R08, R12, R14, R18, R25, R30, R36.
 
@@ -20,12 +20,12 @@ Status legend: [ ] pending / [~] in progress / [x] done. OMP role selection, evi
 
 Workflow S7-T1–T2: full route, tuần tự; mỗi task cần runtime smoke, independent evidence PASS và Bronze-only exact-snapshot commit checkpoint riêng trước task tiếp theo. Owner chọn Gold cho S7-T1, Silver cho S7-T2; implementation workers không commit, không push. S7-T3–T6 chưa được giao.
 
-- [~] **S7-T1 — Temporal recall và lịch sử quyết định end-to-end.** Requirements: R26, R23, R30.
+- [x] **S7-T1 — Temporal recall và lịch sử quyết định end-to-end.** Requirements: R26, R23, R30.
     - Scope: hoàn thiện current/as-of/history query và UI timeline trên validity/revision đã có; không đổi temporal schema meaning.
     - Acceptance: import hôm nay không làm event cũ thành mới; unknown/approximate time không bị làm chính xác giả; current tránh superseded, historical giữ lý do cũ; contradiction chưa phân giải không newest-wins; timezone boundaries đúng.
     - Evidence: quyết định cũ/mới và conflicting research theo nhiều mốc, query qua MCP và thao tác UI; source evidence ở đúng revision/time.
 
-- [ ] **S7-T2 — Intention due scheduling bền vững.** Requirements: R27, R01.
+- [~] **S7-T2 — Intention due scheduling bền vững.** Requirements: R27, R01.
     - Scope: time triggers, due state và acknowledgement độc lập completion; lịch không cần LLM.
     - Acceptance: explicit create/edit/cancel, timezone/clock policy đúng; offline hoặc locked qua deadline rồi restart/unlock vẫn due, không notified=done hoặc notification storm. Locked không lộ intention/title/body hoặc tự unlock; trạng thái encrypted bền vững.
     - Evidence: actual controlled-time scheduler, offline/lock/restart/unlock/cancel/reschedule, actual UI due list và no private notifications khi locked; không long sleep tests.
@@ -60,4 +60,4 @@ Retention mặc định không được phá hủy dữ liệu chỉ vì lâu kh
 
 ## Gate Record
 
-Pending. Chưa có scheduler/lifecycle runtime verification.
+S7-T1 accepted: [worker evidence](../../artifacts/sprint-7/task-1.md), [R2 evidence PASS](../../artifacts/sprint-7/reviews/S7-T1-R2.md), [exact-snapshot checkpoint](../../artifacts/sprint-7/checkpoints/S7-T1-C1.md), commit `f3c38c30c269e1deea2de5da03a413366f87c479`. R1 evidence gaps được correction và fresh review giải quyết. S7-T2 pending runtime/evidence/checkpoint; sprint gate chưa complete. Không push.

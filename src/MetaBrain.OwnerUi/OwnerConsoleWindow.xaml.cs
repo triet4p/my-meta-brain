@@ -9,10 +9,10 @@ namespace MetaBrain.OwnerUi;
 
 /// <summary>
 /// The owner console window: an explicit owner session against the running
-/// service, a small navigation shell, an honest connection/locked state, and
-/// the explicit unlock/lock/key-recovery acts of the owner workflow. No private
-/// content is fetched, displayed or cached by this task's surfaces, and every
-/// vault act is an ordinary request of this console to the running service.
+/// service, navigation across owner views, an honest connection/locked state,
+/// and the explicit unlock/lock/key-recovery acts. Private views are read only
+/// over the owner pipe while unlocked and cleared with the private session state;
+/// every vault act remains an ordinary request to the running service.
 /// </summary>
 public partial class OwnerConsoleWindow : System.Windows.Window
 {
@@ -152,7 +152,14 @@ public partial class OwnerConsoleWindow : System.Windows.Window
 
     private void OnSessionChanged(object? sender, EventArgs e) => Render();
 
-    private async void OnTimerTick(object? sender, EventArgs e) => await _session.CheckAsync();
+    private async void OnTimerTick(object? sender, EventArgs e)
+    {
+        await _session.CheckAsync();
+        if (Navigation.SelectedIndex == 9)
+        {
+            await _session.RefreshIntentionsAsync();
+        }
+    }
 
     private async void OnConnectClicked(object sender, RoutedEventArgs e) => await _session.AttachAsync();
 
@@ -192,6 +199,11 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         SharingPanel.Visibility = Navigation.SelectedIndex == 6 ? Visibility.Visible : Visibility.Collapsed;
         SourcesPanel.Visibility = Navigation.SelectedIndex == 7 ? Visibility.Visible : Visibility.Collapsed;
         JobsPanel.Visibility = Navigation.SelectedIndex == 8 ? Visibility.Visible : Visibility.Collapsed;
+        IntentionsPanel.Visibility = Navigation.SelectedIndex == 9 ? Visibility.Visible : Visibility.Collapsed;
+        if (Navigation.SelectedIndex == 9)
+        {
+            _ = _session.RefreshIntentionsAsync();
+        }
     }
 
     private void Render()
@@ -293,6 +305,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         RenderSharing(attached);
         RenderSources(attached);
         RenderJobs(attached);
+        RenderIntentions(attached);
     }
 
     private string LastCheckText_Value() => _session.LastCheckLocal is { } last
@@ -504,6 +517,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
             ProvisionConfirmInput.Clear();
             UnlockPassphraseInput.Clear();
             RecoveryInput.Clear();
+            ClearIntentionInputs();
         }
         finally
         {
@@ -514,9 +528,8 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     /// <summary>
     /// Keyboard workflow of the whole console: Ctrl+F reaches the library search
     /// box, Ctrl+L asks the service to lock the vault (the same owner act as the
-    /// button) and F5 re-runs the library search. Nothing here acts on the vault
-    /// on its own; every shortcut is an owner key press that reaches the same
-    /// service operation as the corresponding control.
+    /// button), and F5 refreshes the active view's owner query, including the
+    /// private intention schedule. Every shortcut calls its ordinary service operation.
     /// </summary>
     private void OnWindowPreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
@@ -564,6 +577,11 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         {
             e.Handled = true;
             _ = RefreshSourcesForKeyboardAsync();
+        }
+        if (e.Key == System.Windows.Input.Key.F5 && Navigation.SelectedIndex == 9)
+        {
+            e.Handled = true;
+            _ = _session.RefreshIntentionsAsync();
         }
 
         if (e.Key == System.Windows.Input.Key.F5 && Navigation.SelectedIndex == 8)

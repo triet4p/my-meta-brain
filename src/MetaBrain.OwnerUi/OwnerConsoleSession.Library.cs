@@ -459,6 +459,7 @@ internal sealed partial class OwnerConsoleSession
         ClearPrivateRelationsState();
         ClearPrivateSharingState();
         ClearPrivateSourcesState();
+        ClearPrivateIntentionsState();
         // stops reporting one.
         LibraryIndex = null;
         LibraryMessage = null;

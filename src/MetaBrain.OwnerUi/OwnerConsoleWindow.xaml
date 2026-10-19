@@ -32,7 +32,7 @@
                                Foreground="#FF6B7280" Margin="2,0,0,8" />
                     <TextBlock DockPanel.Dock="Bottom" TextWrapping="Wrap" FontSize="11" Foreground="#FF6B7280" Margin="2,12,2,0"
                                Text="Only delivered views appear here. This host ships no placeholder screen and no control without a real backing operation." />
-                    <ListBox x:Name="Navigation" BorderThickness="0" Background="Transparent" Height="220"
+                    <ListBox x:Name="Navigation" BorderThickness="0" Background="Transparent" Height="260"
                              SelectionChanged="OnNavigationChanged">
                         <ListBoxItem Content="Owner session" Padding="8,6" />
                         <ListBoxItem Content="Vault status" Padding="8,6" />
@@ -43,6 +43,7 @@
                         <ListBoxItem Content="Sharing" Padding="8,6" />
                         <ListBoxItem Content="Sources" Padding="8,6" />
                         <ListBoxItem Content="Jobs" Padding="8,6" />
+                        <ListBoxItem Content="Intentions" Padding="8,6" />
                     </ListBox>
                 </DockPanel>
             </Border>
@@ -1111,6 +1112,68 @@
                                    Text="• Keyboard: Enter reads the selected job, F5 refreshes the job list, Ctrl+L locks the vault." />
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
                                    Text="• Privacy: this view holds no on-disk cache and never shows the API key. Locking the vault (or losing the service, or ending the session) clears every job, schedule and spend view above, and an answer already in flight is discarded instead of restoring them." />
+                    </StackPanel>
+                    <StackPanel x:Name="IntentionsPanel" Visibility="Collapsed">
+                        <TextBlock Text="Intentions — scheduled and due" FontSize="19" FontWeight="SemiBold" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,8,0,0"
+                                   Text="Create or edit a one-time trigger for an intention you name, or cancel that trigger without completing the intention. Only exact ISO-8601 timestamps with Z or a numeric UTC offset are accepted: local times without an offset (including a repeated DST hour), date-only values and invalid offsets are refused. A numeric offset resolves a repeated wall-clock hour to one instant; named timezones and recurring local-time rules are not supported. Forward or backward UTC system-clock corrections can make an unnotified deadline appear due early or late; once a trigger is recorded as notified it is not repeated. The owner-only due list is the notification surface while unlocked; the background scheduler makes no LLM/provider calls." />
+                        <TextBlock Text="The service pauses private scheduling and due-list reads while locked, stores no key, and never unlocks for a deadline. Unlock is always your explicit act. Due, notification, acknowledgement and completion are separate states." TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280" />
+                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                            <Button x:Name="IntentionsRefreshButton" Content="Read scheduled intentions" Padding="14,7" Click="OnIntentionsRefreshClicked" />
+                        </StackPanel>
+                        <TextBlock x:Name="IntentionsMessageText" TextWrapping="Wrap" Margin="0,8,0,0" FontWeight="SemiBold" />
+                        <ListBox x:Name="IntentionsList" Height="210" Margin="0,8,0,0" Background="White" BorderBrush="#FFD5D8DC"
+                                 AutomationProperties.AutomationId="IntentionsList" SelectionChanged="OnIntentionsSelectionChanged"
+                                 KeyDown="OnIntentionsListKeyDown">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="2">
+                                        <TextBlock Text="{Binding Summary}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding BodyPreview}" Foreground="#FF6B7280" TextWrapping="Wrap" Margin="0,2,0,0" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+
+                        <TextBlock Text="One-time time trigger (exact instant with explicit offset)" FontWeight="SemiBold" Margin="0,18,0,0" />
+                        <Grid Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Intention resource ID" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="IntentionResourceIdInput" Margin="0,0,0,6"
+                                     AutomationProperties.AutomationId="IntentionResourceIdInput" TextChanged="OnIntentionInputChanged" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Due at" Foreground="#FF6B7280" />
+                            <TextBox Grid.Row="1" Grid.Column="1" x:Name="IntentionDueAtInput"
+                                     AutomationProperties.AutomationId="IntentionDueAtInput" TextChanged="OnIntentionInputChanged" />
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="IntentionTriggerSetButton" Content="Create / reschedule trigger" Padding="14,7" Click="OnIntentionTriggerSetClicked" />
+                            <Button x:Name="IntentionTriggerCancelButton" Content="Cancel trigger" Padding="14,7" Margin="8,0,0,0" Click="OnIntentionTriggerCancelClicked" />
+                        </StackPanel>
+                        <TextBlock Text="Owner act (acknowledgement never marks done)" FontWeight="SemiBold" Margin="0,18,0,0" />
+                        <TextBlock Text="Acknowledge records that you saw the due item. Complete or cancel changes the intention only after the separate action below; an explicit rationale is recorded for those state changes." TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280" />
+                        <TextBox x:Name="IntentionRationaleInput" Margin="0,8,0,0" Height="52" AcceptsReturn="True" TextWrapping="Wrap"
+                                 AutomationProperties.AutomationId="IntentionRationaleInput" TextChanged="OnIntentionInputChanged" />
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="IntentionAcknowledgeButton" Content="Acknowledge due" Padding="14,7" Click="OnIntentionAcknowledgeClicked" />
+                            <Button x:Name="IntentionCompleteButton" Content="Complete intention" Padding="14,7" Margin="8,0,0,0" Click="OnIntentionCompleteClicked" />
+                            <Button x:Name="IntentionCancelButton" Content="Cancel intention" Padding="14,7" Margin="8,0,0,0" Click="OnIntentionCancelClicked" />
+                        </StackPanel>
+                        <TextBlock Text="Privacy and interaction" FontWeight="SemiBold" Margin="0,20,0,6" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• The scheduler reads and writes only encrypted lifecycle records during an unlocked vault operation. When locked, no title, body, due instant or acknowledgement is queried or sent to a notification surface." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• A missed deadline remains due across offline time, service restart and lock. After explicit unlock the scheduler records one notification marker, and the item remains in this list until the owner acts. Reading or acknowledging it never completes it, and rescheduling clears only the prior notification and acknowledgement markers." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Keyboard: Enter opens the selected row, F5 reads the due list, Ctrl+L locks the vault." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Privacy: this view holds no on-disk cache. Locking, service loss or ending the owner session clears the list, private due text and controls; nothing automatically unlocks the vault." />
                     </StackPanel>
                 </Grid>
             </ScrollViewer>

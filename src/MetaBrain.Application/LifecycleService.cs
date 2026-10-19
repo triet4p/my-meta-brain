@@ -36,6 +36,11 @@ public sealed record RetainedRevisionReadResult(
 /// </summary>
 public sealed class LifecycleService
 {
+    private readonly TimeProvider _timeProvider;
+
+    public LifecycleService(TimeProvider? timeProvider = null) =>
+        _timeProvider = timeProvider ?? TimeProvider.System;
+
     /// <summary>
     /// Creates the lifecycle record for a subject item. The subject must be a
     /// memory item that exists now; the record's zone is the subject's zone, so
@@ -66,7 +71,7 @@ public sealed class LifecycleService
         var subject = RequireSubject(store, subjectResourceId);
         LifecycleValidator.ValidateAgainstSubject(draft, subject.Envelope);
 
-        var now = DateTimeOffset.UtcNow;
+        var now = _timeProvider.GetUtcNow().ToUniversalTime();
         var stored = new StoredLifecycleRecord(
             LifecycleCodec.CurrentSchemaVersion,
             DomainIdentifiers.LifecycleIdFor(subjectResourceId),
@@ -232,13 +237,21 @@ public sealed class LifecycleService
 
         LifecycleValidator.ValidateAgainstSubject(transition, subject.Envelope);
 
-        var now = DateTimeOffset.UtcNow;
+        var now = _timeProvider.GetUtcNow().ToUniversalTime();
         var executor = ExecutorOf(context);
         LifecycleRetainedRevision[] retained = stored.RetainedRevisions;
         if (LifecycleTransitions.AllowsRetention(act))
         {
             retained = RetainSubjectRevision(stored, subject, executor, now, store);
         }
+        var intentionDueAt = act switch
+        {
+            LifecycleAct.SetIntentionDue => transition.IntentionDueAt,
+            LifecycleAct.ClearIntentionDue => null,
+            _ => stored.IntentionDueAt
+        };
+        var timeTriggerChanged = !Equals(intentionDueAt, stored.IntentionDueAt);
+
 
         var next = stored with
         {
@@ -251,16 +264,17 @@ public sealed class LifecycleService
             Intention = LifecycleTransitions.ChangesState(act) && LifecycleTransitions.AspectOf(act) == LifecycleAspect.Intention
                 ? LifecycleTransitions.TargetIntention(act)
                 : stored.Intention,
-            Notified = act == LifecycleAct.Notify ? true : stored.Notified,
-            NotifiedAtUtc = act == LifecycleAct.Notify ? now : stored.NotifiedAtUtc,
-            Acknowledged = act == LifecycleAct.Acknowledge ? true : stored.Acknowledged,
-            AcknowledgedAtUtc = act == LifecycleAct.Acknowledge ? now : stored.AcknowledgedAtUtc,
+            Notified = timeTriggerChanged ? false : act == LifecycleAct.Notify || stored.Notified,
+            NotifiedAtUtc = timeTriggerChanged ? null : act == LifecycleAct.Notify ? now : stored.NotifiedAtUtc,
+            Acknowledged = timeTriggerChanged ? false : act == LifecycleAct.Acknowledge || stored.Acknowledged,
+            AcknowledgedAtUtc = timeTriggerChanged ? null : act == LifecycleAct.Acknowledge ? now : stored.AcknowledgedAtUtc,
             SupersededBy = LifecycleTransitions.RequiresReplacement(act) ? replacement : stored.SupersededBy,
             Occurred = transition.Occurred ?? stored.Occurred,
             Recorded = transition.Recorded ?? stored.Recorded,
             ValidFrom = transition.ValidFrom ?? stored.ValidFrom,
             ValidUntil = transition.ValidUntil ?? stored.ValidUntil,
             ReviewAfter = transition.ReviewAfter ?? stored.ReviewAfter,
+            IntentionDueAt = intentionDueAt,
             RetainedRevisions = retained,
             History = AppendHistory(stored, act, executor, now, transition, replacement)
         };
@@ -548,7 +562,8 @@ public sealed class LifecycleService
         stored.Reason,
         stored.RecordedAtUtc,
         stored.History,
-        stored.RetainedRevisions);
+        stored.RetainedRevisions,
+        stored.IntentionDueAt);
 
     private static MemoryItem ToSubject(StoredMemoryEnvelope stored, long revision) => new(
         stored.Id,

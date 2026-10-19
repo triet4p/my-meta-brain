@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Globalization;
+
 
 namespace MetaBrain.Core.Domain;
 
@@ -36,6 +38,108 @@ public sealed record TemporalStamp(
     int? LocalDay,
     int? LocalQuarter,
     int? TimeZoneOffsetMinutes);
+
+/// <summary>
+/// The one-time due-instant policy for owner intention triggers. A trigger
+/// requires an exact ISO-8601 date-time with an explicit <c>Z</c> or numeric
+/// UTC offset; it is not a recurring wall-clock schedule or a named timezone.
+/// </summary>
+public static class IntentionTimeTrigger
+{
+    public static bool TryParse(string? text, out TemporalStamp? stamp)
+    {
+        stamp = null;
+        if (string.IsNullOrEmpty(text))
+        {
+            return false;
+        }
+
+        var offsetStart = text.EndsWith('Z') ? text.Length - 1 : text.Length - 6;
+        if (offsetStart < 19 ||
+            text[4] != '-' || text[7] != '-' ||
+            text[10] != 'T' || text[13] != ':' || text[16] != ':')
+        {
+            return false;
+        }
+
+        for (var index = 0; index < 19; index++)
+        {
+            if (index is 4 or 7 or 10 or 13 or 16)
+            {
+                continue;
+            }
+
+            if (!IsAsciiDigit(text[index]))
+            {
+                return false;
+            }
+        }
+
+        var cursor = 19;
+        if (cursor < offsetStart && text[cursor] == '.')
+        {
+            cursor++;
+            var fractionStart = cursor;
+            while (cursor < offsetStart && IsAsciiDigit(text[cursor]))
+            {
+                cursor++;
+            }
+
+            if (cursor == fractionStart || cursor - fractionStart > 7)
+            {
+                return false;
+            }
+        }
+
+        if (cursor != offsetStart)
+        {
+            return false;
+        }
+
+        if (text.EndsWith('Z'))
+        {
+            if (offsetStart != text.Length - 1)
+            {
+                return false;
+            }
+        }
+        else if (text[offsetStart] is not '+' and not '-' ||
+                 text[offsetStart + 3] != ':' ||
+                 !IsAsciiDigit(text[offsetStart + 1]) ||
+                 !IsAsciiDigit(text[offsetStart + 2]) ||
+                 !IsAsciiDigit(text[offsetStart + 4]) ||
+                 !IsAsciiDigit(text[offsetStart + 5]))
+        {
+            return false;
+        }
+        else
+        {
+            var hours = (text[offsetStart + 1] - '0') * 10 + text[offsetStart + 2] - '0';
+            var minutes = (text[offsetStart + 4] - '0') * 10 + text[offsetStart + 5] - '0';
+            if (hours > 14 || minutes > 59 || (hours == 14 && minutes != 0))
+            {
+                return false;
+            }
+        }
+
+        if (!DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out var instant))
+        {
+            return false;
+        }
+
+        stamp = new TemporalStamp(
+            TimestampPrecision.Exact,
+            instant.ToUniversalTime(),
+            null,
+            null,
+            null,
+            null,
+            (int)instant.Offset.TotalMinutes);
+        return true;
+    }
+
+    private static bool IsAsciiDigit(char value) => value is >= '0' and <= '9';
+}
 
 /// <summary>
 /// Publication lifecycle from the specification: proposal, published,
@@ -91,7 +195,8 @@ public enum LifecycleAspect
     Intention = 3,
     Notification = 4,
     Temporal = 5,
-    History = 6
+    History = 6,
+    Schedule = 7
 }
 
 /// <summary>
@@ -114,7 +219,9 @@ public enum LifecycleAct
     Notify = 10,
     Acknowledge = 11,
     SetValidity = 12,
-    RetainRevision = 13
+    RetainRevision = 13,
+    SetIntentionDue = 14,
+    ClearIntentionDue = 15
 }
 
 /// <summary>
@@ -136,8 +243,8 @@ public sealed record LifecycleDraft(
 
 /// <summary>
 /// Client-supplied transition draft. Only the rationale, the explicit
-/// supersession pointer, and (for a validity act) the temporal stamps travel
-/// here; the subject, the kind and the states never do.
+/// supersession pointer, and the fields for the named act travel here; the
+/// subject, kind, state and revision never do.
 /// </summary>
 public sealed record LifecycleTransitionDraft(
     string? Rationale,
@@ -146,7 +253,9 @@ public sealed record LifecycleTransitionDraft(
     TemporalStamp? Recorded,
     TemporalStamp? ValidFrom,
     TemporalStamp? ValidUntil,
-    TemporalStamp? ReviewAfter);
+    TemporalStamp? ReviewAfter,
+    TemporalStamp? IntentionDueAt = null,
+    bool ClearIntentionDueAt = false);
 
 /// <summary>
 /// One retained historical revision of the subject: the exact subject
@@ -163,9 +272,8 @@ public sealed record LifecycleRetainedRevision(
 /// <summary>
 /// Server-persisted lifecycle record (encrypted bytes). Revision lives in the
 /// vault descriptor, not duplicated here; readers join it via ListResources.
-/// One record covers one subject memory item: the publication lifecycle of
-/// every item plus, when the subject kind matches, the question or the
-/// intention lifecycle and the temporal validity of its content.
+/// One record covers one subject memory item: publication, question or
+/// intention state, validity, and an independent optional exact time trigger.
 /// </summary>
 public sealed record StoredLifecycleRecord(
     int SchemaVersion,
@@ -191,7 +299,8 @@ public sealed record StoredLifecycleRecord(
     string? Reason,
     DateTimeOffset RecordedAtUtc,
     LifecycleStateChange[] History,
-    LifecycleRetainedRevision[] RetainedRevisions);
+    LifecycleRetainedRevision[] RetainedRevisions,
+    TemporalStamp? IntentionDueAt = null);
 
 /// <summary>
 /// One recorded act: the facet, the act, the states it moved between, the
@@ -238,11 +347,12 @@ public sealed record LifecycleRecord(
     string? Reason,
     DateTimeOffset RecordedAtUtc,
     LifecycleStateChange[] History,
-    LifecycleRetainedRevision[] RetainedRevisions);
+    LifecycleRetainedRevision[] RetainedRevisions,
+    TemporalStamp? IntentionDueAt = null);
 
 public static class LifecycleCodec
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
     public const int MaximumReasonLength = 2000;
     public const int MaximumRationaleLength = 2000;
     public const int MaximumHistoryEntries = 256;
@@ -308,6 +418,12 @@ public static class LifecycleCodec
 
         return draft ?? new LifecycleTransitionDraft(null, null, null, null, null, null, null);
     }
+    public static byte[] EncodeTransitionDraft(LifecycleTransitionDraft draft)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+        return JsonSerializer.SerializeToUtf8Bytes(draft, JsonOptions);
+    }
+
 
     public static byte[] EncodeStored(StoredLifecycleRecord record)
     {
@@ -339,6 +455,12 @@ public static class LifecycleCodec
         if (record is null)
         {
             throw new ArgumentException("The lifecycle record schema is invalid.");
+        }
+        if (record.SchemaVersion == 1)
+        {
+            // v2 adds an independent intention due trigger; older encrypted
+            // lifecycle records have no trigger and retain their validity.
+            record = record with { SchemaVersion = CurrentSchemaVersion, IntentionDueAt = null };
         }
 
         LifecycleValidator.ValidateStored(record);
@@ -416,6 +538,27 @@ public static class LifecycleValidator
             throw new ArgumentException("This lifecycle act does not change temporal validity.");
         }
 
+        if (!LifecycleTransitions.AllowsScheduleUpdate(act) &&
+            (transition.IntentionDueAt is not null || transition.ClearIntentionDueAt))
+        {
+            throw new ArgumentException("This lifecycle act does not change an intention time trigger.");
+        }
+
+        if (act == LifecycleAct.SetIntentionDue)
+        {
+            if (transition.IntentionDueAt is null || transition.ClearIntentionDueAt)
+            {
+                throw new ArgumentException("Setting an intention time trigger requires one exact due instant.");
+            }
+
+            ValidateIntentionDueAt(transition.IntentionDueAt);
+        }
+        else if (act == LifecycleAct.ClearIntentionDue &&
+                 (!transition.ClearIntentionDueAt || transition.IntentionDueAt is not null))
+        {
+            throw new ArgumentException("Clearing an intention time trigger carries only the explicit clear marker.");
+        }
+
         if (!LifecycleTransitions.RequiresReplacement(act) && transition.ReplacementResourceId is not null)
         {
             throw new ArgumentException("This lifecycle act does not name a replacement item.");
@@ -488,6 +631,8 @@ public static class LifecycleValidator
 
         ValidateReason(record.Reason);
         ValidateTime(record.Occurred, record.Recorded, record.ValidFrom, record.ValidUntil, record.ReviewAfter);
+        ValidateIntentionDueAt(record.IntentionDueAt);
+
         ValidateRetainedRevisions(record);
 
         if (record.Recorded is not null && record.Recorded.Precision != TimestampPrecision.Exact)
@@ -532,6 +677,11 @@ public static class LifecycleValidator
         {
             throw new ArgumentException("Only an intention subject carries an intention state.");
         }
+        if (!intentionApplies && record.IntentionDueAt is not null)
+        {
+            throw new ArgumentException("Only an intention subject carries a time trigger.");
+        }
+
 
         // Notification markers only exist on an intention subject and always
         // carry the time the marker was recorded.
@@ -784,6 +934,21 @@ public static class LifecycleValidator
         ValidateStamp(reviewAfter);
         ValidateOrder(validFrom, validUntil);
     }
+    private static void ValidateIntentionDueAt(TemporalStamp? stamp)
+    {
+        if (stamp is null)
+        {
+            return;
+        }
+
+        ValidateStamp(stamp);
+        if (stamp.Precision != TimestampPrecision.Exact || stamp.InstantUtc is null ||
+            stamp.TimeZoneOffsetMinutes is null)
+        {
+            throw new ArgumentException("An intention time trigger requires one exact instant and its explicit UTC offset.");
+        }
+    }
+
 
     private static void ValidateStamp(TemporalStamp? stamp)
     {
@@ -960,6 +1125,7 @@ public static class LifecycleTokens
         LifecycleAspect.Notification => "notification",
         LifecycleAspect.Temporal => "temporal",
         LifecycleAspect.History => "history",
+        LifecycleAspect.Schedule => "schedule",
         _ => "unknown"
     };
 
@@ -1030,6 +1196,7 @@ public static class LifecycleTransitions
             => LifecycleAspect.Intention,
         LifecycleAct.Notify or LifecycleAct.Acknowledge => LifecycleAspect.Notification,
         LifecycleAct.SetValidity => LifecycleAspect.Temporal,
+        LifecycleAct.SetIntentionDue or LifecycleAct.ClearIntentionDue => LifecycleAspect.Schedule,
         LifecycleAct.RetainRevision => LifecycleAspect.History,
         _ => LifecycleAspect.Unknown
     };
@@ -1057,6 +1224,9 @@ public static class LifecycleTransitions
     public static bool RequiresReplacement(LifecycleAct act) => act == LifecycleAct.SupersedeIntention;
 
     public static bool AllowsTemporalUpdate(LifecycleAct act) => act == LifecycleAct.SetValidity;
+    public static bool AllowsScheduleUpdate(LifecycleAct act) =>
+        act is LifecycleAct.SetIntentionDue or LifecycleAct.ClearIntentionDue;
+
 
     /// <summary>
     /// Retaining a revision is allowed from any state: a superseded, cancelled,
@@ -1109,6 +1279,7 @@ public static class LifecycleTransitions
             LifecycleAspect.Notification => record.Intention is not null,
             LifecycleAspect.History => true,
             LifecycleAspect.Temporal => true,
+            LifecycleAspect.Schedule => record.Intention == IntentionState.Pending,
             _ => false
         };
     }
