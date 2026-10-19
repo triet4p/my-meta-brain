@@ -159,12 +159,24 @@ public interface IVaultLifecycle
 }
 
 /// <summary>
+/// Owner purge deletion: removes one canonical resource from the encrypted
+/// manifest and deletes its ciphertext file. S7-T5 only: called exclusively
+/// by the owner purge service after an explicit confirmed intent. Deleting an
+/// ID that is already gone succeeds idempotently (already deleted), so an
+/// interrupted purge resumes honestly instead of failing on partial progress.
+/// </summary>
+public interface IPurgeResourceDeletion
+{
+    bool DeleteCanonicalResource(string resourceId);
+}
+
+/// <summary>
 /// Scoped unlocked access to private resource metadata and content. The
 /// application disposes this lease only after the operation response is sent.
 /// </summary>
-public interface IVaultOperation : IManagedResourceStore, IScopeGrantPersistence, ICatalogPersistence, ISourceEnrollmentPersistence, IRecallPolicyPersistence, IDisposable
-{
-}
+public interface IVaultOperation : IManagedResourceStore, IScopeGrantPersistence, ICatalogPersistence, ISourceEnrollmentPersistence, IRecallPolicyPersistence, IPurgeLedgerPersistence, IPurgeResourceDeletion, IDisposable
+ {
+ }
 
 /// <summary>
 /// Thrown when a managed resource cannot be served. The message is deliberately

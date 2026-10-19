@@ -46,6 +46,8 @@ internal sealed class EncryptedVaultStore
     private const int MaximumSourceEnrollmentEnvelopeBytes = SourceIngestionLimits.MaximumSourceStateBytes + (256 * 1024);
     private const int MaximumRecallPolicyBytes = 4 * 1024 * 1024;
     private const int MaximumRecallPolicyEnvelopeBytes = 6 * 1024 * 1024;
+    private const int MaximumPurgeLedgerBytes = 4 * 1024 * 1024;
+    private const int MaximumPurgeLedgerEnvelopeBytes = 6 * 1024 * 1024;
     private const int MaximumProjectionBytes = 1024 * 1024;
     private const int MaximumResourceBytes = SourceSnapshotCodec.MaximumStoredBytes;
     private const int KeyBytes = 32;
@@ -71,6 +73,7 @@ internal sealed class EncryptedVaultStore
     private readonly string _catalogPath;
     private readonly string _sourceEnrollmentPath;
     private readonly string _recallPolicyPath;
+    private readonly string _purgeLedgerPath;
     private readonly string _projectionPath;
 
     private sealed record KeyWrapper(int KdfIterations, string Salt, string Nonce, string Ciphertext, string Tag);
@@ -94,6 +97,7 @@ internal sealed class EncryptedVaultStore
         _catalogPath = Path.Combine(_root, "owner-catalog.enc");
         _sourceEnrollmentPath = Path.Combine(_root, "source-enrollment.enc");
         _recallPolicyPath = Path.Combine(_root, "recall-policy.enc");
+        _purgeLedgerPath = Path.Combine(_root, "purge-ledger.enc");
         _projectionPath = Path.Combine(_serviceDirectory, "published-catalog.json");
     }
 
@@ -511,6 +515,99 @@ internal sealed class EncryptedVaultStore
             }
         }
     }
+    /// <summary>
+    /// S7-T5 durable owner purge ledger. Same dedicated-file pattern as the
+    /// scope-grant, catalog, source-enrollment and recall-policy states: one
+    /// encrypted file beside them in the vault, bound to the vault ID and the
+    /// ledger schema version through the associated data, written atomically.
+    /// The ledger records purged IDs and revisions only — never the removed
+    /// payload — and is never a canonical manifest resource.
+    /// </summary>
+    public OwnerPurgeLedgerState LoadPurgeLedgerState(VaultManifest manifest, ReadOnlySpan<byte> dataKey)
+    {
+        FileAttributes attributes;
+        try
+        {
+            attributes = File.GetAttributes(_purgeLedgerPath);
+        }
+        catch (FileNotFoundException)
+        {
+            return OwnerPurgeLedgerState.Empty;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return OwnerPurgeLedgerState.Empty;
+        }
+
+        if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+        {
+            throw new InvalidDataException("The encrypted owner purge ledger must be a regular file.");
+        }
+
+        byte[]? associatedData = null;
+        byte[]? plaintext = null;
+        try
+        {
+            var json = ProtectedFile.ReadPrivateFile(_purgeLedgerPath, _ownerSid, MaximumPurgeLedgerEnvelopeBytes).Text;
+            var envelope = JsonSerializer.Deserialize<EncryptedPayload>(json, JsonOptions)
+                ?? throw new InvalidDataException("Invalid encrypted owner purge ledger envelope.");
+            associatedData = ResourceAssociatedData(
+                manifest.VaultId, "purge-ledger", OwnerPurgeLedgerState.CurrentSchemaVersion, 1);
+            plaintext = DecryptPayload(
+                envelope, dataKey, associatedData, OwnerPurgeLedgerState.CurrentSchemaVersion, 1, MaximumPurgeLedgerBytes);
+            return JsonSerializer.Deserialize<OwnerPurgeLedgerState>(plaintext, JsonOptions)
+                ?? throw new InvalidDataException("Invalid encrypted owner purge ledger.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or
+                                   CryptographicException or ArgumentException or FormatException or OverflowException)
+        {
+            throw new InvalidDataException("The encrypted owner purge ledger is unavailable.", ex);
+        }
+        finally
+        {
+            if (associatedData is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(associatedData);
+            }
+
+            if (plaintext is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(plaintext);
+            }
+        }
+    }
+
+    public void SavePurgeLedgerState(
+        VaultManifest manifest,
+        ReadOnlySpan<byte> dataKey,
+        OwnerPurgeLedgerState state)
+    {
+        var plaintext = JsonSerializer.SerializeToUtf8Bytes(state, JsonOptions);
+        if (plaintext.Length is <= 0 or > MaximumPurgeLedgerBytes)
+        {
+            CryptographicOperations.ZeroMemory(plaintext);
+            throw new InvalidDataException("The owner purge ledger exceeds its storage limit.");
+        }
+
+        var associatedData = ResourceAssociatedData(
+            manifest.VaultId, "purge-ledger", OwnerPurgeLedgerState.CurrentSchemaVersion, 1);
+        byte[]? envelopeBytes = null;
+        try
+        {
+            var envelope = EncryptPayload(plaintext, dataKey, associatedData);
+            envelopeBytes = JsonSerializer.SerializeToUtf8Bytes(envelope, JsonOptions);
+            AtomicWrite(_purgeLedgerPath, envelopeBytes);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(plaintext);
+            CryptographicOperations.ZeroMemory(associatedData);
+            if (envelopeBytes is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(envelopeBytes);
+            }
+        }
+    }
 
     /// <summary>
     /// S3-T1 owner source enrollment state (allowlist + quarantine). Same
@@ -851,6 +948,36 @@ internal sealed class EncryptedVaultStore
 
         return nextManifest;
     }
+    /// <summary>
+    /// S7-T5 owner purge deletion: removes one canonical resource from the
+    /// manifest and deletes its ciphertext file. Returns false when the ID is
+    /// already gone, so an interrupted purge resumes idempotently; otherwise
+    /// commits the manifest atomically like a write so no reader sees a
+    /// half-deleted state. The old ciphertext is deleted after the manifest
+    /// commit, exactly like the superseded-bytes cleanup on a write.
+    /// </summary>
+    public VaultManifest DeleteResource(VaultManifest manifest, ReadOnlySpan<byte> dataKey, string resourceId)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        if (string.IsNullOrEmpty(resourceId))
+        {
+            throw new ManagedResourceUnavailableException();
+        }
+
+        var current = manifest.Resources.FirstOrDefault(resource =>
+            string.Equals(resource.ResourceId, resourceId, StringComparison.Ordinal));
+        if (current is null || current.InternalOnly)
+        {
+            throw new ManagedResourceUnavailableException();
+        }
+
+        var nextManifest = new VaultManifest(
+            CurrentManifestSchemaVersion, manifest.VaultId, checked(manifest.Revision + 1),
+            manifest.Resources.Where(resource => !string.Equals(resource.ResourceId, resourceId, StringComparison.Ordinal)).ToArray());
+        WriteManifest(_root, manifest.VaultId, nextManifest, dataKey);
+        TryDeleteCiphertext(ResolveResourcePath(current.StorageName));
+        return nextManifest;
+    }
     private VaultManifest ReadManifest(string vaultId, ReadOnlySpan<byte> dataKey)
     {
         // The manifest is the one private file that grows with the resource
@@ -1163,6 +1290,7 @@ internal sealed class EncryptedVaultStore
         known.Add("scope-grants.enc");
         known.Add("owner-catalog.enc");
         known.Add("recall-policy.enc");
+        known.Add("purge-ledger.enc");
         known.Add("vault-header.json");
         var reaped = 0;
         if (Directory.Exists(_resourcesPath))

@@ -355,6 +355,63 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
             return result;
         }
     }
+    private OwnerPurgeLedgerState LoadPurgeLedgerState()
+    {
+        lock (_contentGate)
+        {
+            if (_manifest is null || _dataKey is null)
+            {
+                throw new ManagedResourceUnavailableException();
+            }
+
+            return OwnerPurgeLedgerAuthority.ValidateAndNormalizeState(
+                _store.LoadPurgeLedgerState(_manifest, _dataKey));
+        }
+    }
+
+    private T UpdatePurgeLedgerState<T>(
+        Func<OwnerPurgeLedgerState, (OwnerPurgeLedgerState State, T Result)> update)
+    {
+        lock (_contentGate)
+        {
+            if (_manifest is null || _dataKey is null)
+            {
+                throw new ManagedResourceUnavailableException();
+            }
+
+            var state = OwnerPurgeLedgerAuthority.ValidateAndNormalizeState(
+                _store.LoadPurgeLedgerState(_manifest, _dataKey));
+            var (nextState, result) = update(state);
+            if (!ReferenceEquals(nextState, state))
+            {
+                nextState = OwnerPurgeLedgerAuthority.ValidateAndNormalizeState(nextState);
+                _store.SavePurgeLedgerState(_manifest, _dataKey, nextState);
+            }
+
+            return result;
+        }
+    }
+
+    private bool DeleteCanonicalResource(string resourceId)
+    {
+        lock (_contentGate)
+        {
+            if (_manifest is null || _dataKey is null)
+            {
+                throw new ManagedResourceUnavailableException();
+            }
+
+            var exists = _manifest.Resources.Any(resource =>
+                string.Equals(resource.ResourceId, resourceId, StringComparison.Ordinal));
+            if (!exists)
+            {
+                return false;
+            }
+
+            _manifest = _store.DeleteResource(_manifest, _dataKey, resourceId);
+            return true;
+        }
+    }
 
     private byte[] ReadContent(string resourceId, long? expectedRevision = null)
     {
@@ -564,6 +621,11 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
         public T UpdateRecallPolicyState<T>(
             Func<OwnerRecallPolicyState, (OwnerRecallPolicyState State, T Result)> update) =>
             GetOwner().UpdateRecallPolicyState(update);
+        public OwnerPurgeLedgerState LoadPurgeLedgerState() => GetOwner().LoadPurgeLedgerState();
+        public T UpdatePurgeLedgerState<T>(
+            Func<OwnerPurgeLedgerState, (OwnerPurgeLedgerState State, T Result)> update) =>
+            GetOwner().UpdatePurgeLedgerState(update);
+        public bool DeleteCanonicalResource(string resourceId) => GetOwner().DeleteCanonicalResource(resourceId);
         public bool TryGetZone(string resourceId, out string? zoneId) => GetOwner().TryGetZone(resourceId, out zoneId);
         public byte[] ReadContent(string resourceId, long? expectedRevision = null) => GetOwner().ReadContent(resourceId, expectedRevision);
         public byte[][] ReadBatch(IReadOnlyList<ScopeResourceRevision> batch, int maxDegreeOfParallelism, CancellationToken cancellationToken) => GetOwner().ReadBatch(batch, maxDegreeOfParallelism, cancellationToken);

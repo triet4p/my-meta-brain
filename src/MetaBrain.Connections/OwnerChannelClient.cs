@@ -457,6 +457,50 @@ public sealed record OwnerRecallResult(
     string? ErrorCode,
     OwnerRecallState? Recall);
 
+/// <summary>One canonical resource a purge preview would delete (ID + live revision).</summary>
+public sealed record OwnerPurgeImpact(
+    string ResourceId,
+    string Kind,
+    long Revision,
+    string Reason);
+
+/// <summary>Owner purge impact preview exactly as the service computed it.</summary>
+public sealed record OwnerPurgePreview(
+    string PurgeId,
+    string TargetResourceId,
+    long TargetRevision,
+    string TargetZoneId,
+    string TargetKind,
+    OwnerPurgeImpact[] Impacted,
+    string[] WithdrawnCatalogIds,
+    bool GrantsTouched,
+    bool SessionsTouched,
+    long LiveGeneration,
+    string S8BackupNote);
+
+/// <summary>Owner purge preview outcome on the owner channel.</summary>
+public sealed record OwnerPurgePreviewResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerPurgePreview? Preview);
+
+/// <summary>One completed (or resumed) owner purge outcome.</summary>
+public sealed record OwnerPurgeOutcome(
+    string PurgeId,
+    string TargetResourceId,
+    OwnerPurgeDeleted[] Deleted,
+    string[] WithdrawnCatalogIds,
+    long FinalGeneration,
+    bool DecisionApplied);
+
+/// <summary>One canonical resource a purge deleted (ID + revision only).</summary>
+public sealed record OwnerPurgeDeleted(string ResourceId, long Revision);
+
+/// <summary>Owner purge confirm/resume outcome on the owner channel.</summary>
+public sealed record OwnerPurgeResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerPurgeOutcome? Purge);
 /// <summary>
 /// One private evidence pin a declassification stands on, as the service
 /// reported it on the owner channel only.
@@ -1219,6 +1263,96 @@ public static class OwnerChannelClient
             "recall_read",
             cancellationToken).ConfigureAwait(false);
         return new OwnerRecallResult(reply.Outcome, reply.ErrorCode, ProjectRecallState(reply));
+    }
+    /// <summary>
+    /// S7-T5 owner purge preview through the owner control pipe: binds the
+    /// live target revision and returns the exact impacted set. Writes nothing.
+    /// </summary>
+    public static async Task<OwnerPurgePreviewResult> PreviewPurgeAsync(
+        string controlPipe,
+        string resourceId,
+        long revision,
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(resourceId);
+        ArgumentNullException.ThrowIfNull(reason);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerPurgePreviewOperation,
+                ResourceId: resourceId,
+                ResourceRevision: revision,
+                Description: reason),
+            "purge_preview",
+            cancellationToken).ConfigureAwait(false);
+        return new OwnerPurgePreviewResult(reply.Outcome, reply.ErrorCode, ProjectPurgePreview(reply));
+    }
+
+    /// <summary>
+    /// S7-T5 owner purge confirm: deletes the exact previewed set. The
+    /// preview fields are rebound here so the service fails closed on change.
+    /// </summary>
+    public static async Task<OwnerPurgeResult> ConfirmPurgeAsync(
+        string controlPipe,
+        OwnerPurgePreview preview,
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(preview);
+        ArgumentNullException.ThrowIfNull(reason);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerPurgeConfirmOperation,
+                ResourceId: preview.PurgeId,
+                ZoneId: preview.TargetResourceId,
+                ResourceRevision: preview.TargetRevision,
+                CatalogId: preview.TargetZoneId,
+                Label: preview.TargetKind + "|PURGE",
+                DestinationResourceIds: preview.Impacted.Select(item => $"{item.ResourceId}|{item.Revision}|{item.Kind}|{item.Reason}").ToArray(),
+                DestinationRevision: preview.LiveGeneration,
+                CatalogIds: preview.WithdrawnCatalogIds,
+                Description: reason),
+            "purged",
+            cancellationToken).ConfigureAwait(false);
+        return new OwnerPurgeResult(reply.Outcome, reply.ErrorCode, ProjectPurgeOutcome(reply));
+    }
+
+    /// <summary>
+    /// S7-T5 owner purge resume after interruption: resumes one
+    /// confirmed-but-incomplete intent by purge ID.
+    /// </summary>
+    public static async Task<OwnerPurgeResult> ResumePurgeAsync(
+        string controlPipe,
+        string purgeId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(purgeId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerPurgeResumeOperation,
+                ResourceId: purgeId),
+            "purge_resumed",
+            cancellationToken).ConfigureAwait(false);
+        if (reply.Outcome != OwnerCommandOutcome.Completed)
+        {
+            var purged = await ReadReplyAsync(
+                controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.OwnerPurgeResumeOperation,
+                    ResourceId: purgeId),
+                "purged",
+                cancellationToken).ConfigureAwait(false);
+            return new OwnerPurgeResult(purged.Outcome, purged.ErrorCode, ProjectPurgeOutcome(purged));
+        }
+
+        return new OwnerPurgeResult(reply.Outcome, reply.ErrorCode, ProjectPurgeOutcome(reply));
     }
 
     /// <summary>
@@ -3641,6 +3775,64 @@ public static class OwnerChannelClient
             Text(payload, "actor"),
             Timestamp(payload, "recordedAtUtc"),
             history);
+    }
+    private static OwnerPurgePreview? ProjectPurgePreview(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            !reply.Payload.TryGetProperty("purgePreview", out var payload) ||
+            payload.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var impacted = payload.TryGetProperty("impacted", out var impactedElements) && impactedElements.ValueKind == JsonValueKind.Array
+            ? impactedElements.EnumerateArray().Select(item => new OwnerPurgeImpact(
+                Text(item, "resourceId") ?? string.Empty,
+                Text(item, "kind") ?? "canonical",
+                Int64(item, "revision"),
+                Text(item, "reason") ?? string.Empty)).ToArray()
+            : Array.Empty<OwnerPurgeImpact>();
+        var catalogIds = payload.TryGetProperty("withdrawnCatalogIds", out var catalogElements) && catalogElements.ValueKind == JsonValueKind.Array
+            ? catalogElements.EnumerateArray().Select(value => value.GetString()!).Where(id => id is not null).ToArray()
+            : Array.Empty<string>();
+        return new OwnerPurgePreview(
+            Text(payload, "purgeId") ?? string.Empty,
+            Text(payload, "targetResourceId") ?? string.Empty,
+            Int64(payload, "targetRevision"),
+            Text(payload, "targetZoneId") ?? string.Empty,
+            Text(payload, "targetKind") ?? "canonical",
+            impacted,
+            catalogIds,
+            Flag(payload, "grantsTouched"),
+            Flag(payload, "sessionsTouched"),
+            Int64(payload, "liveGeneration"),
+            Text(payload, "s8BackupNote") ?? string.Empty);
+    }
+
+    private static OwnerPurgeOutcome? ProjectPurgeOutcome(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            !reply.Payload.TryGetProperty("purge", out var payload) ||
+            payload.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var deleted = payload.TryGetProperty("deleted", out var deletedElements) && deletedElements.ValueKind == JsonValueKind.Array
+            ? deletedElements.EnumerateArray().Select(item => new OwnerPurgeDeleted(
+                Text(item, "resourceId") ?? string.Empty,
+                Int64(item, "revision"))).ToArray()
+            : Array.Empty<OwnerPurgeDeleted>();
+        var catalogIds = payload.TryGetProperty("withdrawnCatalogIds", out var catalogElements) && catalogElements.ValueKind == JsonValueKind.Array
+            ? catalogElements.EnumerateArray().Select(value => value.GetString()!).Where(id => id is not null).ToArray()
+            : Array.Empty<string>();
+        return new OwnerPurgeOutcome(
+            Text(payload, "purgeId") ?? string.Empty,
+            Text(payload, "targetResourceId") ?? string.Empty,
+            deleted,
+            catalogIds,
+            Int64(payload, "finalGeneration"),
+            Flag(payload, "decisionApplied"));
     }
 
     private static OwnerLibraryHit ProjectLibraryHit(JsonElement hit) => new(

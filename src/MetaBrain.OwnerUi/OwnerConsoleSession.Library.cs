@@ -59,6 +59,15 @@ internal sealed partial class OwnerConsoleSession
     /// </summary>
     public OwnerRecallState? LibraryRecall { get; private set; }
 
+    /// <summary>
+    /// S7-T5 owner purge impact preview for the open item, as the service
+    /// computed it. It carries IDs and revisions only — never any body.
+    /// A confirm rebinds this exact preview, so a changed target fails closed.
+    /// </summary>
+    public OwnerPurgePreview? LibraryPurgePreview { get; private set; }
+
+    /// <summary>S7-T5 last purge outcome for the open item.</summary>
+    public OwnerPurgeOutcome? LibraryPurge { get; private set; }
     /// <summary>S7-T1 decision history of the open item, exactly as the service served it.</summary>
     public OwnerTimelineDetail? LibraryTimeline { get; private set; }
 
@@ -287,6 +296,123 @@ internal sealed partial class OwnerConsoleSession
         Append(DescribeLibraryActForLog("recall read", result.Outcome, result.ErrorCode));
         RaiseChanged();
     }
+    /// <summary>
+    /// S7-T5 previews the owner purge of the open item at its exact revision:
+    /// the service binds the live revision and returns the exact impacted set.
+    /// Writes nothing; the preview must be confirmed unchanged.
+    /// </summary>
+    public async Task PreviewPurgeAsync(string reason)
+    {
+        var item = LibraryItem;
+        if (item is null || string.IsNullOrWhiteSpace(reason) || TryBeginLibraryAct() is not { } epoch)
+        {
+            return;
+        }
+
+        var result = await ExecuteLibraryRequestAsync(
+            LibraryActTimeout,
+            token => OwnerChannelClient.PreviewPurgeAsync(ControlPipe, item.Id, item.Revision, reason.Trim(), token),
+            errorCode => new OwnerPurgePreviewResult(OwnerCommandOutcome.Unavailable, errorCode, null)).ConfigureAwait(true);
+
+        await ProbeAsync().ConfigureAwait(true);
+        ApplyPurgePreviewAnswer(epoch, result);
+        Append(DescribeLibraryActForLog("purge preview", result.Outcome, result.ErrorCode));
+        RaiseChanged();
+    }
+
+    /// <summary>
+    /// S7-T5 confirms the exact previewed purge: deletes every listed
+    /// canonical copy after the owner typed PURGE in the confirmation box,
+    /// withdraws the mapped catalog entries, and records the durable ledger.
+    /// </summary>
+    public async Task ConfirmPurgeAsync(string confirmation, string reason)
+    {
+        var preview = LibraryPurgePreview;
+        if (preview is null || TryBeginLibraryAct() is not { } epoch)
+        {
+            return;
+        }
+
+        var result = await ExecuteLibraryRequestAsync(
+            new System.TimeSpan(0, 0, 30),
+            token => OwnerChannelClient.ConfirmPurgeAsync(ControlPipe, preview, reason.Trim(), token),
+            errorCode => new OwnerPurgeResult(OwnerCommandOutcome.Unavailable, errorCode, null)).ConfigureAwait(true);
+
+        await ProbeAsync().ConfigureAwait(true);
+        ApplyPurgeAnswer(epoch, result);
+        Append(DescribeLibraryActForLog("purge confirm", result.Outcome, result.ErrorCode));
+        RaiseChanged();
+    }
+
+    /// <summary>
+    /// Applies one purge preview answer requested under <paramref name="epoch"/>,
+    /// with the same epoch guard as every other library answer.
+    /// </summary>
+    internal bool ApplyPurgePreviewAnswer(long epoch, OwnerPurgePreviewResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        if (epoch != _privateEpoch)
+        {
+            AppendIgnoredStaleAnswer("purge preview");
+            return false;
+        }
+
+        if (result.Outcome == OwnerCommandOutcome.Completed && result.Preview is not null)
+        {
+            LibraryPurgePreview = result.Preview;
+            LibraryPurge = null;
+            LibraryMessage = "The service previewed the exact purge impact: " +
+                result.Preview.Impacted.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+                " canonical copies and " +
+                result.Preview.WithdrawnCatalogIds.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+                " catalog entries. Confirm deletes exactly this set; a changed target fails closed.";
+            return true;
+        }
+
+        LibraryMessage = "The service refused the purge preview (code: " + (result.ErrorCode ?? "unknown") +
+            "). Nothing was previewed and nothing was deleted.";
+        ApplyPrivateRefusal(result.Outcome, result.ErrorCode);
+        return true;
+    }
+
+    /// <summary>
+    /// Applies one purge outcome requested under <paramref name="epoch"/>, with
+    /// the same epoch guard as every other library answer.
+    /// </summary>
+    internal bool ApplyPurgeAnswer(long epoch, OwnerPurgeResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        if (epoch != _privateEpoch)
+        {
+            AppendIgnoredStaleAnswer("purge confirm");
+            return false;
+        }
+
+        if (result.Outcome == OwnerCommandOutcome.Completed && result.Purge is not null)
+        {
+            LibraryPurge = result.Purge;
+            LibraryPurgePreview = null;
+            LibraryPage = null;
+            LibraryItem = null;
+            LibrarySource = null;
+            LibraryTimeline = null;
+            LibraryRetained = null;
+            LibraryRecall = null;
+            LibraryMessage = "The service purged " +
+                result.Purge.Deleted.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+                " canonical copies, withdrew " +
+                result.Purge.WithdrawnCatalogIds.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+                " catalog entries, and advanced the scope generation to " +
+                result.Purge.FinalGeneration.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+                ". Rebuild the library index before searching again.";
+            return true;
+        }
+
+        LibraryMessage = "The service refused the purge confirm (code: " + (result.ErrorCode ?? "unknown") +
+            "). Nothing was deleted.";
+        ApplyPrivateRefusal(result.Outcome, result.ErrorCode);
+        return true;
+    }
 
     /// <summary>
     /// Applies one recall answer requested under <paramref name="epoch"/>, with
@@ -364,6 +490,8 @@ internal sealed partial class OwnerConsoleSession
             LibraryTimeline = null;
             LibraryRetained = null;
             LibraryRecall = null;
+            LibraryPurgePreview = null;
+            LibraryPurge = null;
             LibraryMessage = DescribeLibraryAnswer("search", result.Outcome, result.ErrorCode, true);
         }
         else
@@ -571,6 +699,8 @@ internal sealed partial class OwnerConsoleSession
         LibraryTimeline = null;
         LibraryRetained = null;
         LibraryRecall = null;
+        LibraryPurgePreview = null;
+        LibraryPurge = null;
     }
 
     private void ApplyPrivateRefusal(OwnerCommandOutcome outcome, string? errorCode)

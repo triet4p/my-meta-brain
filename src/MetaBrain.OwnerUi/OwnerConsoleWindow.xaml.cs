@@ -701,6 +701,20 @@ public partial class OwnerConsoleWindow : System.Windows.Window
 
     private async void OnLibraryRecallRestoreClicked(object sender, RoutedEventArgs e) =>
         await _session.ApplyRecallActAsync("restore", LibraryRecallReasonInput.Text);
+    /// <summary>
+    /// S7-T5 the owner previews the exact purge impact for the open item.
+    /// The console shows the IDs the service would delete; it never deletes.
+    /// </summary>
+    private async void OnLibraryPurgePreviewClicked(object sender, RoutedEventArgs e) =>
+        await _session.PreviewPurgeAsync(LibraryPurgeReasonInput.Text);
+
+    /// <summary>
+    /// S7-T5 the owner confirms the exact previewed purge by typing PURGE.
+    /// The console sends the typed confirmation with the bound preview; the
+    /// service fails closed on any change.
+    /// </summary>
+    private async void OnLibraryPurgeConfirmClicked(object sender, RoutedEventArgs e) =>
+        await _session.ConfirmPurgeAsync(LibraryPurgeConfirmInput.Text, LibraryPurgeReasonInput.Text);
 
     private async void OnLibraryRetainedClicked(object sender, RoutedEventArgs e)
     {
@@ -992,10 +1006,36 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         LibraryRecallArchiveButton.IsEnabled = canAct && recallState is not ("archived" or "pinned");
         LibraryRecallRestoreButton.IsEnabled = canAct && recallState != "normal";
         LibraryRecallReasonInput.IsEnabled = canAct;
+        var purge = _session.LibraryPurgePreview;
+        var purged = _session.LibraryPurge;
+        LibraryPurgeText.Text = purged is not null
+            ? "purged target=" + purged.TargetResourceId + " deleted=" +
+                purged.Deleted.Length.ToString(CultureInfo.InvariantCulture) +
+                " catalog=" + string.Join(",", purged.WithdrawnCatalogIds) +
+                " generation=" + purged.FinalGeneration.ToString(CultureInfo.InvariantCulture)
+            : purge is null
+                ? (unlocked
+                    ? "No purge preview is open. Open an item, type the owner reason, then preview the exact impact."
+                    : "No private purge preview is shown.")
+                : "preview=" + purge.PurgeId + " target=" + purge.TargetResourceId + "@" + purge.TargetRevision.ToString(CultureInfo.InvariantCulture) +
+                    " impacted=" + string.Join(",", purge.Impacted.Select(item => item.ResourceId + "@" + item.Revision.ToString(CultureInfo.InvariantCulture))) +
+                    " catalog=" + string.Join(",", purge.WithdrawnCatalogIds) +
+                    " grants=" + purge.GrantsTouched.ToString(CultureInfo.InvariantCulture) +
+                    " sessions=" + purge.SessionsTouched.ToString(CultureInfo.InvariantCulture) +
+                    "\nS8: " + purge.S8BackupNote;
+        LibraryPurgePreviewButton.IsEnabled = canAct;
+        LibraryPurgeConfirmButton.IsEnabled = canAct && purge is not null;
+        LibraryPurgeReasonInput.IsEnabled = canAct;
+        LibraryPurgeConfirmInput.IsEnabled = canAct && purge is not null;
 
         LibraryMessageText.Text = _session.LibraryMessage ?? (unlocked
             ? "No library act has been sent in this session. Nothing private is read until you search."
             : "No private library act is offered while the service does not report the vault unlocked.");
+        if (!unlocked)
+        {
+            LibraryPurgeReasonInput.Text = string.Empty;
+            LibraryPurgeConfirmInput.Text = string.Empty;
+        }
 
         LibraryHistoryButton.IsEnabled = unlocked && !inFlight && detail is not null;
         LibraryRetainedButton.IsEnabled = unlocked && !inFlight && timeline is { RetainedRevisions.Length: > 0 };

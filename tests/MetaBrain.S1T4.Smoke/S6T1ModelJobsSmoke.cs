@@ -1590,6 +1590,9 @@ internal static partial class OwnerServiceSmoke
         public T UpdateCatalogState<T>(Func<OwnerCatalogState, (OwnerCatalogState State, T Result)> update) => _inner.UpdateCatalogState(update);
         public OwnerRecallPolicyState LoadRecallPolicyState() => _inner.LoadRecallPolicyState();
         public T UpdateRecallPolicyState<T>(Func<OwnerRecallPolicyState, (OwnerRecallPolicyState State, T Result)> update) => _inner.UpdateRecallPolicyState(update);
+        public OwnerPurgeLedgerState LoadPurgeLedgerState() => _inner.LoadPurgeLedgerState();
+        public T UpdatePurgeLedgerState<T>(Func<OwnerPurgeLedgerState, (OwnerPurgeLedgerState State, T Result)> update) => _inner.UpdatePurgeLedgerState(update);
+        public bool DeleteCanonicalResource(string resourceId) => _inner.DeleteCanonicalResource(resourceId);
         public void Dispose() => _inner.Dispose();
     }
 }

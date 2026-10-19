@@ -336,6 +336,18 @@
                                     <Button x:Name="LibraryRecallRestoreButton" Content="Restore" Padding="14,7"
                                         Margin="8,0,0,0" HorizontalAlignment="Left" Click="OnLibraryRecallRestoreClicked" />
                                 </StackPanel>
+                                <TextBlock Text="Owner purge (deletes exactly the previewed copies; originals outside the vault are untouched)" FontWeight="SemiBold" Margin="0,14,0,0" />
+                                <TextBlock x:Name="LibraryPurgeText" TextWrapping="Wrap" Margin="0,6,0,0" FontFamily="Consolas" />
+                                <TextBox x:Name="LibraryPurgeReasonInput" Width="360" Margin="0,8,0,0" VerticalContentAlignment="Center"
+                                         AutomationProperties.AutomationId="LibraryPurgeReasonInput" />
+                                <TextBox x:Name="LibraryPurgeConfirmInput" Width="120" Margin="0,8,0,0" VerticalContentAlignment="Center"
+                                         AutomationProperties.AutomationId="LibraryPurgeConfirmInput" />
+                                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                    <Button x:Name="LibraryPurgePreviewButton" Content="Preview purge" Padding="14,7"
+                                        HorizontalAlignment="Left" Click="OnLibraryPurgePreviewClicked" />
+                                    <Button x:Name="LibraryPurgeConfirmButton" Content="Confirm PURGE" Padding="14,7"
+                                        Margin="8,0,0,0" HorizontalAlignment="Left" Click="OnLibraryPurgeConfirmClicked" />
+                                </StackPanel>
                             </StackPanel>
                         </Border>
 

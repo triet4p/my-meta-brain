@@ -226,6 +226,51 @@ public sealed record RecallPolicyChangeWire(
     string Actor,
     DateTimeOffset RecordedAtUtc,
     string? Rationale);
+/// <summary>
+/// One S7-T5 owner purge impact entry: a canonical resource the confirm would
+/// delete, with the live revision it was bound at, its decoded kind, and why
+/// it is in the set. The wire carries IDs and revisions only — never a body,
+/// title, locator, citation or key.
+/// </summary>
+public sealed record PurgeImpactEntryWire(
+    string ResourceId,
+    string Kind,
+    long Revision,
+    string Reason);
+
+/// <summary>
+/// One S7-T5 owner purge impact preview: the exact canonical set a confirm
+/// would delete, the catalog entries that would be withdrawn, whether live
+/// grants/sessions still touch them, and the S8 backup handoff note.
+/// </summary>
+public sealed record PurgeImpactWire(
+    string PurgeId,
+    string TargetResourceId,
+    long TargetRevision,
+    string TargetZoneId,
+    string TargetKind,
+    PurgeImpactEntryWire[] Impacted,
+    string[] WithdrawnCatalogIds,
+    bool GrantsTouched,
+    bool SessionsTouched,
+    long LiveGeneration,
+    string S8BackupNote);
+
+/// <summary>
+/// One completed (or resumed) S7-T5 owner purge: the purge ID, the target,
+/// the deleted ID/revision pairs, the withdrawn catalog entries, the final
+/// policy generation, and whether this call performed the deletion.
+/// </summary>
+public sealed record PurgeResultWire(
+    string PurgeId,
+    string TargetResourceId,
+    PurgeDeletedWire[] Deleted,
+    string[] WithdrawnCatalogIds,
+    long FinalGeneration,
+    bool DecisionApplied);
+
+/// <summary>One canonical resource a purge deleted (ID and revision only).</summary>
+public sealed record PurgeDeletedWire(string ResourceId, long Revision);
 
 /// <summary>
 /// One S5-T4 owner review outcome. It names the pending proposal that was
@@ -857,7 +902,9 @@ public sealed record ServiceReply(
     ScheduleRunWire? ScheduleRun = null,
     IntentionScheduleWire? IntentionSchedule = null,
     IntentionSchedulePassWire? IntentionSchedulePass = null,
-    RecallPolicyWire? Recall = null);
+    RecallPolicyWire? Recall = null,
+    PurgeImpactWire? PurgePreview = null,
+    PurgeResultWire? Purge = null);
 
 public sealed class ServiceRequestHandler
 {
@@ -970,6 +1017,9 @@ public sealed class ServiceRequestHandler
     public const string OwnerLibrarySearchOperation = "owner.library.search";
     public const string OwnerRecallApplyOperation = "owner.recall.apply";
     public const string OwnerRecallReadOperation = "owner.recall.read";
+    public const string OwnerPurgePreviewOperation = "owner.purge.preview";
+    public const string OwnerPurgeConfirmOperation = "owner.purge.confirm";
+    public const string OwnerPurgeResumeOperation = "owner.purge.resume";
     public const string OwnerRelationListOperation = "owner.relation.list";
     public const string OwnerProposalPublishOperation = "owner.proposal.publish";
     public const string OwnerProposalRejectOperation = "owner.proposal.reject";
@@ -1244,6 +1294,20 @@ public sealed class ServiceRequestHandler
             return HandleOwnerRecallRead(context, request, operation);
         }
 
+        if (string.Equals(request.Operation, OwnerPurgePreviewOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerPurgePreview(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerPurgeConfirmOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerPurgeConfirm(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerPurgeResumeOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerPurgeResume(context, request, operation);
+        }
         if (string.Equals(request.Operation, OwnerRelationListOperation, StringComparison.Ordinal))
         {
             return HandleOwnerRelationList(context, request, operation);
@@ -2350,6 +2414,7 @@ public sealed class ServiceRequestHandler
         byte[]? draft = null;
         try
         {
+            RequireNotPurged(operation, request.ResourceId);
             draft = Convert.FromBase64String(request.ContentBase64);
             var created = new MemoryItemService().Create(context, request.ResourceId, request.ZoneId, draft, operation);
             return new ServiceReply(CurrentProtocolVersion, "memory_created", "owner", null,
@@ -2397,6 +2462,7 @@ public sealed class ServiceRequestHandler
         byte[]? envelope = null;
         try
         {
+            RequireNotPurged(operation, request.ResourceId);
             envelope = Convert.FromBase64String(request.ContentBase64);
             var imported = new MemoryItemService().Import(context, request.ResourceId, request.ZoneId, expectedRevision, envelope, operation);
             return new ServiceReply(CurrentProtocolVersion, "memory_imported", "owner", null,
@@ -2443,6 +2509,7 @@ public sealed class ServiceRequestHandler
         byte[]? draft = null;
         try
         {
+            RequireNotPurged(operation, request.ResourceId);
             draft = Convert.FromBase64String(request.ContentBase64);
             var revised = new MemoryItemService().Revise(context, request.ResourceId, request.ZoneId, expectedRevision, draft, operation);
             return new ServiceReply(CurrentProtocolVersion, "memory_revised", "owner", null,
@@ -2511,6 +2578,7 @@ public sealed class ServiceRequestHandler
         byte[]? draft = null;
         try
         {
+            RequireNotPurged(operation, request.ResourceId);
             draft = Convert.FromBase64String(request.ContentBase64);
             var created = new FeedbackService().Create(context, request.ResourceId, request.ZoneId, draft, operation);
             return new ServiceReply(CurrentProtocolVersion, "feedback_created", "owner", null,
@@ -2634,6 +2702,7 @@ public sealed class ServiceRequestHandler
         byte[]? draft = null;
         try
         {
+            RequireNotPurged(operation, request.ResourceId);
             draft = Convert.FromBase64String(request.ContentBase64);
             var created = new SourceRegistryService().Create(context, request.ResourceId, request.ZoneId, draft, operation);
             return new ServiceReply(CurrentProtocolVersion, "source_created", "owner", null,
@@ -2673,6 +2742,7 @@ public sealed class ServiceRequestHandler
         byte[]? draft = null;
         try
         {
+            RequireNotPurged(operation, request.ResourceId);
             draft = Convert.FromBase64String(request.ContentBase64);
             var revised = new SourceRegistryService().Revise(context, request.ResourceId, request.ZoneId, expectedRevision, draft, operation);
             return new ServiceReply(CurrentProtocolVersion, "source_revised", "owner", null,
@@ -2770,6 +2840,7 @@ public sealed class ServiceRequestHandler
         byte[]? text = null;
         try
         {
+            RequireNotPurged(operation, request.ResourceId);
             text = Convert.FromBase64String(request.ContentBase64);
             var captured = new ResearchCaptureService().Capture(
                 context, request.ResourceId, request.ZoneId, text,
@@ -3532,6 +3603,7 @@ public sealed class ServiceRequestHandler
         byte[]? draft = null;
         try
         {
+            RequireNotPurged(operation, request.ResourceId);
             draft = Convert.FromBase64String(request.ContentBase64);
             var created = new RelationService().Create(context, request.ResourceId, request.ZoneId, draft, operation);
             return new ServiceReply(CurrentProtocolVersion, "relation_created", "owner", null,
@@ -4394,6 +4466,7 @@ public sealed class ServiceRequestHandler
         byte[]? draft = null;
         try
         {
+            RequireNotPurged(operation, request.ResourceId);
             draft = Convert.FromBase64String(request.ContentBase64);
             var created = new LifecycleService().Create(context, request.ResourceId, draft, operation);
             return new ServiceReply(CurrentProtocolVersion, "lifecycle_created", "owner", null,
@@ -5877,6 +5950,346 @@ public sealed class ServiceRequestHandler
                     change.RecordedAtUtc,
                     change.Rationale)).ToArray()));
     }
+    /// <summary>
+    /// S7-T5 owner purge preview carries exactly the target, its live
+    /// revision, and the owner's reason — and nothing else. The reason rides
+    /// the shared description field the recall act already uses for owner
+    /// rationale; no other flow's fields are accepted.
+    /// </summary>
+    private static bool HasPurgePreviewExtras(ServiceRequest request) =>
+        request.ZoneId is not null || request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ContentBase64 is not null || request.ResourceIds is not null ||
+        request.Operations is not null || request.DestinationResourceIds is not null ||
+        request.DestinationRevision is not null || request.ExpiresAtUtc is not null ||
+        request.Provider is not null || request.Model is not null ||
+        request.MaximumCostUsd is not null || request.PreviewId is not null ||
+        request.CollectionId is not null || request.Token is not null ||
+        request.SessionToken is not null || request.SessionId is not null ||
+        request.AccessOperation is not null ||
+        request.DestinationResourceId is not null ||
+        request.EstimatedCostUsd is not null || request.InputTokens is not null ||
+        request.OutputTokens is not null || request.CatalogId is not null ||
+        request.Label is not null || request.CatalogIds is not null ||
+        request.Query is not null || request.BudgetChars is not null ||
+        request.Purpose is not null || request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null ||
+        request.SourceLocator is not null || request.SourceFormat is not null ||
+        request.SourceFormatVersion is not null || request.SourceTitle is not null ||
+        request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
+        request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null ||
+        request.SearchOffset is not null || request.SearchLimit is not null ||
+        request.SearchKind is not null || request.SearchCurrent is not null ||
+        request.SearchLevel is not null || request.SearchFromUtc is not null ||
+        request.SearchToUtc is not null || request.SearchAsOfUtc is not null ||
+        request.ContextProject is not null || request.ContextTask is not null ||
+        request.IncludeArchived is not null;
+
+    /// <summary>
+    /// S7-T5 owner purge confirm rebinds the exact previewed set: target,
+    /// live revision, destination-zone-as-kind carrier, the pipe-encoded
+    /// impacted set, the live generation, the confirmed reason and the typed
+    /// PURGE confirmation — and nothing else.
+    /// </summary>
+    private static bool HasPurgeConfirmExtras(ServiceRequest request) =>
+        request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ContentBase64 is not null || request.ResourceIds is not null ||
+        request.Operations is not null ||
+        request.ExpiresAtUtc is not null || request.Provider is not null ||
+        request.Model is not null || request.MaximumCostUsd is not null ||
+        request.PreviewId is not null || request.CollectionId is not null ||
+        request.Token is not null || request.SessionToken is not null ||
+        request.SessionId is not null || request.AccessOperation is not null ||
+        request.DestinationResourceId is not null ||
+        request.EstimatedCostUsd is not null || request.InputTokens is not null ||
+        request.OutputTokens is not null || request.Query is not null ||
+        request.BudgetChars is not null || request.Purpose is not null ||
+        request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null ||
+        request.SourceLocator is not null || request.SourceFormat is not null ||
+        request.SourceFormatVersion is not null || request.SourceTitle is not null ||
+        request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
+        request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null ||
+        request.SearchOffset is not null || request.SearchLimit is not null ||
+        request.SearchKind is not null || request.SearchCurrent is not null ||
+        request.SearchLevel is not null || request.SearchFromUtc is not null ||
+        request.SearchToUtc is not null || request.SearchAsOfUtc is not null ||
+        request.ContextProject is not null || request.ContextTask is not null ||
+        request.IncludeArchived is not null;
+
+    /// <summary>
+    /// S7-T5 owner purge resume carries only the purge ID in the shared
+    /// resource-ID field — and nothing else.
+    /// </summary>
+    private static bool HasPurgeResumeExtras(ServiceRequest request) =>
+        HasPurgePreviewExtras(request) && request.Description is null && request.ResourceRevision is null;
+    /// <summary>
+    /// Rejects canonical writes that name a purged ID. The durable ledger is
+    /// the anti-resurrection authority: purged IDs are reserved forever, so a
+    /// later create, import, revise, catalog publication, or reindex can never
+    /// bring them back. Original sources outside the vault are unaffected.
+    /// </summary>
+    private static void RequireNotPurged(IVaultOperation operation, string? resourceId)
+    {
+        if (string.IsNullOrEmpty(resourceId))
+        {
+            return;
+        }
+
+        var ledger = OwnerPurgeLedgerAuthority.ValidateAndNormalizeState(operation.LoadPurgeLedgerState());
+        if (OwnerPurgeLedgerAuthority.IsPurged(ledger, resourceId))
+        {
+            throw new ArgumentException("The resource ID was purged and is reserved; it cannot be recreated.");
+        }
+    }
+    /// <summary>
+    /// S7-T5 owner purge preview: binds the live target revision and computes
+    /// the exact impacted canonical set. Writes nothing; the preview (with its
+    /// policy generation) must be confirmed unchanged.
+    /// </summary>
+    private ServiceReply HandleOwnerPurgePreview(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || HasPurgePreviewExtras(request))
+        {
+            return Error("invalid_request");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (string.IsNullOrEmpty(request.ResourceId) ||
+            request.ResourceRevision is not { } targetRevision || targetRevision < 1 ||
+            string.IsNullOrEmpty(request.Description))
+        {
+            return Error("invalid_request");
+        }
+
+        if (request.Description is { Length: > OwnerPurgeLedgerAuthority.MaximumReasonLength })
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var preview = new PurgeService().Preview(
+                context, request.ResourceId, targetRevision, request.Description, operation);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "purge_preview",
+                "owner",
+                null,
+                PurgePreview: ToPurgePreviewWire(preview));
+        }
+        catch (ArgumentException ex)
+        {
+            return PurgePreviewError(ex);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (InvalidDataException)
+        {
+            return Error("purge_unavailable");
+        }
+        catch (IOException)
+        {
+            return Error("purge_unavailable");
+        }
+    }
+
+    /// <summary>
+    /// S7-T5 owner purge confirm: binds the exact previewed set and deletes
+    /// it after a typed PURGE confirmation carried in the request label.
+    /// </summary>
+    private ServiceReply HandleOwnerPurgeConfirm(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || HasPurgeConfirmExtras(request))
+        {
+            return Error("invalid_request");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        var preview = FromPurgePreviewWire(request, out var _);
+        if (preview is null)
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var label = request.Label ?? string.Empty;
+            var marker = label.Split('|');
+            var kind = marker.Length == 2 ? marker[0] : string.Empty;
+            var confirmation = marker.Length == 2 ? marker[1] : label;
+            _ = kind;
+            var result = new PurgeService().Confirm(
+                context, preview, confirmation, request.Description ?? string.Empty,
+                operation, ResetPrivateIndex);
+            RefreshProjection(operation);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "purged",
+                "owner",
+                null,
+                ResourceRevision: result.Deleted.Length,
+                Purge: ToPurgeResultWire(result));
+        }
+        catch (ArgumentException ex)
+        {
+            return PurgePreviewError(ex);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (InvalidDataException)
+        {
+            return Error("purge_unavailable");
+        }
+        catch (IOException)
+        {
+            return Error("purge_unavailable");
+        }
+    }
+
+    /// <summary>
+    /// S7-T5 owner purge resume: resumes one confirmed-but-incomplete intent
+    /// after interruption. Carries only the purge ID.
+    /// </summary>
+    private ServiceReply HandleOwnerPurgeResume(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || HasPurgeResumeExtras(request))
+        {
+            return Error("invalid_request");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (string.IsNullOrEmpty(request.ResourceId))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var result = new PurgeService().Resume(
+                context, request.ResourceId, operation, ResetPrivateIndex);
+            RefreshProjection(operation);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "purge_resumed",
+                "owner",
+                null,
+                ResourceRevision: result.Deleted.Length,
+                Purge: ToPurgeResultWire(result));
+        }
+        catch (ArgumentException ex)
+        {
+            return PurgePreviewError(ex);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (InvalidDataException)
+        {
+            return Error("purge_unavailable");
+        }
+        catch (IOException)
+        {
+            return Error("purge_unavailable");
+        }
+    }
+
+    private static ServiceReply PurgePreviewError(ArgumentException ex)
+    {
+        var message = ex.Message ?? string.Empty;
+        if (message.Contains("already been purged", StringComparison.Ordinal) ||
+            message.Contains("already purged", StringComparison.Ordinal))
+        {
+            return Error("purge_already_purged");
+        }
+
+        if (message.Contains("moved", StringComparison.Ordinal) ||
+            message.Contains("changed", StringComparison.Ordinal) ||
+            message.Contains("stale", StringComparison.Ordinal))
+        {
+            return Error("purge_target_moved");
+        }
+
+        return Error("invalid_request");
+    }
+
+    private static PurgeImpactWire ToPurgePreviewWire(PurgeImpactPreview preview) => new(
+        preview.PurgeId,
+        preview.TargetResourceId,
+        preview.TargetRevision,
+        preview.TargetZoneId,
+        preview.TargetKind,
+        preview.Impacted.Select(item => new PurgeImpactEntryWire(
+            item.ResourceId, item.Kind, item.Revision, item.Reason)).ToArray(),
+        preview.WithdrawnCatalogIds,
+        preview.GrantsTouched,
+        preview.SessionsTouched,
+        preview.LiveGeneration,
+        preview.S8BackupNote);
+
+    private static PurgeResultWire ToPurgeResultWire(PurgeResult result) => new(
+        result.PurgeId,
+        result.TargetResourceId,
+        result.Deleted.Select(item => new PurgeDeletedWire(item.ResourceId, item.Revision)).ToArray(),
+        result.WithdrawnCatalogIds,
+        result.FinalGeneration,
+        result.DecisionApplied);
+
+    private static PurgeImpactPreview? FromPurgePreviewWire(ServiceRequest request, out string why)
+    {
+        why = string.Empty;
+        if (string.IsNullOrEmpty(request.ResourceId) ||
+            request.ResourceRevision is not { } targetRevision || targetRevision < 1 ||
+            string.IsNullOrEmpty(request.ZoneId) ||
+            request.DestinationResourceIds is not { } impactedIds || impactedIds.Length == 0 ||
+            request.DestinationRevision is not { } liveGeneration)
+        {
+            why = "missing-preview-fields";
+            return null;
+        }
+
+        var impacted = new List<PurgeImpactEntry>();
+        foreach (var token in impactedIds)
+        {
+            var parts = token.Split('|');
+            if (parts.Length != 4 || !long.TryParse(parts[1], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var revision) || revision < 1)
+            {
+                why = "bad-impacted-token:" + token;
+                return null;
+            }
+
+            impacted.Add(new PurgeImpactEntry(parts[0], parts[2], revision, parts[3]));
+        }
+        var targetKind = (request.Label ?? "canonical").Split('|')[0];
+        return new PurgeImpactPreview(
+            request.ResourceId,
+            request.ZoneId ?? string.Empty,
+            targetRevision,
+            request.CatalogId ?? string.Empty,
+            targetKind,
+            impacted.ToArray(),
+            request.CatalogIds ?? Array.Empty<string>(),
+            GrantsTouched: true,
+            SessionsTouched: true,
+            liveGeneration,
+            PurgeService.S8BackupNoteText);
+    }
 
     /// <summary>
     /// S5-T3 owner library search: the owner's own search over their unlocked
@@ -6987,12 +7400,17 @@ public sealed class ServiceRequestHandler
 
         try
         {
-            var available = operation.ListResources();
-            if (request.CollectionId is not null && (request.ZoneId is not null || request.ResourceIds is { Length: > 0 }))
+            foreach (var id in request.ResourceIds ?? Array.Empty<string>())
             {
-                throw new ArgumentException("Select a collection, zone, or exact resources.");
+                RequireNotPurged(operation, id);
             }
 
+            foreach (var id in request.DestinationResourceIds ?? Array.Empty<string>())
+            {
+                RequireNotPurged(operation, id);
+            }
+
+            var available = operation.ListResources();
             var resources = request.CollectionId is null
                 ? ResolveResourceSelection(available, request.ZoneId, request.ResourceIds)
                 : Array.Empty<ScopeResourceRevision>();
@@ -7106,6 +7524,11 @@ public sealed class ServiceRequestHandler
 
         try
         {
+            foreach (var id in resourceIds)
+            {
+                RequireNotPurged(operation, id);
+            }
+
             var resources = ResolveResourceIds(operation.ListResources(), resourceIds);
             var collection = _ownerScopeGrants.SetCollection(context, collectionId, resources, operation);
             var summary = new OwnerScopeCollectionSummary(collection.CollectionId, collection.ResourceIds);
@@ -7191,6 +7614,7 @@ public sealed class ServiceRequestHandler
 
         try
         {
+            RequireNotPurged(operation, request.ResourceId);
             var liveResources = operation.ListResources();
             var published = _ownerCatalog.Publish(
                 context, request.CatalogId, request.Label, request.Description,

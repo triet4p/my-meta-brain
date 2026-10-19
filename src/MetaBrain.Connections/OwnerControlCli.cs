@@ -123,12 +123,14 @@ internal static class OwnerControlCli
                 "session" => await SessionAsync(options).ConfigureAwait(false),
                 "redeem" => await RedeemAsync(options).ConfigureAwait(false),
                 "sessions" => await ListSessionsAsync(options).ConfigureAwait(false),
+                "revoke-session" => await RevokeSessionAsync(options).ConfigureAwait(false),
                 "index-status" => await IndexStatusAsync(options).ConfigureAwait(false),
+                "index-rebuild" => await IndexRebuildAsync(options).ConfigureAwait(false),
                 "recall-apply" => await RecallApplyAsync(options).ConfigureAwait(false),
                 "recall-read" => await RecallReadAsync(options).ConfigureAwait(false),
-                "index-rebuild" => await IndexRebuildAsync(options).ConfigureAwait(false),
-                "revoke-session" => await RevokeSessionAsync(options).ConfigureAwait(false),
-                "authorize" => await AuthorizeAsync(options).ConfigureAwait(false),
+                "purge-preview" => await PurgePreviewAsync(options).ConfigureAwait(false),
+                "purge-confirm" => await PurgeConfirmAsync(options).ConfigureAwait(false),
+                "purge-resume" => await PurgeResumeAsync(options).ConfigureAwait(false),
                 "job-create" => await JobCreateAsync(options).ConfigureAwait(false),
                 "job-start" => await JobStartAsync(options).ConfigureAwait(false),
                 "job-cancel" => await JobCancelAsync(options).ConfigureAwait(false),
@@ -4611,6 +4613,197 @@ internal static class OwnerControlCli
         PrintRecallState(result.Reply);
         return 0;
     }
+    /// <summary>
+    /// S7-T5 owner purge preview: binds the live target revision and prints
+    /// the exact impacted canonical set the confirm would delete. The owner
+    /// reason is required so the durable ledger always records why.
+    /// </summary>
+    private static async Task<int> PurgePreviewAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--resource-revision", "--reason");
+        var controlPipe = ControlPipe(options);
+        var resourceId = options.Required("--resource-id");
+        var reason = options.Required("--reason");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId) ||
+            !long.TryParse(options.Required("--resource-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var revision) ||
+            revision < 1)
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerPurgePreviewOperation,
+                ResourceId: resourceId,
+                ResourceRevision: revision,
+                Description: reason)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "purge_preview") ||
+            !result.Reply.TryGetProperty("purgePreview", out var preview) ||
+            preview.ValueKind != JsonValueKind.Object)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintPurgePreview(result.Reply);
+        return 0;
+    }
+
+    /// <summary>
+    /// S7-T5 owner purge confirm: rebinds the exact previewed set and deletes
+    /// it after the owner types PURGE. The impacted set rides the destination
+    /// resource IDs as stable id|revision|kind|reason tokens.
+    /// </summary>
+    private static async Task<int> PurgeConfirmAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--purge-id", "--resource-id", "--resource-revision",
+            "--target-zone", "--target-kind", "--impacted", "--live-generation", "--catalog-ids", "--reason");
+        var controlPipe = ControlPipe(options);
+        var purgeId = options.Required("--purge-id");
+        var resourceId = options.Required("--resource-id");
+        var targetZone = options.Required("--target-zone");
+        var targetKind = options.Required("--target-kind");
+        var reason = options.Required("--reason");
+        if (!Guid.TryParseExact(purgeId, "N", out _) ||
+            !ServiceSettingsLoader.IsSafeIdentifier(resourceId) ||
+            !ServiceSettingsLoader.IsSafeIdentifier(targetZone) ||
+            !long.TryParse(options.Required("--resource-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var revision) ||
+            revision < 1 ||
+            !long.TryParse(options.Required("--live-generation"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var generation))
+        {
+            return Usage();
+        }
+
+        var impacted = options.Required("--impacted").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (impacted.Length == 0)
+        {
+            return Usage();
+        }
+
+        var catalogIds = options.Optional("--catalog-ids")?.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            ?? Array.Empty<string>();
+        Console.WriteLine($"PURGE CONFIRM preview={purgeId} target={resourceId} revision={revision}: this deletes every listed canonical copy and withdraws the listed catalog entries. Originals outside the vault are untouched.");
+        Console.WriteLine("impacted=" + string.Join(",", impacted));
+        Console.WriteLine("catalog=" + string.Join(",", catalogIds));
+        Console.WriteLine("S8: retained backups keep ciphertext until their own retention; a restore must re-apply this ledger.");
+        Console.Write("Type PURGE to approve this exact deletion: ");
+        if (!string.Equals(Console.ReadLine(), "PURGE", StringComparison.Ordinal))
+        {
+            Console.WriteLine("CANCELLED; vault unchanged");
+            return 3;
+        }
+
+        var result = await InvokeOwnerAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerPurgeConfirmOperation,
+                ResourceId: purgeId,
+                ZoneId: resourceId,
+                ResourceRevision: revision,
+                CatalogId: targetZone,
+                Label: targetKind + "|PURGE",
+                DestinationResourceIds: impacted,
+                DestinationRevision: generation,
+                CatalogIds: catalogIds,
+                Description: reason)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "purged"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintPurgeResult(result.Reply);
+        return 0;
+    }
+
+    /// <summary>
+    /// S7-T5 owner purge resume: resumes one confirmed-but-incomplete intent
+    /// after interruption. Carries only the purge ID.
+    /// </summary>
+    private static async Task<int> PurgeResumeAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--purge-id");
+        var controlPipe = ControlPipe(options);
+        var purgeId = options.Required("--purge-id");
+        if (!Guid.TryParseExact(purgeId, "N", out _))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerPurgeResumeOperation,
+                ResourceId: purgeId)).ConfigureAwait(false);
+        if (!result.Success || !(HasStatus(result.Reply, "purge_resumed") || HasStatus(result.Reply, "purged")))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintPurgeResult(result.Reply);
+        return 0;
+    }
+
+    private static void PrintPurgePreview(JsonElement reply)
+    {
+        if (!reply.TryGetProperty("purgePreview", out var preview) || preview.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        Console.WriteLine($"PURGE PREVIEW id={JsonValueText(preview, "purgeId")} target={JsonValueText(preview, "targetResourceId")} revision={JsonValueText(preview, "targetRevision")} zone={JsonValueText(preview, "targetZoneId")} kind={JsonValueText(preview, "targetKind")} generation={JsonValueText(preview, "liveGeneration")}");
+        foreach (var token in PurgeImpactedTokens(preview))
+        {
+            Console.WriteLine("impacted " + token);
+        }
+
+        if (preview.TryGetProperty("withdrawnCatalogIds", out var catalogs) && catalogs.ValueKind == JsonValueKind.Array)
+        {
+            Console.WriteLine("catalog=" + string.Join(",", catalogs.EnumerateArray().Select(value => value.GetString())));
+        }
+
+        Console.WriteLine($"grantsTouched={JsonFlagText(preview, "grantsTouched")} sessionsTouched={JsonFlagText(preview, "sessionsTouched")}");
+        Console.WriteLine("s8=" + JsonValueText(preview, "s8BackupNote"));
+    }
+
+    private static string[] PurgeImpactedTokens(JsonElement preview)
+    {
+        if (!preview.TryGetProperty("impacted", out var impacted) || impacted.ValueKind != JsonValueKind.Array)
+        {
+            return Array.Empty<string>();
+        }
+
+        return impacted.EnumerateArray()
+            .Select(item => $"{JsonValueText(item, "resourceId")}|{JsonValueText(item, "revision")}|{JsonValueText(item, "kind")}|{JsonValueText(item, "reason")}")
+            .ToArray();
+    }
+
+    private static void PrintPurgeResult(JsonElement reply)
+    {
+        if (!reply.TryGetProperty("purge", out var purge) || purge.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        Console.WriteLine($"PURGED id={JsonValueText(purge, "purgeId")} target={JsonValueText(purge, "targetResourceId")} generation={JsonValueText(purge, "finalGeneration")} applied={JsonFlagText(purge, "decisionApplied")}");
+        if (purge.TryGetProperty("deleted", out var deleted) && deleted.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in deleted.EnumerateArray())
+            {
+                Console.WriteLine($"deleted id={JsonValueText(item, "resourceId")} revision={JsonValueText(item, "revision")}");
+            }
+        }
+
+        if (purge.TryGetProperty("withdrawnCatalogIds", out var catalogs) && catalogs.ValueKind == JsonValueKind.Array)
+        {
+            Console.WriteLine("catalog=" + string.Join(",", catalogs.EnumerateArray().Select(value => value.GetString())));
+        }
+    }
 
     /// <summary>
     /// Reads one explicit boolean option. The option is present only when the
@@ -4969,7 +5162,7 @@ internal static class OwnerControlCli
         Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|agent-search --query [--offset --limit --kind --current]|source-enroll --source-id --zone-id --format --format-version --input-file|source-relocate --source-id --source-generation --input-file|source-revoke --source-id|source-status --source-id|source-ingest --source-id|source-pause --source-id|source-resume --source-id|source-refresh-optin --source-id|source-refresh-optout --source-id|source-list|source-refresh|source-snapshot-list --source-id|source-snapshot-preserve --source-id --source-revision --retain-until-utc|source-snapshot-read --snapshot-id --snapshot-revision --output-file|source-snapshot-retain --snapshot-id --expected-revision --retain-until-utc|source-snapshot-purge --snapshot-id --expected-revision|research-capture --resource-id --zone-id --input-file [--title --source-url --source-author --source-date]|research-read --resource-id [--resource-revision --output-file]|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|relation-list|lifecycle-create|lifecycle-read|lifecycle-retained-read --resource-revision|lifecycle-publish --expected-revision|lifecycle-reject --expected-revision|lifecycle-withdraw --expected-revision|lifecycle-repropose --expected-revision|lifecycle-question-resolve --expected-revision|lifecycle-question-reopen --expected-revision|lifecycle-intention-complete --expected-revision|lifecycle-intention-cancel --expected-revision|lifecycle-intention-supersede --expected-revision|lifecycle-intention-notify --expected-revision|lifecycle-intention-acknowledge --expected-revision|lifecycle-validity-set --expected-revision|lifecycle-retain --expected-revision|proposal-read --resource-id [--resource-revision]|proposal-list|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read|agent-collection-view|agent-search|agent-brief|agent-feedback|agent-feedback-read|agent-propose|agent-relation-resolve|agent-relation-list|agent-relation-create|agent-relation-supersede|agent-relation-unlink|agent-relation-restore}; lifecycle --resource-id is the subject item ID; relation/lifecycle transitions need --expected-revision and an optional --input-file draft; agent-propose --session-file --input-file carries one proposal draft JSON (kind create/revise, idempotencyKey, inbox destinationResourceId/destinationRevision, revise subjectResourceId/subjectRevision, proposed item draft) and never publishes; agent-relation-create/supersede --session-file --input-file carries typed endpoints/revisions, kind, reason and requestEvidence; agent-relation-unlink/restore --session-file --resource-id --resource-revision --input-file carries stateReason/requestEvidence; restore returns only to proposed; source-enroll and source-relocate --input-file are JSON objects holding the private locator ({\"locator\": \"C:/exact/path\"}), never a command argument; source-snapshot-read requires an explicit --output-file export");
         Console.Error.WriteLine("Agent brief: owner agent-brief --agent-pipe --session-file [--query] [--budget-chars 200..8000] [--context-project explicit-label] [--context-task explicit-label] [--include-archived]; contextual intentions are returned only from the frozen memory.context grant.");
         Console.Error.WriteLine("Recall policy: owner recall-apply --resource-id --act {demote|pin|archive|restore} [--reason text] | owner recall-read --resource-id; the act changes only how an item is offered, never its content, evidence, revision or any scope.");
-        Console.Error.WriteLine("Model/egress and schedule commands: owner {provider-config --provider --model [--base-url] [--api-key-stdin|--from-env]|provider-status|job-create|job-start --job-id|job-cancel --job-id|job-status --job-id|job-list|job-ledger|schedule-set --interval-minutes --zone-id --destination-id --destination-revision --provider --model --input-file|schedule-disable|schedule-status}");
+        Console.Error.WriteLine("Owner purge: owner purge-preview --resource-id --resource-revision --reason text | owner purge-confirm --purge-id --resource-id --resource-revision --target-zone --target-kind --impacted id|rev|kind|reason,... --live-generation N [--catalog-ids ...] --reason text (type PURGE) | owner purge-resume --purge-id; deletes exactly the previewed canonical copies and withdraws the mapped catalog.");
         return 2;
     }
 
