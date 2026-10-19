@@ -110,23 +110,27 @@ public enum OwnerLibraryCurrentness
     History = 2
 }
 
-/// <summary>
-/// One owner library query, as the console states it. Every filter is applied
-/// by the service; the console sends the filter and renders the answer.
-/// <see cref="FromUtc"/> and <see cref="ToUtc"/> are inclusive bounds over the
-/// item's own occurred instant (its recorded instant when it has none).
-/// </summary>
-public sealed record OwnerLibraryQuery(
-    string? Text = null,
-    string? ZoneId = null,
-    string? CollectionId = null,
-    string? Kind = null,
-    string? Level = null,
-    OwnerLibraryCurrentness Current = OwnerLibraryCurrentness.All,
-    DateTimeOffset? FromUtc = null,
-    DateTimeOffset? ToUtc = null,
-    int Offset = 0,
-    int Limit = 10);
+    /// <summary>
+    /// One owner library query, as the console states it. Every filter is applied
+    /// by the service; the console sends the filter and renders the answer.
+    /// <see cref="FromUtc"/> and <see cref="ToUtc"/> are inclusive bounds over the
+    /// item's own occurred instant (its recorded instant when it has none).
+    /// <see cref="AsOfUtc"/> is the S7-T1 as-of instant: the service replays
+    /// lifecycle history only through that instant. It must be UTC and not in
+    /// the future; the service refuses anything else.
+    /// </summary>
+    public sealed record OwnerLibraryQuery(
+        string? Text = null,
+        string? ZoneId = null,
+        string? CollectionId = null,
+        string? Kind = null,
+        string? Level = null,
+        OwnerLibraryCurrentness Current = OwnerLibraryCurrentness.All,
+        DateTimeOffset? FromUtc = null,
+        DateTimeOffset? ToUtc = null,
+        int Offset = 0,
+        int Limit = 10,
+        DateTimeOffset? AsOfUtc = null);
 
 /// <summary>
 /// One owner library hit exactly as the service ranked and described it. The
@@ -145,25 +149,26 @@ public sealed record OwnerLibraryHit(
     DateTimeOffset RecordedAtUtc,
     string Publication);
 
-/// <summary>
-/// One owner library page. A generation behind the vault is never served as a
-/// page: the service refuses that search (<c>search_index_stale</c>) until the
-/// owner rebuilds the index.
-/// </summary>
-public sealed record OwnerLibraryPage(
-    string Query,
-    string? ZoneId,
-    string? CollectionId,
-    string? Kind,
-    string? Level,
-    string Current,
-    DateTimeOffset? FromUtc,
-    DateTimeOffset? ToUtc,
-    int Total,
-    int Offset,
-    int Limit,
-    bool HasMore,
-    OwnerLibraryHit[] Hits);
+    /// <summary>
+    /// One owner library page. A generation behind the vault is never served as a
+    /// page: the service refuses that search (<c>search_index_stale</c>) until the
+    /// owner rebuilds the index.
+    /// </summary>
+    public sealed record OwnerLibraryPage(
+        string Query,
+        string? ZoneId,
+        string? CollectionId,
+        string? Kind,
+        string? Level,
+        string Current,
+        DateTimeOffset? FromUtc,
+        DateTimeOffset? ToUtc,
+        int Total,
+        int Offset,
+        int Limit,
+        bool HasMore,
+        OwnerLibraryHit[] Hits,
+        DateTimeOffset? AsOfUtc = null);
 
 public sealed record OwnerLibrarySearchResult(
     OwnerCommandOutcome Outcome,
@@ -1084,7 +1089,8 @@ public static class OwnerChannelClient
                 SearchLevel: query.Level,
                 SearchCurrent: CurrentToken(query.Current),
                 SearchFromUtc: query.FromUtc,
-                SearchToUtc: query.ToUtc),
+                SearchToUtc: query.ToUtc,
+                SearchAsOfUtc: query.AsOfUtc),
             "library_page",
             cancellationToken).ConfigureAwait(false);
 
@@ -1612,6 +1618,57 @@ public static class OwnerChannelClient
             cancellationToken).ConfigureAwait(false);
 
         return new OwnerLifecycleResult(reply.Outcome, reply.ErrorCode, ProjectLifecycle(reply));
+    }
+
+    /// <summary>
+    /// S7-T1 decision history: the lifecycle record of one subject with its
+    /// recorded states, temporal validity, history and retained archives,
+    /// exactly as the service served it. Unknown, unavailable, tampered or
+    /// wrongly shaped records share one generic outcome: a history read is
+    /// never an existence oracle.
+    /// </summary>
+    public static async Task<OwnerTimelineResult> ReadTimelineAsync(
+        string controlPipe,
+        string subjectResourceId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(subjectResourceId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.LifecycleReadOperation,
+                ResourceId: subjectResourceId),
+            "lifecycle",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerTimelineResult(reply.Outcome, reply.ErrorCode, ProjectTimeline(reply));
+    }
+
+    /// <summary>
+    /// S7-T1 retained historical revision: the exact archived bytes of one
+    /// older subject revision, with both the subject revision and the
+    /// archive's own vault revision. A superseded frozen read never drifts
+    /// onto newer content.
+    /// </summary>
+    public static async Task<OwnerRetainedRevisionResult> ReadRetainedRevisionAsync(
+        string controlPipe,
+        string subjectResourceId,
+        long subjectRevision,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(subjectResourceId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.LifecycleRetainedRevisionReadOperation,
+                ResourceId: subjectResourceId,
+                ResourceRevision: subjectRevision),
+            "retained_revision",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerRetainedRevisionResult(reply.Outcome, reply.ErrorCode, ProjectRetainedRevision(reply));
     }
 
     /// <summary>
@@ -3227,7 +3284,8 @@ public static class OwnerChannelClient
             Int32(payload, "offset"),
             Int32(payload, "limit"),
             Flag(payload, "hasMore"),
-            hits);
+            hits,
+            Timestamp(payload, "asOfUtc"));
     }
 
     private static OwnerLibraryHit ProjectLibraryHit(JsonElement hit) => new(
@@ -4286,6 +4344,121 @@ public static class OwnerChannelClient
             Text(lifecycle, "subjectResourceId") ?? string.Empty,
             Int64(lifecycle, "revision"),
             Text(lifecycle, "publication") ?? string.Empty);
+    }
+
+    private static OwnerTimelineDetail? ProjectTimeline(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            reply.Payload.ValueKind != JsonValueKind.Object ||
+            !reply.Payload.TryGetProperty("lifecycle", out var lifecycle) ||
+            lifecycle.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return new OwnerTimelineDetail(
+            Text(lifecycle, "id") ?? string.Empty,
+            Text(lifecycle, "zoneId") ?? string.Empty,
+            Int64(lifecycle, "revision"),
+            Text(lifecycle, "subjectResourceId") ?? string.Empty,
+            Text(lifecycle, "subjectKind") ?? string.Empty,
+            Text(lifecycle, "publication") ?? string.Empty,
+            Text(lifecycle, "question"),
+            Text(lifecycle, "intention"),
+            Flag(lifecycle, "notified"),
+            Timestamp(lifecycle, "notifiedAtUtc"),
+            Flag(lifecycle, "acknowledged"),
+            Timestamp(lifecycle, "acknowledgedAtUtc"),
+            Text(lifecycle, "supersededBy"),
+            ProjectStamp(lifecycle, "occurred"),
+            ProjectStamp(lifecycle, "recorded"),
+            ProjectStamp(lifecycle, "validFrom"),
+            ProjectStamp(lifecycle, "validUntil"),
+            ProjectStamp(lifecycle, "reviewAfter"),
+            Text(lifecycle, "executor") ?? string.Empty,
+            Text(lifecycle, "creationMethod") ?? string.Empty,
+            Text(lifecycle, "reason"),
+            Timestamp(lifecycle, "recordedAtUtc") ?? DateTimeOffset.MinValue,
+            lifecycle.TryGetProperty("history", out var history) && history.ValueKind == JsonValueKind.Array
+                ? history.EnumerateArray().Select(ProjectTimelineChange).ToArray()
+                : Array.Empty<OwnerTimelineChange>(),
+            lifecycle.TryGetProperty("retainedRevisions", out var retained) && retained.ValueKind == JsonValueKind.Array
+                ? retained.EnumerateArray().Select(ProjectTimelineRetained).ToArray()
+                : Array.Empty<OwnerTimelineRetained>());
+    }
+
+    private static OwnerTimelineStamp? ProjectStamp(JsonElement parent, string name)
+    {
+        if (!parent.TryGetProperty(name, out var stamp) || stamp.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return new OwnerTimelineStamp(
+            Text(stamp, "precision") ?? "unknown",
+            Timestamp(stamp, "instantUtc"),
+            OptionalInt64(stamp, "localYear") is { } year ? (int)year : null,
+            OptionalInt64(stamp, "localMonth") is { } month ? (int)month : null,
+            OptionalInt64(stamp, "localDay") is { } day ? (int)day : null,
+            OptionalInt64(stamp, "localQuarter") is { } quarter ? (int)quarter : null,
+            OptionalInt64(stamp, "timeZoneOffsetMinutes") is { } zone ? (int)zone : null);
+    }
+
+    private static OwnerTimelineChange ProjectTimelineChange(JsonElement change) => new(
+        Text(change, "aspect") ?? string.Empty,
+        Text(change, "act") ?? string.Empty,
+        Text(change, "fromState") ?? string.Empty,
+        Text(change, "toState") ?? string.Empty,
+        Text(change, "executor") ?? string.Empty,
+        Timestamp(change, "recordedAtUtc") ?? DateTimeOffset.MinValue,
+        Text(change, "rationale"),
+        Text(change, "replacementResourceId"));
+
+    private static OwnerTimelineRetained ProjectTimelineRetained(JsonElement entry) => new(
+        OptionalInt64(entry, "subjectRevision") ?? 0,
+        Text(entry, "archiveResourceId") ?? string.Empty,
+        Text(entry, "executor") ?? string.Empty,
+        Timestamp(entry, "recordedAtUtc") ?? DateTimeOffset.MinValue);
+
+    private static OwnerRetainedRevisionDetail? ProjectRetainedRevision(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            reply.Payload.ValueKind != JsonValueKind.Object ||
+            !reply.Payload.TryGetProperty("retainedRevision", out var retained) ||
+            retained.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var subject = retained.TryGetProperty("subject", out var subjectElement) && subjectElement.ValueKind == JsonValueKind.Object
+            ? subjectElement
+            : (JsonElement?)null;
+        var sources = subject is { } subjectValue &&
+            subjectValue.TryGetProperty("sources", out var sourceElements) && sourceElements.ValueKind == JsonValueKind.Array
+            ? sourceElements.EnumerateArray().Select(element => new OwnerRetainedRevisionSource(
+                Text(element, "sourceId"),
+                Text(element, "locator"),
+                Text(element, "availability") ?? "unknown",
+                OptionalInt64(element, "sourceRevision"))).ToArray()
+            : Array.Empty<OwnerRetainedRevisionSource>();
+
+        return new OwnerRetainedRevisionDetail(
+            subject is { } detail ? Text(detail, "id") ?? string.Empty : string.Empty,
+            subject is { } detailZone ? Text(detailZone, "zoneId") ?? string.Empty : string.Empty,
+            subject is { } detailRevision ? Int64(detailRevision, "revision") : 0,
+            Int64(retained, "archiveRevision"),
+            Text(retained, "archiveResourceId") ?? string.Empty,
+            subject is { } detailKind ? Text(detailKind, "kind") ?? string.Empty : string.Empty,
+            subject is { } detailTitle ? Text(detailTitle, "title") : null,
+            subject is { } detailBody ? Text(detailBody, "body") ?? string.Empty : string.Empty,
+            subject is { } detailAuthor ? Text(detailAuthor, "author") ?? string.Empty : string.Empty,
+            subject is { } detailExecutor ? Text(detailExecutor, "executor") ?? string.Empty : string.Empty,
+            subject is { } detailMethod ? Text(detailMethod, "creationMethod") ?? string.Empty : string.Empty,
+            subject is { } detailEvidence ? Text(detailEvidence, "evidence") ?? string.Empty : string.Empty,
+            subject is { } detailLevel ? Text(detailLevel, "level") ?? string.Empty : string.Empty,
+            subject is { } detailOccurred ? Timestamp(detailOccurred, "occurredAtUtc") : null,
+            subject is { } detailRecorded ? Timestamp(detailRecorded, "recordedAtUtc") ?? DateTimeOffset.MinValue : DateTimeOffset.MinValue,
+            sources);
     }
 
     private static long? SpanStart(JsonElement element) =>

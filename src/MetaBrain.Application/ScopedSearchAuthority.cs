@@ -52,7 +52,8 @@ public sealed class ScopedSearchAuthority
         int limit,
         PrivateIndexSnapshot? materialized,
         IPrivateIndexStore index,
-        IManagedResourceStore vault)
+        IManagedResourceStore vault,
+        DateTimeOffset? asOfUtc = null)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(index);
@@ -106,7 +107,7 @@ public sealed class ScopedSearchAuthority
                 continue;
             }
 
-            if (current is not null && !PassesCurrent(document, current))
+            if (current is not null && !PassesCurrentScoped(document, LifecycleOf(vault, approved.ResourceId), current, asOfUtc, vault, approved.ResourceId))
             {
                 continue;
             }
@@ -136,10 +137,11 @@ public sealed class ScopedSearchAuthority
         string? current,
         PrivateIndexSnapshot? materialized,
         IPrivateIndexStore index,
-        IManagedResourceStore vault)
+        IManagedResourceStore vault,
+        DateTimeOffset? asOfUtc = null)
     {
         // Total over the frozen scope: same filters, full ranking, no paging.
-        var all = Search(session, query, kind, current, 0, int.MaxValue, materialized, index, vault);
+        var all = Search(session, query, kind, current, 0, int.MaxValue, materialized, index, vault, asOfUtc);
         return all.Count;
     }
 
@@ -148,6 +150,10 @@ public sealed class ScopedSearchAuthority
     /// owner's own search text; an empty text is a browse. Zone and collection
     /// are not part of this record: the caller has already reduced the scope to
     /// the owner-selected rows, so a filter can never widen what is searched.
+    /// <see cref="AsOfUtc"/> is the S7-T1 as-of instant: when set, the page
+    /// replays every candidate's lifecycle history only through that instant,
+    /// so currentness reflects what was recorded then. A future as-of fails
+    /// closed in the handler, never silently clamped to now.
     /// </summary>
     public sealed record OwnerLibraryQuery(
         string? Text,
@@ -157,7 +163,8 @@ public sealed class ScopedSearchAuthority
         DateTimeOffset? FromUtc,
         DateTimeOffset? ToUtc,
         int Offset,
-        int Limit);
+        int Limit,
+        DateTimeOffset? AsOfUtc = null);
 
     /// <summary>
     /// One owner library answer: <see cref="Total"/> counts matches under the
@@ -241,8 +248,15 @@ public sealed class ScopedSearchAuthority
                 continue;
             }
 
-            if (!PassesCurrent(document, query.Current ?? string.Empty) ||
-                !PassesWindow(document, query.FromUtc, query.ToUtc))
+            var lifecycle = query.AsOfUtc is not null || string.Equals(query.Current, "current", StringComparison.OrdinalIgnoreCase)
+                ? LifecycleOf(vault, resource.ResourceId)
+                : null;
+            if (!PassesCurrentScoped(document, lifecycle, query.Current ?? string.Empty, query.AsOfUtc, vault, resource.ResourceId))
+            {
+                continue;
+            }
+
+            if (!PassesWindow(document, query.FromUtc, query.ToUtc))
             {
                 continue;
             }
@@ -384,6 +398,123 @@ public sealed class ScopedSearchAuthority
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// S7-T1 scoped currentness: publication replays only through the as-of
+    /// instant, and the S2-T5 validity window bounds currentness at the as-of
+    /// instant (or now when no as-of is named). A superseded endpoint is never
+    /// current unless the caller explicitly asks for history. Contradictory
+    /// voices stay visible: a contradicts link never removes either side from
+    /// history, and newest-wins is never applied here.
+    /// </summary>
+    private static bool PassesCurrentScoped(SearchIndexDocument document, StoredLifecycleRecord? lifecycle, string current, DateTimeOffset? asOfUtc)
+    {
+        if (!string.Equals(current, "current", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var at = asOfUtc ?? DateTimeOffset.UtcNow;
+        var publication = document.Publication;
+        if (lifecycle is not null && asOfUtc is { } asOf)
+        {
+            publication = LifecycleTokens.Publication(TemporalRecall.StatesAt(lifecycle, asOf).Publication);
+        }
+
+        if (string.Equals(publication, "withdrawn", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(publication, "rejected", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (lifecycle is { ValidFrom: not null } || lifecycle is { ValidUntil: not null })
+        {
+            if (!TemporalRecall.ValidityContains(lifecycle!.ValidFrom, lifecycle.ValidUntil, at))
+            {
+                return false;
+            }
+        }
+        else if (document.RecordedAtUtc > at.AddMinutes(5))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool PassesCurrentScoped(SearchIndexDocument document, StoredLifecycleRecord? lifecycle, string current, DateTimeOffset? asOfUtc, IManagedResourceStore vault, string resourceId)
+    {
+        if (!PassesCurrentScoped(document, lifecycle, current, asOfUtc))
+        {
+            return false;
+        }
+
+        return !string.Equals(current, "current", StringComparison.OrdinalIgnoreCase) ||
+            !IsSupersededTarget(vault, lifecycle, resourceId);
+    }
+
+    private static StoredLifecycleRecord? LifecycleOf(IManagedResourceStore vault, string resourceId)
+    {
+        byte[]? raw = null;
+        try
+        {
+            raw = vault.ReadContent(DomainIdentifiers.LifecycleIdFor(resourceId), null);
+            var record = LifecycleCodec.DecodeStored(raw);
+            return string.Equals(record.SubjectResourceId, resourceId, StringComparison.Ordinal) ? record : null;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+        finally
+        {
+            if (raw is { Length: > 0 })
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(raw);
+            }
+        }
+    }
+
+    private static bool IsSupersededTarget(IManagedResourceStore vault, StoredLifecycleRecord? lifecycle, string resourceId)
+    {
+        if (lifecycle is { Intention: IntentionState.Superseded })
+        {
+            return true;
+        }
+
+        foreach (var listed in vault.ListResources())
+        {
+            if (!listed.ResourceId.StartsWith("rel-", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            byte[]? raw = null;
+            try
+            {
+                raw = vault.ReadContent(listed.ResourceId, listed.Revision);
+                var relation = RelationCodec.DecodeStored(raw);
+                if (relation.Kind == RelationKind.Supersedes &&
+                    relation.State is RelationState.Proposed or RelationState.Accepted &&
+                    string.Equals(relation.From.ResourceId, resourceId, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+            catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+            {
+            }
+            finally
+            {
+                if (raw is { Length: > 0 })
+                {
+                    System.Security.Cryptography.CryptographicOperations.ZeroMemory(raw);
+                }
+            }
+        }
+
+        return false;
     }
 
     private static bool IsExpired(SearchIndexDocument document)

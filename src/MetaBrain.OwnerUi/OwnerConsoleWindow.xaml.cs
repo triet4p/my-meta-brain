@@ -62,6 +62,8 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     private bool _clearingInputs;
     private OwnerLibraryPage? _renderedPage;
     private OwnerItemDetail? _renderedItem;
+    private OwnerTimelineDetail? _renderedTimeline;
+    private OwnerRetainedRevisionDetail? _renderedRetained;
     private long _captureDraftVersion;
     private long _reviewDraftVersion;
     private bool _syncingInboxEditors;
@@ -660,6 +662,26 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         }
     }
 
+    private async void OnLibraryHistoryClicked(object sender, RoutedEventArgs e) =>
+        await _session.ReadLibraryTimelineAsync();
+
+    private async void OnLibraryRetainedClicked(object sender, RoutedEventArgs e)
+    {
+        if (_session.LibraryTimeline is { RetainedRevisions.Length: > 0 } timeline)
+        {
+            var oldest = timeline.RetainedRevisions[0];
+            foreach (var entry in timeline.RetainedRevisions)
+            {
+                if (entry.SubjectRevision < oldest.SubjectRevision)
+                {
+                    oldest = entry;
+                }
+            }
+
+            await _session.OpenLibraryRetainedAsync(oldest.SubjectRevision);
+        }
+    }
+
     private async void OnLibraryRenameClicked(object sender, RoutedEventArgs e) =>
         await _session.RenameLibraryItemAsync(LibraryTitleInput.Text);
 
@@ -702,10 +724,11 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     {
         query = new OwnerLibraryQuery();
         if (!TryParseOwnerUtcDate(LibraryFromInput.Text, out var fromUtc) ||
-            !TryParseOwnerUtcDate(LibraryToInput.Text, out var toUtc))
+            !TryParseOwnerUtcDate(LibraryToInput.Text, out var toUtc) ||
+            !TryParseOwnerUtcDate(LibraryAsOfInput.Text, out var asOfUtc))
         {
             _session.ReportLibraryInputProblem(
-                "This console did not send the search: a From/To value is not a date or date-time it understands. Use yyyy-MM-dd or yyyy-MM-ddTHH:mm in UTC.");
+                "This console did not send the search: a From/To/As-of value is not a date or date-time it understands. Use yyyy-MM-dd or yyyy-MM-ddTHH:mm in UTC.");
             return false;
         }
 
@@ -724,7 +747,8 @@ public partial class OwnerConsoleWindow : System.Windows.Window
             FromUtc: fromUtc,
             ToUtc: toUtc,
             Offset: offset,
-            Limit: CurrentPageSize());
+            Limit: CurrentPageSize(),
+            AsOfUtc: asOfUtc);
         return true;
     }
 
@@ -777,6 +801,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         };
         LibraryFromInput.Text = string.Empty;
         LibraryToInput.Text = string.Empty;
+        LibraryAsOfInput.Text = string.Empty;
     }
 
     /// <summary>
@@ -832,6 +857,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
                 " zone=" + (page.ZoneId ?? "(any)") + " collection=" + (page.CollectionId ?? "(any)") +
                 " kind=" + (page.Kind ?? "(any)") + " level=" + (page.Level ?? "(any)") + " show=" + page.Current +
                 " from=" + Stamp(page.FromUtc) + " to=" + Stamp(page.ToUtc) +
+                " asOf=" + Stamp(page.AsOfUtc) +
                 " | this page was answered from an index generation that still matched the vault";
 
         var detail = _session.LibraryItem;
@@ -876,33 +902,99 @@ public partial class OwnerConsoleWindow : System.Windows.Window
                 "  executor=" + source.Executor + "  creation=" + source.CreationMethod +
                 "  locator=" + (source.Locator ?? "(none)");
 
-        var citation = SelectedCitation();
-        var canOpenCitation = unlocked && !inFlight &&
-            citation is { SourceId: { Length: > 0 }, SourceRevision: >= 1 };
+        var timeline = _session.LibraryTimeline;
+        if (!ReferenceEquals(_renderedTimeline, timeline))
+        {
+            _renderedTimeline = timeline;
+        }
 
-        LibrarySearchButton.IsEnabled = unlocked && !inFlight;
-        LibraryRebuildButton.IsEnabled = unlocked && !inFlight;
-        LibraryResetButton.IsEnabled = !inFlight;
-        LibraryPreviousButton.IsEnabled = unlocked && !inFlight && page is { Offset: > 0 };
-        LibraryNextButton.IsEnabled = unlocked && !inFlight && page is { HasMore: true };
-        LibraryOpenSourceButton.IsEnabled = canOpenCitation;
-        LibraryRenameButton.IsEnabled = unlocked && !inFlight && detail is not null && !string.IsNullOrWhiteSpace(LibraryTitleInput.Text);
-        LibraryQueryInput.IsEnabled = unlocked && !inFlight;
-        LibraryZoneInput.IsEnabled = unlocked && !inFlight;
-        LibraryCollectionInput.IsEnabled = unlocked && !inFlight;
-        LibraryKindInput.IsEnabled = unlocked && !inFlight;
-        LibraryLevelInput.IsEnabled = unlocked && !inFlight;
-        LibraryCurrentInput.IsEnabled = unlocked && !inFlight;
-        LibraryFromInput.IsEnabled = unlocked && !inFlight;
-        LibraryToInput.IsEnabled = unlocked && !inFlight;
-        LibraryPageSizeInput.IsEnabled = unlocked && !inFlight;
-        LibraryResults.IsEnabled = unlocked && !inFlight;
-        LibraryCitations.IsEnabled = unlocked && !inFlight;
-        LibraryTitleInput.IsEnabled = unlocked && !inFlight;
+        LibraryHistoryText.Text = timeline is null
+            ? (unlocked
+                ? "No decision history is open. Open an item, then read its decision history."
+                : "No private decision history is shown.")
+            : DescribeTimeline(timeline);
+        var retained = _session.LibraryRetained;
+        if (!ReferenceEquals(_renderedRetained, retained))
+        {
+            _renderedRetained = retained;
+        }
+
+        LibraryRetainedText.Text = retained is null
+            ? string.Empty
+            : "retained subject revision=" + retained.SubjectRevision.ToString(CultureInfo.InvariantCulture) +
+                " archive=" + retained.ArchiveResourceId + "@" + retained.ArchiveRevision.ToString(CultureInfo.InvariantCulture) +
+                " kind=" + retained.Kind + " title=" + (retained.Title ?? "(none)") + " author=" + retained.Author +
+                " evidence=" + retained.Evidence + " occurred=" + Stamp(retained.OccurredAtUtc) +
+                " recorded=" + Stamp(retained.RecordedAtUtc) + "\n" + retained.Body;
 
         LibraryMessageText.Text = _session.LibraryMessage ?? (unlocked
             ? "No library act has been sent in this session. Nothing private is read until you search."
             : "No private library act is offered while the service does not report the vault unlocked.");
+
+        LibraryHistoryButton.IsEnabled = unlocked && !inFlight && detail is not null;
+        LibraryRetainedButton.IsEnabled = unlocked && !inFlight && timeline is { RetainedRevisions.Length: > 0 };
+    }
+
+    private static string DescribeTimeline(OwnerTimelineDetail timeline)
+    {
+        var lines = new List<string>
+        {
+            "subject=" + timeline.SubjectResourceId + " kind=" + timeline.SubjectKind +
+                " publication=" + timeline.Publication +
+                (timeline.Question is null ? string.Empty : " question=" + timeline.Question) +
+                (timeline.Intention is null ? string.Empty : " intention=" + timeline.Intention) +
+                (string.IsNullOrEmpty(timeline.SupersededBy) ? string.Empty : " supersededBy=" + timeline.SupersededBy),
+            "occurred=" + DescribeStamp(timeline.Occurred) + " recorded=" + DescribeStamp(timeline.Recorded) +
+                " validFrom=" + DescribeStamp(timeline.ValidFrom) + " validUntil=" + DescribeStamp(timeline.ValidUntil) +
+                " reviewAfter=" + DescribeStamp(timeline.ReviewAfter),
+        };
+        foreach (var change in timeline.History)
+        {
+            lines.Add(
+                change.RecordedAtUtc.ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture) +
+                " " + change.Aspect + "/" + change.Act + " " + change.FromState + "->" + change.ToState +
+                " by=" + change.Executor +
+                (string.IsNullOrEmpty(change.Rationale) ? string.Empty : " rationale=" + change.Rationale) +
+                (string.IsNullOrEmpty(change.ReplacementResourceId) ? string.Empty : " replacement=" + change.ReplacementResourceId));
+        }
+
+        foreach (var entry in timeline.RetainedRevisions)
+        {
+            lines.Add(
+                "retained revision=" + entry.SubjectRevision.ToString(CultureInfo.InvariantCulture) +
+                " archive=" + entry.ArchiveResourceId + " by=" + entry.Executor +
+                " at=" + entry.RecordedAtUtc.ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture));
+        }
+
+        return string.Join("\n", lines);
+    }
+
+    private static string DescribeStamp(OwnerTimelineStamp? stamp)
+    {
+        if (stamp is null)
+        {
+            return "none";
+        }
+
+        if (string.Equals(stamp.Precision, "unknown", StringComparison.Ordinal))
+        {
+            return "unknown";
+        }
+
+        var zone = stamp.TimeZoneOffsetMinutes is { } offset
+            ? (offset < 0 ? "-" : "+") + (Math.Abs(offset) / 60).ToString("00", CultureInfo.InvariantCulture) + ":" +
+                (Math.Abs(offset) % 60).ToString("00", CultureInfo.InvariantCulture)
+            : "unknown";
+        if (string.Equals(stamp.Precision, "exact", StringComparison.Ordinal))
+        {
+            return "exact:" + (stamp.InstantUtc?.ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture) ?? "(none)") + "@" + zone;
+        }
+
+        return stamp.Precision + ":" + (stamp.LocalYear?.ToString(CultureInfo.InvariantCulture) ?? "?") +
+            (stamp.LocalMonth is { } month ? "-" + month.ToString("00", CultureInfo.InvariantCulture) : string.Empty) +
+            (stamp.LocalDay is { } day ? "-" + day.ToString("00", CultureInfo.InvariantCulture) : string.Empty) +
+            (stamp.LocalQuarter is { } quarter ? "-Q" + quarter.ToString(CultureInfo.InvariantCulture) : string.Empty) +
+            "@" + zone;
     }
 
     // ---- S5-T4 inbox: capture and proposal review ----

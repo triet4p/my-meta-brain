@@ -3751,7 +3751,7 @@ internal static class OwnerControlCli
     /// </summary>
     private static async Task<int> AgentSearchAsync(CommandOptions options)
     {
-        options.RequireOnly("--agent-pipe", "--session-file", "--query", "--offset", "--limit", "--kind", "--current");
+        options.RequireOnly("--agent-pipe", "--session-file", "--query", "--offset", "--limit", "--kind", "--current", "--as-of");
         var agentPipe = PipeName(options, "--agent-pipe");
         var sessionPath = options.Required("--session-file");
         var query = options.Required("--query");
@@ -3791,6 +3791,18 @@ internal static class OwnerControlCli
             return Usage();
         }
 
+        DateTimeOffset? asOfUtc = null;
+        if (options.Optional("--as-of") is { } asOfText)
+        {
+            if (!DateTimeOffset.TryParse(asOfText, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed) ||
+                parsed.Offset != TimeSpan.Zero)
+            {
+                return Usage();
+            }
+
+            asOfUtc = parsed;
+        }
+
         string sessionToken;
         try
         {
@@ -3812,7 +3824,8 @@ internal static class OwnerControlCli
                 SearchOffset: offset,
                 SearchLimit: limit,
                 SearchKind: kind,
-                SearchCurrent: current)).ConfigureAwait(false);
+                SearchCurrent: current,
+                SearchAsOfUtc: asOfUtc)).ConfigureAwait(false);
         if (!result.Success || !HasStatus(result.Reply, "memory_search") ||
             !result.Reply.TryGetProperty("memorySearch", out var page) ||
             page.ValueKind != JsonValueKind.Object)

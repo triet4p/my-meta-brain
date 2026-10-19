@@ -52,6 +52,12 @@ internal sealed partial class OwnerConsoleSession
     /// <summary>Last library index generation the service reported.</summary>
     public OwnerIndexReport? LibraryIndex { get; private set; }
 
+    /// <summary>S7-T1 decision history of the open item, exactly as the service served it.</summary>
+    public OwnerTimelineDetail? LibraryTimeline { get; private set; }
+
+    /// <summary>S7-T1 retained historical revision opened from the history, or null when none is shown.</summary>
+    public OwnerRetainedRevisionDetail? LibraryRetained { get; private set; }
+
     /// <summary>Owner-facing outcome of the last library act. Never private content.</summary>
     public string? LibraryMessage { get; private set; }
 
@@ -151,6 +157,54 @@ internal sealed partial class OwnerConsoleSession
     }
 
     /// <summary>
+    /// S7-T1 decision history of the open item: the recorded lifecycle states,
+    /// validity and history with every actor, time and rationale. History keeps
+    /// original motivations; a contradiction is never newest-wins.
+    /// </summary>
+    public async Task ReadLibraryTimelineAsync()
+    {
+        var item = LibraryItem;
+        if (item is null || TryBeginLibraryAct() is not { } epoch)
+        {
+            return;
+        }
+
+        var result = await ExecuteLibraryRequestAsync(
+            LibraryActTimeout,
+            token => OwnerChannelClient.ReadTimelineAsync(ControlPipe, item.Id, token),
+            errorCode => new OwnerTimelineResult(OwnerCommandOutcome.Unavailable, errorCode, null)).ConfigureAwait(true);
+
+        await ProbeAsync().ConfigureAwait(true);
+        ApplyTimelineAnswer(epoch, result);
+        Append(DescribeLibraryActForLog("decision history", result.Outcome, result.ErrorCode));
+        RaiseChanged();
+    }
+
+    /// <summary>
+    /// S7-T1 retained historical revision: the exact archived bytes of one
+    /// older subject revision named by the history. The live item is never
+    /// rewritten and a superseded frozen read never drifts onto newer content.
+    /// </summary>
+    public async Task OpenLibraryRetainedAsync(long subjectRevision)
+    {
+        var item = LibraryItem;
+        if (item is null || subjectRevision < 1 || TryBeginLibraryAct() is not { } epoch)
+        {
+            return;
+        }
+
+        var result = await ExecuteLibraryRequestAsync(
+            LibraryActTimeout,
+            token => OwnerChannelClient.ReadRetainedRevisionAsync(ControlPipe, item.Id, subjectRevision, token),
+            errorCode => new OwnerRetainedRevisionResult(OwnerCommandOutcome.Unavailable, errorCode, null)).ConfigureAwait(true);
+
+        await ProbeAsync().ConfigureAwait(true);
+        ApplyRetainedAnswer(epoch, result);
+        Append(DescribeLibraryActForLog("retained revision", result.Outcome, result.ErrorCode));
+        RaiseChanged();
+    }
+
+    /// <summary>
     /// Saves a new title through the existing revision-gated owner revise
     /// operation. The item keeps its ID: only a new revision of the same item is
     /// written, with the body, citations, times, applicability, attribution and
@@ -220,6 +274,8 @@ internal sealed partial class OwnerConsoleSession
             // A new page invalidates any detail and source opened from the old one.
             LibraryItem = null;
             LibrarySource = null;
+            LibraryTimeline = null;
+            LibraryRetained = null;
             LibraryMessage = DescribeLibraryAnswer("search", result.Outcome, result.ErrorCode, true);
         }
         else
@@ -258,6 +314,8 @@ internal sealed partial class OwnerConsoleSession
         if (!renamed)
         {
             LibrarySource = null;
+            LibraryTimeline = null;
+            LibraryRetained = null;
             return true;
         }
 
@@ -269,6 +327,8 @@ internal sealed partial class OwnerConsoleSession
             // rather than shown as if it still matched the vault.
             LibraryPage = null;
             LibrarySource = null;
+            LibraryTimeline = null;
+            LibraryRetained = null;
             LibraryMessage = "The service saved the new title as ID " + result.Item.Id +
                 " revision " + result.Item.Revision.ToString(CultureInfo.InvariantCulture) +
                 ": the same item, one new revision, with the stored body, citations, times and attribution unchanged. " +
@@ -305,6 +365,52 @@ internal sealed partial class OwnerConsoleSession
         return true;
     }
 
+    internal bool ApplyTimelineAnswer(long epoch, OwnerTimelineResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        if (epoch != _privateEpoch)
+        {
+            AppendIgnoredStaleAnswer("decision history");
+            return false;
+        }
+
+        if (result.Outcome == OwnerCommandOutcome.Completed && result.Timeline is not null)
+        {
+            LibraryTimeline = result.Timeline;
+            LibraryMessage = "The service served the recorded decision history of this item with its validity and every recorded act.";
+        }
+        else
+        {
+            LibraryMessage = DescribeLibraryAnswer("decision history", result.Outcome, result.ErrorCode, false);
+            ApplyPrivateRefusal(result.Outcome, result.ErrorCode);
+        }
+
+        return true;
+    }
+
+    internal bool ApplyRetainedAnswer(long epoch, OwnerRetainedRevisionResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        if (epoch != _privateEpoch)
+        {
+            AppendIgnoredStaleAnswer("retained revision");
+            return false;
+        }
+
+        if (result.Outcome == OwnerCommandOutcome.Completed && result.Retained is not null)
+        {
+            LibraryRetained = result.Retained;
+            LibraryMessage = "The service served the exact retained revision the history named; nothing else was substituted.";
+        }
+        else
+        {
+            LibraryMessage = DescribeLibraryAnswer("retained revision", result.Outcome, result.ErrorCode, false);
+            ApplyPrivateRefusal(result.Outcome, result.ErrorCode);
+        }
+
+        return true;
+    }
+
     /// <summary>
     /// Applies one index answer requested under <paramref name="epoch"/>, with
     /// the same epoch guard as a page answer.
@@ -329,6 +435,8 @@ internal sealed partial class OwnerConsoleSession
         LibraryPage = null;
         LibraryItem = null;
         LibrarySource = null;
+        LibraryTimeline = null;
+        LibraryRetained = null;
         LibraryMessage = "The service materialized index generation " +
             ShortDigest(result.Index.CanonicalDigest) + " with " +
             result.Index.RowCount.ToString(CultureInfo.InvariantCulture) +
@@ -371,6 +479,8 @@ internal sealed partial class OwnerConsoleSession
         LibraryPage = null;
         LibraryItem = null;
         LibrarySource = null;
+        LibraryTimeline = null;
+        LibraryRetained = null;
     }
 
     private void ApplyPrivateRefusal(OwnerCommandOutcome outcome, string? errorCode)

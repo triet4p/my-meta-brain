@@ -59,6 +59,7 @@ public sealed record ServiceRequest(
     string? SearchLevel = null,
     DateTimeOffset? SearchFromUtc = null,
     DateTimeOffset? SearchToUtc = null,
+    DateTimeOffset? SearchAsOfUtc = null,
     string? JobId = null,
     string? BaseUrl = null,
     string? ApiKey = null,
@@ -198,20 +199,21 @@ public sealed record ProposalReviewWire(
 /// owner rebuilds the index, so a page is always a page of a generation that
 /// still equals canonical.
 /// </summary>
-public sealed record LibraryPageWire(
-    string Query,
-    string? ZoneId,
-    string? CollectionId,
-    string? Kind,
-    string? Level,
-    string Current,
-    DateTimeOffset? FromUtc,
-    DateTimeOffset? ToUtc,
-    int Total,
-    int Offset,
-    int Limit,
-    bool HasMore,
-    LibraryHitWire[] Hits);
+    public sealed record LibraryPageWire(
+        string Query,
+        string? ZoneId,
+        string? CollectionId,
+        string? Kind,
+        string? Level,
+        string Current,
+        DateTimeOffset? FromUtc,
+        DateTimeOffset? ToUtc,
+        int Total,
+        int Offset,
+        int Limit,
+        bool HasMore,
+        LibraryHitWire[] Hits,
+        DateTimeOffset? AsOfUtc = null);
 
 /// One S4-T4 brief entry: the approved ID and frozen revision it was
 /// projected from, the bounded excerpt carried under the caller's budget, and
@@ -946,11 +948,19 @@ public sealed class ServiceRequestHandler
             return Error("unsupported_protocol");
         }
 
-        // The owner library filters are accepted by exactly one operation. Any
-        // other operation carrying them fails closed here instead of silently
-        // ignoring a field its own request contract does not name.
+        // The owner library filters are accepted by exactly one operation, plus
+        // the S7-T1 as-of instant which the agent search contract also names.
+        // Any other operation carrying them fails closed here instead of
+        // silently ignoring a field its own request contract does not name.
         if (HasLibraryFilterFields(request) &&
             !string.Equals(request.Operation, OwnerLibrarySearchOperation, StringComparison.Ordinal))
+        {
+            return Error("invalid_request");
+        }
+
+        if (request.SearchAsOfUtc is not null &&
+            !string.Equals(request.Operation, OwnerLibrarySearchOperation, StringComparison.Ordinal) &&
+            !string.Equals(request.Operation, AgentMemorySearchOperation, StringComparison.Ordinal))
         {
             return Error("invalid_request");
         }
@@ -4994,6 +5004,11 @@ public sealed class ServiceRequestHandler
             return ResourceDenied();
         }
 
+        if (request.SearchAsOfUtc is { } searchAsOf && (searchAsOf.Offset != TimeSpan.Zero || searchAsOf > DateTimeOffset.UtcNow.AddMinutes(5)))
+        {
+            return ResourceDenied();
+        }
+
         var authority = new ScopedSearchAuthority();
         var started = DateTimeOffset.UtcNow;
         IReadOnlyList<ScopedSearchAuthority.ScoredHit> page;
@@ -5001,8 +5016,8 @@ public sealed class ServiceRequestHandler
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            total = authority.Count(session, request.Query, request.SearchKind, request.SearchCurrent, materialized, _privateIndexStore, operation);
-            page = authority.Search(session, request.Query, request.SearchKind, request.SearchCurrent, offset, limit, materialized, _privateIndexStore, operation);
+            total = authority.Count(session, request.Query, request.SearchKind, request.SearchCurrent, materialized, _privateIndexStore, operation, request.SearchAsOfUtc);
+            page = authority.Search(session, request.Query, request.SearchKind, request.SearchCurrent, offset, limit, materialized, _privateIndexStore, operation, request.SearchAsOfUtc);
         }
         catch (OperationCanceledException)
         {
@@ -5378,6 +5393,11 @@ public sealed class ServiceRequestHandler
             return Error("invalid_request");
         }
 
+        if (request.SearchAsOfUtc is { } asOfUtc && (asOfUtc.Offset != TimeSpan.Zero || asOfUtc > DateTimeOffset.UtcNow.AddMinutes(5)))
+        {
+            return Error("invalid_request");
+        }
+
         HashSet<string>? collectionMembers = null;
         if (collectionId is not null)
         {
@@ -5434,7 +5454,7 @@ public sealed class ServiceRequestHandler
             page = authority.SearchOwner(
                 scope,
                 new ScopedSearchAuthority.OwnerLibraryQuery(
-                    request.Query, kind, current, level, request.SearchFromUtc, request.SearchToUtc, offset, limit),
+                    request.Query, kind, current, level, request.SearchFromUtc, request.SearchToUtc, offset, limit, request.SearchAsOfUtc),
                 materialized,
                 _privateIndexStore,
                 operation);
@@ -5482,7 +5502,8 @@ public sealed class ServiceRequestHandler
                 offset,
                 limit,
                 offset + hits.Length < page.Total,
-                hits));
+                hits,
+                request.SearchAsOfUtc));
     }
 
     /// <summary>
@@ -7621,7 +7642,7 @@ public sealed class ServiceRequestHandler
         request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null;
     /// <summary>
     /// S4-T2 scoped search carries only the session bearer, the access
-    /// operation name, the query text and its paging/kind/current filters.
+    /// operation name, the query text and its paging/kind/current/as-of filters.
     /// Every identity, zone, scope, credential, catalog, egress and
     /// content-draft field is refused, so a query can never steer the search
     /// toward another scope or mint authority.
@@ -7647,7 +7668,11 @@ public sealed class ServiceRequestHandler
         request.SourceLocator is not null || request.SourceFormat is not null ||
         request.SourceFormatVersion is not null || request.SourceTitle is not null ||
         request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
-        request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null;
+        request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null ||
+        request.SearchLevel is not null || request.SearchFromUtc is not null || request.SearchToUtc is not null;
+    // Note: SearchAsOfUtc is intentionally NOT an extra: it is the S7-T1
+    // as-of filter of the agent search contract, validated (UTC, not future)
+    // in the handler itself.
 
     /// <summary>
     /// S4-T4 scoped brief carries only the session bearer, the access

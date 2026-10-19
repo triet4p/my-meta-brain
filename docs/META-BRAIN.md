@@ -333,9 +333,9 @@ Quản trị grant, declassification và purge nằm trên owner channel. Trả 
 
 ## 12. Thời gian, dự định và quên
 
-Thời gian tách occurred_at, recorded_at, valid_from/valid_until và review_after; không gán thời điểm import cho thời điểm xảy ra. Giữ độ chính xác/unknown và múi giờ phù hợp; không bịa ngày chính xác từ “quý tới”.
+    Thời gian tách occurred_at, recorded_at, valid_from/valid_until và review_after; không gán thời điểm import cho thời điểm xảy ra. Giữ độ chính xác/unknown và múi giờ phù hợp; không bịa ngày chính xác từ “quý tới”.
 
-Thay quyết định giữ lịch sử supersedes. Current query tránh lời khuyên hết hiệu lực; historical query có thể truy lại. Mâu thuẫn chưa phân giải vẫn hiển thị là mâu thuẫn, không mặc định newest wins.
+    Implementation (S7-T1): current/as-of/history query và UI timeline chạy trên validity/revision đã có, không đổi temporal schema meaning. Current loại withdrawn/rejected, hết validity và superseded (intention superseded hoặc `supersedes` proposed/accepted); history giữ tất cả kèm lý do gốc. As-of replay history chỉ tới instant đó (UTC, không future) nên current phản ánh đúng điều đã recorded lúc đó. Window coarse không zone không bound gì; unknown không bịa ngày; bounds inclusive; contradicts không newest-wins.
 
 Intention có pending/done/cancelled/superseded, trigger theo thời gian hoặc ngữ cảnh user chọn. Lịch chạy không cần LLM. Không có agent kết nối thì due item vẫn tồn tại. Đã nhắc không phải đã hoàn thành; lịch đã tắt không tiếp tục âm thầm nhắc. Việc hoàn thành cần thao tác/bằng chứng theo policy, không suy từ câu trả lời AI.
 
@@ -351,10 +351,10 @@ Không tự xóa chỉ vì ít truy cập; bài học hiếm có thể rất qua
 
 UI tối thiểu về phạm vi sản phẩm, không phải MVP:
 
-- Inbox: capture văn bản, nguồn mới, proposals và trạng thái job.
-- Library: duyệt theo zone, project/topic, kind, thời gian, level và tìm kiếm.
-- Detail/review: đọc nguồn cạnh nội dung, revision diff, sửa, publish/reject, relations, contradiction và undo phù hợp.
-- Timeline/intentions: lịch sử quyết định, việc đang chờ, due và review-after.
+    - Inbox: capture văn bản, nguồn mới, proposals và trạng thái job.
+    - Library: duyệt theo zone, project/topic, kind, thời gian, level và tìm kiếm; current/history/as-of, decision history và retained revision của item đang mở.
+    - Detail/review: đọc nguồn cạnh nội dung, revision diff, sửa, publish/reject, relations, contradiction và undo phù hợp.
+    - Timeline/intentions: lịch sử quyết định, việc đang chờ, due và review-after.
 - Access: catalog publication, agent access requests/mục đích, preview/chọn IDs/revisions/operations/provider scope, token handoff, expiry/revoke và “agent này thấy gì”; không protected-runtime launcher.
 - Settings/operations: unlock/lock, key/recovery và mất key, nguồn allowlist, model/egress, automation opt-in, retention, encrypted backup/restore, explicit export và health.
 

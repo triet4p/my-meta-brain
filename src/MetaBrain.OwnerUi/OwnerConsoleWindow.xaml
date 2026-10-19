@@ -227,6 +227,7 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
                             <TextBlock Grid.Row="0" Grid.Column="0" Text="Search text" Foreground="#FF6B7280" Margin="0,0,0,6" />
@@ -250,12 +251,18 @@
                             <ComboBox Grid.Row="2" Grid.Column="3" x:Name="LibraryCurrentInput" Margin="0,0,0,6"
                                       AutomationProperties.AutomationId="LibraryCurrentInput" />
 
-                            <TextBlock Grid.Row="3" Grid.Column="0" Text="From (UTC)" Foreground="#FF6B7280" />
-                            <TextBox Grid.Row="3" Grid.Column="1" x:Name="LibraryFromInput" Margin="0,0,10,0"
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="From (UTC)" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="3" Grid.Column="1" x:Name="LibraryFromInput" Margin="0,0,10,6"
                                      AutomationProperties.AutomationId="LibraryFromInput" />
-                            <TextBlock Grid.Row="3" Grid.Column="2" Text="To (UTC)" Foreground="#FF6B7280" />
-                            <TextBox Grid.Row="3" Grid.Column="3" x:Name="LibraryToInput"
+                            <TextBlock Grid.Row="3" Grid.Column="2" Text="To (UTC)" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="3" Grid.Column="3" x:Name="LibraryToInput" Margin="0,0,0,6"
                                      AutomationProperties.AutomationId="LibraryToInput" />
+
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="As of (UTC)" Foreground="#FF6B7280" />
+                            <TextBox Grid.Row="4" Grid.Column="1" x:Name="LibraryAsOfInput" Margin="0,0,10,0"
+                                     AutomationProperties.AutomationId="LibraryAsOfInput" />
+                            <TextBlock Grid.Row="4" Grid.Column="2" Text="" Foreground="#FF6B7280" />
+                            <TextBlock Grid.Row="4" Grid.Column="3" Text="Current + as-of replays history" Foreground="#FF6B7280" TextWrapping="Wrap" />
                         </Grid>
 
                         <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
@@ -298,6 +305,16 @@
 
                                 <TextBlock Text="Source as the service served it" FontWeight="SemiBold" Margin="0,14,0,0" />
                                 <TextBlock x:Name="LibrarySourceText" TextWrapping="Wrap" Margin="0,6,0,0" FontFamily="Consolas" />
+
+                                <TextBlock Text="Decision history (recorded acts of this item)" FontWeight="SemiBold" Margin="0,14,0,0" />
+                                <TextBlock x:Name="LibraryHistoryText" TextWrapping="Wrap" Margin="0,6,0,0" FontFamily="Consolas" />
+                                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                    <Button x:Name="LibraryHistoryButton" Content="Read decision history" Padding="14,7"
+                                        Margin="0,0,0,0" HorizontalAlignment="Left" Click="OnLibraryHistoryClicked" />
+                                    <Button x:Name="LibraryRetainedButton" Content="Open retained revision" Padding="14,7"
+                                        Margin="8,0,0,0" HorizontalAlignment="Left" Click="OnLibraryRetainedClicked" />
+                                </StackPanel>
+                                <TextBlock x:Name="LibraryRetainedText" TextWrapping="Wrap" Margin="0,6,0,0" FontFamily="Consolas" />
                             </StackPanel>
                         </Border>
 
@@ -307,9 +324,9 @@
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
                                    Text="• Searching reads the materialized library index generation, not the vault files: after a write (a new item, a revision, a publication change) the service refuses to search that generation and asks you to rebuild it, because a match it named could no longer be opened at that revision. A page is therefore only ever answered from a generation that still matches the vault." />
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
-                                   Text="• The body you see is the exact revision the service served; an item's older revisions are not readable (only the live revision and lifecycle-retained archives are), so this view never claims to show an item's revision history." />
+                                   Text="• The body you see is the exact revision the service served. Decision history is the item's recorded lifecycle acts with the actor, time and rationale; a retained revision is the exact archived bytes of one older subject revision. History keeps original motivations; a contradiction is never resolved by newest-wins." />
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
-                                   Text="• A citation the service reports as unknown or superseded is shown as such, with its warning; a missing source stays visibly missing and is never presented as verified." />
+                                   Text="• Current excludes withdrawn, rejected, expired and superseded items; choose History to keep them. As-of replays recorded history only through that instant. A citation the service reports as unknown or superseded is shown as such, with its warning; a missing source stays visibly missing and is never presented as verified." />
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
                                    Text="• Keyboard: Ctrl+F focuses the search box, Enter searches, arrows choose a result, Enter opens it, Enter on a citation opens that source, and Ctrl+L locks the vault." />
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
