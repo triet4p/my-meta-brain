@@ -944,12 +944,15 @@ public sealed record OwnerScheduledIntention(
     string State,
     string? Title,
     string BodyPreview,
-    DateTimeOffset DueAt,
+    DateTimeOffset? DueAt,
     bool IsDue,
     bool Notified,
     DateTimeOffset? NotifiedAtUtc,
     bool Acknowledged,
-    DateTimeOffset? AcknowledgedAtUtc);
+    DateTimeOffset? AcknowledgedAtUtc,
+    string? ContextProject,
+    string? ContextTask,
+    bool ContextTriggerEnabled);
 
 public sealed record OwnerIntentionScheduleListResult(
     OwnerCommandOutcome Outcome,
@@ -2837,6 +2840,48 @@ public static class OwnerChannelClient
             CryptographicOperations.ZeroMemory(draft);
         }
     }
+    /// <summary>
+    /// Enables an explicit project/task context trigger or disables the
+    /// currently configured trigger without changing the intention itself.
+    /// The expected lifecycle revision protects an owner edit against a stale row.
+    /// </summary>
+    public static async Task<OwnerLifecycleResult> SetIntentionContextTriggerAsync(
+        string controlPipe,
+        string resourceId,
+        string? project,
+        string? task,
+        bool disable,
+        long? expectedLifecycleRevision,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(resourceId);
+        if (string.IsNullOrEmpty(resourceId) ||
+            disable == (project is not null || task is not null) ||
+            expectedLifecycleRevision is < 1)
+        {
+            throw new ArgumentException("Set a project/task context or explicitly disable it; a supplied lifecycle revision must be positive.");
+        }
+
+        var draft = JsonSerializer.SerializeToUtf8Bytes(
+            new IntentionContextTriggerDraft(project, task, disable, expectedLifecycleRevision));
+        try
+        {
+            var reply = await ReadReplyAsync(
+                controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.OwnerIntentionContextTriggerSetOperation,
+                    ResourceId: resourceId,
+                    ContentBase64: Convert.ToBase64String(draft)),
+                disable ? "intention_context_trigger_disabled" : "intention_context_trigger_enabled",
+                cancellationToken).ConfigureAwait(false);
+            return new OwnerLifecycleResult(reply.Outcome, reply.ErrorCode, ProjectLifecycle(reply));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(draft);
+        }
+    }
 
     public static async Task<OwnerIntentionSchedulePassResult> RunIntentionSchedulePassAsync(
         string controlPipe,
@@ -2849,10 +2894,14 @@ public static class OwnerChannelClient
                 ServiceRequestHandler.OwnerIntentionScheduleRunOperation),
             "intention_schedule_pass",
             cancellationToken).ConfigureAwait(false);
-        var notifications = reply.Payload.TryGetProperty("intentionSchedulePass", out var pass) &&
-            pass.ValueKind == JsonValueKind.Object
-                ? Int32(pass, "notificationsRecorded")
-                : (int?)null;
+        int? notifications = null;
+        if (reply.Outcome == OwnerCommandOutcome.Completed &&
+            reply.Payload.ValueKind == JsonValueKind.Object &&
+            reply.Payload.TryGetProperty("intentionSchedulePass", out var pass) &&
+            pass.ValueKind == JsonValueKind.Object)
+        {
+            notifications = Int32(pass, "notificationsRecorded");
+        }
         return new OwnerIntentionSchedulePassResult(reply.Outcome, reply.ErrorCode, notifications);
     }
 
@@ -3374,7 +3423,7 @@ public static class OwnerChannelClient
         var index = 0;
         foreach (var item in items.EnumerateArray())
         {
-            if (item.ValueKind != JsonValueKind.Object || Timestamp(item, "dueAt") is not { } dueAt)
+            if (item.ValueKind != JsonValueKind.Object)
             {
                 return null;
             }
@@ -3386,12 +3435,15 @@ public static class OwnerChannelClient
                 Text(item, "state") ?? string.Empty,
                 Text(item, "title"),
                 Text(item, "bodyPreview") ?? string.Empty,
-                dueAt,
+                Timestamp(item, "dueAt"),
                 Flag(item, "isDue"),
                 Flag(item, "notified"),
                 Timestamp(item, "notifiedAtUtc"),
                 Flag(item, "acknowledged"),
-                Timestamp(item, "acknowledgedAtUtc"));
+                Timestamp(item, "acknowledgedAtUtc"),
+                Text(item, "contextProject"),
+                Text(item, "contextTask"),
+                Flag(item, "contextTriggerEnabled"));
         }
 
         return result;

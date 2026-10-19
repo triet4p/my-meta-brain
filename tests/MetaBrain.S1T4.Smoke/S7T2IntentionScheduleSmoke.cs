@@ -147,14 +147,39 @@ internal static partial class OwnerServiceSmoke
             try
             {
                 Require(!Encoding.UTF8.GetString(legacyBytes).Contains("intentionDueAt", StringComparison.Ordinal),
-                    "The old lifecycle fixture unexpectedly included the new trigger field.");
-                var migrated = LifecycleCodec.DecodeStored(legacyBytes);
-                Require(migrated.SchemaVersion == LifecycleCodec.CurrentSchemaVersion && migrated.IntentionDueAt is null,
-                    "A trigger-free v1 lifecycle record did not migrate in memory to v2 without changing validity.");
+                    "The pre-schedule lifecycle fixture unexpectedly included a time-trigger field.");
+                var migratedV1 = LifecycleCodec.DecodeStored(legacyBytes);
+                Require(migratedV1.SchemaVersion == LifecycleCodec.CurrentSchemaVersion && migratedV1.IntentionDueAt is null &&
+                        migratedV1.ContextTrigger is null,
+                    "A trigger-free v1 lifecycle record did not migrate in memory to the current schema without changing validity.");
             }
             finally
             {
                 CryptographicOperations.ZeroMemory(legacyBytes);
+            }
+
+            var v2Due = new TemporalStamp(
+                TimestampPrecision.Exact,
+                DateTimeOffset.UtcNow,
+                null,
+                null,
+                null,
+                null,
+                0);
+            var v2Bytes = JsonSerializer.SerializeToUtf8Bytes(
+                legacy with { SchemaVersion = 2, IntentionDueAt = v2Due },
+                legacyOptions);
+            try
+            {
+                var migratedV2 = LifecycleCodec.DecodeStored(v2Bytes);
+                Require(migratedV2.SchemaVersion == LifecycleCodec.CurrentSchemaVersion &&
+                        migratedV2.IntentionDueAt?.InstantUtc == v2Due.InstantUtc &&
+                        migratedV2.ContextTrigger is null,
+                    "A v2 time trigger did not migrate to the current schema unchanged.");
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(v2Bytes);
             }
 
             var noOffsetRequest = await S7T2SetTriggerAsync(handler, vault, S7T2ControlledId,
@@ -487,7 +512,8 @@ internal static partial class OwnerServiceSmoke
         var ackDue = now.AddMinutes(-2).ToOffset(TimeSpan.FromHours(-4)).ToString("O", CultureInfo.InvariantCulture);
         await SetS7T2WpfTriggerAsync(window, session, S7T2UiAcknowledgeId, ackDue).ConfigureAwait(true);
         var dueAck = session.ScheduledIntentions.Single(item => item.ResourceId == S7T2UiAcknowledgeId);
-        Require(dueAck.IsDue && dueAck.DueAt.Offset == TimeSpan.FromHours(-4) && dueAck.State == "pending",
+        Require(dueAck.IsDue && dueAck.DueAt is { Offset: var dueOffset } &&
+                dueOffset == TimeSpan.FromHours(-4) && dueAck.State == "pending",
             "The WPF due list did not show the exact past trigger with its explicit offset and pending state.");
         var ackPass = await OwnerChannelClient.RunIntentionSchedulePassAsync(fixture.ControlPipe, CancellationToken.None).ConfigureAwait(true);
         Require(ackPass.Outcome == OwnerCommandOutcome.Completed, "The real owner schedule pass did not run from the shown UI scenario.");
@@ -514,7 +540,8 @@ internal static partial class OwnerServiceSmoke
         Require(window.IntentionTriggerSetButton.IsEnabled, "The WPF edit control did not enable for a valid explicit-offset timestamp.");
         window.IntentionTriggerSetButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         Require(await WaitForAsync(() => session.ScheduledIntentions.SingleOrDefault(item => item.ResourceId == S7T2UiAcknowledgeId) is
-                { IsDue: false, Notified: false, Acknowledged: false } item && item.DueAt.Offset == TimeSpan.FromMinutes(330),
+                { IsDue: false, Notified: false, Acknowledged: false } item &&
+                item.DueAt is { Offset: var futureOffset } && futureOffset == TimeSpan.FromMinutes(330),
             TimeSpan.FromSeconds(30)).ConfigureAwait(true),
             "The WPF reschedule did not persist the new offset or reset only acknowledgement/notification markers.");
         SelectS7T2WpfIntention(window, session, S7T2UiAcknowledgeId);

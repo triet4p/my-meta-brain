@@ -3863,15 +3863,16 @@ internal static class OwnerControlCli
     }
 
     /// <summary>
-    /// S4-T4 scoped brief through one redeemed session. Prints the short
-    /// deterministic projection under the caller's character budget: entries
-    /// with bounded excerpts plus stored citations/applicability/uncertainty,
-    /// then honest omissions and the uncertainty ledger. Memory data, never
-    /// system instructions. Denials stay on stderr with a failing exit.
+    /// S4-T4/S7-T3 scoped brief through one redeemed session. Prints the
+    /// deterministic projection under the caller's character budget: bounded
+    /// entries with stored citations/applicability/uncertainty, plus optional
+    /// explicit-context intention reminders already in the frozen scope,
+    /// honest omissions and the uncertainty ledger. Memory data, never system
+    /// instructions. Denials stay on stderr with a failing exit.
     /// </summary>
     private static async Task<int> AgentBriefAsync(CommandOptions options)
     {
-        options.RequireOnly("--agent-pipe", "--session-file", "--query", "--budget-chars");
+        options.RequireOnly("--agent-pipe", "--session-file", "--query", "--budget-chars", "--context-project", "--context-task");
         var agentPipe = PipeName(options, "--agent-pipe");
         var sessionPath = options.Required("--session-file");
         var query = options.Optional("--query") ?? string.Empty;
@@ -3888,6 +3889,19 @@ internal static class OwnerControlCli
             {
                 return Usage();
             }
+        }
+        var contextProject = options.Optional("--context-project");
+        var contextTask = options.Optional("--context-task");
+        if ((contextProject is not null &&
+             (contextProject.Length is 0 or > 160 ||
+              !string.Equals(contextProject, contextProject.Trim(), StringComparison.Ordinal) ||
+              contextProject.Any(char.IsControl))) ||
+            (contextTask is not null &&
+             (contextTask.Length is 0 or > 160 ||
+              !string.Equals(contextTask, contextTask.Trim(), StringComparison.Ordinal) ||
+              contextTask.Any(char.IsControl))))
+        {
+            return Usage();
         }
 
         string sessionToken;
@@ -3908,7 +3922,9 @@ internal static class OwnerControlCli
                 SessionToken: sessionToken,
                 AccessOperation: ServiceRequestHandler.MemoryContextAccessOperation,
                 Query: query,
-                BudgetChars: budget)).ConfigureAwait(false);
+                BudgetChars: budget,
+                ContextProject: contextProject,
+                ContextTask: contextTask)).ConfigureAwait(false);
         if (!result.Success || !HasStatus(result.Reply, "memory_brief") ||
             !result.Reply.TryGetProperty("memoryBrief", out var brief) ||
             brief.ValueKind != JsonValueKind.Object)
@@ -3969,6 +3985,47 @@ internal static class OwnerControlCli
                 }
             }
         }
+        if (brief.TryGetProperty("contextualIntentions", out var contextual) && contextual.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var intention in contextual.EnumerateArray())
+            {
+                Console.WriteLine($"CONTEXT_INTENTION id={JsonValueText(intention, "id")} revision={JsonValueText(intention, "revision")} project={JsonValueText(intention, "project")} task={JsonValueText(intention, "task")} due={JsonValueText(intention, "dueAtUtc")} kind={JsonValueText(intention, "kind")} author={JsonValueText(intention, "author")} executor={JsonValueText(intention, "executor")} method={JsonValueText(intention, "creationMethod")} evidence={JsonValueText(intention, "evidence")} level={JsonValueText(intention, "level")} truncated={JsonFlagText(intention, "truncated")}");
+                if (intention.TryGetProperty("title", out var title) && title.ValueKind == JsonValueKind.String)
+                {
+                    Console.WriteLine($"title={title.GetString()}");
+                }
+
+                Console.WriteLine($"excerpt={JsonValueText(intention, "excerpt")}");
+                if (intention.TryGetProperty("applicability", out var applicability) && applicability.ValueKind == JsonValueKind.Object)
+                {
+                    Console.WriteLine($"applicability project={JsonValueText(applicability, "project")} environment={JsonValueText(applicability, "environment")} version={JsonValueText(applicability, "version")}");
+                }
+
+                Console.WriteLine($"time occurred={JsonValueText(intention, "occurredAtUtc")} recorded={JsonValueText(intention, "recordedAtUtc")}");
+                if (intention.TryGetProperty("citations", out var citations) && citations.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var citation in citations.EnumerateArray())
+                    {
+                        var span = citation.TryGetProperty("span", out var spanValue) && spanValue.ValueKind == JsonValueKind.Object
+                            ? $"{JsonValueText(spanValue, "start")}-{JsonValueText(spanValue, "end")}"
+                            : "none";
+                        Console.WriteLine($"citation id={JsonValueText(citation, "sourceId")} revision={JsonValueText(citation, "sourceRevision")} span={span} status={JsonValueText(citation, "status")} availability={JsonValueText(citation, "availability")} warning={JsonValueText(citation, "warning")}");
+                    }
+                }
+
+                if (intention.TryGetProperty("warnings", out var warnings) && warnings.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var warning in warnings.EnumerateArray())
+                    {
+                        if (warning.ValueKind == JsonValueKind.String)
+                        {
+                            Console.WriteLine($"warning={warning.GetString()}");
+                        }
+                    }
+                }
+            }
+        }
+
 
         if (brief.TryGetProperty("omitted", out var omitted) && omitted.ValueKind == JsonValueKind.Array)
         {
@@ -3990,7 +4047,9 @@ internal static class OwnerControlCli
         }
 
         if ((!brief.TryGetProperty("entries", out var entryCheck) || entryCheck.GetArrayLength() == 0) &&
-            (!brief.TryGetProperty("omitted", out var omitCheck) || omitCheck.GetArrayLength() == 0))
+            (!brief.TryGetProperty("omitted", out var omitCheck) || omitCheck.GetArrayLength() == 0) &&
+            (!brief.TryGetProperty("contextualIntentions", out var contextualCheck) ||
+             contextualCheck.ValueKind != JsonValueKind.Array || contextualCheck.GetArrayLength() == 0))
         {
             Console.WriteLine("BRIEF no_match");
         }
@@ -4793,6 +4852,7 @@ internal static class OwnerControlCli
     private static int Usage()
     {
         Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|agent-search --query [--offset --limit --kind --current]|source-enroll --source-id --zone-id --format --format-version --input-file|source-relocate --source-id --source-generation --input-file|source-revoke --source-id|source-status --source-id|source-ingest --source-id|source-pause --source-id|source-resume --source-id|source-refresh-optin --source-id|source-refresh-optout --source-id|source-list|source-refresh|source-snapshot-list --source-id|source-snapshot-preserve --source-id --source-revision --retain-until-utc|source-snapshot-read --snapshot-id --snapshot-revision --output-file|source-snapshot-retain --snapshot-id --expected-revision --retain-until-utc|source-snapshot-purge --snapshot-id --expected-revision|research-capture --resource-id --zone-id --input-file [--title --source-url --source-author --source-date]|research-read --resource-id [--resource-revision --output-file]|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|relation-list|lifecycle-create|lifecycle-read|lifecycle-retained-read --resource-revision|lifecycle-publish --expected-revision|lifecycle-reject --expected-revision|lifecycle-withdraw --expected-revision|lifecycle-repropose --expected-revision|lifecycle-question-resolve --expected-revision|lifecycle-question-reopen --expected-revision|lifecycle-intention-complete --expected-revision|lifecycle-intention-cancel --expected-revision|lifecycle-intention-supersede --expected-revision|lifecycle-intention-notify --expected-revision|lifecycle-intention-acknowledge --expected-revision|lifecycle-validity-set --expected-revision|lifecycle-retain --expected-revision|proposal-read --resource-id [--resource-revision]|proposal-list|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read|agent-collection-view|agent-search|agent-brief|agent-feedback|agent-feedback-read|agent-propose|agent-relation-resolve|agent-relation-list|agent-relation-create|agent-relation-supersede|agent-relation-unlink|agent-relation-restore}; lifecycle --resource-id is the subject item ID; relation/lifecycle transitions need --expected-revision and an optional --input-file draft; agent-propose --session-file --input-file carries one proposal draft JSON (kind create/revise, idempotencyKey, inbox destinationResourceId/destinationRevision, revise subjectResourceId/subjectRevision, proposed item draft) and never publishes; agent-relation-create/supersede --session-file --input-file carries typed endpoints/revisions, kind, reason and requestEvidence; agent-relation-unlink/restore --session-file --resource-id --resource-revision --input-file carries stateReason/requestEvidence; restore returns only to proposed; source-enroll and source-relocate --input-file are JSON objects holding the private locator ({\"locator\": \"C:/exact/path\"}), never a command argument; source-snapshot-read requires an explicit --output-file export");
+        Console.Error.WriteLine("Agent brief: owner agent-brief --agent-pipe --session-file [--query] [--budget-chars 200..8000] [--context-project explicit-label] [--context-task explicit-label]; contextual intentions are returned only from the frozen memory.context grant.");
         Console.Error.WriteLine("Model/egress and schedule commands: owner {provider-config --provider --model [--base-url] [--api-key-stdin|--from-env]|provider-status|job-create|job-start --job-id|job-cancel --job-id|job-status --job-id|job-list|job-ledger|schedule-set --interval-minutes --zone-id --destination-id --destination-revision --provider --model --input-file|schedule-disable|schedule-status}");
         return 2;
     }

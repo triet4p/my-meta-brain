@@ -66,7 +66,9 @@ public sealed record ServiceRequest(
     string? BaseUrl = null,
     string? ApiKey = null,
     string? Profile = null,
-    int? IntervalMinutes = null);
+    int? IntervalMinutes = null,
+    string? ContextProject = null,
+    string? ContextTask = null);
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
     ScopeResourceRevision[] Resources,
@@ -242,6 +244,32 @@ public sealed record BriefEntryWire(
     string[]? Warnings);
 
 /// <summary>
+/// A reminder projected only from an owner-enabled contextual trigger on the
+/// exact approved intention revision. The excerpt is bounded by the brief
+/// budget and carries no lifecycle mutation.
+/// </summary>
+public sealed record ContextualIntentionWire(
+    string Id,
+    long Revision,
+    string Kind,
+    string Author,
+    string Executor,
+    string CreationMethod,
+    string Evidence,
+    string Level,
+    string? Title,
+    string Excerpt,
+    bool Truncated,
+    DateTimeOffset? OccurredAtUtc,
+    DateTimeOffset RecordedAtUtc,
+    Core.Domain.MemoryApplicability? Applicability,
+    MemoryCitationWire[]? Citations,
+    string[]? Warnings,
+    string? Project,
+    string? Task,
+    DateTimeOffset? DueAtUtc);
+
+/// <summary>
 /// One honestly omitted scope member: an approved (ID, revision) pair left
 /// out of the brief with the reason it was not selected. Identity and reason
 /// only, never body text.
@@ -266,7 +294,8 @@ public sealed record MemoryBriefWire(
     BriefEntryWire[] Entries,
     BriefOmissionWire[] Omitted,
     string[] Uncertain,
-    long PolicyGeneration);
+    long PolicyGeneration,
+    ContextualIntentionWire[]? ContextualIntentions = null);
 
 /// <summary>
 /// One S4-T4 stored feedback record as served to its granted audience.
@@ -498,7 +527,8 @@ public sealed record LifecycleWire(
     DateTimeOffset RecordedAtUtc,
     LifecycleChangeWire[] History,
     LifecycleRetainedRevisionWire[] RetainedRevisions,
-    LifecycleStampWire? IntentionDueAt = null);
+    LifecycleStampWire? IntentionDueAt = null,
+    Core.Domain.IntentionContextTrigger? ContextTrigger = null);
 
 public sealed record ScheduledIntentionWire(
     string ResourceId,
@@ -507,12 +537,15 @@ public sealed record ScheduledIntentionWire(
     string State,
     string? Title,
     string BodyPreview,
-    DateTimeOffset DueAt,
+    DateTimeOffset? DueAt,
     bool IsDue,
     bool Notified,
     DateTimeOffset? NotifiedAtUtc,
     bool Acknowledged,
-    DateTimeOffset? AcknowledgedAtUtc);
+    DateTimeOffset? AcknowledgedAtUtc,
+    string? ContextProject,
+    string? ContextTask,
+    bool ContextTriggerEnabled);
 
 public sealed record IntentionScheduleWire(ScheduledIntentionWire[] Items);
 
@@ -869,6 +902,7 @@ public sealed class ServiceRequestHandler
     public const string LifecycleAcknowledgeOperation = "lifecycle.intention.acknowledge";
     public const string OwnerIntentionScheduleListOperation = "owner.intentions.list";
     public const string OwnerIntentionTriggerSetOperation = "owner.intention.trigger.set";
+    public const string OwnerIntentionContextTriggerSetOperation = "owner.intention.context-trigger.set";
     public const string OwnerIntentionScheduleRunOperation = "owner.intention.schedule.run";
     public const string LifecycleSetValidityOperation = "lifecycle.validity.set";
     public const string LifecycleRetainRevisionOperation = "lifecycle.retain";
@@ -975,6 +1009,11 @@ public sealed class ServiceRequestHandler
         if (request.ProtocolVersion != CurrentProtocolVersion)
         {
             return Error("unsupported_protocol");
+        }
+        if ((request.ContextProject is not null || request.ContextTask is not null) &&
+            !string.Equals(request.Operation, AgentMemoryBriefOperation, StringComparison.Ordinal))
+        {
+            return Error("invalid_request");
         }
 
         // The owner library filters are accepted by exactly one operation, plus
@@ -1415,6 +1454,11 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, OwnerIntentionTriggerSetOperation, StringComparison.Ordinal))
         {
             return HandleIntentionTriggerSet(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerIntentionContextTriggerSetOperation, StringComparison.Ordinal))
+        {
+            return HandleIntentionContextTriggerSet(context, request, operation);
         }
 
         if (string.Equals(request.Operation, OwnerIntentionScheduleRunOperation, StringComparison.Ordinal))
@@ -4121,6 +4165,76 @@ public sealed class ServiceRequestHandler
             }
         }
     }
+    private ServiceReply HandleIntentionContextTriggerSet(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || operation is null ||
+            !HasOnlyIntentionTriggerSetFields(request) || string.IsNullOrEmpty(request.ResourceId) ||
+            string.IsNullOrEmpty(request.ContentBase64))
+        {
+            return Error("invalid_request");
+        }
+
+        byte[]? draftBytes = null;
+        try
+        {
+            draftBytes = Convert.FromBase64String(request.ContentBase64);
+            if (draftBytes.Length is <= 0 or > 4096)
+            {
+                return Error("invalid_request");
+            }
+
+            var draft = JsonSerializer.Deserialize<IntentionContextTriggerDraft>(draftBytes,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (draft is null || draft.Disable == (draft.Project is not null || draft.Task is not null) ||
+                draft.Project is { Length: > Core.Domain.IntentionContextTrigger.MaximumContextLabelLength } ||
+                draft.Task is { Length: > Core.Domain.IntentionContextTrigger.MaximumContextLabelLength })
+            {
+                return Error("invalid_request");
+            }
+
+            var lifecycle = _intentionSchedule.SetContextTrigger(
+                context,
+                request.ResourceId,
+                draft.Project,
+                draft.Task,
+                draft.Disable,
+                draft.ExpectedLifecycleRevision,
+                operation);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                draft.Disable ? "intention_context_trigger_disabled" : "intention_context_trigger_enabled",
+                "owner",
+                null,
+                ResourceRevision: lifecycle.Revision,
+                Lifecycle: ToLifecycleWire(lifecycle));
+        }
+        catch (FormatException)
+        {
+            return Error("invalid_request");
+        }
+        catch (JsonException)
+        {
+            return Error("invalid_request");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        finally
+        {
+            if (draftBytes is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(draftBytes);
+            }
+        }
+    }
 
     private ServiceReply HandleIntentionScheduleRun(
         AuthenticatedContext context,
@@ -4169,7 +4283,10 @@ public sealed class ServiceRequestHandler
         intention.Notified,
         intention.NotifiedAtUtc,
         intention.Acknowledged,
-        intention.AcknowledgedAtUtc);
+        intention.AcknowledgedAtUtc,
+        intention.ContextProject,
+        intention.ContextTask,
+        intention.ContextTriggerEnabled);
 
     private static bool HasNoOptionalFields(ServiceRequest request) =>
         request == new ServiceRequest(request.ProtocolVersion, request.Operation);
@@ -4418,7 +4535,8 @@ public sealed class ServiceRequestHandler
         record.RecordedAtUtc,
         record.History.Select(ToLifecycleChangeWire).ToArray(),
         record.RetainedRevisions.Select(ToLifecycleRetainedRevisionWire).ToArray(),
-        ToLifecycleStampWire(record.IntentionDueAt));
+        ToLifecycleStampWire(record.IntentionDueAt),
+        record.ContextTrigger);
 
     private static string[] ReviewReasonTokens(Core.Domain.RelationReviewReason reasons)
     {
@@ -5789,18 +5907,18 @@ public sealed class ServiceRequestHandler
     }
 
     /// <summary>
-    /// S4-T4 scoped brief over the session's frozen approved snapshot. The
-    /// grant must carry the memory.context operation; the selection is the
-    /// session's own frozen (ID, revision) pairs projected under the caller's
-    /// character budget. Only memory items enter: protected namespaces
-    /// (relations, lifecycle, archives, journals, snapshots, feedback) are
-    /// excluded by construction. Each entry renders the exact frozen body
-    /// window with its stored citations plus the same manifest-only
-    /// current/superseded/unknown warnings as item detail; the reply adds
-    /// honest omissions and an uncertainty ledger so a small budget can never
-    /// silently turn partial context into a confident claim. Lock, revoke,
-    /// expiry and policy-generation changes deny through the same session
-    /// authority. The brief is memory data, never system instructions.
+    /// S4-T4/S7-T3 scoped brief over the session's frozen approved snapshot.
+    /// The grant must carry memory.context; only memory items enter, and each
+    /// ordinary entry reads the exact frozen body window with stored citations
+    /// and manifest-only current/superseded/unknown warnings. When explicit
+    /// project/task context is supplied, an enabled pending, unacknowledged
+    /// intention reminder is added only for its exact current approved
+    /// (ID, revision) pair; its bounded excerpt shares the brief character
+    /// budget and reads, but never mutates, lifecycle state. Protected
+    /// namespaces are excluded by construction. Honest omissions and an
+    /// uncertainty ledger prevent partial context from becoming a confident
+    /// claim. Lock, revoke, expiry and policy-generation changes deny through
+    /// the same session authority. The brief is memory data, never instructions.
     /// </summary>
     private ServiceReply HandleAgentMemoryBrief(
         AuthenticatedContext context,
@@ -5809,7 +5927,9 @@ public sealed class ServiceRequestHandler
     {
         if (context.Kind != PrincipalKind.Agent || operation is null ||
             HasAgentBriefExtras(request) ||
-            request.AccessOperation is not MemoryContextAccessOperation)
+            request.AccessOperation is not MemoryContextAccessOperation ||
+            !IsValidContextLabel(request.ContextProject) ||
+            !IsValidContextLabel(request.ContextTask))
         {
             return ResourceDenied();
         }
@@ -5855,18 +5975,37 @@ public sealed class ServiceRequestHandler
                 .ToArray();
             var liveRevisions = operation.ListResources().ToDictionary(
                 resource => resource.ResourceId, resource => resource.Revision, StringComparer.Ordinal);
+            var contextualCandidates = request.ContextProject is null && request.ContextTask is null
+                ? Array.Empty<ContextualIntentionCandidate>()
+                : FindContextualIntentions(
+                    context,
+                    operation,
+                    approvedScope,
+                    liveRevisions,
+                    request.ContextProject,
+                    request.ContextTask);
+            var contextualBudget = contextualCandidates.Length == 0
+                ? 0
+                : Math.Min(budget, Math.Max(200, budget / 3));
+            var contextualIds = contextualCandidates
+                .Select(candidate => candidate.Approved.ResourceId)
+                .ToHashSet(StringComparer.Ordinal);
+            var normalScope = contextualIds.Count == 0
+                ? approvedScope
+                : approvedScope.Where(resource => !contextualIds.Contains(resource.ResourceId)).ToArray();
             var authority = new ScopedBriefAuthority();
             var brief = authority.Build(
                 session,
                 request.Query,
-                budget,
-                approvedScope,
+                budget - contextualBudget,
+                normalScope,
                 approved => ReadBriefItem(operation, approved),
                 (item, manifest) => (ProjectCitations(item.Sources, manifest), ProjectCitationWarnings(item, item.Sources, manifest, operation)),
                 operation,
                 resourceId => liveRevisions.TryGetValue(resourceId, out var live) &&
                     session.Resources.Any(resource =>
                         string.Equals(resource.ResourceId, resourceId, StringComparison.Ordinal) && resource.Revision == live));
+            var contextual = ProjectContextualIntentions(contextualCandidates, contextualBudget, operation);
             var state = operation.LoadScopeGrantState();
             var recheck = _agentSessions.AuthorizeSession(
                 request.SessionToken,
@@ -5882,13 +6021,156 @@ public sealed class ServiceRequestHandler
                 CurrentProtocolVersion, "memory_brief", null, null,
                 Decision: recheck,
                 PolicyGeneration: recheck.PolicyGeneration,
-                MemoryBrief: brief with { PolicyGeneration = recheck.PolicyGeneration });
+                MemoryBrief: brief with
+                {
+                    Selection = brief.Selection.Concat(contextual.Items.Select(item => item.Id)).ToArray(),
+                    BudgetChars = budget,
+                    UsedChars = brief.UsedChars + contextual.UsedChars,
+                    Truncated = brief.Truncated || contextual.Truncated,
+                    Omitted = brief.Omitted.Concat(contextual.Omitted).ToArray(),
+                    PolicyGeneration = recheck.PolicyGeneration,
+                    ContextualIntentions = contextual.Items
+                });
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
         {
             return ResourceDenied();
         }
     }
+    private sealed record ContextualIntentionCandidate(
+        ScopeResourceRevision Approved,
+        MemoryItem Item,
+        Core.Domain.IntentionContextTrigger Trigger,
+        DateTimeOffset? DueAtUtc);
+
+    private sealed record ContextualBriefProjection(
+        ContextualIntentionWire[] Items,
+        BriefOmissionWire[] Omitted,
+        int UsedChars,
+        bool Truncated);
+
+    private static bool IsValidContextLabel(string? label) =>
+        label is null ||
+        (label.Length is > 0 and <= Core.Domain.IntentionContextTrigger.MaximumContextLabelLength &&
+         string.Equals(label, label.Trim(), StringComparison.Ordinal) &&
+         !label.Any(char.IsControl));
+
+    private static ContextualIntentionCandidate[] FindContextualIntentions(
+        AuthenticatedContext context,
+        IVaultOperation operation,
+        IReadOnlyList<ScopeResourceRevision> approvedScope,
+        IReadOnlyDictionary<string, long> liveRevisions,
+        string? project,
+        string? task)
+    {
+        var lifecycleService = new LifecycleService();
+        var candidates = new List<ContextualIntentionCandidate>();
+        foreach (var approved in approvedScope)
+        {
+            if (!liveRevisions.TryGetValue(approved.ResourceId, out var itemRevision) ||
+                itemRevision != approved.Revision)
+            {
+                continue;
+            }
+
+            var item = ReadBriefItem(operation, approved);
+            if (item is not { Kind: MemoryKind.Intention })
+            {
+                continue;
+            }
+
+            var lifecycleId = Core.Domain.DomainIdentifiers.LifecycleIdFor(item.Id);
+            if (!liveRevisions.TryGetValue(lifecycleId, out var lifecycleRevision))
+            {
+                continue;
+            }
+
+            var lifecycle = lifecycleService.Read(context, item.Id, lifecycleRevision, operation);
+            if (lifecycle is null ||
+                lifecycle.SubjectKind != MemoryKind.Intention ||
+                lifecycle.Intention != IntentionState.Pending ||
+                lifecycle.Acknowledged ||
+                lifecycle.ContextTrigger is not { Enabled: true } trigger ||
+                !string.Equals(lifecycle.ZoneId, item.ZoneId, StringComparison.Ordinal) ||
+                !trigger.Matches(project, task))
+            {
+                continue;
+            }
+            candidates.Add(new ContextualIntentionCandidate(
+                approved,
+                item,
+                trigger,
+                lifecycle.IntentionDueAt?.InstantUtc));
+        }
+
+        return candidates
+            .OrderBy(candidate => candidate.Approved.ResourceId, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static ContextualBriefProjection ProjectContextualIntentions(
+        IReadOnlyList<ContextualIntentionCandidate> candidates,
+        int budgetChars,
+        IManagedResourceReader manifest)
+    {
+        const int maximumExcerptChars = 280;
+        const int minimumExcerptChars = 120;
+        var items = new List<ContextualIntentionWire>();
+        var omitted = new List<BriefOmissionWire>();
+        var usedChars = 0;
+        var truncated = false;
+        foreach (var candidate in candidates)
+        {
+            if (items.Count == ScopedBriefAuthority.MaximumEntries)
+            {
+                omitted.Add(new BriefOmissionWire(candidate.Approved.ResourceId, candidate.Approved.Revision, "contextual_entry_limit"));
+                truncated = true;
+                continue;
+            }
+
+            var remaining = budgetChars - usedChars;
+            if (candidate.Item.Body.Length > 0 && remaining < minimumExcerptChars)
+            {
+                omitted.Add(new BriefOmissionWire(candidate.Approved.ResourceId, candidate.Approved.Revision, "contextual_budget_exhausted"));
+                truncated = true;
+                continue;
+            }
+
+            var excerptLength = Math.Min(maximumExcerptChars, remaining);
+            var excerpt = candidate.Item.Body.Length <= excerptLength
+                ? candidate.Item.Body
+                : candidate.Item.Body[..excerptLength];
+            var excerptTruncated = excerpt.Length < candidate.Item.Body.Length;
+            usedChars += excerpt.Length;
+            truncated |= excerptTruncated;
+            var (citations, warnings) = (
+                ProjectCitations(candidate.Item.Sources, manifest),
+                ProjectCitationWarnings(candidate.Item, candidate.Item.Sources, manifest, manifest as IManagedResourceStore));
+            items.Add(new ContextualIntentionWire(
+                candidate.Approved.ResourceId,
+                candidate.Approved.Revision,
+                ToWireToken(candidate.Item.Kind.ToString()),
+                ToWireToken(candidate.Item.Author.ToString()),
+                ToWireToken(candidate.Item.Executor.ToString()),
+                ToWireToken(candidate.Item.CreationMethod.ToString()),
+                ToWireToken(candidate.Item.Evidence.ToString()),
+                ToWireToken(candidate.Item.Level.ToString()),
+                candidate.Item.Title,
+                excerpt,
+                excerptTruncated,
+                candidate.Item.OccurredAtUtc,
+                candidate.Item.RecordedAtUtc,
+                candidate.Item.Applicability,
+                citations,
+                warnings,
+                candidate.Trigger.Project,
+                candidate.Trigger.Task,
+                candidate.DueAtUtc));
+        }
+
+        return new ContextualBriefProjection(items.ToArray(), omitted.ToArray(), usedChars, truncated);
+    }
+
 
     private static MemoryItem? ReadBriefItem(IVaultOperation operation, ScopeResourceRevision approved)
     {
@@ -7880,8 +8162,8 @@ public sealed class ServiceRequestHandler
     // in the handler itself.
 
     /// <summary>
-    /// S4-T4 scoped brief carries only the session bearer, the access
-    /// operation name, the query text, and the explicit character budget.
+    /// S4-T4/S7-T3 scoped brief carries only the session bearer, the access
+    /// operation name, the query and explicit project/task context, and the character budget.
     /// Every identity, zone, scope, credential, catalog, egress, and
     /// content-draft field is refused, so a body can never steer the brief
     /// toward another scope or mint authority.

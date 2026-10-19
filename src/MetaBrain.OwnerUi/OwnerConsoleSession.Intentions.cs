@@ -3,9 +3,9 @@ using MetaBrain.Connections;
 namespace MetaBrain.OwnerUi;
 
 /// <summary>
-/// Owner-only time-trigger view state. Every scheduled intention/title/body is an answer
-/// of the unlocked owner service and is discarded with its private epoch; this session
-/// holds no schedule database, clock policy or notification queue of its own.
+/// Owner-only time/context-trigger view state. Every scheduled intention/title/body/label is
+/// an answer of the unlocked owner service and is discarded with its private epoch; this
+/// session holds no trigger database, clock policy or notification queue of its own.
 /// </summary>
 internal sealed partial class OwnerConsoleSession
 {
@@ -51,10 +51,10 @@ internal sealed partial class OwnerConsoleSession
             ScheduledIntentions = result.Intentions;
             var dueCount = ScheduledIntentions.Count(intention => intention.IsDue);
             IntentionsMessage = ScheduledIntentions.Length == 0
-                ? "No pending intention has an enabled exact time trigger."
+                ? "No pending intention has an enabled time or context trigger."
                 : dueCount.ToString(System.Globalization.CultureInfo.InvariantCulture) + " due of " +
                     ScheduledIntentions.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) +
-                    " pending scheduled intention(s). Acknowledgement never completes an intention.";
+                    " pending intention(s) with a time or context trigger. Acknowledgement never completes an intention.";
         }
         else
         {
@@ -78,6 +78,33 @@ internal sealed partial class OwnerConsoleSession
                 expectedLifecycleRevision: expectedLifecycleRevision,
                 cancellationToken: token));
 
+    public Task EnableIntentionContextTriggerAsync(
+        string resourceId,
+        string? project,
+        string? task,
+        long? expectedLifecycleRevision) =>
+        RunIntentionTransitionAsync(
+            "enable intention context trigger",
+            token => OwnerChannelClient.SetIntentionContextTriggerAsync(
+                controlPipe: ControlPipe,
+                resourceId: resourceId,
+                project: project,
+                task: task,
+                disable: false,
+                expectedLifecycleRevision: expectedLifecycleRevision,
+                cancellationToken: token));
+
+    public Task DisableIntentionContextTriggerAsync(OwnerScheduledIntention intention) =>
+        RunIntentionTransitionAsync(
+            "disable intention context trigger",
+            token => OwnerChannelClient.SetIntentionContextTriggerAsync(
+                controlPipe: ControlPipe,
+                resourceId: intention.ResourceId,
+                project: null,
+                task: null,
+                disable: true,
+                expectedLifecycleRevision: intention.LifecycleRevision,
+                cancellationToken: token));
     public Task CancelIntentionTimeTriggerAsync(OwnerScheduledIntention intention) =>
         RunIntentionTransitionAsync(
             "cancel intention time trigger",
@@ -91,7 +118,7 @@ internal sealed partial class OwnerConsoleSession
 
     public Task AcknowledgeIntentionAsync(OwnerScheduledIntention intention) =>
         RunIntentionTransitionAsync(
-            "acknowledge due intention",
+            "acknowledge intention reminder",
             token => OwnerChannelClient.AcknowledgeIntentionAsync(ControlPipe, intention, token));
 
     public Task CompleteIntentionAsync(OwnerScheduledIntention intention, string rationale) =>

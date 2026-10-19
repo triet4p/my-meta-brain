@@ -251,7 +251,14 @@ public sealed class LifecycleService
             _ => stored.IntentionDueAt
         };
         var timeTriggerChanged = !Equals(intentionDueAt, stored.IntentionDueAt);
-
+        var contextTrigger = act switch
+        {
+            LifecycleAct.SetIntentionContextTrigger => transition.ContextTrigger,
+            LifecycleAct.DisableIntentionContextTrigger when stored.ContextTrigger is { } configured =>
+                configured with { Enabled = false },
+            _ => stored.ContextTrigger
+        };
+        var contextTriggerChanged = !Equals(contextTrigger, stored.ContextTrigger);
 
         var next = stored with
         {
@@ -266,8 +273,8 @@ public sealed class LifecycleService
                 : stored.Intention,
             Notified = timeTriggerChanged ? false : act == LifecycleAct.Notify || stored.Notified,
             NotifiedAtUtc = timeTriggerChanged ? null : act == LifecycleAct.Notify ? now : stored.NotifiedAtUtc,
-            Acknowledged = timeTriggerChanged ? false : act == LifecycleAct.Acknowledge || stored.Acknowledged,
-            AcknowledgedAtUtc = timeTriggerChanged ? null : act == LifecycleAct.Acknowledge ? now : stored.AcknowledgedAtUtc,
+            Acknowledged = timeTriggerChanged || contextTriggerChanged ? false : act == LifecycleAct.Acknowledge || stored.Acknowledged,
+            AcknowledgedAtUtc = timeTriggerChanged || contextTriggerChanged ? null : act == LifecycleAct.Acknowledge ? now : stored.AcknowledgedAtUtc,
             SupersededBy = LifecycleTransitions.RequiresReplacement(act) ? replacement : stored.SupersededBy,
             Occurred = transition.Occurred ?? stored.Occurred,
             Recorded = transition.Recorded ?? stored.Recorded,
@@ -275,6 +282,7 @@ public sealed class LifecycleService
             ValidUntil = transition.ValidUntil ?? stored.ValidUntil,
             ReviewAfter = transition.ReviewAfter ?? stored.ReviewAfter,
             IntentionDueAt = intentionDueAt,
+            ContextTrigger = contextTrigger,
             RetainedRevisions = retained,
             History = AppendHistory(stored, act, executor, now, transition, replacement)
         };
@@ -563,7 +571,8 @@ public sealed class LifecycleService
         stored.RecordedAtUtc,
         stored.History,
         stored.RetainedRevisions,
-        stored.IntentionDueAt);
+        stored.IntentionDueAt,
+        stored.ContextTrigger);
 
     private static MemoryItem ToSubject(StoredMemoryEnvelope stored, long revision) => new(
         stored.Id,

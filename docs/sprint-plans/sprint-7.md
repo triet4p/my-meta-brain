@@ -6,7 +6,7 @@ Nhớ đúng thời điểm, nhắc đúng ý định đã được yêu cầu, 
 
 ## Status and Dependencies
 
-- Status: In progress — S7-T1 accepted với evidence PASS và checkpoint; S7-T2 đang triển khai. Entry: Sprint 6 PASS; encrypted domain/lineage và lock/session APIs. Private scheduler/notifications không tự unlock vault.
+- Status: In progress — S7-T1–T2 accepted với independent evidence PASS và checkpoint riêng; S7-T3 đang triển khai, S7-T4–T6 đã được giao và chờ tuần tự. Entry: Sprint 6 PASS; encrypted domain/lineage và lock/session APIs. Private scheduler/notifications không tự unlock vault.
 - [Global plan](../PLAN.md), [specification](../META-BRAIN.md), [requirements](../REQUIREMENTS.md).
 - Requirements: R26–R29; bảo toàn R01, R03–R06, R08, R12, R14, R18, R25, R30, R36.
 
@@ -18,19 +18,19 @@ Lifecycle không sửa authored content cho ranking. Private state encrypted; lo
 
 Status legend: [ ] pending / [~] in progress / [x] done. OMP role selection, evidence review, record ownership, and exact-snapshot checkpoints follow the [canonical execution contract](../PLAN.md#planning-and-execution-contract). Worker artifact for S7-T<M>: `artifacts/sprint-7/task-<M>.md`; reviewers and checkpoint executors own their separate records under the sprint artifact tree.
 
-Workflow S7-T1–T2: full route, tuần tự; mỗi task cần runtime smoke, independent evidence PASS và Bronze-only exact-snapshot commit checkpoint riêng trước task tiếp theo. Owner chọn Gold cho S7-T1, Silver cho S7-T2; implementation workers không commit, không push. S7-T3–T6 chưa được giao.
+Workflow S7-T1–T6: full route, tuần tự; mỗi task cần runtime smoke, independent evidence PASS và Bronze-only exact-snapshot commit checkpoint riêng trước task tiếp theo. Owner chọn Gold cho S7-T1/T5, Silver cho S7-T2/T3/T4/T6; implementation workers không commit, không push. Sprint-final differential deep review sau mọi task gate/checkpoint; findings cần correction, fresh evidence review và checkpoint trước fresh deep review.
 
 - [x] **S7-T1 — Temporal recall và lịch sử quyết định end-to-end.** Requirements: R26, R23, R30.
     - Scope: hoàn thiện current/as-of/history query và UI timeline trên validity/revision đã có; không đổi temporal schema meaning.
     - Acceptance: import hôm nay không làm event cũ thành mới; unknown/approximate time không bị làm chính xác giả; current tránh superseded, historical giữ lý do cũ; contradiction chưa phân giải không newest-wins; timezone boundaries đúng.
     - Evidence: quyết định cũ/mới và conflicting research theo nhiều mốc, query qua MCP và thao tác UI; source evidence ở đúng revision/time.
 
-- [~] **S7-T2 — Intention due scheduling bền vững.** Requirements: R27, R01.
+- [x] **S7-T2 — Intention due scheduling bền vững.** Requirements: R27, R01.
     - Scope: time triggers, due state và acknowledgement độc lập completion; lịch không cần LLM.
     - Acceptance: explicit create/edit/cancel, timezone/clock policy đúng; offline hoặc locked qua deadline rồi restart/unlock vẫn due, không notified=done hoặc notification storm. Locked không lộ intention/title/body hoặc tự unlock; trạng thái encrypted bền vững.
     - Evidence: actual controlled-time scheduler, offline/lock/restart/unlock/cancel/reschedule, actual UI due list và no private notifications khi locked; không long sleep tests.
 
-- [ ] **S7-T3 — Contextual intention recall và owner controls.** Requirements: R27, R01, R24, R30.
+- [~] **S7-T3 — Contextual intention recall và owner controls.** Requirements: R27, R01, R24, R30.
     - Scope: trigger theo project/task context user chỉ định, surfaced qua brief/MCP và timeline UI.
     - Acceptance: enabled trigger và approved ID/revision session scope mới hiện, read không done; explicit owner controls; no private notification khi locked hoặc outside scope. New intention/member/revision không tự vào grant; disable ngừng trigger.
     - Evidence: mở hai project contexts với grants khác nhau; due/context reminder → acknowledge → explicit complete, hỏi lịch sử vẫn thấy motivation gốc.
@@ -60,4 +60,6 @@ Retention mặc định không được phá hủy dữ liệu chỉ vì lâu kh
 
 ## Gate Record
 
-S7-T1 accepted: [worker evidence](../../artifacts/sprint-7/task-1.md), [R2 evidence PASS](../../artifacts/sprint-7/reviews/S7-T1-R2.md), [exact-snapshot checkpoint](../../artifacts/sprint-7/checkpoints/S7-T1-C1.md), commit `f3c38c30c269e1deea2de5da03a413366f87c479`. R1 evidence gaps được correction và fresh review giải quyết. S7-T2 pending runtime/evidence/checkpoint; sprint gate chưa complete. Không push.
+S7-T1 accepted: [worker evidence](../../artifacts/sprint-7/task-1.md), [R2 evidence PASS](../../artifacts/sprint-7/reviews/S7-T1-R2.md), [exact-snapshot checkpoint](../../artifacts/sprint-7/checkpoints/S7-T1-C1.md), commit `f3c38c30c269e1deea2de5da03a413366f87c479`. R1 evidence gaps được correction và fresh review giải quyết.
+
+S7-T2 accepted: [worker evidence](../../artifacts/sprint-7/task-2.md), [R1 evidence PASS](../../artifacts/sprint-7/reviews/S7-T2-R1.md), [exact-snapshot checkpoint](../../artifacts/sprint-7/checkpoints/S7-T2-C1.md), commit `18d2059b34574160bd991692c346f6d93b6d3cf0`. Checkpoint dùng frozen manifest byte-exact; executor ghi nhận sai chép full hash trong bảng inline của review report, không ảnh hưởng manifest/committed snapshot. Sprint gate/deep review chưa complete; S7-T3–T6 đã được giao, triển khai tuần tự. Không push.

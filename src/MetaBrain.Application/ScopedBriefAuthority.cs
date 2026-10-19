@@ -55,10 +55,9 @@ public sealed class ScopedBriefAuthority
         ArgumentNullException.ThrowIfNull(approvedScope);
         ArgumentNullException.ThrowIfNull(readApproved);
         ArgumentNullException.ThrowIfNull(projectCitations);
-        ArgumentNullException.ThrowIfNull(manifest);
-        if (budgetChars < MinimumBudgetChars || budgetChars > MaximumBudgetChars)
+        if (budgetChars < 0 || budgetChars > MaximumBudgetChars)
         {
-            throw new ArgumentException("The brief budget must be 200-8000 characters.");
+            throw new ArgumentException("The brief budget must be 0-8000 characters.");
         }
 
         var candidates = PlanCandidates(session, query, approvedScope, readApproved, isLiveRevision, expandQuery);

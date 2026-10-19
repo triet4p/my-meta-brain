@@ -47,10 +47,19 @@ public partial class OwnerConsoleWindow
             !string.IsNullOrWhiteSpace(IntentionResourceIdInput.Text) &&
             IntentionTimeTrigger.TryParse(IntentionDueAtInput.Text.Trim(), out _);
         IntentionTriggerCancelButton.IsEnabled = canAct && selected is not null &&
+            selected.Intention.DueAt is not null &&
             string.Equals(IntentionResourceIdInput.Text.Trim(), selected.Intention.ResourceId, StringComparison.Ordinal);
+        IntentionContextProjectInput.IsEnabled = canAct;
+        IntentionContextTaskInput.IsEnabled = canAct;
+        IntentionContextTriggerSetButton.IsEnabled = canAct &&
+            !string.IsNullOrWhiteSpace(IntentionResourceIdInput.Text) &&
+            (!string.IsNullOrWhiteSpace(IntentionContextProjectInput.Text) ||
+             !string.IsNullOrWhiteSpace(IntentionContextTaskInput.Text));
+        IntentionContextTriggerDisableButton.IsEnabled = canAct && selected?.Intention.ContextTriggerEnabled == true;
         IntentionRationaleInput.IsEnabled = canAct && selected is not null;
         IntentionAcknowledgeButton.IsEnabled = canAct && selected is not null &&
-            selected.Intention.IsDue && !selected.Intention.Acknowledged;
+            (selected.Intention.IsDue || selected.Intention.ContextTriggerEnabled) &&
+            !selected.Intention.Acknowledged;
         IntentionCompleteButton.IsEnabled = canAct && selected is not null && !string.IsNullOrWhiteSpace(IntentionRationaleInput.Text);
         IntentionCancelButton.IsEnabled = canAct && selected is not null && !string.IsNullOrWhiteSpace(IntentionRationaleInput.Text);
     }
@@ -70,7 +79,9 @@ public partial class OwnerConsoleWindow
         }
 
         IntentionResourceIdInput.Text = selected.Intention.ResourceId;
-        IntentionDueAtInput.Text = selected.Intention.DueAt.ToString("O", CultureInfo.InvariantCulture);
+        IntentionDueAtInput.Text = selected.Intention.DueAt?.ToString("O", CultureInfo.InvariantCulture) ?? string.Empty;
+        IntentionContextProjectInput.Text = selected.Intention.ContextProject ?? string.Empty;
+        IntentionContextTaskInput.Text = selected.Intention.ContextTask ?? string.Empty;
         IntentionRationaleInput.Clear();
         RenderIntentions(_session.Attached);
     }
@@ -91,6 +102,37 @@ public partial class OwnerConsoleWindow
                 ? selected.Intention.LifecycleRevision
                 : null;
         await _session.SetIntentionTimeTriggerAsync(resourceId, dueAt, expectedRevision);
+    }
+
+    private async void OnIntentionContextTriggerSetClicked(object sender, RoutedEventArgs e)
+    {
+        var resourceId = IntentionResourceIdInput.Text.Trim();
+        var project = string.IsNullOrWhiteSpace(IntentionContextProjectInput.Text)
+            ? null
+            : IntentionContextProjectInput.Text.Trim();
+        var task = string.IsNullOrWhiteSpace(IntentionContextTaskInput.Text)
+            ? null
+            : IntentionContextTaskInput.Text.Trim();
+        if (resourceId.Length == 0 || (project is null && task is null))
+        {
+            IntentionsMessageText.Text = "Name an intention and at least one explicit project or task context. No context is inferred.";
+            return;
+        }
+
+        var selected = SelectedIntention();
+        long? expectedRevision = selected is not null &&
+            string.Equals(selected.Intention.ResourceId, resourceId, StringComparison.Ordinal)
+                ? selected.Intention.LifecycleRevision
+                : null;
+        await _session.EnableIntentionContextTriggerAsync(resourceId, project, task, expectedRevision);
+    }
+
+    private async void OnIntentionContextTriggerDisableClicked(object sender, RoutedEventArgs e)
+    {
+        if (SelectedIntention() is { Intention.ContextTriggerEnabled: true } selected)
+        {
+            await _session.DisableIntentionContextTriggerAsync(selected.Intention);
+        }
     }
 
     private async void OnIntentionTriggerCancelClicked(object sender, RoutedEventArgs e)
@@ -133,16 +175,21 @@ public partial class OwnerConsoleWindow
         if (e.Key == System.Windows.Input.Key.Enter && SelectedIntention() is { } selected)
         {
             IntentionResourceIdInput.Text = selected.Intention.ResourceId;
-            IntentionDueAtInput.Text = selected.Intention.DueAt.ToString("O", CultureInfo.InvariantCulture);
+            IntentionDueAtInput.Text = selected.Intention.DueAt?.ToString("O", CultureInfo.InvariantCulture) ?? string.Empty;
+            IntentionContextProjectInput.Text = selected.Intention.ContextProject ?? string.Empty;
+            IntentionContextTaskInput.Text = selected.Intention.ContextTask ?? string.Empty;
             RenderIntentions(_session.Attached);
             e.Handled = true;
         }
     }
 
+
     private void ClearIntentionInputs()
     {
         IntentionResourceIdInput.Clear();
         IntentionDueAtInput.Clear();
+        IntentionContextProjectInput.Clear();
+        IntentionContextTaskInput.Clear();
         IntentionRationaleInput.Clear();
     }
 
@@ -155,7 +202,10 @@ public partial class OwnerConsoleWindow
         public string Summary =>
             (string.IsNullOrEmpty(Intention.Title) ? "(no title)" : Intention.Title) +
             " | " + (Intention.IsDue ? "DUE" : "scheduled") +
-            " | due=" + Intention.DueAt.ToString("O", CultureInfo.InvariantCulture) +
+            " | due=" + (Intention.DueAt?.ToString("O", CultureInfo.InvariantCulture) ?? "none") +
+            " | context=" + (Intention.ContextTriggerEnabled ? "enabled" : Intention.ContextProject is not null || Intention.ContextTask is not null ? "disabled" : "none") +
+            " | project=" + (Intention.ContextProject ?? "none") +
+            " | task=" + (Intention.ContextTask ?? "none") +
             " | state=" + Intention.State +
             " | notified=" + Intention.Notified.ToString(CultureInfo.InvariantCulture) +
             " | acknowledged=" + Intention.Acknowledged.ToString(CultureInfo.InvariantCulture);

@@ -1116,8 +1116,8 @@
                     <StackPanel x:Name="IntentionsPanel" Visibility="Collapsed">
                         <TextBlock Text="Intentions — scheduled and due" FontSize="19" FontWeight="SemiBold" />
                         <TextBlock TextWrapping="Wrap" Margin="0,8,0,0"
-                                   Text="Create or edit a one-time trigger for an intention you name, or cancel that trigger without completing the intention. Only exact ISO-8601 timestamps with Z or a numeric UTC offset are accepted: local times without an offset (including a repeated DST hour), date-only values and invalid offsets are refused. A numeric offset resolves a repeated wall-clock hour to one instant; named timezones and recurring local-time rules are not supported. Forward or backward UTC system-clock corrections can make an unnotified deadline appear due early or late; once a trigger is recorded as notified it is not repeated. The owner-only due list is the notification surface while unlocked; the background scheduler makes no LLM/provider calls." />
-                        <TextBlock Text="The service pauses private scheduling and due-list reads while locked, stores no key, and never unlocks for a deadline. Unlock is always your explicit act. Due, notification, acknowledgement and completion are separate states." TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280" />
+                                   Text="Create or edit a one-time time trigger for an intention you name, or cancel that trigger without completing the intention. An owner-enabled project/task context trigger surfaces a reminder only when the brief caller explicitly supplies the same configured context and the intention ID/revision is already in that session's approved scope. No context is inferred and scope never grows. Exact ISO-8601 due times require Z or a numeric UTC offset; local times, date-only values, named zones and recurring schedules are unsupported. The owner-only view is the time-notification surface while unlocked; the background scheduler makes no LLM/provider calls." />
+                        <TextBlock Text="The service pauses private scheduling and due-list reads while locked, stores no key, and never unlocks for a deadline. Unlock is always your explicit act. Due/context reminders, notification, acknowledgement and completion are separate; reading or acknowledging never completes an intention." TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280" />
                         <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                             <Button x:Name="IntentionsRefreshButton" Content="Read scheduled intentions" Padding="14,7" Click="OnIntentionsRefreshClicked" />
                         </StackPanel>
@@ -1156,24 +1156,46 @@
                             <Button x:Name="IntentionTriggerSetButton" Content="Create / reschedule trigger" Padding="14,7" Click="OnIntentionTriggerSetClicked" />
                             <Button x:Name="IntentionTriggerCancelButton" Content="Cancel trigger" Padding="14,7" Margin="8,0,0,0" Click="OnIntentionTriggerCancelClicked" />
                         </StackPanel>
+                        <TextBlock Text="Project/task context trigger (exact owner-selected labels)" FontWeight="SemiBold" Margin="0,18,0,0" />
+                        <TextBlock Text="A caller must explicitly name each configured project/task context. Only an enabled pending intention at its exact approved ID/revision can appear; a new item, membership or revision never enters an existing grant. Disabling stops future matches while retaining the labels for owner review." TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280" />
+                        <Grid Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Project context" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="IntentionContextProjectInput" Margin="0,0,0,6"
+                                     AutomationProperties.AutomationId="IntentionContextProjectInput" TextChanged="OnIntentionInputChanged" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Task context" Foreground="#FF6B7280" />
+                            <TextBox Grid.Row="1" Grid.Column="1" x:Name="IntentionContextTaskInput"
+                                     AutomationProperties.AutomationId="IntentionContextTaskInput" TextChanged="OnIntentionInputChanged" />
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="IntentionContextTriggerSetButton" Content="Enable / update context trigger" Padding="14,7" Click="OnIntentionContextTriggerSetClicked" />
+                            <Button x:Name="IntentionContextTriggerDisableButton" Content="Disable context trigger" Padding="14,7" Margin="8,0,0,0" Click="OnIntentionContextTriggerDisableClicked" />
+                        </StackPanel>
                         <TextBlock Text="Owner act (acknowledgement never marks done)" FontWeight="SemiBold" Margin="0,18,0,0" />
-                        <TextBlock Text="Acknowledge records that you saw the due item. Complete or cancel changes the intention only after the separate action below; an explicit rationale is recorded for those state changes." TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280" />
+                        <TextBlock Text="Acknowledge records that you saw the due or context reminder. Complete or cancel changes the intention only after the separate action below; an explicit rationale is recorded for those state changes." TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280" />
                         <TextBox x:Name="IntentionRationaleInput" Margin="0,8,0,0" Height="52" AcceptsReturn="True" TextWrapping="Wrap"
                                  AutomationProperties.AutomationId="IntentionRationaleInput" TextChanged="OnIntentionInputChanged" />
                         <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                            <Button x:Name="IntentionAcknowledgeButton" Content="Acknowledge due" Padding="14,7" Click="OnIntentionAcknowledgeClicked" />
+                            <Button x:Name="IntentionAcknowledgeButton" Content="Acknowledge reminder" Padding="14,7" Click="OnIntentionAcknowledgeClicked" />
                             <Button x:Name="IntentionCompleteButton" Content="Complete intention" Padding="14,7" Margin="8,0,0,0" Click="OnIntentionCompleteClicked" />
                             <Button x:Name="IntentionCancelButton" Content="Cancel intention" Padding="14,7" Margin="8,0,0,0" Click="OnIntentionCancelClicked" />
                         </StackPanel>
                         <TextBlock Text="Privacy and interaction" FontWeight="SemiBold" Margin="0,20,0,6" />
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
-                                   Text="• The scheduler reads and writes only encrypted lifecycle records during an unlocked vault operation. When locked, no title, body, due instant or acknowledgement is queried or sent to a notification surface." />
+                                   Text="• The service reads/writes encrypted lifecycle records only in an unlocked vault operation. Locked requests return no private trigger metadata or content; no title, body, due instant, project/task context or acknowledgement is sent to a notification surface while locked." />
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
-                                   Text="• A missed deadline remains due across offline time, service restart and lock. After explicit unlock the scheduler records one notification marker, and the item remains in this list until the owner acts. Reading or acknowledging it never completes it, and rescheduling clears only the prior notification and acknowledgement markers." />
+                                   Text="• A missed deadline remains due across offline time, service restart and lock; after explicit unlock the scheduler records one notification marker. A matching project/task appears only inside a brief whose existing session snapshot contains its exact current intention revision. Reading or acknowledging a time/context reminder never completes it; the owner must separately complete with a rationale." />
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
                                    Text="• Keyboard: Enter opens the selected row, F5 reads the due list, Ctrl+L locks the vault." />
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
-                                   Text="• Privacy: this view holds no on-disk cache. Locking, service loss or ending the owner session clears the list, private due text and controls; nothing automatically unlocks the vault." />
+                                   Text="• Privacy: this view holds no on-disk cache. Locking, service loss or ending the owner session clears the list, private due/context text and controls; nothing automatically unlocks the vault." />
                     </StackPanel>
                 </Grid>
             </ScrollViewer>

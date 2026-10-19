@@ -4,7 +4,7 @@ using MetaBrain.Core.Security;
 
 namespace MetaBrain.Application;
 
-/// <summary>One scheduled intention exactly as the unlocked owner service serves it.</summary>
+/// <summary>One pending intention with an optional time due instant and/or owner-authored contextual trigger.</summary>
 public sealed record ScheduledIntention(
     string ResourceId,
     string ZoneId,
@@ -12,23 +12,36 @@ public sealed record ScheduledIntention(
     string State,
     string? Title,
     string BodyPreview,
-    DateTimeOffset DueAt,
+    DateTimeOffset? DueAt,
     bool IsDue,
     bool Notified,
     DateTimeOffset? NotifiedAtUtc,
     bool Acknowledged,
-    DateTimeOffset? AcknowledgedAtUtc);
+    DateTimeOffset? AcknowledgedAtUtc,
+    string? ContextProject,
+    string? ContextTask,
+    bool ContextTriggerEnabled);
 
-/// <summary>The owner-supplied one-time trigger; cancellation is explicit and distinct from a missing time.</summary>
-public sealed record IntentionTimeTriggerDraft(string? DueAt, bool Cancel, long? ExpectedLifecycleRevision = null);
+/// <summary>The owner-controlled project/task context trigger fields.</summary>
+public sealed record IntentionContextTriggerDraft(
+    string? Project,
+    string? Task,
+    bool Disable,
+    long? ExpectedLifecycleRevision = null);
+/// <summary>The owner-selected one-time time-trigger request.</summary>
+public sealed record IntentionTimeTriggerDraft(
+    string? DueAt,
+    bool Cancel,
+    long? ExpectedLifecycleRevision = null);
+
 
 /// <summary>One scheduler evaluation, with no private intention metadata in its result.</summary>
 public sealed record IntentionSchedulePassResult(int NotificationsRecorded);
 
 /// <summary>
-/// Time-triggered intention scheduling on the existing revision-gated encrypted lifecycle
-/// record. The service has no model/provider dependency. A due pass sets the existing
-/// notification marker once; acknowledgement and completion remain separate owner acts.
+/// Owner-controlled time/context intention triggers on the existing encrypted
+/// lifecycle record. Time due passes do not require a model/provider, and a
+/// context trigger is matched only by an explicit scoped brief context.
 /// </summary>
 public sealed class IntentionScheduleService
 {
@@ -146,9 +159,132 @@ public sealed class IntentionScheduleService
     }
 
     /// <summary>
-    /// Lists the bounded set of pending intentions with explicit exact time triggers.
-    /// A malformed or unavailable canonical record fails the whole answer instead of
-    /// silently disappearing from the owner's due view.
+    /// Creates or updates one exact owner-authored project/task trigger on the
+    /// same encrypted, revision-gated lifecycle record as time reminders.
+    /// Disabling retains the last explicit labels for owner review but prevents
+    /// them from matching an agent brief.
+    /// </summary>
+    public LifecycleRecord SetContextTrigger(
+        AuthenticatedContext context,
+        string resourceId,
+        string? project,
+        string? task,
+        bool disable,
+        long? expectedLifecycleRevision,
+        IManagedResourceStore store)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(store);
+        EnsureOwner(context);
+        if (string.IsNullOrEmpty(resourceId) || expectedLifecycleRevision is < 1)
+        {
+            throw new ArgumentException("An intention ID and a positive expected lifecycle revision are required when a revision is supplied.");
+        }
+
+        project = NormalizeContextLabel(project);
+        task = NormalizeContextLabel(task);
+        if (disable && (project is not null || task is not null))
+        {
+            throw new ArgumentException("Disabling a context trigger does not carry replacement labels.");
+        }
+
+        var requestedTrigger = disable ? null : new IntentionContextTrigger(true, project, task);
+        IntentionContextTrigger.Validate(requestedTrigger);
+        var subject = ReadIntention(resourceId, store);
+        var current = _lifecycle.Read(context, resourceId, expectedRevision: null, store);
+        if (expectedLifecycleRevision is { } expected && current?.Revision != expected)
+        {
+            throw new ArgumentException("The intention lifecycle moved since the owner read it.");
+        }
+
+        if (current is null)
+        {
+            if (disable || (project is null && task is null))
+            {
+                throw new ArgumentException("Enabling a context trigger requires an explicit project or task label.");
+            }
+
+            var creation = LifecycleCodec.EncodeDraft(new LifecycleDraft(
+                CreationMethod.DirectWrite,
+                "Owner configured a project/task context trigger.",
+                null,
+                null,
+                null,
+                null,
+                null));
+            try
+            {
+                current = _lifecycle.Create(context, resourceId, creation, store);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(creation);
+            }
+        }
+
+        if (current.SubjectKind != MemoryKind.Intention || current.Intention != IntentionState.Pending ||
+            !string.Equals(current.ZoneId, subject.ZoneId, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Only a pending intention can have a context trigger.");
+        }
+
+        var trigger = disable
+            ? current.ContextTrigger is { Enabled: true } configured
+                ? configured with { Enabled = false }
+                : throw new ArgumentException("There is no enabled context trigger to disable.")
+            : requestedTrigger!;
+        if (!disable && Equals(current.ContextTrigger, trigger))
+        {
+            return current;
+        }
+
+        var transition = new LifecycleTransitionDraft(
+            Rationale: null,
+            ReplacementResourceId: null,
+            Occurred: null,
+            Recorded: null,
+            ValidFrom: null,
+            ValidUntil: null,
+            ReviewAfter: null,
+            ContextTrigger: disable ? null : trigger,
+            DisableContextTrigger: disable);
+        var payload = LifecycleCodec.EncodeTransitionDraft(transition);
+        try
+        {
+            return _lifecycle.Transition(
+                context,
+                resourceId,
+                disable ? LifecycleAct.DisableIntentionContextTrigger : LifecycleAct.SetIntentionContextTrigger,
+                current.Revision,
+                payload,
+                store);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(payload);
+        }
+    }
+
+    private static string? NormalizeContextLabel(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var normalized = value.Trim();
+        if (normalized.Length > IntentionContextTrigger.MaximumContextLabelLength)
+        {
+            throw new ArgumentException("A project or task context label exceeds its length limit.");
+        }
+
+        return normalized;
+    }
+
+    /// <summary>
+    /// Lists the bounded set of pending intentions with a time or contextual
+    /// trigger. A malformed or unavailable canonical record fails the whole
+    /// answer instead of silently disappearing from the owner timeline.
     /// </summary>
     public ScheduledIntention[] ListScheduled(AuthenticatedContext context, IManagedResourceStore store)
     {
@@ -169,7 +305,8 @@ public sealed class IntentionScheduleService
             var subjectId = resource.ResourceId[LifecyclePrefix.Length..];
             var lifecycle = _lifecycle.Read(context, subjectId, resource.Revision, store)
                 ?? throw new InvalidDataException("A lifecycle record is unavailable to the intention schedule view.");
-            if (lifecycle.Intention != IntentionState.Pending || lifecycle.IntentionDueAt is not { } dueStamp)
+            if (lifecycle.Intention != IntentionState.Pending ||
+                (lifecycle.IntentionDueAt is null && lifecycle.ContextTrigger is null))
             {
                 continue;
             }
@@ -187,8 +324,15 @@ public sealed class IntentionScheduleService
                 throw new InvalidDataException("The intention schedule list exceeds its bounded owner view.");
             }
 
-            var instant = dueStamp.InstantUtc!.Value;
-            var dueAt = instant.ToOffset(TimeSpan.FromMinutes(dueStamp.TimeZoneOffsetMinutes!.Value));
+            DateTimeOffset? dueAt = null;
+            var isDue = false;
+            if (lifecycle.IntentionDueAt is { } dueStamp)
+            {
+                var instant = dueStamp.InstantUtc!.Value;
+                dueAt = instant.ToOffset(TimeSpan.FromMinutes(dueStamp.TimeZoneOffsetMinutes!.Value));
+                isDue = instant <= now;
+            }
+
             scheduled.Add(new ScheduledIntention(
                 subjectId,
                 subject.ZoneId,
@@ -197,16 +341,21 @@ public sealed class IntentionScheduleService
                 subject.Title,
                 subject.Body.Length <= BodyPreviewLength ? subject.Body : subject.Body[..BodyPreviewLength],
                 dueAt,
-                instant <= now,
+                isDue,
                 lifecycle.Notified,
                 lifecycle.NotifiedAtUtc,
                 lifecycle.Acknowledged,
-                lifecycle.AcknowledgedAtUtc));
+                lifecycle.AcknowledgedAtUtc,
+                lifecycle.ContextTrigger?.Project,
+                lifecycle.ContextTrigger?.Task,
+                lifecycle.ContextTrigger?.Enabled == true));
         }
 
         scheduled.Sort(static (left, right) =>
         {
-            var dueOrder = left.DueAt.UtcDateTime.Ticks.CompareTo(right.DueAt.UtcDateTime.Ticks);
+            var leftTicks = left.DueAt?.UtcDateTime.Ticks ?? long.MaxValue;
+            var rightTicks = right.DueAt?.UtcDateTime.Ticks ?? long.MaxValue;
+            var dueOrder = leftTicks.CompareTo(rightTicks);
             return dueOrder != 0 ? dueOrder : StringComparer.Ordinal.Compare(left.ResourceId, right.ResourceId);
         });
         return scheduled.ToArray();

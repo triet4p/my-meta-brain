@@ -182,6 +182,47 @@ public enum IntentionState
     Cancelled = 3,
     Superseded = 4
 }
+/// <summary>
+/// One owner-authored project/task context trigger. Each supplied label must
+/// match the context explicitly supplied to the brief; a missing label is not
+/// a wildcard and a disabled trigger is never surfaced.
+/// </summary>
+public sealed record IntentionContextTrigger(bool Enabled, string? Project, string? Task)
+{
+    public const int MaximumContextLabelLength = 160;
+
+    public bool Matches(string? project, string? task) =>
+        Enabled &&
+        (Project is null || string.Equals(Project, project, StringComparison.OrdinalIgnoreCase)) &&
+        (Task is null || string.Equals(Task, task, StringComparison.OrdinalIgnoreCase)) &&
+        (Project is not null || Task is not null);
+
+    public static void Validate(IntentionContextTrigger? trigger)
+    {
+        if (trigger is null)
+        {
+            return;
+        }
+
+        ValidateLabel(trigger.Project);
+        ValidateLabel(trigger.Task);
+        if (trigger.Project is null && trigger.Task is null)
+        {
+            throw new ArgumentException("A contextual intention trigger names a project, a task, or both.");
+        }
+    }
+
+    private static void ValidateLabel(string? label)
+    {
+        if (label is not null &&
+            (label.Length is 0 or > MaximumContextLabelLength ||
+             !string.Equals(label, label.Trim(), StringComparison.Ordinal) ||
+             label.Any(char.IsControl)))
+        {
+            throw new ArgumentException("A contextual intention label must be trimmed, non-empty, and within its length limit.");
+        }
+    }
+}
 
 /// <summary>
 /// Which facet of a lifecycle record an act touched. The history records the
@@ -198,6 +239,7 @@ public enum LifecycleAspect
     History = 6,
     Schedule = 7
 }
+
 
 /// <summary>
 /// The explicit acts a caller can perform on a lifecycle record. Every act is
@@ -221,7 +263,9 @@ public enum LifecycleAct
     SetValidity = 12,
     RetainRevision = 13,
     SetIntentionDue = 14,
-    ClearIntentionDue = 15
+    ClearIntentionDue = 15,
+    SetIntentionContextTrigger = 16,
+    DisableIntentionContextTrigger = 17
 }
 
 /// <summary>
@@ -255,7 +299,9 @@ public sealed record LifecycleTransitionDraft(
     TemporalStamp? ValidUntil,
     TemporalStamp? ReviewAfter,
     TemporalStamp? IntentionDueAt = null,
-    bool ClearIntentionDueAt = false);
+    bool ClearIntentionDueAt = false,
+    IntentionContextTrigger? ContextTrigger = null,
+    bool DisableContextTrigger = false);
 
 /// <summary>
 /// One retained historical revision of the subject: the exact subject
@@ -273,7 +319,7 @@ public sealed record LifecycleRetainedRevision(
 /// Server-persisted lifecycle record (encrypted bytes). Revision lives in the
 /// vault descriptor, not duplicated here; readers join it via ListResources.
 /// One record covers one subject memory item: publication, question or
-/// intention state, validity, and an independent optional exact time trigger.
+/// intention state, validity, and independently configured intention triggers.
 /// </summary>
 public sealed record StoredLifecycleRecord(
     int SchemaVersion,
@@ -300,7 +346,8 @@ public sealed record StoredLifecycleRecord(
     DateTimeOffset RecordedAtUtc,
     LifecycleStateChange[] History,
     LifecycleRetainedRevision[] RetainedRevisions,
-    TemporalStamp? IntentionDueAt = null);
+    TemporalStamp? IntentionDueAt = null,
+    IntentionContextTrigger? ContextTrigger = null);
 
 /// <summary>
 /// One recorded act: the facet, the act, the states it moved between, the
@@ -348,11 +395,12 @@ public sealed record LifecycleRecord(
     DateTimeOffset RecordedAtUtc,
     LifecycleStateChange[] History,
     LifecycleRetainedRevision[] RetainedRevisions,
-    TemporalStamp? IntentionDueAt = null);
+    TemporalStamp? IntentionDueAt = null,
+    IntentionContextTrigger? ContextTrigger = null);
 
 public static class LifecycleCodec
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
     public const int MaximumReasonLength = 2000;
     public const int MaximumRationaleLength = 2000;
     public const int MaximumHistoryEntries = 256;
@@ -458,9 +506,18 @@ public static class LifecycleCodec
         }
         if (record.SchemaVersion == 1)
         {
-            // v2 adds an independent intention due trigger; older encrypted
-            // lifecycle records have no trigger and retain their validity.
-            record = record with { SchemaVersion = CurrentSchemaVersion, IntentionDueAt = null };
+            // v2 introduced exact time triggers; v3 adds encrypted project/task
+            // context triggers. Legacy records retain validity and have neither.
+            record = record with
+            {
+                SchemaVersion = CurrentSchemaVersion,
+                IntentionDueAt = null,
+                ContextTrigger = null
+            };
+        }
+        else if (record.SchemaVersion == 2)
+        {
+            record = record with { SchemaVersion = CurrentSchemaVersion, ContextTrigger = null };
         }
 
         LifecycleValidator.ValidateStored(record);
@@ -542,6 +599,26 @@ public static class LifecycleValidator
             (transition.IntentionDueAt is not null || transition.ClearIntentionDueAt))
         {
             throw new ArgumentException("This lifecycle act does not change an intention time trigger.");
+        }
+        if (!LifecycleTransitions.AllowsContextTriggerUpdate(act) &&
+            (transition.ContextTrigger is not null || transition.DisableContextTrigger))
+        {
+            throw new ArgumentException("This lifecycle act does not change an intention context trigger.");
+        }
+
+        if (act == LifecycleAct.SetIntentionContextTrigger)
+        {
+            if (transition.ContextTrigger is not { Enabled: true } || transition.DisableContextTrigger)
+            {
+                throw new ArgumentException("Enabling an intention context trigger requires its explicit project/task context.");
+            }
+
+            IntentionContextTrigger.Validate(transition.ContextTrigger);
+        }
+        else if (act == LifecycleAct.DisableIntentionContextTrigger &&
+                 (!transition.DisableContextTrigger || transition.ContextTrigger is not null || record.ContextTrigger is not { Enabled: true }))
+        {
+            throw new ArgumentException("Disabling an intention context trigger requires one enabled trigger.");
         }
 
         if (act == LifecycleAct.SetIntentionDue)
@@ -632,6 +709,7 @@ public static class LifecycleValidator
         ValidateReason(record.Reason);
         ValidateTime(record.Occurred, record.Recorded, record.ValidFrom, record.ValidUntil, record.ReviewAfter);
         ValidateIntentionDueAt(record.IntentionDueAt);
+        IntentionContextTrigger.Validate(record.ContextTrigger);
 
         ValidateRetainedRevisions(record);
 
@@ -680,6 +758,10 @@ public static class LifecycleValidator
         if (!intentionApplies && record.IntentionDueAt is not null)
         {
             throw new ArgumentException("Only an intention subject carries a time trigger.");
+        }
+        if (!intentionApplies && record.ContextTrigger is not null)
+        {
+            throw new ArgumentException("Only an intention subject carries a context trigger.");
         }
 
 
@@ -1196,7 +1278,8 @@ public static class LifecycleTransitions
             => LifecycleAspect.Intention,
         LifecycleAct.Notify or LifecycleAct.Acknowledge => LifecycleAspect.Notification,
         LifecycleAct.SetValidity => LifecycleAspect.Temporal,
-        LifecycleAct.SetIntentionDue or LifecycleAct.ClearIntentionDue => LifecycleAspect.Schedule,
+        LifecycleAct.SetIntentionDue or LifecycleAct.ClearIntentionDue or
+        LifecycleAct.SetIntentionContextTrigger or LifecycleAct.DisableIntentionContextTrigger => LifecycleAspect.Schedule,
         LifecycleAct.RetainRevision => LifecycleAspect.History,
         _ => LifecycleAspect.Unknown
     };
@@ -1226,6 +1309,8 @@ public static class LifecycleTransitions
     public static bool AllowsTemporalUpdate(LifecycleAct act) => act == LifecycleAct.SetValidity;
     public static bool AllowsScheduleUpdate(LifecycleAct act) =>
         act is LifecycleAct.SetIntentionDue or LifecycleAct.ClearIntentionDue;
+    public static bool AllowsContextTriggerUpdate(LifecycleAct act) =>
+        act is LifecycleAct.SetIntentionContextTrigger or LifecycleAct.DisableIntentionContextTrigger;
 
 
     /// <summary>
