@@ -29,6 +29,7 @@ internal static partial class OwnerServiceSmoke
     private const string S7T3ProjectGamma = "S7T3 Project Gamma";
     private const string S7T3TaskGamma = "S7T3 Task Gamma";
     private const string S7T3NoMatchQuery = "UNRELATED_TOKEN_9b7c";
+    private const string S7T3ArchiveReason = "S7T3_SYNTHETIC_ARCHIVE_REASON_c4d2: the Beta migration is paused on purpose.";
 
     internal static async Task RunS7T3ContextualIntentionsAsync(string connectionsExecutable)
     {
@@ -201,6 +202,60 @@ internal static partial class OwnerServiceSmoke
                     currentBetaBrief.Contains(S7T3BetaRevisedBody, StringComparison.Ordinal),
                 "A fresh Beta grant did not bind and surface the owner-approved current intention revision.");
 
+            // The owner's own forgetting decision applies to the contextual
+            // reminder exactly as it applies to the generic brief: a set-aside
+            // intention is not offered, it is named in the omission trace, an
+            // explicit expansion brings it back, and a restore returns the
+            // default behaviour. Reading the brief changes no lifecycle state.
+            var betaLifecycleBefore = await RunOwnerCommandAsync(connectionsExecutable,
+                "owner", "lifecycle-read", "--control-pipe", fixture.ControlPipe, "--resource-id", S7T3BetaId).ConfigureAwait(false);
+            var archivedBeta = await RunOwnerCommandAsync(connectionsExecutable,
+                "owner", "recall-apply", "--control-pipe", fixture.ControlPipe,
+                "--resource-id", S7T3BetaId, "--act", "archive",
+                "--reason", S7T3ArchiveReason).ConfigureAwait(false);
+            Require(archivedBeta.ExitCode == 0 && archivedBeta.StandardOutput.Contains("state=archived", StringComparison.Ordinal) &&
+                    archivedBeta.StandardOutput.Contains("S7T3_SYNTHETIC_ARCHIVE_REASON_c4d2", StringComparison.Ordinal),
+                "The owner could not set the Beta intention aside (" + archivedBeta.StandardError.Trim() + ").");
+
+            var archivedBetaBrief = await RunS7T3BriefAsync(connectionsExecutable, fixture, currentBetaSession, S7T3ProjectBeta, S7T3TaskBeta).ConfigureAwait(false);
+            Require(!archivedBetaBrief.Contains("CONTEXT_INTENTION", StringComparison.Ordinal) &&
+                    !archivedBetaBrief.Contains(S7T3BetaTitle, StringComparison.Ordinal) &&
+                    !archivedBetaBrief.Contains(S7T3BetaRevisedBody, StringComparison.Ordinal) &&
+                    archivedBetaBrief.Contains($"OMITTED id={S7T3BetaId} revision=2 reason=owner_archived", StringComparison.Ordinal),
+                "A set-aside intention was still offered as a contextual reminder (" + archivedBetaBrief.Trim() + ").");
+
+            var expandedBetaBrief = await RunS7T3BriefAsync(connectionsExecutable, fixture, currentBetaSession, S7T3ProjectBeta, S7T3TaskBeta, includeArchived: true).ConfigureAwait(false);
+            Require(expandedBetaBrief.Contains($"CONTEXT_INTENTION id={S7T3BetaId} revision=2", StringComparison.Ordinal) &&
+                    expandedBetaBrief.Contains(S7T3BetaRevisedBody, StringComparison.Ordinal),
+                "The explicit archive expansion did not bring the set-aside intention back (" + expandedBetaBrief.Trim() + ").");
+
+            var outOfScopeArchivedBrief = await RunS7T3BriefAsync(connectionsExecutable, fixture, alphaSession, S7T3ProjectBeta, S7T3TaskBeta, includeArchived: true).ConfigureAwait(false);
+            Require(!outOfScopeArchivedBrief.Contains(S7T3BetaId, StringComparison.Ordinal) &&
+                    !outOfScopeArchivedBrief.Contains(S7T3BetaTitle, StringComparison.Ordinal) &&
+                    !outOfScopeArchivedBrief.Contains(S7T3BetaRevisedBody, StringComparison.Ordinal) &&
+                    !outOfScopeArchivedBrief.Contains("owner_archived", StringComparison.Ordinal),
+                "An out-of-scope set-aside intention leaked its identity or omission metadata into another session's brief (" + outOfScopeArchivedBrief.Trim() + ").");
+
+            var restoredBeta = await RunOwnerCommandAsync(connectionsExecutable,
+                "owner", "recall-apply", "--control-pipe", fixture.ControlPipe,
+                "--resource-id", S7T3BetaId, "--act", "restore").ConfigureAwait(false);
+            Require(restoredBeta.ExitCode == 0 && restoredBeta.StandardOutput.Contains("state=normal", StringComparison.Ordinal),
+                "The owner could not restore the set-aside intention (" + restoredBeta.StandardError.Trim() + ").");
+
+            var restoredBetaBrief = await RunS7T3BriefAsync(connectionsExecutable, fixture, currentBetaSession, S7T3ProjectBeta, S7T3TaskBeta).ConfigureAwait(false);
+            Require(restoredBetaBrief.Contains($"CONTEXT_INTENTION id={S7T3BetaId} revision=2", StringComparison.Ordinal) &&
+                    restoredBetaBrief.Contains(S7T3BetaRevisedBody, StringComparison.Ordinal) &&
+                    !restoredBetaBrief.Contains("owner_archived", StringComparison.Ordinal),
+                "The restored intention did not return to the default contextual reminder (" + restoredBetaBrief.Trim() + ").");
+
+            var betaLifecycleAfter = await RunOwnerCommandAsync(connectionsExecutable,
+                "owner", "lifecycle-read", "--control-pipe", fixture.ControlPipe, "--resource-id", S7T3BetaId).ConfigureAwait(false);
+            Require(betaLifecycleBefore.ExitCode == 0 && betaLifecycleAfter.ExitCode == 0 &&
+                    ExtractS7T3LifecycleState(betaLifecycleBefore.StandardOutput) == ExtractS7T3LifecycleState(betaLifecycleAfter.StandardOutput) &&
+                    betaLifecycleAfter.StandardOutput.Contains("intention=pending", StringComparison.Ordinal),
+                "Reading, omitting or restoring the contextual reminder changed the intention's lifecycle state (" +
+                betaLifecycleBefore.StandardOutput.Trim() + " vs " + betaLifecycleAfter.StandardOutput.Trim() + ").");
+
             var currentAlphaSession = await IssueS7T3CollectionGrantAsync(
                 connectionsExecutable, fixture, "s7t3-alpha-current", S7T3CollectionId).ConfigureAwait(false);
             DriveS7T3Wpf(fixture, connectionsExecutable, currentAlphaSession);
@@ -233,6 +288,7 @@ internal static partial class OwnerServiceSmoke
                     !lockedBrief.Contains(S7T3GammaBody, StringComparison.Ordinal),
                 "A locked vault ran a private schedule pass or returned intention metadata/content through MCP.");
             Console.WriteLine("PASS real MCP briefs serve only the matching enabled intention at each distinct frozen grant; mismatched context, new intentions, members, revisions and locked requests fail closed");
+            Console.WriteLine("PASS an intention the owner set aside is omitted from the contextual brief with an owner_archived trace, returns only under an explicit expansion, and a restore returns the default reminder without changing lifecycle state");
             Console.WriteLine("PASS actual WPF context trigger controls disable and re-enable matching, then acknowledge stays pending until explicit completion; original motivation remains unchanged");
             Console.WriteLine("PASS synthetic intention/context/due data remains encrypted in the vault; no key file or plaintext context/content appears in vault files");
             Console.WriteLine("LIMIT synthetic Windows-only records and a throwaway encrypted vault; no model/provider/network call, installed-service setup, external notification channel, OS-level isolation or secure-erasure claim was exercised.");
@@ -279,7 +335,8 @@ internal static partial class OwnerServiceSmoke
         SmokeFixture fixture,
         S4T4Session session,
         string project,
-        string task)
+        string task,
+        bool includeArchived = false)
     {
         var response = await RunBridgeToolAsync(executable, fixture.AgentPipe,
             "metabrain_memory_brief", new
@@ -288,12 +345,20 @@ internal static partial class OwnerServiceSmoke
                 query = S7T3NoMatchQuery,
                 budgetChars = "8000",
                 contextProject = project,
-                contextTask = task
+                contextTask = task,
+                includeArchived = includeArchived ? "true" : "false"
             }).ConfigureAwait(false);
         using var document = JsonDocument.Parse(response);
         return document.RootElement.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString()
             ?? string.Empty;
     }
+
+    private static string ExtractS7T3LifecycleState(string output) =>
+        string.Join("|", output.Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => line.StartsWith("LIFECYCLE id=", StringComparison.Ordinal) ||
+                line.StartsWith("publication=", StringComparison.Ordinal) ||
+                line.StartsWith("notified=", StringComparison.Ordinal)));
 
     private static async Task ReviseS7T3IntentionAsync(
         string executable,
@@ -479,6 +544,7 @@ internal static partial class OwnerServiceSmoke
             S7T3TaskBeta,
             S7T3ProjectGamma,
             S7T3TaskGamma,
+            S7T3ArchiveReason,
             passphrase,
             recoveryCode
         };

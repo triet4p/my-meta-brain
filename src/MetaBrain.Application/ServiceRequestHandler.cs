@@ -6898,6 +6898,13 @@ public sealed class ServiceRequestHandler
                 .ToArray();
             var liveRevisions = operation.ListResources().ToDictionary(
                 resource => resource.ResourceId, resource => resource.Revision, StringComparer.Ordinal);
+            // The owner's recall policy applies to the contextual projection exactly as
+            // it applies to the generic brief: an intention the owner set aside
+            // is not offered unless the caller explicitly expands the archive,
+            // and it is named in the omission trace instead of vanishing. The
+            // policy never adds a member and never widens a right.
+            var recall = LoadRecallPolicy(operation);
+            var includeArchived = request.IncludeArchived == true;
             var contextualCandidates = request.ContextProject is null && request.ContextTask is null
                 ? Array.Empty<ContextualIntentionCandidate>()
                 : FindContextualIntentions(
@@ -6906,10 +6913,24 @@ public sealed class ServiceRequestHandler
                     approvedScope,
                     liveRevisions,
                     request.ContextProject,
-                    request.ContextTask);
-            var contextualBudget = contextualCandidates.Length == 0
+                    request.ContextTask,
+                    recall);
+            var offeredContextual = includeArchived
+                ? contextualCandidates
+                : contextualCandidates
+                    .Where(candidate => candidate.Disposition != RecallDisposition.Archived)
+                    .ToArray();
+            var archivedContextual = includeArchived
+                ? Array.Empty<ContextualIntentionCandidate>()
+                : contextualCandidates
+                    .Where(candidate => candidate.Disposition == RecallDisposition.Archived)
+                    .ToArray();
+            var contextualBudget = offeredContextual.Length == 0
                 ? 0
                 : Math.Min(budget, Math.Max(200, budget / 3));
+            // Every contextual candidate, archived or not, leaves the generic
+            // scope: one scope member is offered on one surface only, and the
+            // archived one is named in the contextual omission trace.
             var contextualIds = contextualCandidates
                 .Select(candidate => candidate.Approved.ResourceId)
                 .ToHashSet(StringComparer.Ordinal);
@@ -6933,9 +6954,9 @@ public sealed class ServiceRequestHandler
                 // applies to scoped search: it reorders or hides subjects that
                 // are already in this session's frozen scope, and it never
                 // adds a member or widens a right.
-                LoadRecallPolicy(operation),
-                request.IncludeArchived == true);
-            var contextual = ProjectContextualIntentions(contextualCandidates, contextualBudget, operation);
+                recall,
+                includeArchived);
+            var contextual = ProjectContextualIntentions(offeredContextual, archivedContextual, contextualBudget, operation);
             var state = operation.LoadScopeGrantState();
             var recheck = _agentSessions.AuthorizeSession(
                 request.SessionToken,
@@ -6971,7 +6992,15 @@ public sealed class ServiceRequestHandler
         ScopeResourceRevision Approved,
         MemoryItem Item,
         Core.Domain.IntentionContextTrigger Trigger,
-        DateTimeOffset? DueAtUtc);
+        DateTimeOffset? DueAtUtc)
+    {
+        /// <summary>
+        /// The owner's own recall decision for this intention, taken from the
+        /// shared recall policy. It decides only whether the reminder is
+        /// offered, never what the reminder says.
+        /// </summary>
+        public RecallDisposition Disposition { get; init; } = RecallDisposition.Normal;
+    }
 
     private sealed record ContextualBriefProjection(
         ContextualIntentionWire[] Items,
@@ -6991,7 +7020,8 @@ public sealed class ServiceRequestHandler
         IReadOnlyList<ScopeResourceRevision> approvedScope,
         IReadOnlyDictionary<string, long> liveRevisions,
         string? project,
-        string? task)
+        string? task,
+        RecallPolicyIndex? recall)
     {
         var lifecycleService = new LifecycleService();
         var candidates = new List<ContextualIntentionCandidate>();
@@ -7030,7 +7060,14 @@ public sealed class ServiceRequestHandler
                 approved,
                 item,
                 trigger,
-                lifecycle.IntentionDueAt?.InstantUtc));
+                lifecycle.IntentionDueAt?.InstantUtc)
+            {
+                // The owner's own forgetting decision for this intention. It
+                // is read from the same shared recall policy the generic
+                // brief uses, so one decision is honoured by every recall
+                // surface and the policy never widens a scope.
+                Disposition = recall?.DispositionOf(approved.ResourceId) ?? RecallDisposition.Normal,
+            });
         }
 
         return candidates
@@ -7040,6 +7077,7 @@ public sealed class ServiceRequestHandler
 
     private static ContextualBriefProjection ProjectContextualIntentions(
         IReadOnlyList<ContextualIntentionCandidate> candidates,
+        IReadOnlyList<ContextualIntentionCandidate> archivedCandidates,
         int budgetChars,
         IManagedResourceReader manifest)
     {
@@ -7049,6 +7087,18 @@ public sealed class ServiceRequestHandler
         var omitted = new List<BriefOmissionWire>();
         var usedChars = 0;
         var truncated = false;
+        // The owner set these intentions aside: they are not projected, but
+        // they are named in the omission trace so the caller can see that the
+        // scope member exists and was deliberately not offered, exactly as the
+        // generic brief names a set-aside scope member.
+        foreach (var archived in archivedCandidates)
+        {
+            omitted.Add(new BriefOmissionWire(
+                archived.Approved.ResourceId,
+                archived.Approved.Revision,
+                "owner_archived"));
+        }
+
         foreach (var candidate in candidates)
         {
             if (items.Count == ScopedBriefAuthority.MaximumEntries)
