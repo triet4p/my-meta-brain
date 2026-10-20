@@ -20,6 +20,10 @@ internal sealed class NamedPipeService
     // operation only; every other request keeps the 10-second guard, and the
     // rebuild still has to complete inside the frozen budget to pass.
     private static readonly TimeSpan IndexRebuildTimeout = TimeSpan.FromMinutes(25);
+    // The S7-T6 review queue evaluates the live canonical set, so it gets the
+    // same kind of room as the index rebuild. Every other request keeps the
+    // general 10-second guard.
+    private static readonly TimeSpan ReviewListTimeout = TimeSpan.FromMinutes(5);
     private readonly ServiceSettings _settings;
     private readonly ServiceRequestHandler _handler;
     private readonly VaultLifecycle _vault;
@@ -182,6 +186,14 @@ internal sealed class NamedPipeService
                     timeout.CancelAfter(IndexRebuildTimeout);
                 }
 
+                if (string.Equals(request.Operation, ServiceRequestHandler.OwnerReviewListOperation, StringComparison.Ordinal))
+                {
+                    // The review queue reads the live canonical set, so it needs
+                    // the same room as the index rebuild on a large vault. Every
+                    // other request keeps the general 10-second guard.
+                    timeout.CancelAfter(ReviewListTimeout);
+                }
+
                 var needsVaultOperation =
                     string.Equals(request.Operation, ServiceRequestHandler.ResourceReadOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.ResourceWriteOperation, StringComparison.Ordinal) ||
@@ -303,7 +315,9 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerIntentionScheduleListOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerIntentionTriggerSetOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerIntentionContextTriggerSetOperation, StringComparison.Ordinal) ||
-                    string.Equals(request.Operation, ServiceRequestHandler.OwnerIntentionScheduleRunOperation, StringComparison.Ordinal);
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerIntentionScheduleRunOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerReviewListOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerReviewRecordOperation, StringComparison.Ordinal);
                 using var operation = needsVaultOperation ? _vault.TryBeginOperation() : null;
                 if (needsVaultOperation && operation is not null)
                 {

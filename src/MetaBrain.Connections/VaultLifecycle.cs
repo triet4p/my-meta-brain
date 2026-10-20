@@ -355,6 +355,43 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
             return result;
         }
     }
+    private OwnerReviewState LoadReviewState()
+    {
+        lock (_contentGate)
+        {
+            if (_manifest is null || _dataKey is null)
+            {
+                throw new ManagedResourceUnavailableException();
+            }
+
+            return OwnerReviewAuthority.ValidateAndNormalizeState(
+                _store.LoadReviewState(_manifest, _dataKey));
+        }
+    }
+
+    private T UpdateReviewState<T>(
+        Func<OwnerReviewState, (OwnerReviewState State, T Result)> update)
+    {
+        lock (_contentGate)
+        {
+            if (_manifest is null || _dataKey is null)
+            {
+                throw new ManagedResourceUnavailableException();
+            }
+
+            var state = OwnerReviewAuthority.ValidateAndNormalizeState(
+                _store.LoadReviewState(_manifest, _dataKey));
+            var (nextState, result) = update(state);
+            if (!ReferenceEquals(nextState, state))
+            {
+                nextState = OwnerReviewAuthority.ValidateAndNormalizeState(nextState);
+                _store.SaveReviewState(_manifest, _dataKey, nextState);
+            }
+
+            return result;
+        }
+    }
+
     private OwnerPurgeLedgerState LoadPurgeLedgerState()
     {
         lock (_contentGate)
@@ -621,6 +658,10 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
         public T UpdateRecallPolicyState<T>(
             Func<OwnerRecallPolicyState, (OwnerRecallPolicyState State, T Result)> update) =>
             GetOwner().UpdateRecallPolicyState(update);
+        public OwnerReviewState LoadReviewState() => GetOwner().LoadReviewState();
+        public T UpdateReviewState<T>(
+            Func<OwnerReviewState, (OwnerReviewState State, T Result)> update) =>
+            GetOwner().UpdateReviewState(update);
         public OwnerPurgeLedgerState LoadPurgeLedgerState() => GetOwner().LoadPurgeLedgerState();
         public T UpdatePurgeLedgerState<T>(
             Func<OwnerPurgeLedgerState, (OwnerPurgeLedgerState State, T Result)> update) =>

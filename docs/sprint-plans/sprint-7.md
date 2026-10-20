@@ -6,7 +6,7 @@ Nhớ đúng thời điểm, nhắc đúng ý định đã được yêu cầu, 
 
 ## Status and Dependencies
 
-- Status: In progress — S7-T1–T4 accepted với independent evidence PASS và checkpoint riêng; S7-T5 đang triển khai, S7-T6 chờ tuần tự. Entry: Sprint 6 PASS; encrypted domain/lineage và lock/session APIs. Private scheduler/notifications không tự unlock vault.
+- Status: In progress — S7-T1–T5 accepted với independent evidence PASS và checkpoint riêng; S7-T6 đang triển khai. Entry: Sprint 6 PASS; encrypted domain/lineage và lock/session APIs. Private scheduler/notifications không tự unlock vault.
 - [Global plan](../PLAN.md), [specification](../META-BRAIN.md), [requirements](../REQUIREMENTS.md).
 - Requirements: R26–R29; bảo toàn R01, R03–R06, R08, R12, R14, R18, R25, R30, R36.
 
@@ -40,12 +40,12 @@ Workflow S7-T1–T6: full route, tuần tự; mỗi task cần runtime smoke, in
     - Acceptance: ít đọc chỉ giảm ưu tiên theo lựa chọn, không giảm độ đúng hoặc auto-delete; pinned rare lesson còn tìm được; archived tìm qua history/explicit expansion; restore khôi phục visibility thích hợp không mở quyền.
     - Evidence: rare important lesson, noisy repeated item và archive/restore qua UI/MCP queries; ranking reason rõ, read loop không self-reinforce truth.
 
-- [~] **S7-T5 — Owner purge và derivative impact handling.** Requirements: R29, R08, R18.
+- [x] **S7-T5 — Owner purge và derivative impact handling.** Requirements: R29, R08, R18.
     - Scope: dry-run impact, confirm, durable deletion bookkeeping và purge trong vault/index/cache/snapshots; backup lifecycle integration contract cho S8.
     - Acceptance: owner preview impact, encrypted deletion bookkeeping không giữ removed payload; xử lý private copies/lineage/cache/request scopes và published catalog withdrawal. Original session không xóa mặc định; invalidate session access to purged IDs, no restore/reindex resurrection. Không claim secure physical erase hoặc xóa external/retained-backup copies.
     - Evidence: seed encrypted source/summary/snapshot/index/cache và approved catalog, owner purge, read/search/catalog/rebuild deny, interrupted resume; live scoped session không còn đọc removed item, agent không owner purge.
 
-- [ ] **S7-T6 — Review-after và lifecycle reconciliation.** Requirements: R26, R27, R28, R29, R39.
+- [~] **S7-T6 — Review-after và lifecycle reconciliation.** Requirements: R26, R27, R28, R29, R39.
     - Scope: due-for-review, source-change invalidation và reconciliation của các lifecycle transitions đã có; không auto-rewrite tri thức.
     - Acceptance: nguồn đổi, unavailable hoặc item review_after tới hạn hiện rõ trong UI, không tự phủ định hoặc sửa belief; source reimport/index rebuild không hồi sinh purged items; restart giữ intention/archive/review states và xử lý deletion policy với source enrollment rõ.
     - Evidence: source change → stale synthesis → owner review; purge → reingest/reindex → không resurrection trái policy; restart kết hợp due/archive/review state.
@@ -67,3 +67,5 @@ S7-T2 accepted: [worker evidence](../../artifacts/sprint-7/task-2.md), [R1 evide
 S7-T3 accepted: [worker evidence](../../artifacts/sprint-7/task-3.md), [R1 evidence PASS](../../artifacts/sprint-7/reviews/S7-T3-R1.md), [exact-snapshot checkpoint](../../artifacts/sprint-7/checkpoints/S7-T3-C1.md), commit `62fab6c57e21cb32f06443feb3b172064a25eab7`. Không push.
 
 S7-T4 accepted: [worker evidence](../../artifacts/sprint-7/task-4.md), [R1 evidence PASS](../../artifacts/sprint-7/reviews/S7-T4-R1.md), [exact-snapshot checkpoint](../../artifacts/sprint-7/checkpoints/S7-T4-C1.md), commit `5775be4efa37f6d72d552e60f920c629bd35b4c9`. Không push.
+
+S7-T5 accepted: [worker evidence/corrections](../../artifacts/sprint-7/task-5.md), [R4 evidence PASS](../../artifacts/sprint-7/reviews/S7-T5-R4.md), [exact-snapshot checkpoint](../../artifacts/sprint-7/checkpoints/S7-T5-C1.md), commit `ddccb2c7d36e26a837536cfd3ffc6ba3869e07c6`. CLI regression và partial-delete/Finalizing recovery đã correction/review; production crash scaffolding đã bỏ. Không push.

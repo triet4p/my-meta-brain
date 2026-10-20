@@ -420,6 +420,13 @@ public sealed class PurgeService
             }
         }
 
+        // S7-T6 deletion policy over source enrollment: a purged source's
+        // enrollment is revoked in the same run, so the deleted source cannot
+        // keep being ingested, refreshed or probed afterwards. The step is
+        // idempotent and re-runs on resume; the original file outside the
+        // vault is untouched, exactly like the rest of the purge.
+        RevokePurgedEnrollments(operation, intent.Impacted.Select(item => item.ResourceId).ToArray());
+
         invalidateIndex?.Invoke();
 
         var completedAt = _timeProvider.GetUtcNow().ToUniversalTime();
@@ -444,6 +451,46 @@ public sealed class PurgeService
         return new PurgeResult(
             intent.PurgeId, intent.TargetResourceId, intent.Impacted,
             intent.WithdrawnCatalogIds, finalGeneration, DecisionApplied: true);
+    }
+
+    /// <summary>
+    /// Revokes the enrollment of every purged source ID. The enrollment is
+    /// owner-private state beside the vault, so the deletion policy has to
+    /// reach it explicitly: without this, an enrollment of a deleted source
+    /// could keep ingesting and probing the original file. The step is
+    /// idempotent (an already revoked enrollment is left alone) and it never
+    /// touches the original file outside the vault.
+    /// </summary>
+    private static void RevokePurgedEnrollments(IVaultOperation operation, IReadOnlyCollection<string> purgedIds)
+    {
+        if (purgedIds.Count == 0)
+        {
+            return;
+        }
+
+        operation.UpdateSourceEnrollmentState(state =>
+        {
+            var validated = SourceEnrollmentAuthority.ValidateAndNormalizeState(state);
+            if (validated.Enrollments.Length == 0)
+            {
+                return (state, false);
+            }
+
+            var revokedAt = DateTimeOffset.UtcNow;
+            var changed = false;
+            var enrollments = validated.Enrollments.Select(enrollment =>
+            {
+                if (enrollment.RevokedAtUtc is not null ||
+                    !purgedIds.Contains(enrollment.SourceId))
+                {
+                    return enrollment;
+                }
+
+                changed = true;
+                return enrollment with { RevokedAtUtc = revokedAt };
+            }).ToArray();
+            return changed ? (validated with { Enrollments = enrollments }, true) : (state, false);
+        });
     }
 
     private static bool ImpactSetsEqual(PurgeImpactEntry[] left, PurgeImpactEntry[] right, out string mismatch)

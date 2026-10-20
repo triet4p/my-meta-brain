@@ -44,11 +44,12 @@
                         <ListBoxItem Content="Sources" Padding="8,6" />
                         <ListBoxItem Content="Jobs" Padding="8,6" />
                         <ListBoxItem Content="Intentions" Padding="8,6" />
+                        <ListBoxItem Content="Review queue" Padding="8,6" />
                     </ListBox>
                 </DockPanel>
             </Border>
 
-            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Padding="18,16,18,16">
+            <ScrollViewer x:Name="ContentScrollViewer" Grid.Column="1" VerticalScrollBarVisibility="Auto" Padding="18,16,18,16">
                 <Grid>
                     <StackPanel x:Name="OwnerSessionPanel">
                         <TextBlock Text="Owner session" FontSize="19" FontWeight="SemiBold" />
@@ -1228,6 +1229,54 @@
                                    Text="• Keyboard: Enter opens the selected row, F5 reads the due list, Ctrl+L locks the vault." />
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
                                    Text="• Privacy: this view holds no on-disk cache. Locking, service loss or ending the owner session clears the list, private due/context text and controls; nothing automatically unlocks the vault." />
+                    </StackPanel>
+
+                    <StackPanel x:Name="ReviewQueuePanel" Visibility="Collapsed">
+                        <TextBlock Text="Review queue — due, stale and unavailable evidence" FontSize="19" FontWeight="SemiBold" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,8,0,0"
+                                   Text="The service evaluates your vault and reports what asks for your attention: an item whose review-after deadline has passed, an item whose cited source moved past the revision the item cited, a cited source that is gone, and a cited source that states it is unavailable. A source nobody asserted anything about stays unknown, and a deadline known only as a year stays a year: nothing is narrowed into a date that was never recorded." />
+                        <TextBlock Text="A moved, missing or unavailable source is a fact about the evidence, not a verdict about the item. Recording a review says that you looked; the item keeps its own text, evidence level, citations and state, and nothing here completes an intention or denies a belief." TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280" />
+                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                            <Button x:Name="ReviewQueueRefreshButton" Content="Read review queue" Padding="14,7" Click="OnReviewRefreshClicked" />
+                        </StackPanel>
+                        <TextBlock x:Name="ReviewQueueMessageText" TextWrapping="Wrap" Margin="0,8,0,0" FontWeight="SemiBold" AutomationProperties.AutomationId="ReviewQueueMessageText" />
+                        <ListBox x:Name="ReviewQueueList" Height="210" Margin="0,8,0,0" Background="White" BorderBrush="#FFD5D8DC"
+                                 AutomationProperties.AutomationId="ReviewQueueList" SelectionChanged="OnReviewSelectionChanged"
+                                 KeyDown="OnReviewListKeyDown">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="2">
+                                        <TextBlock Text="{Binding Summary}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding BodyPreview}" Foreground="#FF6B7280" TextWrapping="Wrap" Margin="0,2,0,0" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+
+                        <Border x:Name="ReviewQueueDetailPanel" Margin="0,14,0,0" Padding="14" Background="White"
+                                BorderBrush="#FFD5D8DC" BorderThickness="1" CornerRadius="3">
+                            <StackPanel>
+                                <TextBlock Text="Selected item (exactly as the service served it)" FontWeight="SemiBold" FontSize="15" />
+                                <TextBlock x:Name="ReviewQueueDetailText" TextWrapping="Wrap" Margin="0,8,0,0" FontFamily="Consolas" />
+                                <TextBlock x:Name="ReviewQueueCitationsText" TextWrapping="Wrap" Margin="0,6,0,0" FontFamily="Consolas" />
+                                <TextBlock Text="Why you reviewed it" FontWeight="SemiBold" Margin="0,12,0,2" />
+                                <TextBox x:Name="ReviewQueueRationaleInput" Margin="0,0,0,0" Height="48" AcceptsReturn="True" TextWrapping="Wrap"
+                                         AutomationProperties.AutomationId="ReviewQueueRationaleInput" TextChanged="OnReviewInputChanged" />
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                    <Button x:Name="ReviewQueueRecordButton" Content="Record my review" Padding="14,7" Click="OnReviewRecordClicked" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Text="Privacy and interaction" FontWeight="SemiBold" Margin="0,20,0,6" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• The queue is computed by the service from your own encrypted vault. Nothing outside the vault is read: no enrolled source file is opened, nothing is polled, and no provider or network call happens on this screen." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Recording a review stores your reason in your private encrypted review state. It never rewrites the item, never changes its evidence level, never touches a grant, a collection or a session scope, and it never marks an intention done." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Locking, losing the service or ending the owner session clears this view and its controls. Your recorded reviews stay in the vault and come back with the next read." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Keyboard: Enter opens the selected row, F5 reads the queue again, Ctrl+L locks the vault." />
                     </StackPanel>
                 </Grid>
             </ScrollViewer>

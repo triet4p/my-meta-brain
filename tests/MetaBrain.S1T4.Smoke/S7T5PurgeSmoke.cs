@@ -704,6 +704,8 @@ internal static partial class OwnerServiceSmoke
         public T UpdateSourceEnrollmentState<T>(Func<SourceEnrollmentState, (SourceEnrollmentState State, T Result)> update) => _inner.UpdateSourceEnrollmentState(update);
         public OwnerRecallPolicyState LoadRecallPolicyState() => _inner.LoadRecallPolicyState();
         public T UpdateRecallPolicyState<T>(Func<OwnerRecallPolicyState, (OwnerRecallPolicyState State, T Result)> update) => _inner.UpdateRecallPolicyState(update);
+        public OwnerReviewState LoadReviewState() => _inner.LoadReviewState();
+        public T UpdateReviewState<T>(Func<OwnerReviewState, (OwnerReviewState State, T Result)> update) => _inner.UpdateReviewState(update);
         public bool DeleteCanonicalResource(string resourceId) => _inner.DeleteCanonicalResource(resourceId);
         public void Dispose() => _inner.Dispose();
     }

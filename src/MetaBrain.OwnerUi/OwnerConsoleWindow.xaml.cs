@@ -200,9 +200,15 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         SourcesPanel.Visibility = Navigation.SelectedIndex == 7 ? Visibility.Visible : Visibility.Collapsed;
         JobsPanel.Visibility = Navigation.SelectedIndex == 8 ? Visibility.Visible : Visibility.Collapsed;
         IntentionsPanel.Visibility = Navigation.SelectedIndex == 9 ? Visibility.Visible : Visibility.Collapsed;
+        ReviewQueuePanel.Visibility = Navigation.SelectedIndex == 10 ? Visibility.Visible : Visibility.Collapsed;
         if (Navigation.SelectedIndex == 9)
         {
             _ = _session.RefreshIntentionsAsync();
+        }
+
+        if (Navigation.SelectedIndex == 10)
+        {
+            _ = _session.RefreshReviewQueueAsync();
         }
     }
 
@@ -306,6 +312,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         RenderSources(attached);
         RenderJobs(attached);
         RenderIntentions(attached);
+        RenderReview(attached);
     }
 
     private string LastCheckText_Value() => _session.LastCheckLocal is { } last
@@ -518,6 +525,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
             UnlockPassphraseInput.Clear();
             RecoveryInput.Clear();
             ClearIntentionInputs();
+            ReviewRationaleInput.Clear();
         }
         finally
         {

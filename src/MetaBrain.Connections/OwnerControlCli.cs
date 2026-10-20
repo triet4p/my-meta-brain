@@ -131,6 +131,8 @@ internal static class OwnerControlCli
                 "purge-preview" => await PurgePreviewAsync(options).ConfigureAwait(false),
                 "purge-confirm" => await PurgeConfirmAsync(options).ConfigureAwait(false),
                 "purge-resume" => await PurgeResumeAsync(options).ConfigureAwait(false),
+                "review-list" => await ReviewListAsync(options).ConfigureAwait(false),
+                "review-record" => await ReviewRecordAsync(options).ConfigureAwait(false),
                 "job-create" => await JobCreateAsync(options).ConfigureAwait(false),
                 "job-start" => await JobStartAsync(options).ConfigureAwait(false),
                 "job-cancel" => await JobCancelAsync(options).ConfigureAwait(false),
@@ -4749,6 +4751,116 @@ internal static class OwnerControlCli
         return 0;
     }
 
+    /// <summary>
+    /// S7-T6 owner review queue: prints every item the service reports as
+    /// needing the owner's attention, with the reasons, the review-after
+    /// stamp exactly as it was recorded, and each cited source's exact ID,
+    /// cited revision, live revision and availability. The command reads only:
+    /// it changes nothing in the vault.
+    /// </summary>
+    private static async Task<int> ReviewListAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var controlPipe = ControlPipe(options);
+        var result = await InvokeOwnerAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerReviewListOperation)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "review_listed"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintReviewQueue(result.Reply);
+        return 0;
+    }
+
+    /// <summary>
+    /// S7-T6 owner review act: records that the owner looked at one item,
+    /// with the owner's own reason. The act changes only the owner's private
+    /// review state; the item's content, evidence, citations, times and states
+    /// stay exactly as they were.
+    /// </summary>
+    private static async Task<int> ReviewRecordAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--reason");
+        var controlPipe = ControlPipe(options);
+        var resourceId = options.Required("--resource-id");
+        var reason = options.Required("--reason");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId) || reason.Length is 0 or > 1000)
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerReviewRecordOperation,
+                ResourceId: resourceId,
+                Description: reason)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "review_recorded"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        if (result.Reply.TryGetProperty("review", out var review) && review.ValueKind == JsonValueKind.Object)
+        {
+            Console.WriteLine(
+                $"REVIEW RECORDED subject={JsonValueText(review, "subjectResourceId")} " +
+                $"at={JsonValueText(review, "reviewedAtUtc")} " +
+                $"actor={JsonValueText(review, "actor")} " +
+                $"acknowledged=[{JsonStringList(review, "acknowledgedReasons")}]");
+            Console.WriteLine($"reason={JsonValueText(review, "rationale")}");
+        }
+
+        return 0;
+    }
+
+    private static void PrintReviewQueue(JsonElement reply)
+    {
+        if (!reply.TryGetProperty("reviewQueue", out var queue) || queue.ValueKind != JsonValueKind.Object)
+        {
+            Console.WriteLine("REVIEW queue unavailable");
+            return;
+        }
+
+        Console.WriteLine(
+            $"REVIEW QUEUE entries={(queue.TryGetProperty("entries", out var entries) && entries.ValueKind == JsonValueKind.Array ? entries.GetArrayLength() : 0)} " +
+            $"scanned={JsonValueText(queue, "scannedItems")} truncated={JsonFlagText(queue, "truncated")}");
+        if (!queue.TryGetProperty("entries", out var entryElements) || entryElements.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        foreach (var entry in entryElements.EnumerateArray())
+        {
+            Console.WriteLine(
+                $"REVIEW id={JsonValueText(entry, "resourceId")} revision={JsonValueText(entry, "resourceRevision")} " +
+                $"kind={JsonValueText(entry, "kind")} state={JsonValueText(entry, "state")} " +
+                $"reasons=[{JsonStringList(entry, "reasons")}] " +
+                $"undetermined=[{JsonStringList(entry, "undeterminedReasons")}] " +
+                $"pending=[{JsonStringList(entry, "pendingReasons")}] " +
+                $"reviewAfter={LifecycleStampText(entry, "reviewAfter")} " +
+                $"lastReviewed={JsonValueText(entry, "lastReviewedAtUtc")}");
+            if (entry.TryGetProperty("citations", out var citations) && citations.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var citation in citations.EnumerateArray())
+                {
+                    Console.WriteLine(
+                        $"CITATION source={JsonValueText(citation, "sourceId")} " +
+                        $"cited={JsonValueText(citation, "citedRevision")} " +
+                        $"live={JsonValueText(citation, "liveRevision")} " +
+                        $"availability={JsonValueText(citation, "availability")} " +
+                        $"sourceRecorded={JsonValueText(citation, "sourceRecordedAtUtc")}");
+                }
+            }
+        }
+    }
+
     private static void PrintPurgePreview(JsonElement reply)
     {
         if (!reply.TryGetProperty("purgePreview", out var preview) || preview.ValueKind != JsonValueKind.Object)
@@ -5163,6 +5275,7 @@ internal static class OwnerControlCli
         Console.Error.WriteLine("Agent brief: owner agent-brief --agent-pipe --session-file [--query] [--budget-chars 200..8000] [--context-project explicit-label] [--context-task explicit-label] [--include-archived]; contextual intentions are returned only from the frozen memory.context grant.");
         Console.Error.WriteLine("Recall policy: owner recall-apply --resource-id --act {demote|pin|archive|restore} [--reason text] | owner recall-read --resource-id; the act changes only how an item is offered, never its content, evidence, revision or any scope.");
         Console.Error.WriteLine("Owner purge: owner purge-preview --resource-id --resource-revision --reason text | owner purge-confirm --purge-id --resource-id --resource-revision --target-zone --target-kind --impacted id|rev|kind|reason,... --live-generation N [--catalog-ids ...] --reason text (type PURGE) | owner purge-resume --purge-id; deletes exactly the previewed canonical copies and withdraws the mapped catalog.");
+        Console.Error.WriteLine("Review queue: owner review-list | owner review-record --resource-id --reason text; the queue reports due review-after, a source that moved past the cited revision, a missing source and an unavailable source, and the act records only that the owner looked.");
         return 2;
     }
 

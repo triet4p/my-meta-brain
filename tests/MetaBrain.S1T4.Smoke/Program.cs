@@ -55,7 +55,8 @@ internal static class Program
                 string.Equals(args[0], "s7-t2", StringComparison.Ordinal) ||
                 string.Equals(args[0], "s7-t3", StringComparison.Ordinal) ||
                 string.Equals(args[0], "s7-t4", StringComparison.Ordinal) ||
-                string.Equals(args[0], "s7-t5", StringComparison.Ordinal))
+                string.Equals(args[0], "s7-t5", StringComparison.Ordinal) ||
+                string.Equals(args[0], "s7-t6", StringComparison.Ordinal))
             ? args[0]
             : args.Length == 3 &&
               (string.Equals(args[0], "s5-t1-console-fixture", StringComparison.Ordinal) ||
@@ -274,6 +275,9 @@ internal static class Program
                     break;
                 case "s7-t5":
                     await OwnerServiceSmoke.RunS7T5PurgeAsync(fullPath).ConfigureAwait(false);
+                    break;
+                case "s7-t6":
+                    await OwnerServiceSmoke.RunS7T6ReviewAsync(fullPath).ConfigureAwait(false);
                     break;
                 default:
                     await OwnerServiceSmoke.RunAsync(fullPath).ConfigureAwait(false);

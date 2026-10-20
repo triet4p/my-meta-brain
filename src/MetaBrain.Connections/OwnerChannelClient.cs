@@ -457,6 +457,70 @@ public sealed record OwnerRecallResult(
     string? ErrorCode,
     OwnerRecallState? Recall);
 
+/// <summary>
+/// One cited source as the S7-T6 review evaluation reported it: the exact
+/// source ID the item cites, the exact revision it cited, the live revision
+/// now, and what is known about that source's availability. "available",
+/// "unavailable", "unknown" and "missing" stay distinct.
+/// </summary>
+public sealed record OwnerReviewCitation(
+    string SourceId,
+    long? CitedRevision,
+    long? LiveRevision,
+    string Availability,
+    DateTimeOffset? SourceRecordedAtUtc);
+
+/// <summary>
+/// One item in the owner's S7-T6 review queue, exactly as the service reported
+/// it: the identity the vault holds, the reasons the service computed, the
+/// review-after stamp with its precision and offset, the reasons the owner
+/// has not answered yet, and the owner's own last review.
+/// </summary>
+public sealed record OwnerReviewEntry(
+    string ResourceId,
+    string ZoneId,
+    long ResourceRevision,
+    string Kind,
+    string? Title,
+    string State,
+    string[] Reasons,
+    string[] UndeterminedReasons,
+    string[] PendingReasons,
+    string[] AcknowledgedReasons,
+    OwnerTimelineStamp? ReviewAfter,
+    DateTimeOffset? LastReviewedAtUtc,
+    string? LastReviewedRationale,
+    OwnerReviewCitation[] Citations);
+
+/// <summary>The whole S7-T6 owner review queue as the service reported it.</summary>
+public sealed record OwnerReviewQueue(
+    OwnerReviewEntry[] Entries,
+    int ScannedItems,
+    bool Truncated);
+
+/// <summary>The outcome of one S7-T6 review queue read on the owner channel.</summary>
+public sealed record OwnerReviewQueueResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerReviewQueue? Queue);
+
+/// <summary>
+/// One recorded S7-T6 owner review: the subject, when the owner looked, who
+/// looked, the owner's own reason, and the reasons the owner saw then.
+/// </summary>
+public sealed record OwnerReviewRecord(
+    string SubjectResourceId,
+    DateTimeOffset ReviewedAtUtc,
+    string Actor,
+    string Rationale,
+    string[] AcknowledgedReasons);
+
+/// <summary>The outcome of one S7-T6 owner review act on the owner channel.</summary>
+public sealed record OwnerReviewRecordResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerReviewRecord? Review);
+
 /// <summary>One canonical resource a purge preview would delete (ID + live revision).</summary>
 public sealed record OwnerPurgeImpact(
     string ResourceId,
@@ -1264,6 +1328,55 @@ public static class OwnerChannelClient
             cancellationToken).ConfigureAwait(false);
         return new OwnerRecallResult(reply.Outcome, reply.ErrorCode, ProjectRecallState(reply));
     }
+
+    /// <summary>
+    /// Reads the owner's S7-T6 review queue through the owner control pipe:
+    /// the items whose review-after deadline passed, whose cited source moved
+    /// past the cited revision, whose cited source is gone, or whose cited
+    /// source states that it is unavailable. The queue is a report; reading it
+    /// changes nothing in the vault.
+    /// </summary>
+    public static async Task<OwnerReviewQueueResult> ListReviewQueueAsync(
+        string controlPipe,
+        CancellationToken cancellationToken)
+    {
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerReviewListOperation),
+            "review_listed",
+            cancellationToken).ConfigureAwait(false);
+        return new OwnerReviewQueueResult(reply.Outcome, reply.ErrorCode, ProjectReviewQueue(reply));
+    }
+
+    /// <summary>
+    /// Records one explicit S7-T6 owner review of one subject memory item
+    /// through the owner control pipe. The act stores the owner's own
+    /// rationale in the owner's private review state: the item's content,
+    /// evidence, citations, times and states are untouched, and no belief is
+    /// denied.
+    /// </summary>
+    public static async Task<OwnerReviewRecordResult> RecordReviewAsync(
+        string controlPipe,
+        string resourceId,
+        string rationale,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(resourceId);
+        ArgumentNullException.ThrowIfNull(rationale);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerReviewRecordOperation,
+                ResourceId: resourceId,
+                Description: rationale),
+            "review_recorded",
+            cancellationToken).ConfigureAwait(false);
+        return new OwnerReviewRecordResult(reply.Outcome, reply.ErrorCode, ProjectOwnerReview(reply));
+    }
+
     /// <summary>
     /// S7-T5 owner purge preview through the owner control pipe: binds the
     /// live target revision and returns the exact impacted set. Writes nothing.
@@ -3748,6 +3861,70 @@ public static class OwnerChannelClient
             Flag(payload, "hasMore"),
             hits,
             Timestamp(payload, "asOfUtc"));
+    }
+
+    private static OwnerReviewQueue? ProjectReviewQueue(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            !reply.Payload.TryGetProperty("reviewQueue", out var payload) ||
+            payload.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var entries = payload.TryGetProperty("entries", out var entryElements) && entryElements.ValueKind == JsonValueKind.Array
+            ? entryElements.EnumerateArray().Select(ProjectReviewEntry).ToArray()
+            : Array.Empty<OwnerReviewEntry>();
+
+        return new OwnerReviewQueue(
+            entries,
+            Int32(payload, "scannedItems"),
+            Flag(payload, "truncated"));
+    }
+
+    private static OwnerReviewEntry ProjectReviewEntry(JsonElement entry)
+    {
+        var citations = entry.TryGetProperty("citations", out var citationElements) && citationElements.ValueKind == JsonValueKind.Array
+            ? citationElements.EnumerateArray().Select(citation => new OwnerReviewCitation(
+                Text(citation, "sourceId") ?? string.Empty,
+                OptionalInt64(citation, "citedRevision"),
+                OptionalInt64(citation, "liveRevision"),
+                Text(citation, "availability") ?? "unknown",
+                Timestamp(citation, "sourceRecordedAtUtc"))).ToArray()
+            : Array.Empty<OwnerReviewCitation>();
+
+        return new OwnerReviewEntry(
+            Text(entry, "resourceId") ?? string.Empty,
+            Text(entry, "zoneId") ?? string.Empty,
+            Int64(entry, "resourceRevision"),
+            Text(entry, "kind") ?? "unknown",
+            Text(entry, "title"),
+            Text(entry, "state") ?? "current",
+            Strings(entry, "reasons"),
+            Strings(entry, "undeterminedReasons"),
+            Strings(entry, "pendingReasons"),
+            Strings(entry, "acknowledgedReasons"),
+            ProjectStamp(entry, "reviewAfter"),
+            Timestamp(entry, "lastReviewedAtUtc"),
+            Text(entry, "lastReviewedRationale"),
+            citations);
+    }
+
+    private static OwnerReviewRecord? ProjectOwnerReview(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            !reply.Payload.TryGetProperty("review", out var payload) ||
+            payload.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return new OwnerReviewRecord(
+            Text(payload, "subjectResourceId") ?? string.Empty,
+            Timestamp(payload, "reviewedAtUtc") ?? DateTimeOffset.MinValue,
+            Text(payload, "actor") ?? string.Empty,
+            Text(payload, "rationale") ?? string.Empty,
+            Strings(payload, "acknowledgedReasons"));
     }
 
     private static OwnerRecallState? ProjectRecallState(OwnerReply reply)

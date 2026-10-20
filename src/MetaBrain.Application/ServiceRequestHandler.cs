@@ -273,6 +273,68 @@ public sealed record PurgeResultWire(
 public sealed record PurgeDeletedWire(string ResourceId, long Revision);
 
 /// <summary>
+/// One cited source as the S7-T6 review evaluation sees it: the exact source
+/// ID the item cites, the exact revision it cited, the live revision of the
+/// registered source now, and what is known about that source's own
+/// availability ("available", "unavailable", "unknown" or "missing"). The
+/// three unknown states stay distinct: a source that moved is never reported
+/// as missing, and a source nobody asserted anything about is never reported
+/// as available.
+/// </summary>
+public sealed record ReviewCitationWire(
+    string SourceId,
+    long? CitedRevision,
+    long? LiveRevision,
+    string Availability,
+    DateTimeOffset? SourceRecordedAtUtc);
+
+/// <summary>
+/// One item in the owner's S7-T6 review queue: the identity the vault already
+/// holds, the reasons the service computed from live state, the review-after
+/// stamp exactly as it was recorded (with its precision and offset), and the
+/// owner's own last review of it. The queue reports; it never rewrites the
+/// item's content, evidence or belief.
+/// </summary>
+public sealed record ReviewEntryWire(
+    string ResourceId,
+    string ZoneId,
+    long ResourceRevision,
+    string Kind,
+    string? Title,
+    string State,
+    string[] Reasons,
+    string[] UndeterminedReasons,
+    string[] PendingReasons,
+    string[] AcknowledgedReasons,
+    LifecycleStampWire? ReviewAfter,
+    DateTimeOffset? LastReviewedAtUtc,
+    string? LastReviewedRationale,
+    ReviewCitationWire[] Citations);
+
+/// <summary>
+/// The whole S7-T6 owner review queue: the entries that ask for the owner's
+/// attention, how many live items the evaluation read, and whether the scan
+/// stopped at its bound (so the owner knows the queue is not the whole vault).
+/// </summary>
+public sealed record ReviewQueueWire(
+    ReviewEntryWire[] Entries,
+    int ScannedItems,
+    bool Truncated);
+
+/// <summary>
+/// One recorded S7-T6 owner review: the subject, when the owner looked, who
+/// looked, the owner's own rationale, and the reasons the owner saw then. It
+/// is owner curation about the owner's attention, not a statement about the
+/// item's truth.
+/// </summary>
+public sealed record OwnerReviewWire(
+    string SubjectResourceId,
+    DateTimeOffset ReviewedAtUtc,
+    string Actor,
+    string Rationale,
+    string[] AcknowledgedReasons);
+
+/// <summary>
 /// One S5-T4 owner review outcome. It names the pending proposal that was
 /// reviewed at its exact revision, the canonical memory item the review wrote
 /// under the ID derived from that proposal, and the publication state the
@@ -903,6 +965,8 @@ public sealed record ServiceReply(
     IntentionScheduleWire? IntentionSchedule = null,
     IntentionSchedulePassWire? IntentionSchedulePass = null,
     RecallPolicyWire? Recall = null,
+    ReviewQueueWire? ReviewQueue = null,
+    OwnerReviewWire? Review = null,
     PurgeImpactWire? PurgePreview = null,
     PurgeResultWire? Purge = null);
 
@@ -1020,6 +1084,8 @@ public sealed class ServiceRequestHandler
     public const string OwnerPurgePreviewOperation = "owner.purge.preview";
     public const string OwnerPurgeConfirmOperation = "owner.purge.confirm";
     public const string OwnerPurgeResumeOperation = "owner.purge.resume";
+    public const string OwnerReviewListOperation = "owner.review.list";
+    public const string OwnerReviewRecordOperation = "owner.review.record";
     public const string OwnerRelationListOperation = "owner.relation.list";
     public const string OwnerProposalPublishOperation = "owner.proposal.publish";
     public const string OwnerProposalRejectOperation = "owner.proposal.reject";
@@ -1307,6 +1373,16 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, OwnerPurgeResumeOperation, StringComparison.Ordinal))
         {
             return HandleOwnerPurgeResume(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerReviewListOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerReviewList(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerReviewRecordOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerReviewRecord(context, request, operation);
         }
         if (string.Equals(request.Operation, OwnerRelationListOperation, StringComparison.Ordinal))
         {
@@ -2987,6 +3063,15 @@ public sealed class ServiceRequestHandler
             return Error("vault_locked");
         }
 
+        // S7-T6: a purged source ID is reserved by the durable purge ledger.
+        // Re-enrolling, re-ingesting, refreshing or re-mapping that ID would
+        // resurrect a deleted source and its journals, so every source command
+        // that names one fails closed on the ledger instead.
+        if (IsPurgedResource(operation, request.ResourceId))
+        {
+            return Error("resource_purged");
+        }
+
         if (string.Equals(request.Operation, SourceEnrollOperation, StringComparison.Ordinal))
         {
             if (HasSourceEnrollExtras(request) ||
@@ -3450,6 +3535,14 @@ public sealed class ServiceRequestHandler
         if (operation is null)
         {
             return Error("vault_locked");
+        }
+
+        // S7-T6: a preserved snapshot is derived from the source ID it names.
+        // When that ID was purged, its snapshots were purged with it, so
+        // preserving one again would resurrect a deleted copy.
+        if (IsPurgedResource(operation, request.ResourceId))
+        {
+            return Error("resource_purged");
         }
 
         try
@@ -6041,6 +6134,22 @@ public sealed class ServiceRequestHandler
             throw new ArgumentException("The resource ID was purged and is reserved; it cannot be recreated.");
         }
     }
+
+    /// <summary>
+    /// Whether the durable purge ledger already reserved this resource ID.
+    /// Used by the source and snapshot surfaces, where a reserved ID must be
+    /// refused with its own explicit code instead of a generic refusal.
+    /// </summary>
+    private static bool IsPurgedResource(IVaultOperation operation, string? resourceId)
+    {
+        if (string.IsNullOrEmpty(resourceId))
+        {
+            return false;
+        }
+
+        var ledger = OwnerPurgeLedgerAuthority.ValidateAndNormalizeState(operation.LoadPurgeLedgerState());
+        return OwnerPurgeLedgerAuthority.IsPurged(ledger, resourceId);
+    }
     /// <summary>
     /// S7-T5 owner purge preview: binds the live target revision and computes
     /// the exact impacted canonical set. Writes nothing; the preview (with its
@@ -6209,6 +6318,149 @@ public sealed class ServiceRequestHandler
             return Error("purge_unavailable");
         }
     }
+
+    /// <summary>
+    /// S7-T6 owner review list carries no field at all: the queue is the
+    /// service's own evaluation over live canonical state, and a caller cannot
+    /// narrow, widen or reshape it from the request.
+    /// </summary>
+    private static bool HasReviewListExtras(ServiceRequest request) =>
+        HasPurgePreviewExtras(request) ||
+        request.ResourceId is not null ||
+        request.ResourceRevision is not null ||
+        request.Description is not null;
+
+    /// <summary>
+    /// S7-T6 owner review record carries only the subject and the owner's own
+    /// rationale — and nothing else. The reasons the owner acknowledged are
+    /// the service's own computation at that moment, never a client claim.
+    /// </summary>
+    private static bool HasReviewRecordExtras(ServiceRequest request) =>
+        HasPurgePreviewExtras(request) ||
+        request.ResourceRevision is not null;
+
+    /// <summary>
+    /// S7-T6 owner review queue: the items whose review-after deadline passed,
+    /// whose cited source moved past the cited revision, whose cited source is
+    /// gone, or whose cited source states that it is unavailable. The reply is
+    /// a report: nothing in the vault is changed by reading it.
+    /// </summary>
+    private ServiceReply HandleOwnerReviewList(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || HasReviewListExtras(request))
+        {
+            return Error("invalid_request");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        try
+        {
+            var queue = new ReviewQueueService().List(context, operation);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "review_listed",
+                "owner",
+                null,
+                ReviewQueue: new ReviewQueueWire(
+                    queue.Entries.Select(ToReviewEntryWire).ToArray(),
+                    queue.ScannedItems,
+                    queue.Truncated));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (InvalidDataException)
+        {
+            return Error("review_unavailable");
+        }
+        catch (IOException)
+        {
+            return Error("review_unavailable");
+        }
+    }
+
+    /// <summary>
+    /// S7-T6 owner review act: the owner records that it looked at one item,
+    /// with its own reason. The act writes the owner's private review state
+    /// only: the item's body, evidence, citations, times, publication state
+    /// and intention state are untouched, and no belief is denied.
+    /// </summary>
+    private ServiceReply HandleOwnerReviewRecord(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner || HasReviewRecordExtras(request))
+        {
+            return Error("invalid_request");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (string.IsNullOrEmpty(request.ResourceId))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var recorded = new ReviewQueueService().Record(
+                context, request.ResourceId, request.Description, operation);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "review_recorded",
+                "owner",
+                null,
+                Review: new OwnerReviewWire(
+                    recorded.SubjectResourceId,
+                    recorded.ReviewedAtUtc,
+                    ToWireToken(recorded.Executor.ToString()),
+                    recorded.Rationale ?? string.Empty,
+                    ReviewTokens.Reasons(recorded.AcknowledgedReasons)));
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (InvalidDataException)
+        {
+            return Error("review_unavailable");
+        }
+        catch (IOException)
+        {
+            return Error("review_unavailable");
+        }
+    }
+
+    private static ReviewEntryWire ToReviewEntryWire(ReviewEntry entry) => new(
+        entry.ResourceId,
+        entry.ZoneId,
+        entry.ResourceRevision,
+        entry.Kind,
+        entry.Title,
+        ReviewTokens.State(entry.State),
+        ReviewTokens.Reasons(entry.Reasons),
+        ReviewTokens.Reasons(entry.UndeterminedReasons),
+        ReviewTokens.Reasons(entry.PendingReasons),
+        ReviewTokens.Reasons(entry.AcknowledgedReasons),
+        ToLifecycleStampWire(entry.ReviewAfter),
+        entry.LastReviewedAtUtc,
+        entry.LastReviewedRationale,
+        entry.Citations.Select(citation => new ReviewCitationWire(
+            citation.SourceId,
+            citation.CitedRevision,
+            citation.LiveRevision,
+            ReviewTokens.Availability(citation.Availability, citation.Missing),
+            citation.SourceRecordedAtUtc)).ToArray());
 
     private static ServiceReply PurgePreviewError(ArgumentException ex)
     {

@@ -46,6 +46,8 @@ internal sealed class EncryptedVaultStore
     private const int MaximumSourceEnrollmentEnvelopeBytes = SourceIngestionLimits.MaximumSourceStateBytes + (256 * 1024);
     private const int MaximumRecallPolicyBytes = 4 * 1024 * 1024;
     private const int MaximumRecallPolicyEnvelopeBytes = 6 * 1024 * 1024;
+    private const int MaximumReviewStateBytes = 4 * 1024 * 1024;
+    private const int MaximumReviewStateEnvelopeBytes = 6 * 1024 * 1024;
     private const int MaximumPurgeLedgerBytes = 4 * 1024 * 1024;
     private const int MaximumPurgeLedgerEnvelopeBytes = 6 * 1024 * 1024;
     private const int MaximumProjectionBytes = 1024 * 1024;
@@ -73,6 +75,7 @@ internal sealed class EncryptedVaultStore
     private readonly string _catalogPath;
     private readonly string _sourceEnrollmentPath;
     private readonly string _recallPolicyPath;
+    private readonly string _reviewStatePath;
     private readonly string _purgeLedgerPath;
     private readonly string _projectionPath;
 
@@ -97,6 +100,7 @@ internal sealed class EncryptedVaultStore
         _catalogPath = Path.Combine(_root, "owner-catalog.enc");
         _sourceEnrollmentPath = Path.Combine(_root, "source-enrollment.enc");
         _recallPolicyPath = Path.Combine(_root, "recall-policy.enc");
+        _reviewStatePath = Path.Combine(_root, "review-state.enc");
         _purgeLedgerPath = Path.Combine(_root, "purge-ledger.enc");
         _projectionPath = Path.Combine(_serviceDirectory, "published-catalog.json");
     }
@@ -515,6 +519,101 @@ internal sealed class EncryptedVaultStore
             }
         }
     }
+    /// <summary>
+    /// S7-T6 owner review state. Same dedicated-file pattern as the
+    /// scope-grant, catalog, source-enrollment, recall-policy and purge-ledger
+    /// states: one encrypted file beside them in the vault, bound to the vault
+    /// ID and the state schema version through the associated data, written
+    /// atomically. The file is never a canonical manifest resource, so
+    /// recording a review never changes an item's revision and never
+    /// invalidates the private index.
+    /// </summary>
+    public OwnerReviewState LoadReviewState(VaultManifest manifest, ReadOnlySpan<byte> dataKey)
+    {
+        FileAttributes attributes;
+        try
+        {
+            attributes = File.GetAttributes(_reviewStatePath);
+        }
+        catch (FileNotFoundException)
+        {
+            return OwnerReviewState.Empty;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return OwnerReviewState.Empty;
+        }
+
+        if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+        {
+            throw new InvalidDataException("The encrypted owner review state must be a regular file.");
+        }
+
+        byte[]? associatedData = null;
+        byte[]? plaintext = null;
+        try
+        {
+            var json = ProtectedFile.ReadPrivateFile(_reviewStatePath, _ownerSid, MaximumReviewStateEnvelopeBytes).Text;
+            var envelope = JsonSerializer.Deserialize<EncryptedPayload>(json, JsonOptions)
+                ?? throw new InvalidDataException("Invalid encrypted owner review state envelope.");
+            associatedData = ResourceAssociatedData(
+                manifest.VaultId, "review-state", OwnerReviewState.CurrentSchemaVersion, 1);
+            plaintext = DecryptPayload(
+                envelope, dataKey, associatedData, OwnerReviewState.CurrentSchemaVersion, 1, MaximumReviewStateBytes);
+            return JsonSerializer.Deserialize<OwnerReviewState>(plaintext, JsonOptions)
+                ?? throw new InvalidDataException("Invalid encrypted owner review state.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or
+                                   CryptographicException or ArgumentException or FormatException or OverflowException)
+        {
+            throw new InvalidDataException("The encrypted owner review state is unavailable.", ex);
+        }
+        finally
+        {
+            if (associatedData is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(associatedData);
+            }
+
+            if (plaintext is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(plaintext);
+            }
+        }
+    }
+
+    public void SaveReviewState(
+        VaultManifest manifest,
+        ReadOnlySpan<byte> dataKey,
+        OwnerReviewState state)
+    {
+        var plaintext = JsonSerializer.SerializeToUtf8Bytes(state, JsonOptions);
+        if (plaintext.Length is <= 0 or > MaximumReviewStateBytes)
+        {
+            CryptographicOperations.ZeroMemory(plaintext);
+            throw new InvalidDataException("The owner review state exceeds its storage limit.");
+        }
+
+        var associatedData = ResourceAssociatedData(
+            manifest.VaultId, "review-state", OwnerReviewState.CurrentSchemaVersion, 1);
+        byte[]? envelopeBytes = null;
+        try
+        {
+            var envelope = EncryptPayload(plaintext, dataKey, associatedData);
+            envelopeBytes = JsonSerializer.SerializeToUtf8Bytes(envelope, JsonOptions);
+            AtomicWrite(_reviewStatePath, envelopeBytes);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(plaintext);
+            CryptographicOperations.ZeroMemory(associatedData);
+            if (envelopeBytes is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(envelopeBytes);
+            }
+        }
+    }
+
     /// <summary>
     /// S7-T5 durable owner purge ledger. Same dedicated-file pattern as the
     /// scope-grant, catalog, source-enrollment and recall-policy states: one
@@ -1290,6 +1389,7 @@ internal sealed class EncryptedVaultStore
         known.Add("scope-grants.enc");
         known.Add("owner-catalog.enc");
         known.Add("recall-policy.enc");
+        known.Add("review-state.enc");
         known.Add("purge-ledger.enc");
         known.Add("vault-header.json");
         var reaped = 0;

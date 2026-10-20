@@ -174,8 +174,8 @@ public interface IPurgeResourceDeletion
 /// Scoped unlocked access to private resource metadata and content. The
 /// application disposes this lease only after the operation response is sent.
 /// </summary>
-public interface IVaultOperation : IManagedResourceStore, IScopeGrantPersistence, ICatalogPersistence, ISourceEnrollmentPersistence, IRecallPolicyPersistence, IPurgeLedgerPersistence, IPurgeResourceDeletion, IDisposable
- {
+public interface IVaultOperation : IManagedResourceStore, IScopeGrantPersistence, ICatalogPersistence, ISourceEnrollmentPersistence, IRecallPolicyPersistence, IReviewStatePersistence, IPurgeLedgerPersistence, IPurgeResourceDeletion, IDisposable
+{
  }
 
 /// <summary>
