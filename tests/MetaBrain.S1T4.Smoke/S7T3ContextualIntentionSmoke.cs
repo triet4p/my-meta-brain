@@ -520,8 +520,8 @@ internal static partial class OwnerServiceSmoke
             "The actual owner vault lock did not complete during the contextual-intention privacy check.");
         await session.CheckAsync().ConfigureAwait(true);
         Require(session.ReportedVaultState == OwnerVaultState.Locked && session.ScheduledIntentions.Length == 0 &&
-                window.IntentionsList.Items.Count == 0 && window.IntentionResourceIdInput.Text.Length == 0 &&
-                window.IntentionDueAtInput.Text.Length == 0 && window.IntentionContextProjectInput.Text.Length == 0 &&
+                window.IntentionsList.Items.Count == 0 && window.IntentionChosenText.Text.Length == 0 &&
+                window.IntentionTimeInput.Text.Length == 0 && window.IntentionContextProjectInput.Text.Length == 0 &&
                 window.IntentionContextTaskInput.Text.Length == 0 && window.IntentionRationaleInput.Text.Length == 0 &&
                 !window.IntentionsMessageText.Text.Contains(S7T3BetaTitle, StringComparison.Ordinal) &&
                 !window.IntentionsMessageText.Text.Contains(S7T3BetaRevisedBody, StringComparison.Ordinal),

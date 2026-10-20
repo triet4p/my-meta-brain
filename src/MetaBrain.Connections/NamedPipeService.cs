@@ -239,6 +239,7 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.RelationUnlinkOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.RelationRelinkOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.RelationReadOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerRelationListOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.AgentRelationCreateOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.AgentRelationSupersedeOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.AgentRelationUnlinkOperation, StringComparison.Ordinal) ||

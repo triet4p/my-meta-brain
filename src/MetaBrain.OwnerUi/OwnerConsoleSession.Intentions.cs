@@ -14,6 +14,15 @@ internal sealed partial class OwnerConsoleSession
 
     public OwnerScheduledIntention[] ScheduledIntentions { get; private set; } = Array.Empty<OwnerScheduledIntention>();
 
+    /// <summary>
+    /// Pending intentions the service ranked for the schedule form's picker.
+    /// The owner never has to type an intention resource ID: choosing a row
+    /// fills the same identity the service will verify at its live revision.
+    /// </summary>
+    public OwnerLibraryHit[] IntentionCandidates { get; private set; } = Array.Empty<OwnerLibraryHit>();
+
+    public string? IntentionCandidateMessage { get; private set; }
+
     public string? IntentionsMessage { get; private set; }
 
     public bool IntentionActInFlight => _intentionActInFlight;
@@ -63,6 +72,59 @@ internal sealed partial class OwnerConsoleSession
         }
 
         Append("read scheduled intentions -> " + result.Outcome.ToString().ToLowerInvariant() +
+            (result.Outcome == OwnerCommandOutcome.Completed ? string.Empty : " (" + (result.ErrorCode ?? "unknown") + ")"));
+        RaiseChanged();
+    }
+
+    /// <summary>
+    /// Ranks pending intentions through the same owner library search the
+    /// Library view uses, so the trigger form can be filled from service data
+    /// instead of a remembered resource ID. Only kind=intention items can carry
+    /// a trigger; the service still validates the subject on the write.
+    /// </summary>
+    public async Task SearchIntentionCandidatesAsync(string query)
+    {
+        if (TryBeginIntentionAct() is not { } epoch)
+        {
+            return;
+        }
+
+        IntentionCandidateMessage = null;
+        var libraryQuery = new OwnerLibraryQuery(
+            Text: string.IsNullOrWhiteSpace(query) ? null : query.Trim(),
+            Kind: "intention",
+            Limit: 20);
+        var result = await ExecuteIntentionCallAsync(
+            token => OwnerChannelClient.SearchLibraryAsync(ControlPipe, libraryQuery, token),
+            code => new OwnerLibrarySearchResult(OwnerCommandOutcome.Unavailable, code, null)).ConfigureAwait(true);
+        _intentionActInFlight = false;
+
+        await ProbeAsync().ConfigureAwait(true);
+        if (epoch != _privateEpoch)
+        {
+            Append("ignored a stale intention candidate answer; the private view stays cleared");
+            RaiseChanged();
+            return;
+        }
+
+        if (result.Outcome == OwnerCommandOutcome.Completed && result.Page is not null)
+        {
+            IntentionCandidates = result.Page.Hits;
+            IntentionCandidateMessage = IntentionCandidates.Length == 0
+                ? "The service found no pending intention for that search. Save an intention in Inbox/Library first, or search another word."
+                : "The service ranked " + IntentionCandidates.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+                    " pending intention(s). Choose one; the trigger write rechecks its live lifecycle revision.";
+        }
+        else
+        {
+            IntentionCandidates = Array.Empty<OwnerLibraryHit>();
+            IntentionCandidateMessage = result.ErrorCode is "index_not_materialized" or "search_index_stale"
+                ? "The service cannot search the library index yet (" + result.ErrorCode +
+                    "). Rebuild the index in Library, then search again. Nothing was scheduled."
+                : DescribeIntentionResult("search pending intentions", result.Outcome, result.ErrorCode);
+        }
+
+        Append("search pending intentions -> " + result.Outcome.ToString().ToLowerInvariant() +
             (result.Outcome == OwnerCommandOutcome.Completed ? string.Empty : " (" + (result.ErrorCode ?? "unknown") + ")"));
         RaiseChanged();
     }
@@ -203,13 +265,16 @@ internal sealed partial class OwnerConsoleSession
     {
         _intentionActInFlight = false;
         ScheduledIntentions = Array.Empty<OwnerScheduledIntention>();
+        IntentionCandidates = Array.Empty<OwnerLibraryHit>();
+        IntentionCandidateMessage = null;
         IntentionsMessage = null;
     }
 
     private static string DescribeIntentionResult(string act, OwnerCommandOutcome outcome, string? errorCode) => outcome switch
     {
         OwnerCommandOutcome.Completed => "The service " + act + ". Acknowledgement and notification are separate from completion.",
-        OwnerCommandOutcome.Refused => "The service refused to " + act + " (" + (errorCode ?? "unknown") + ").",
+        OwnerCommandOutcome.Refused => "The service refused to " + act + " (" + (errorCode ?? "unknown") +
+            "). Nothing was changed. Read the schedule again before retrying: a row whose lifecycle revision moved since this list was read is the usual cause, and the save button never guesses a newer revision.",
         OwnerCommandOutcome.OwnerAuthorityDenied => "The endpoint refused owner authority for " + act + ".",
         OwnerCommandOutcome.ProtocolMismatch => "The endpoint speaks a different protocol revision; " + act + " did not run.",
         _ => "No owner-channel answer reached the service for " + act + " (" + (errorCode ?? "unknown") + ")."

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using MetaBrain.Connections;
@@ -15,6 +16,9 @@ namespace MetaBrain.OwnerUi;
 /// </summary>
 public partial class OwnerConsoleWindow : System.Windows.Window
 {
+    private readonly List<CollectionMember> _collectionMembers = new();
+    private OwnerLibraryHit[]? _renderedCollectionCandidates;
+
     /// <summary>
     /// Empties the sources drafts: the mapping-review form, the collection
     /// form and the snapshot form. Always the whole draft, so no part of a
@@ -22,17 +26,145 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     /// </summary>
     private void SyncSourcesForm()
     {
+        EnrollSourceIdInput.Text = string.Empty;
+        EnrollZoneInput.Text = string.Empty;
+        EnrollFormatInput.Text = string.Empty;
+        EnrollFormatVersionInput.Text = "1";
+        EnrollLocatorInput.Text = string.Empty;
         MappingSourceIdInput.Text = string.Empty;
         MappingLocatorInput.Text = string.Empty;
         MappingZoneInput.Text = string.Empty;
         MappingFormatInput.Text = string.Empty;
         MappingFormatVersionInput.Text = string.Empty;
         CollectionIdInput.Text = string.Empty;
-        CollectionMembersInput.Text = string.Empty;
+        _collectionMembers.Clear();
+        _renderedCollectionCandidates = null;
+        RefreshCollectionMemberList();
+        CollectionMemberSearchInput.Text = string.Empty;
+        CollectionMemberCandidatesList.ItemsSource = null;
         SnapshotSourceIdInput.Text = string.Empty;
         SnapshotSourceRevisionInput.Text = string.Empty;
         SnapshotReferenceLocatorInput.Text = string.Empty;
         SnapshotRetainInput.Text = string.Empty;
+    }
+    /// <summary>
+    /// The source formats the shipped service understands. Anything else is the
+    /// service's explicit unsupported diagnostic, never a silent best effort.
+    /// </summary>
+    private static readonly string[] KnownSourceFormats =
+    {
+        "codex.session.jsonl",
+        "omp.session.jsonl",
+    };
+
+    private void InitializeSourcesControls()
+    {
+        foreach (var format in KnownSourceFormats)
+        {
+            EnrollFormatInput.Items.Add(format);
+        }
+
+        EnrollFormatVersionInput.Text = "1";
+        InitializeSnapshotControls();
+        RefreshCollectionMemberList();
+    }
+    private void RefreshEnrollPickerOptions()
+    {
+        var zoneText = EnrollZoneInput.Text;
+        EnrollZoneInput.Items.Clear();
+        foreach (var zone in _session.KnownZones())
+        {
+            EnrollZoneInput.Items.Add(zone);
+        }
+
+        EnrollZoneInput.Text = zoneText;
+        RefreshSnapshotPickerOptions();
+    }
+
+    private void OnEnrollBrowseClicked(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Choose the source file to enroll (the service reads exactly this file)",
+            CheckFileExists = true,
+            CheckPathExists = true,
+        };
+        if (dialog.ShowDialog() == true)
+        {
+            EnrollLocatorInput.Text = dialog.FileName;
+        }
+
+        Render();
+    }
+
+    private async void OnEnrollClicked(object sender, RoutedEventArgs e)
+    {
+        var sourceId = EnrollSourceIdInput.Text.Trim();
+        var zone = EnrollZoneInput.Text.Trim();
+        var locator = EnrollLocatorInput.Text.Trim();
+        var format = EnrollFormatInput.Text.Trim();
+        var versionText = EnrollFormatVersionInput.Text.Trim();
+        if (sourceId.Length == 0 || zone.Length == 0 || locator.Length == 0 || format.Length == 0)
+        {
+            _session.ReportSourcesFormProblem(
+                "Enrolling needs the source ID you name, the zone it belongs to, the file on this machine, and the format that file speaks. Nothing was enrolled and no transcript was opened.");
+            return;
+        }
+
+        if (!int.TryParse(versionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var version) || version < 1)
+        {
+            _session.ReportSourcesFormProblem(
+                "Enrolling needs a format version that is a positive integer. Nothing was enrolled and no transcript was opened.");
+            return;
+        }
+
+        if (!Path.IsPathRooted(locator))
+        {
+            _session.ReportSourcesFormProblem(
+                "Enrolling needs the full path of the file on this machine (for example C:\\data\\session.jsonl). Nothing was enrolled and no transcript was opened.");
+            return;
+        }
+
+        await _session.EnrollSourceAsync(sourceId, zone, locator, format, version);
+        // The locator travels only in the request just sent: clear the field
+        // so no later capture shows the owner's private path.
+        EnrollLocatorInput.Text = string.Empty;
+    }
+
+    private async void OnSourceRevokeClicked(object sender, RoutedEventArgs e)
+    {
+        if (SourcesList.SelectedItem is SourceRow row)
+        {
+            await _session.RevokeSourceAsync(row.Source);
+        }
+        else
+        {
+            _session.ReportSourcesFormProblem(
+                "Revoking needs the enrolled source to revoke: choose its row first. Nothing changed.");
+        }
+    }
+
+    private async void OnSourceRelocateClicked(object sender, RoutedEventArgs e)
+    {
+        if (SourcesList.SelectedItem is not SourceRow row)
+        {
+            _session.ReportSourcesFormProblem(
+                "Relocating needs the enrolled source to move: choose its row first. Nothing changed.");
+            return;
+        }
+
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Choose the replacement file for " + row.Source.SourceId + " (bytes must match the enrolled generation)",
+            CheckFileExists = true,
+            CheckPathExists = true,
+        };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        await _session.RelocateSourceAsync(row.Source, dialog.FileName);
     }
 
     private async void OnSourcesRefreshClicked(object sender, RoutedEventArgs e)
@@ -176,7 +308,22 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     private async void OnCollectionsRefreshClicked(object sender, RoutedEventArgs e) =>
         await _session.RefreshCollectionsAsync();
 
-    private void OnCollectionsSelectionChanged(object sender, SelectionChangedEventArgs e) => Render();
+    private void OnCollectionsSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (CollectionsList.SelectedItem is CollectionRow row)
+        {
+            CollectionIdInput.Text = row.Collection.CollectionId;
+            _collectionMembers.Clear();
+            foreach (var member in row.Collection.ResourceIds)
+            {
+                _collectionMembers.Add(new CollectionMember(member, null));
+            }
+
+            RefreshCollectionMemberList();
+        }
+
+        Render();
+    }
 
     private async void OnCollectionsListKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
@@ -189,26 +336,113 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         Render();
     }
 
+    private void OnCollectionNewClicked(object sender, RoutedEventArgs e)
+    {
+        CollectionsList.SelectedItem = null;
+        CollectionIdInput.Clear();
+        CollectionIdInput.Focus();
+        _collectionMembers.Clear();
+        RefreshCollectionMemberList();
+        Render();
+    }
+
+    private void OnCollectionMemberSelectionChanged(object sender, SelectionChangedEventArgs e) => Render();
+
+    private async void OnCollectionMemberSearchClicked(object sender, RoutedEventArgs e) =>
+        await _session.SearchCollectionMembersAsync(CollectionMemberSearchInput.Text);
+
+    private void OnCollectionMemberAddSelectedClicked(object sender, RoutedEventArgs e)
+    {
+        var added = 0;
+        foreach (var row in CollectionMemberCandidatesList.SelectedItems.OfType<LibraryResultRow>())
+        {
+            if (AddCollectionMember(row.Hit.Id, row.Hit.Title))
+            {
+                added++;
+            }
+        }
+
+        RefreshCollectionMemberList();
+        if (added == 0)
+        {
+            _session.ReportSourcesFormProblem(
+                "No member was added: choose one or more search results first (or the item is already in this collection). Nothing was saved.");
+        }
+
+        Render();
+    }
+
+    private void OnCollectionMemberAddOpenItemClicked(object sender, RoutedEventArgs e)
+    {
+        if (_session.LibraryItem is not { } item)
+        {
+            _session.ReportSourcesFormProblem(
+                "No library item is open: open one in Library first, then add it here. Nothing was added.");
+            return;
+        }
+
+        AddCollectionMember(item.Id, item.Title);
+        RefreshCollectionMemberList();
+        Render();
+    }
+
+    private void OnCollectionMemberRemoveClicked(object sender, RoutedEventArgs e)
+    {
+        var selectedIds = CollectionMembersList.SelectedItems
+            .OfType<CollectionMember>()
+            .Select(member => member.ResourceId)
+            .ToHashSet(StringComparer.Ordinal);
+        if (selectedIds.Count == 0)
+        {
+            _session.ReportSourcesFormProblem(
+                "No member was removed: choose the member row(s) to remove first. Nothing was saved.");
+            return;
+        }
+
+        _collectionMembers.RemoveAll(member => selectedIds.Contains(member.ResourceId));
+        RefreshCollectionMemberList();
+        Render();
+    }
+
+    private bool AddCollectionMember(string resourceId, string? title)
+    {
+        if (_collectionMembers.Any(member => string.Equals(member.ResourceId, resourceId, StringComparison.Ordinal)))
+        {
+            return false;
+        }
+
+        _collectionMembers.Add(new CollectionMember(resourceId, title));
+        return true;
+    }
+
+    private void RefreshCollectionMemberList()
+    {
+        CollectionMembersList.ItemsSource = null;
+        CollectionMembersList.ItemsSource = _collectionMembers.ToArray();
+        CollectionMembersSummaryText.Text = _collectionMembers.Count == 0
+            ? "No members chosen yet. Search the library or add the open item; a collection needs at least one member."
+            : _collectionMembers.Count.ToString(CultureInfo.InvariantCulture) +
+                " member(s) in this draft. Each line names the resource the service will resolve on save; the ID is shown for copying, not for typing.";
+    }
+
     private async void OnCollectionSaveClicked(object sender, RoutedEventArgs e)
     {
         var collectionId = CollectionIdInput.Text.Trim();
-        var membersText = CollectionMembersInput.Text.Trim();
-        if (collectionId.Length == 0 || membersText.Length == 0)
+        if (collectionId.Length == 0)
         {
             _session.ReportSourcesFormProblem(
-                "This console saved no collection: it needs the collection ID you name and the member resource IDs. Nothing was saved and no grant widened.");
+                "This console saved no collection: name the collection first. Nothing was saved and no grant widened.");
             return;
         }
 
-        var members = SplitCollectionMembers(membersText);
-        if (members is null)
+        if (_collectionMembers.Count == 0)
         {
             _session.ReportSourcesFormProblem(
-                "This console saved no collection: the members are not a nonempty comma-separated list of unique IDs. Nothing was saved and no grant widened.");
+                "This console saved no collection: add at least one library item as a member. Nothing was saved and no grant widened.");
             return;
         }
 
-        await _session.SetCollectionAsync(collectionId, members);
+        await _session.SetCollectionAsync(collectionId, _collectionMembers.Select(member => member.ResourceId).ToArray());
     }
 
     private async void OnSnapshotsSelectionChanged(object sender, SelectionChangedEventArgs e) =>
@@ -269,6 +503,79 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         // The locator travels only in the request just sent: clear the field
         // so no later capture shows the owner's private path.
         SnapshotReferenceLocatorInput.Text = string.Empty;
+    }
+    private const string SnapshotRetainCustomItem = "Custom…";
+
+    private static readonly (string Label, TimeSpan Span)[] SnapshotRetainPresets =
+    {
+        ("30 days", TimeSpan.FromDays(30)),
+        ("90 days", TimeSpan.FromDays(90)),
+        ("1 year", TimeSpan.FromDays(365)),
+    };
+
+    private void InitializeSnapshotControls()
+    {
+        SnapshotRetainPresetInput.Items.Add(SnapshotRetainCustomItem);
+        foreach (var preset in SnapshotRetainPresets)
+        {
+            SnapshotRetainPresetInput.Items.Add(preset.Label);
+        }
+
+        SnapshotRetainPresetInput.SelectedItem = SnapshotRetainCustomItem;
+    }
+
+    private void OnSnapshotRetainPresetChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (SnapshotRetainPresetInput.SelectedItem is not string label)
+        {
+            return;
+        }
+
+        foreach (var preset in SnapshotRetainPresets)
+        {
+            if (string.Equals(preset.Label, label, StringComparison.Ordinal))
+            {
+                var instant = DateTimeOffset.UtcNow + preset.Span;
+                SnapshotRetainInput.Text = instant.ToString("yyyy-MM-ddTHH:mm:ss\\Z", CultureInfo.InvariantCulture);
+                break;
+            }
+        }
+
+        Render();
+    }
+
+    /// <summary>
+    /// Fills the preserve form from the selected enrolled source and its
+    /// reference revision. No ID or revision to remember.
+    /// </summary>
+    private void OnSnapshotUseSelectedClicked(object sender, RoutedEventArgs e)
+    {
+        if (SourcesList.SelectedItem is not SourceRow row)
+        {
+            _session.ReportSnapshotFormProblem(
+                "Filling the preserve form needs the enrolled source: choose its row first. Nothing was filled in.");
+            return;
+        }
+
+        SnapshotSourceIdInput.Text = row.Source.SourceId;
+        SnapshotSourceRevisionInput.Text = (row.Source.SourceReferenceRevision ?? 1).ToString(CultureInfo.InvariantCulture);
+        Render();
+    }
+
+    /// <summary>
+    /// Refreshes the snapshot source picker from the enrolled sources in this
+    /// session, keeping the owner's typed text.
+    /// </summary>
+    private void RefreshSnapshotPickerOptions()
+    {
+        var text = SnapshotSourceIdInput.Text;
+        SnapshotSourceIdInput.Items.Clear();
+        foreach (var source in _session.Sources)
+        {
+            SnapshotSourceIdInput.Items.Add(source.SourceId);
+        }
+
+        SnapshotSourceIdInput.Text = text;
     }
 
     private async void OnSnapshotPreserveClicked(object sender, RoutedEventArgs e)
@@ -336,17 +643,15 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         row.Source.Quarantine is not null &&
         string.Equals(row.Source.Quarantine.Reason, "mapping_unknown", StringComparison.Ordinal);
 
-    private static string[]? SplitCollectionMembers(string text)
+    /// <summary>
+    /// One collection member in the owner's draft: the exact live resource ID
+    /// the service will resolve, with the title the search served when the
+    /// owner picked it. The ID is secondary detail, never a typed input.
+    /// </summary>
+    private sealed record CollectionMember(string ResourceId, string? Title)
     {
-        if (text.Trim().Length == 0)
-        {
-            return null;
-        }
-
-        var members = text.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        return members.Length > 0 && members.Distinct(StringComparer.Ordinal).Count() == members.Length
-            ? members
-            : null;
+        public override string ToString() =>
+            (string.IsNullOrWhiteSpace(Title) ? "(title not loaded)" : Title) + "  ·  " + ResourceId;
     }
 
     private static bool TryParseExplicitUtc(string value, out DateTimeOffset timestamp)
@@ -402,17 +707,17 @@ public partial class OwnerConsoleWindow : System.Windows.Window
                 : rows.FirstOrDefault(row => string.Equals(row.Source.SourceId, previousId, StringComparison.Ordinal));
         }
 
-        SourcesMessageText.Text = _session.SourcesMessage ?? (unlocked
+        RenderOutcome(SourcesMessageText, _session.SourcesMessage ?? (unlocked
             ? "No source has been read in this session. Read the allowlist to see each source's life, checkpoint, quarantine, availability and cache scope."
-            : "No private sources act is offered while the service does not report the vault unlocked.");
+            : "No private sources act is offered while the service does not report the vault unlocked."));
 
         var open = _session.OpenSource;
         SourceDetailText.Text = open is null
             ? "No source is open. Choose a row to see its exact mapping, life, checkpoint, quarantine, availability and cache scope."
             : DescribeSourceDetail(open);
-        SourceMessageText.Text = _session.SourceMessage ?? (unlocked
+        RenderOutcome(SourceMessageText, _session.SourceMessage ?? (unlocked
             ? "No source act has been sent in this session. An uncertain mapping belongs in mapping review, never in a guessed zone."
-            : "No private source act is offered while the service does not report the vault unlocked.");
+            : "No private source act is offered while the service does not report the vault unlocked."));
         var ingest = _session.LastIngest;
         IngestOutcomeText.Text = ingest is null
             ? string.Empty
@@ -421,6 +726,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
 
         var selectedSource = SourcesList.SelectedItem as SourceRow;
         var selectedHeld = selectedSource is not null && IsMappingUnknownRow(selectedSource);
+        RefreshEnrollPickerOptions();
         SourcesRefreshButton.IsEnabled = unlocked && !inFlight;
         SourceOpenButton.IsEnabled = unlocked && !inFlight && selectedSource is not null;
         SourcesRefreshPassButton.IsEnabled = unlocked && !inFlight;
@@ -431,6 +737,15 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         SourceOptInButton.IsEnabled = unlocked && !inFlight && selectedSource is not null && !selectedHeld;
         SourceOptOutButton.IsEnabled = unlocked && !inFlight && selectedSource is not null && !selectedHeld;
         SourceSnapshotsButton.IsEnabled = unlocked && !inFlight && selectedSource is not null && !selectedHeld;
+        EnrollSourceIdInput.IsEnabled = unlocked && !inFlight;
+        EnrollZoneInput.IsEnabled = unlocked && !inFlight;
+        EnrollFormatInput.IsEnabled = unlocked && !inFlight;
+        EnrollFormatVersionInput.IsEnabled = unlocked && !inFlight;
+        EnrollLocatorInput.IsEnabled = unlocked && !inFlight;
+        EnrollBrowseButton.IsEnabled = unlocked && !inFlight;
+        EnrollButton.IsEnabled = unlocked && !inFlight;
+        SourceRevokeButton.IsEnabled = unlocked && !inFlight && selectedSource is not null && !selectedHeld;
+        SourceRelocateButton.IsEnabled = unlocked && !inFlight && selectedSource is not null && !selectedHeld;
         MappingSourceIdInput.IsEnabled = unlocked && !inFlight;
         MappingLocatorInput.IsEnabled = unlocked && !inFlight;
         MappingZoneInput.IsEnabled = unlocked && !inFlight;
@@ -439,18 +754,18 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         MappingSubmitButton.IsEnabled = unlocked && !inFlight;
         MappingWithdrawButton.IsEnabled = unlocked && !inFlight && selectedHeld;
 
-        RefreshMessageText.Text = _session.RefreshMessage ?? (unlocked
+        RenderOutcome(RefreshMessageText, _session.RefreshMessage ?? (unlocked
             ? "No refresh pass has run in this session. Only opted-in sources are read; every other source names its skip reason with no read."
-            : "No private refresh act is offered while the service does not report the vault unlocked.");
+            : "No private refresh act is offered while the service does not report the vault unlocked."));
         if (!ReferenceEquals(_renderedRefresh, _session.RefreshEntries))
         {
             _renderedRefresh = _session.RefreshEntries;
             RefreshList.ItemsSource = _session.RefreshEntries.Select(entry => new RefreshRow(entry)).ToArray();
         }
 
-        CollectionsMessageText.Text = _session.CollectionsMessage ?? (unlocked
+        RenderOutcome(CollectionsMessageText, _session.CollectionsMessage ?? (unlocked
             ? "No collection has been read in this session. Read them to see each collection's members; membership never grants access by itself."
-            : "No private collection act is offered while the service does not report the vault unlocked.");
+            : "No private collection act is offered while the service does not report the vault unlocked."));
         if (!ReferenceEquals(_renderedCollections, _session.Collections))
         {
             _renderedCollections = _session.Collections;
@@ -462,21 +777,46 @@ public partial class OwnerConsoleWindow : System.Windows.Window
                 : rows.FirstOrDefault(row => string.Equals(row.Collection.CollectionId, previousId, StringComparison.Ordinal));
         }
 
-        var selectedCollection = CollectionsList.SelectedItem as CollectionRow;
-        CollectionsRefreshButton.IsEnabled = unlocked && !inFlight;
-        CollectionsList.IsEnabled = unlocked && !inFlight;
-        CollectionIdInput.IsEnabled = unlocked && !inFlight;
-        CollectionMembersInput.IsEnabled = unlocked && !inFlight;
-        CollectionSaveButton.IsEnabled = unlocked && !inFlight;
-        if (selectedCollection is not null && string.IsNullOrWhiteSpace(CollectionIdInput.Text))
+        if (!ReferenceEquals(_renderedCollectionCandidates, _session.CollectionCandidates))
         {
-            CollectionIdInput.Text = selectedCollection.Collection.CollectionId;
-            CollectionMembersInput.Text = string.Join(",", selectedCollection.Collection.ResourceIds);
+            _renderedCollectionCandidates = _session.CollectionCandidates;
+            CollectionMemberCandidatesList.ItemsSource = _session.CollectionCandidates
+                .Select(hit => new LibraryResultRow(hit))
+                .ToArray();
         }
 
-        SnapshotMessageText.Text = _session.SnapshotMessage ?? (unlocked
+        RenderOutcome(CollectionMemberSearchMessageText, _session.CollectionCandidateMessage ?? (unlocked
+            ? "Search the library to choose members without recalling a resource ID."
+            : "No private collection search is offered while the service does not report the vault unlocked."));
+        CollectionsRefreshButton.IsEnabled = unlocked && !inFlight;
+        CollectionsList.IsEnabled = unlocked && !inFlight;
+        CollectionNewButton.IsEnabled = unlocked && !inFlight;
+        CollectionIdInput.IsEnabled = unlocked && !inFlight;
+        CollectionMemberSearchInput.IsEnabled = unlocked && !inFlight;
+        CollectionMemberSearchButton.IsEnabled = unlocked && !inFlight;
+        CollectionMemberCandidatesList.IsEnabled = unlocked && !inFlight;
+        CollectionMemberAddButton.IsEnabled = unlocked && !inFlight && CollectionMemberCandidatesList.SelectedItems.Count > 0;
+        CollectionMemberAddOpenItemButton.IsEnabled = unlocked && !inFlight;
+        CollectionMembersList.IsEnabled = unlocked && !inFlight;
+        CollectionMemberRemoveButton.IsEnabled = unlocked && !inFlight && CollectionMembersList.SelectedItems.Count > 0;
+        CollectionSaveButton.IsEnabled = unlocked && !inFlight && _collectionMembers.Count > 0 &&
+            !string.IsNullOrWhiteSpace(CollectionIdInput.Text);
+        if (CollectionsList.SelectedItem is CollectionRow selectedCollection &&
+            string.IsNullOrWhiteSpace(CollectionIdInput.Text))
+        {
+            CollectionIdInput.Text = selectedCollection.Collection.CollectionId;
+            _collectionMembers.Clear();
+            foreach (var member in selectedCollection.Collection.ResourceIds)
+            {
+                _collectionMembers.Add(new CollectionMember(member, null));
+            }
+
+            RefreshCollectionMemberList();
+        }
+
+        RenderOutcome(SnapshotMessageText, _session.SnapshotMessage ?? (unlocked
             ? "No snapshot has been listed in this session. Preservation is explicit and opt-in, never automatic."
-            : "No private snapshot act is offered while the service does not report the vault unlocked.");
+            : "No private snapshot act is offered while the service does not report the vault unlocked."));
         if (!ReferenceEquals(_renderedSnapshots, _session.Snapshots))
         {
             _renderedSnapshots = _session.Snapshots;
@@ -563,8 +903,10 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     private sealed record CollectionRow(OwnerCollectionMapping Collection)
     {
         public override string ToString() =>
-            "collection " + Collection.CollectionId + "  members=" +
-            (Collection.ResourceIds.Length == 0 ? "(none)" : string.Join(",", Collection.ResourceIds));
+            "collection " + Collection.CollectionId + "  ·  " +
+            Collection.ResourceIds.Length.ToString(CultureInfo.InvariantCulture) +
+            (Collection.ResourceIds.Length == 1 ? " member" : " members") +
+            " (names stay in the member draft below)";
     }
 
     /// <summary>One snapshot descriptor exactly as the service listed it, rendered as one line.</summary>

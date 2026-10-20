@@ -68,6 +68,18 @@ internal sealed partial class OwnerConsoleSession
     /// <summary>Owner-facing outcome of the last collection act. Never private content.</summary>
     public string? CollectionsMessage { get; private set; }
 
+    /// <summary>
+    /// Library items the service ranked for the collection-member picker. A
+    /// collection member must be a live managed resource, so the picker is fed
+    /// by the same materialized-index search the Library view uses instead of
+    /// asking the owner to recall resource IDs. The library view's own page is
+    /// never replaced by a search started here.
+    /// </summary>
+    public OwnerLibraryHit[] CollectionCandidates { get; private set; } = Array.Empty<OwnerLibraryHit>();
+
+    /// <summary>Owner-facing note about the last collection-member search.</summary>
+    public string? CollectionCandidateMessage { get; private set; }
+
     /// <summary>Every preserved snapshot descriptor the last snapshot listing served.</summary>
     public OwnerSourceSnapshotDescriptor[] Snapshots { get; private set; } = Array.Empty<OwnerSourceSnapshotDescriptor>();
 
@@ -108,6 +120,93 @@ internal sealed partial class OwnerConsoleSession
         ApplySourcesListAnswer(epoch, result);
         Append(DescribeSourcesActForLog("read sources", result.Outcome, result.ErrorCode));
         RaiseChanged();
+    }
+
+    /// <summary>
+    /// Enrolls one external source under the owner's explicit mapping. The locator
+    /// is the absolute file path the owner names; the service reads exactly that
+    /// path and refuses anything it cannot validate. No scan, no guessed zone.
+    /// </summary>
+    public async Task EnrollSourceAsync(
+        string sourceId,
+        string zoneId,
+        string locator,
+        string format,
+        int formatVersion)
+    {
+        if (TryBeginSourcesAct() is not { } epoch)
+        {
+            return;
+        }
+
+        SourceMessage = null;
+        var result = await ExecuteSourcesAsync(
+            token => OwnerChannelClient.EnrollSourceAsync(ControlPipe, sourceId, zoneId, locator, format, formatVersion, token),
+            code => new OwnerSourceStatusResult(OwnerCommandOutcome.Unavailable, code, null)).ConfigureAwait(true);
+
+        await ProbeAsync().ConfigureAwait(true);
+        var applied = ApplySourceStatusAnswer(epoch, result);
+        Append(DescribeSourcesActForLog("enroll source", result.Outcome, result.ErrorCode));
+        RaiseChanged();
+        if (applied && result.Outcome == OwnerCommandOutcome.Completed)
+        {
+            await RefreshSourcesAsync().ConfigureAwait(true);
+        }
+    }
+
+    /// <summary>
+    /// Revokes one enrolled source explicitly. The transcript stays untouched;
+    /// only the enrollment ends.
+    /// </summary>
+    public async Task RevokeSourceAsync(OwnerSourceEnrollment source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (TryBeginSourcesAct() is not { } epoch)
+        {
+            return;
+        }
+
+        SourceMessage = null;
+        var result = await ExecuteSourcesAsync(
+            token => OwnerChannelClient.RevokeSourceAsync(ControlPipe, source.SourceId, token),
+            code => new OwnerSourceStatusResult(OwnerCommandOutcome.Unavailable, code, null)).ConfigureAwait(true);
+
+        await ProbeAsync().ConfigureAwait(true);
+        var applied = ApplySourceStatusAnswer(epoch, result);
+        Append(DescribeSourcesActForLog("revoke source", result.Outcome, result.ErrorCode));
+        RaiseChanged();
+        if (applied && result.Outcome == OwnerCommandOutcome.Completed)
+        {
+            await RefreshSourcesAsync().ConfigureAwait(true);
+        }
+    }
+
+    /// <summary>
+    /// Points one enrolled source at an explicitly supplied candidate locator whose
+    /// bytes match the enrolled generation. No scan, no alternate path search.
+    /// </summary>
+    public async Task RelocateSourceAsync(OwnerSourceEnrollment source, string locator)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(locator);
+        if (TryBeginSourcesAct() is not { } epoch)
+        {
+            return;
+        }
+
+        SourceMessage = null;
+        var result = await ExecuteSourcesAsync(
+            token => OwnerChannelClient.RelocateSourceAsync(ControlPipe, source.SourceId, source.Generation, locator, token),
+            code => new OwnerSourceStatusResult(OwnerCommandOutcome.Unavailable, code, null)).ConfigureAwait(true);
+
+        await ProbeAsync().ConfigureAwait(true);
+        var applied = ApplySourceStatusAnswer(epoch, result);
+        Append(DescribeSourcesActForLog("relocate source", result.Outcome, result.ErrorCode));
+        RaiseChanged();
+        if (applied && result.Outcome == OwnerCommandOutcome.Completed)
+        {
+            await RefreshSourcesAsync().ConfigureAwait(true);
+        }
     }
 
     /// <summary>
@@ -345,6 +444,56 @@ internal sealed partial class OwnerConsoleSession
         await ProbeAsync().ConfigureAwait(true);
         ApplyCollectionListAnswer(epoch, result);
         Append(DescribeSourcesActForLog("read collections", result.Outcome, result.ErrorCode));
+        RaiseChanged();
+    }
+
+    /// <summary>
+    /// Ranks library items for the collection-member picker through the same
+    /// owner library search the Library view uses. The service owns the
+    /// materialized index generation, so a stale or unmaterialized index is
+    /// reported with its remediation instead of a guessed member list.
+    /// </summary>
+    public async Task SearchCollectionMembersAsync(string query)
+    {
+        if (TryBeginSourcesAct() is not { } epoch)
+        {
+            return;
+        }
+
+        CollectionCandidateMessage = null;
+        var libraryQuery = new OwnerLibraryQuery(
+            Text: string.IsNullOrWhiteSpace(query) ? null : query.Trim(),
+            Limit: 20);
+        var result = await ExecuteSourcesAsync(
+            token => OwnerChannelClient.SearchLibraryAsync(ControlPipe, libraryQuery, token),
+            code => new OwnerLibrarySearchResult(OwnerCommandOutcome.Unavailable, code, null)).ConfigureAwait(true);
+
+        await ProbeAsync().ConfigureAwait(true);
+        if (epoch != _privateEpoch)
+        {
+            AppendIgnoredStaleSourcesAnswer("collection member search");
+            RaiseChanged();
+            return;
+        }
+
+        if (result.Outcome == OwnerCommandOutcome.Completed && result.Page is not null)
+        {
+            CollectionCandidates = result.Page.Hits;
+            CollectionCandidateMessage = CollectionCandidates.Length == 0
+                ? "The service found no library item for that search. Nothing was added; try another word from the note, or rebuild the library index in Library if it reported a stale generation."
+                : "The service ranked " + CollectionCandidates.Length.ToString(CultureInfo.InvariantCulture) +
+                    " library item(s). Choose the ones to add; each member stays a live resource ID the service rechecks on save.";
+        }
+        else
+        {
+            CollectionCandidates = Array.Empty<OwnerLibraryHit>();
+            CollectionCandidateMessage = result.ErrorCode is "index_not_materialized" or "search_index_stale"
+                ? "The service cannot search the library index yet (" + result.ErrorCode +
+                    "). Rebuild the index in Library, then search again. Nothing was added."
+                : DescribeSourcesAnswer("collection member search", result.Outcome, result.ErrorCode);
+        }
+
+        Append(DescribeSourcesActForLog("search collection members", result.Outcome, result.ErrorCode));
         RaiseChanged();
     }
 
@@ -780,6 +929,8 @@ internal sealed partial class OwnerConsoleSession
         RefreshMessage = null;
         Collections = Array.Empty<OwnerCollectionMapping>();
         CollectionsMessage = null;
+        CollectionCandidates = Array.Empty<OwnerLibraryHit>();
+        CollectionCandidateMessage = null;
         Snapshots = Array.Empty<OwnerSourceSnapshotDescriptor>();
         OpenSnapshot = null;
         SnapshotMessage = null;

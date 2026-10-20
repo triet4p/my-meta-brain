@@ -18,6 +18,7 @@ namespace MetaBrain.OwnerUi;
 public partial class OwnerConsoleWindow : System.Windows.Window
 {
     private OwnerJob[]? _renderedJobs;
+    private readonly List<JobInputSelection> _jobInputs = new();
 
     /// <summary>
     /// The fixed enumerations this view offers are the service's own spellings
@@ -58,7 +59,8 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         ProviderModelInput.Text = string.Empty;
         ProviderBaseUrlInput.Text = string.Empty;
         ProviderKeyInput.Clear();
-        JobsInputsInput.Text = string.Empty;
+        _jobInputs.Clear();
+        JobsInputsList.ItemsSource = null;
         JobsObjectiveInput.Text = string.Empty;
         JobsZoneInput.Text = string.Empty;
         JobsDestinationInput.Text = string.Empty;
@@ -103,6 +105,140 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         await pending.ConfigureAwait(true);
     }
 
+    /// <summary>
+    /// Appends the open library item to the job inputs at its live revision.
+    /// </summary>
+    private void OnJobsAddLibraryClicked(object sender, RoutedEventArgs e)
+    {
+        if (_session.LibraryItem is not { } item)
+        {
+            _session.ReportJobsInputProblem(
+                "No library item is open: open one in Library first, then add it here. Nothing was added.");
+            return;
+        }
+
+        AppendJobsInput(item.Id, item.Revision, item.Title);
+    }
+
+    /// <summary>
+    /// Appends the saved capture's registered source to the job inputs.
+    /// </summary>
+    private void OnJobsAddCaptureClicked(object sender, RoutedEventArgs e)
+    {
+        if (_session.CaptureSource is not { } saved)
+        {
+            _session.ReportJobsInputProblem(
+                "No capture from this session is saved yet: save one in Inbox first, then add it here. Nothing was added.");
+            return;
+        }
+
+        AppendJobsInput(saved.Id, saved.Revision, null);
+    }
+
+    private void OnJobsRemoveInputClicked(object sender, RoutedEventArgs e)
+    {
+        var selected = JobsInputsList.SelectedItems.OfType<JobInputSelection>().ToArray();
+        if (selected.Length == 0)
+        {
+            _session.ReportJobsInputProblem(
+                "No input was removed: choose the input row(s) to remove first. Nothing was sent.");
+            return;
+        }
+
+        foreach (var input in selected)
+        {
+            _jobInputs.Remove(input);
+        }
+
+        RefreshJobInputs();
+        Render();
+    }
+
+    private void OnJobsInputSelectionChanged(object sender, SelectionChangedEventArgs e) => Render();
+
+    private void AppendJobsInput(string resourceId, long revision, string? title)
+    {
+        if (_jobInputs.Any(input => string.Equals(input.ResourceId, resourceId, StringComparison.Ordinal)))
+        {
+            _session.ReportJobsInputProblem(
+                "That note is already in the selection: a job reads each input once. Nothing was added.");
+            return;
+        }
+
+        _jobInputs.Add(new JobInputSelection(resourceId, revision, title));
+        RefreshJobInputs();
+        Render();
+    }
+
+    private void RefreshJobInputs()
+    {
+        JobsInputsList.ItemsSource = null;
+        JobsInputsList.ItemsSource = _jobInputs.ToArray();
+    }
+
+    /// <summary>
+    /// Replaces the job selection with the given already-served resource
+    /// revisions. The buttons and cross-view actions use the same list; this
+    /// entry point exists for callers that already hold a service answer (the
+    /// console itself and the permanent WPF regression suite) and never accepts
+    /// a typed resourceId@revision line.
+    /// </summary>
+    internal void SetJobInputSelection(params (string ResourceId, long Revision)[] inputs)
+    {
+        _jobInputs.Clear();
+        foreach (var (resourceId, revision) in inputs)
+        {
+            _jobInputs.Add(new JobInputSelection(resourceId, revision, null));
+        }
+
+        RefreshJobInputs();
+        Render();
+    }
+
+    /// <summary>
+    /// One input of the owner's job selection: the exact resource the service
+    /// served and the live revision the run pins. The title is display only;
+    /// the service validates the ID and revision again.
+    /// </summary>
+    private sealed record JobInputSelection(string ResourceId, long Revision, string? Title)
+    {
+        public override string ToString() =>
+            (string.IsNullOrWhiteSpace(Title) ? "(title not loaded)" : Title) + "  ·  " + ResourceId +
+            " @ revision " + Revision.ToString(CultureInfo.InvariantCulture);
+    }
+    /// <summary>
+    /// Fills the destination inbox from the open library item: the exact ID and
+    /// live revision the service served. No ID or revision to memorize.
+    /// </summary>
+    private void OnJobsDestinationUseLibraryClicked(object sender, RoutedEventArgs e)
+    {
+        if (_session.LibraryItem is not { } item)
+        {
+            _session.ReportJobsInputProblem(
+                "No library item is open: open one in Library first, then pick it here. Nothing was filled in.");
+            return;
+        }
+
+        JobsDestinationInput.Text = item.Id;
+        JobsDestinationRevisionInput.Text = item.Revision.ToString(CultureInfo.InvariantCulture);
+        Render();
+    }
+
+    /// <summary>
+    /// Refreshes the destination-zone picker from the zones the service named
+    /// in this session, keeping the owner's typed text.
+    /// </summary>
+    private void RefreshJobsPickerOptions()
+    {
+        var zoneText = JobsZoneInput.Text;
+        JobsZoneInput.Items.Clear();
+        foreach (var zone in _session.KnownZones())
+        {
+            JobsZoneInput.Items.Add(zone);
+        }
+
+        JobsZoneInput.Text = zoneText;
+    }
     private async void OnJobsRunClicked(object sender, RoutedEventArgs e) => await RunSelectedJobAsync();
 
     private async void OnJobsBatchClicked(object sender, RoutedEventArgs e) => await RunSelectedBatchAsync();
@@ -218,7 +354,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         if (inputs.Length == 0)
         {
             _session.ReportJobsInputProblem(
-                "A batch needs at least one note: type one line per selected note as resourceId@revision. Nothing was sent.");
+                "A batch needs at least one note: add it from Library or Inbox above. Nothing was sent.");
             return;
         }
 
@@ -253,32 +389,15 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         problem = null;
 
         var selected = new List<OwnerJobInput>();
-        foreach (var rawLine in JobsInputsInput.Text.Split('\n'))
+        foreach (var input in _jobInputs)
         {
-            var line = rawLine.Trim();
-            if (line.Length == 0)
+            if (string.IsNullOrWhiteSpace(input.ResourceId) || input.Revision < 1)
             {
-                continue;
-            }
-
-            var separator = line.LastIndexOf('@');
-            if (separator <= 0 || separator == line.Length - 1)
-            {
-                problem = "The input line \"" + line + "\" is not in the form resourceId@revision, so this console sent nothing. One line per selected note, each pinned to the revision the job may read.";
+                problem = "One selected input does not pin a positive revision, so this console sent nothing. Remove it and add the item again.";
                 return false;
             }
 
-            var resourceId = line[..separator].Trim();
-            var revisionText = line[(separator + 1)..].Trim();
-            if (resourceId.Length == 0 ||
-                !long.TryParse(revisionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var revision) ||
-                revision < 1)
-            {
-                problem = "The input line \"" + line + "\" does not pin a positive revision, so this console sent nothing.";
-                return false;
-            }
-
-            selected.Add(new OwnerJobInput(resourceId, revision));
+            selected.Add(new OwnerJobInput(input.ResourceId, input.Revision));
         }
 
         inputs = selected.ToArray();
@@ -414,6 +533,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
                 ? "Vault: unknown — no usable owner-channel answer, so no jobs view is shown."
                 : "Vault: not reported — this console holds no owner session."
         };
+        RefreshJobsPickerOptions();
 
         var settings = _session.ProviderSettings;
         ProviderSettingsText.Text = settings is null
@@ -425,9 +545,9 @@ public partial class OwnerConsoleWindow : System.Windows.Window
                     " maxOut=" + settings.MaximumJobOutputTokens.ToString(CultureInfo.InvariantCulture) +
                     " rolling30d=" + settings.MaximumRolling30DayCostUsd.ToString("0.####", CultureInfo.InvariantCulture)
                 : "configured=false (the vault holds no provider configuration)";
-        ProviderMessageText.Text = _session.ProviderMessage ?? (unlocked
+        RenderOutcome(ProviderMessageText, _session.ProviderMessage ?? (unlocked
             ? "No model-settings act has been sent in this session. Saving settings stores the key encrypted; no key is ever shown back."
-            : "No model-settings act is offered while the service does not report the vault unlocked.");
+            : "No model-settings act is offered while the service does not report the vault unlocked."));
 
         if (!ReferenceEquals(_renderedJobs, _session.Jobs))
         {
@@ -440,9 +560,9 @@ public partial class OwnerConsoleWindow : System.Windows.Window
                 : rows.FirstOrDefault(row => string.Equals(row.Job.Id, previousId, StringComparison.Ordinal));
         }
 
-        JobsMessageText.Text = _session.JobsMessage ?? (unlocked
-            ? "No job act has been sent in this session. A run reads only the IDs you typed at the revisions you pinned."
-            : "No job act is offered while the service does not report the vault unlocked.");
+        RenderOutcome(JobsMessageText, _session.JobsMessage ?? (unlocked
+            ? "No job act has been sent in this session. A run reads only the IDs you added at the revisions they pin."
+            : "No job act is offered while the service does not report the vault unlocked."));
 
         BatchMessageText.Text = _session.BatchSteps.Length == 0
             ? string.Empty
@@ -467,12 +587,17 @@ public partial class OwnerConsoleWindow : System.Windows.Window
                 " lastRun=" + (schedule.LastRunAtUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) ?? "none") +
                 " lastJob=" + (schedule.LastRunJobId ?? "none") +
                 " lastOutcome=" + (schedule.LastRunOutcome ?? "none");
-        ScheduleMessageText.Text = _session.ScheduleMessage ?? (unlocked
+        RenderOutcome(ScheduleMessageText, _session.ScheduleMessage ?? (unlocked
             ? "No schedule act has been sent in this session. The schedule is off until you enable it here."
-            : "No schedule act is offered while the service does not report the vault unlocked.");
+            : "No schedule act is offered while the service does not report the vault unlocked."));
 
         ProviderSaveButton.IsEnabled = unlocked && !inFlight;
         ProviderReadButton.IsEnabled = unlocked && !inFlight;
+        JobsInputsList.IsEnabled = unlocked && !inFlight;
+        JobsAddLibraryButton.IsEnabled = unlocked && !inFlight;
+        JobsAddCaptureButton.IsEnabled = unlocked && !inFlight;
+        JobsRemoveInputButton.IsEnabled = unlocked && !inFlight && JobsInputsList.SelectedItems.Count > 0;
+        JobsDestinationUseLibraryButton.IsEnabled = unlocked && !inFlight;
         JobsRunButton.IsEnabled = unlocked && !inFlight;
         JobsBatchButton.IsEnabled = unlocked && !inFlight;
         JobsRefreshButton.IsEnabled = unlocked && !inFlight;

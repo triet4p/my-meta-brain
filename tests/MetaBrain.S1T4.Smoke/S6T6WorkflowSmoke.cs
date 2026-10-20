@@ -329,7 +329,7 @@ internal static partial class OwnerServiceSmoke
         window.JobsProfileInput.SelectedItem = StructuringProfiles.Synthesis;
         window.JobsLevelInput.SelectedItem = SynthesisLevels.L2;
         window.JobsObjectiveInput.Text = S6T6Objective;
-        window.JobsInputsInput.Text = S6T6NoteA + "@1" + Environment.NewLine + S6T6NoteB + "@1";
+        window.SetJobInputSelection((S6T6NoteA, 1), (S6T6NoteB, 1));
         window.JobsZoneInput.Text = S6T6Zone;
         window.JobsDestinationInput.Text = S6T6Inbox;
         window.JobsDestinationRevisionInput.Text = "1";
@@ -361,7 +361,7 @@ internal static partial class OwnerServiceSmoke
         window.JobsProfileInput.SelectedItem = StructuringProfiles.ResearchNote;
         window.JobsLevelInput.SelectedItem = "(any)";
         window.JobsObjectiveInput.Text = string.Empty;
-        window.JobsInputsInput.Text = S6T6NoteA + "@1" + Environment.NewLine + S6T6NoteB + "@1";
+        window.SetJobInputSelection((S6T6NoteA, 1), (S6T6NoteB, 1));
         var beforeBatch = provider.RequestCount;
         await WaitForJobsPanelIdleAsync(session).ConfigureAwait(true);
         Require(window.JobsBatchButton.IsEnabled, "The console did not offer the batch act.");
@@ -471,7 +471,7 @@ internal static partial class OwnerServiceSmoke
         window.JobsProfileInput.SelectedItem = StructuringProfiles.Synthesis;
         window.JobsLevelInput.SelectedItem = SynthesisLevels.L2;
         window.JobsObjectiveInput.Text = S6T6Objective;
-        window.JobsInputsInput.Text = S6T6NoteA + "@1" + Environment.NewLine + S6T6NoteB + "@1";
+        window.SetJobInputSelection((S6T6NoteA, 1), (S6T6NoteB, 1));
         var beforeEnable = provider.RequestCount;
         await WaitForJobsPanelIdleAsync(session).ConfigureAwait(true);
         Require(window.ScheduleEnableButton.IsEnabled, "The console did not offer the schedule-enable act.");

@@ -43,10 +43,10 @@ public partial class OwnerConsoleWindow
         }
 
         selected = SelectedReview();
-        ReviewQueueMessageText.Text = _session.ReviewQueueMessage ??
+        RenderOutcome(ReviewQueueMessageText, _session.ReviewQueueMessage ??
             (unlocked
                 ? "Read the service's own evaluation of what asks for your review."
-                : "No review queue is available while locked or disconnected.");
+                : "No review queue is available while locked or disconnected."));
         ReviewQueueRefreshButton.IsEnabled = canAct;
         ReviewQueueList.IsEnabled = unlocked;
         ReviewQueueRationaleInput.IsEnabled = canAct && selected is not null;

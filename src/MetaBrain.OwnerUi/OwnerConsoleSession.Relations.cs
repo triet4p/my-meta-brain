@@ -79,6 +79,50 @@ internal sealed partial class OwnerConsoleSession
     /// value, so no draft of a finished epoch stays on screen.
     /// </summary>
     public long RelationFormVersion => _relationFormVersion;
+    /// <summary>
+    /// Resolves one enrolled source to a pinnable endpoint at its live registry
+    /// revision. The service is asked for the registry record it holds now, so
+    /// the link pins the revision the service will verify — never a guessed or
+    /// remembered number. A source with no live registry record is reported as
+    /// such instead of pinned.
+    /// </summary>
+    public async Task<RelationEndpointPick?> ResolveSourceEndpointAsync(string sourceId)
+    {
+        ArgumentNullException.ThrowIfNull(sourceId);
+        if (TryBeginRelationsAct() is not { } epoch)
+        {
+            return null;
+        }
+
+        var result = await ExecuteRelationsAsync(
+            token => OwnerChannelClient.ReadSourceAsync(ControlPipe, sourceId, null, token),
+            code => new OwnerSourceReadResult(OwnerCommandOutcome.Unavailable, code, null)).ConfigureAwait(true);
+
+        await ProbeAsync().ConfigureAwait(true);
+        if (epoch != _privateEpoch)
+        {
+            AppendIgnoredStaleRelationsAnswer("source endpoint");
+            RaiseChanged();
+            return null;
+        }
+
+        if (result.Outcome != OwnerCommandOutcome.Completed || result.Source is null)
+        {
+            RelationMessage = result.Outcome == OwnerCommandOutcome.Refused && string.Equals(result.ErrorCode, "resource_unavailable", StringComparison.Ordinal)
+                ? "The registry holds no live record for " + sourceId + ", so no endpoint was pinned. Enroll and register it first; nothing was pinned."
+                : DescribeRelationsAnswer("source endpoint", result.Outcome, result.ErrorCode);
+            Append(DescribeRelationsActForLog("resolve source endpoint", result.Outcome, result.ErrorCode));
+            RaiseChanged();
+            return null;
+        }
+
+        var source = result.Source;
+        Append(DescribeRelationsActForLog("resolve source endpoint", result.Outcome, result.ErrorCode));
+        RaiseChanged();
+        return new RelationEndpointPick(
+            source.Id, "registeredSource", source.Revision, source.ZoneId,
+            "source " + source.Id + "@" + source.Revision.ToString(CultureInfo.InvariantCulture) + "  endpointKind=registeredSource");
+    }
 
     /// <summary>
     /// Asks the service for every relation of the unlocked vault with its live

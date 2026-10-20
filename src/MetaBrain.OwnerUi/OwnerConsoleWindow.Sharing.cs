@@ -25,14 +25,16 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         CatalogResourceInput.Text = string.Empty;
         CatalogLabelInput.Text = string.Empty;
         CatalogDescriptionInput.Text = string.Empty;
-        ApproveResourceIdsInput.Text = string.Empty;
-        ApproveOperationsInput.Text = string.Empty;
+        ApproveResourceList.ItemsSource = null;
+        ApproveOperationList.ItemsSource = null;
         ApproveDestinationIdsInput.Text = string.Empty;
         ApproveExpiryInput.Text = string.Empty;
+        ApproveExpiryPresetInput.SelectedItem = ApproveExpiryCustomItem;
         ApproveProviderInput.Text = string.Empty;
         ApproveModelInput.Text = string.Empty;
         ApproveMaxCostInput.Text = string.Empty;
         ApproveHandoffInput.Text = string.Empty;
+        _renderedApprovalPreview = null;
     }
 
     private async Task RefreshSharingAsync()
@@ -40,6 +42,41 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         await _session.RefreshCatalogAsync().ConfigureAwait(true);
         await _session.RefreshAccessRequestsAsync().ConfigureAwait(true);
         await _session.RefreshSessionsAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Fills the mapped resource from the open library item: the exact ID the
+    /// service served, at the revision it served. No ID to memorize.
+    /// </summary>
+    private void OnCatalogUseLibraryClicked(object sender, RoutedEventArgs e)
+    {
+        if (_session.LibraryItem is { } item)
+        {
+            CatalogResourceInput.Text = item.Id;
+            Render();
+        }
+        else
+        {
+            _session.ReportSharingFormProblem(
+                "No library item is open: open one in Library first, then pick it here. Nothing was filled in.");
+        }
+    }
+
+    /// <summary>
+    /// Fills the mapped resource from the saved capture of this session.
+    /// </summary>
+    private void OnCatalogUseCaptureClicked(object sender, RoutedEventArgs e)
+    {
+        if (_session.CaptureSource is { } saved)
+        {
+            CatalogResourceInput.Text = saved.Id;
+            Render();
+        }
+        else
+        {
+            _session.ReportSharingFormProblem(
+                "No capture from this session is saved yet: save one in Inbox first, then pick it here. Nothing was filled in.");
+        }
     }
 
     private async void OnCatalogPreviewClicked(object sender, RoutedEventArgs e) =>
@@ -120,6 +157,122 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         }
     }
 
+    /// <summary>
+    /// Friendly names for the service's scope operations, so the owner picks by
+    /// meaning instead of typing an API token. The wire value travels; only the
+    /// label is friendly.
+    /// </summary>
+    private static string DescribeOperation(string operation) => operation switch
+    {
+        "resource.read" => "Read item text (resource.read)",
+        "source.read" => "Read source record (source.read)",
+        "source.snapshot.read" => "Read preserved snapshot bytes (source.snapshot.read)",
+        "memory.read" => "Read memory item detail (memory.read)",
+        "memory.search" => "Search memory (memory.search)",
+        "memory.context" => "Build brief/context (memory.context)",
+        "memory.feedback" => "Leave feedback (memory.feedback)",
+        "feedback.read" => "Read feedback records (feedback.read)",
+        "relation.read" => "Read relations (relation.read)",
+        "relation.list" => "List relations (relation.list)",
+        "proposal.create" => "File proposals into an inbox (proposal.create)",
+        "link.create" => "Create links (link.create)",
+        "link.supersede" => "Replace links (link.supersede)",
+        "link.remove" => "Remove links (link.remove)",
+        "link.restore" => "Restore removed links (link.restore)",
+        "provider.egress" => "Send to a model (provider.egress)",
+        _ => operation
+    };
+
+    private const string ApproveExpiryCustomItem = "Custom…";
+
+    private static readonly (string Label, TimeSpan Span)[] ApproveExpiryPresets =
+    {
+        ("30 minutes", TimeSpan.FromMinutes(30)),
+        ("8 hours", TimeSpan.FromHours(8)),
+        ("1 day", TimeSpan.FromDays(1)),
+        ("7 days", TimeSpan.FromDays(7)),
+        ("30 days", TimeSpan.FromDays(30)),
+    };
+
+    private void InitializeSharingControls()
+    {
+        ApproveExpiryPresetInput.Items.Add(ApproveExpiryCustomItem);
+        foreach (var preset in ApproveExpiryPresets)
+        {
+            ApproveExpiryPresetInput.Items.Add(preset.Label);
+        }
+
+        ApproveExpiryPresetInput.SelectedItem = ApproveExpiryCustomItem;
+    }
+
+    private void OnApproveSelectionChanged(object sender, SelectionChangedEventArgs e) => Render();
+
+    private void OnApproveExpiryPresetChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ApproveExpiryPresetInput.SelectedItem is not string label)
+        {
+            return;
+        }
+
+        foreach (var preset in ApproveExpiryPresets)
+        {
+            if (string.Equals(preset.Label, label, StringComparison.Ordinal))
+            {
+                var instant = DateTimeOffset.UtcNow + preset.Span;
+                ApproveExpiryInput.Text = instant.ToString("yyyy-MM-ddTHH:mm:ss\\Z", CultureInfo.InvariantCulture);
+                break;
+            }
+        }
+
+        Render();
+    }
+
+    private void OnApproveHandoffBrowseClicked(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "Choose the local handoff file for the sealed token",
+            Filter = "Token handoff (*.handoff)|*.handoff|All files (*.*)|*.*",
+            DefaultExt = ".handoff",
+            OverwritePrompt = false,
+            CheckPathExists = true,
+        };
+        if (dialog.ShowDialog() == true)
+        {
+            ApproveHandoffInput.Text = dialog.FileName;
+        }
+
+        Render();
+    }
+
+    private string[]? TickedResources()
+    {
+        var preview = _session.OpenRequestPreview;
+        if (preview is null || ApproveResourceList.ItemsSource is null)
+        {
+            return null;
+        }
+
+        var ticked = ApproveResourceList.SelectedItems.OfType<ApprovalResourceRow>()
+            .Select(row => row.Resource.ResourceId).ToArray();
+        // All ticked (or an untouched list) approves the whole bound snapshot:
+        // the service treats an omitted list as the full preview.
+        return ticked.Length == preview.Resources.Length ? null : ticked;
+    }
+
+    private string[]? TickedOperations()
+    {
+        var preview = _session.OpenRequestPreview;
+        if (preview is null || ApproveOperationList.ItemsSource is null)
+        {
+            return null;
+        }
+
+        var ticked = ApproveOperationList.SelectedItems.OfType<ApprovalOperationRow>()
+            .Select(row => row.Operation).ToArray();
+        return ticked.Length == 0 ? null : ticked;
+    }
+
     private async void OnRequestApproveClicked(object sender, RoutedEventArgs e)
     {
         var preview = _session.OpenRequestPreview;
@@ -130,39 +283,20 @@ public partial class OwnerConsoleWindow : System.Windows.Window
             return;
         }
 
-        var resourceIds = SplitIdentifiers(ApproveResourceIdsInput.Text);
-        var operations = SplitIdentifiers(ApproveOperationsInput.Text);
         var destinations = SplitIdentifiers(ApproveDestinationIdsInput.Text);
-        if (ApproveResourceIdsInput.Text.Trim().Length > 0 && resourceIds is null)
-        {
-            _session.ReportSharingFormProblem(
-                "This console did not approve the request: the resource IDs are not a nonempty comma-separated list of unique IDs. Nothing was minted.");
-            return;
-        }
-
-        if (ApproveOperationsInput.Text.Trim().Length > 0 && operations is null)
-        {
-            _session.ReportSharingFormProblem(
-                "This console did not approve the request: the operations are not a nonempty comma-separated list of unique operations. Nothing was minted.");
-            return;
-        }
-
         if (ApproveDestinationIdsInput.Text.Trim().Length > 0 && destinations is null)
         {
             _session.ReportSharingFormProblem(
-                "This console did not approve the request: the destination IDs are not a nonempty comma-separated list of unique IDs. Nothing was minted.");
+                "Destinations: name each destination ID once, separated by commas, or leave the field empty when this approval needs no write destination. Nothing was minted.");
             return;
         }
 
         var expiryText = ApproveExpiryInput.Text.Trim();
-        var hasExplicitUtcSuffix = expiryText.EndsWith("Z", StringComparison.Ordinal) ||
-            expiryText.EndsWith("+00:00", StringComparison.Ordinal);
-        if (!hasExplicitUtcSuffix ||
-            !DateTimeOffset.TryParse(expiryText, CultureInfo.InvariantCulture, DateTimeStyles.None, out var expiresAtUtc) ||
+        if (!DateTimeOffset.TryParse(expiryText, CultureInfo.InvariantCulture, DateTimeStyles.None, out var expiresAtUtc) ||
             expiresAtUtc.Offset != TimeSpan.Zero)
         {
             _session.ReportSharingFormProblem(
-                "This console did not approve the request: the expiry must be an explicit UTC instant (ISO 8601 with a Z or +00:00 suffix). Nothing was minted.");
+                "Expiry: type a UTC instant with an explicit Z suffix (for example 2026-10-21T08:00:00Z), or pick a duration above. The service requires a future UTC instant. Nothing was minted.");
             return;
         }
 
@@ -175,11 +309,25 @@ public partial class OwnerConsoleWindow : System.Windows.Window
             if (!decimal.TryParse(costText, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsedCost))
             {
                 _session.ReportSharingFormProblem(
-                    "This console did not approve the request: the cost limit is not a number. Nothing was minted.");
+                    "Cost limit: the value is not a number. Type a value in US dollars (at most $0.25), or clear it. Nothing was minted.");
                 return;
             }
 
             maximumCostUsd = parsedCost;
+        }
+
+        var resourceIds = TickedResources();
+        var operations = TickedOperations();
+        var problem = OwnerConsoleSession.ValidateApprovalDraft(
+            preview, resourceIds, operations, destinations, expiresAtUtc,
+            provider.Length == 0 ? null : provider,
+            model.Length == 0 ? null : model,
+            maximumCostUsd,
+            ApproveHandoffInput.Text);
+        if (problem is not null)
+        {
+            _session.ReportSharingFormProblem(problem.Field + ": " + problem.Message);
+            return;
         }
 
         await _session.ApproveAccessRequestAsync(
@@ -189,7 +337,6 @@ public partial class OwnerConsoleWindow : System.Windows.Window
             maximumCostUsd,
             ApproveHandoffInput.Text);
     }
-
     private async void OnRequestRejectClicked(object sender, RoutedEventArgs e)
     {
         if (RequestsList.SelectedItem is AccessRequestRow row)
@@ -291,9 +438,9 @@ public partial class OwnerConsoleWindow : System.Windows.Window
                 (preview.ExistingEntry is null ? "  (no entry with this ID is published yet)"
                     : "  (an entry with this ID is already published and would be replaced)") +
                 "\nOnly the ID, label and description above would be public; the private mapping stays encrypted.";
-        CatalogMessageText.Text = _session.CatalogMessage ?? _session.CatalogWriteMessage ?? (unlocked
+        RenderOutcome(CatalogMessageText, _session.CatalogMessage ?? _session.CatalogWriteMessage ?? (unlocked
             ? "No catalog act has been sent in this session. Preview first, then publish exactly that metadata — nothing is autofilled from a private title, path or citation."
-            : "No private catalog act is offered while the service does not report the vault unlocked.");
+            : "No private catalog act is offered while the service does not report the vault unlocked."));
 
         var selectedCatalog = CatalogList.SelectedItem as CatalogRow;
         CatalogPreviewButton.IsEnabled = unlocked && !inFlight;
@@ -317,9 +464,9 @@ public partial class OwnerConsoleWindow : System.Windows.Window
                 : rows.FirstOrDefault(row => string.Equals(row.Request.RequestId, previousId, StringComparison.Ordinal));
         }
 
-        RequestsMessageText.Text = _session.AccessRequestsMessage ?? (unlocked
+        RenderOutcome(RequestsMessageText, _session.AccessRequestsMessage ?? (unlocked
             ? "No access request has been read in this session. Read them to see each agent's purpose and catalogs."
-            : "No private request act is offered while the service does not report the vault unlocked.");
+            : "No private request act is offered while the service does not report the vault unlocked."));
 
         var bound = _session.OpenRequestPreview;
         RequestPreviewSummaryText.Text = bound is null
@@ -343,9 +490,9 @@ public partial class OwnerConsoleWindow : System.Windows.Window
                 : string.Join("\n\n", bound.Bodies.Select(body =>
                     "--- preview body resource=" + body.ResourceId + " ---\n" + body.Text +
                     "\n--- end preview body resource=" + body.ResourceId + " ---"));
-        RequestDecisionText.Text = _session.AccessDecisionMessage ?? (unlocked
+        RenderOutcome(RequestDecisionText, _session.AccessDecisionMessage ?? (unlocked
             ? "No request decision has been sent in this session. Narrowing below the bound preview is the only direction offered; the service refuses any growth."
-            : "No private request act is offered while the service does not report the vault unlocked.");
+            : "No private request act is offered while the service does not report the vault unlocked."));
         RequestHandoffText.Text = _session.LastHandoffPath is null
             ? string.Empty
             : "grant=" + (_session.LastGrantId ?? "(unknown)") + "  local handoff=" + _session.LastHandoffPath +
@@ -355,16 +502,79 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         RequestsRefreshButton.IsEnabled = unlocked && !inFlight;
         RequestPreviewButton.IsEnabled = unlocked && !inFlight && selectedRequest is not null;
         RequestsList.IsEnabled = unlocked && !inFlight;
+
+        // The narrowing pickers follow the bound preview: resources and operations
+        // are the exact snapshot an approval would draw from. A new preview
+        // rebuilds both lists with every box ticked (the whole snapshot); the
+        // owner's unticks are the narrowing. Internal IDs stay visible on each
+        // row as secondary copyable detail, never as something to memorize.
+        if (!ReferenceEquals(_renderedApprovalPreview, bound))
+        {
+            _renderedApprovalPreview = bound;
+            if (bound is null)
+            {
+                ApproveResourceList.ItemsSource = null;
+                ApproveOperationList.ItemsSource = null;
+            }
+            else
+            {
+                var resourceRows = bound.Resources.Select(resource => new ApprovalResourceRow(resource)).ToArray();
+                ApproveResourceList.ItemsSource = resourceRows;
+                ApproveResourceList.SelectedItems.Clear();
+                foreach (var row in resourceRows)
+                {
+                    ApproveResourceList.SelectedItems.Add(row);
+                }
+
+                var operationRows = bound.Operations.Select(operation => new ApprovalOperationRow(operation, DescribeOperation(operation))).ToArray();
+                ApproveOperationList.ItemsSource = operationRows;
+                ApproveOperationList.SelectedItems.Clear();
+                foreach (var row in operationRows)
+                {
+                    ApproveOperationList.SelectedItems.Add(row);
+                }
+
+                if (string.IsNullOrWhiteSpace(ApproveExpiryInput.Text))
+                {
+                    ApproveExpiryPresetInput.SelectedItem = "1 day";
+                    OnApproveExpiryPresetChanged(ApproveExpiryPresetInput, new SelectionChangedEventArgs(System.Windows.Controls.Primitives.Selector.SelectionChangedEvent, Array.Empty<object>(), Array.Empty<object>()));
+                }
+
+                if (!string.IsNullOrWhiteSpace(bound.Provider) && string.IsNullOrWhiteSpace(ApproveProviderInput.Text))
+                {
+                    ApproveProviderInput.Text = bound.Provider;
+                }
+
+                if (!string.IsNullOrWhiteSpace(bound.Model) && string.IsNullOrWhiteSpace(ApproveModelInput.Text))
+                {
+                    ApproveModelInput.Text = bound.Model;
+                }
+            }
+        }
+
+        var tickedResourceCount = ApproveResourceList.SelectedItems.Count;
+        var tickedOperationCount = ApproveOperationList.SelectedItems.Count;
+        var previewResourceCount = bound?.Resources.Length ?? 0;
+        ApproveOperationsHelpText.Text = bound is null
+            ? "Preview a pending request to see the operations it offers."
+            : "Ticked " + tickedOperationCount.ToString(CultureInfo.InvariantCulture) + " of " + bound.Operations.Length.ToString(CultureInfo.InvariantCulture) +
+                " operation(s). Unticked operations stay out of the grant; unticking everything approves read-only.";
+        ApproveExpiryHelpText.Text = "Now: " + DateTimeOffset.UtcNow.ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture) +
+            " (your local time " + DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + "). " +
+            "The expiry must be a future UTC instant with a Z suffix. After it passes, the session authorizes nothing." +
+            (bound is null ? string.Empty : " Ticked " + tickedResourceCount.ToString(CultureInfo.InvariantCulture) + " of " + previewResourceCount.ToString(CultureInfo.InvariantCulture) + " resource(s).");
         RequestApproveButton.IsEnabled = unlocked && !inFlight && bound is not null;
         RequestRejectButton.IsEnabled = unlocked && !inFlight && selectedRequest is not null;
-        ApproveResourceIdsInput.IsEnabled = unlocked && !inFlight && bound is not null;
-        ApproveOperationsInput.IsEnabled = unlocked && !inFlight && bound is not null;
+        ApproveResourceList.IsEnabled = unlocked && !inFlight && bound is not null;
+        ApproveOperationList.IsEnabled = unlocked && !inFlight && bound is not null;
         ApproveDestinationIdsInput.IsEnabled = unlocked && !inFlight && bound is not null;
+        ApproveExpiryPresetInput.IsEnabled = unlocked && !inFlight && bound is not null;
         ApproveExpiryInput.IsEnabled = unlocked && !inFlight && bound is not null;
         ApproveProviderInput.IsEnabled = unlocked && !inFlight && bound is not null;
         ApproveModelInput.IsEnabled = unlocked && !inFlight && bound is not null;
         ApproveMaxCostInput.IsEnabled = unlocked && !inFlight && bound is not null;
         ApproveHandoffInput.IsEnabled = unlocked && !inFlight && bound is not null;
+        ApproveHandoffBrowseButton.IsEnabled = unlocked && !inFlight && bound is not null;
 
         if (!ReferenceEquals(_renderedSessions, _session.AgentSessions))
         {
@@ -377,9 +587,9 @@ public partial class OwnerConsoleWindow : System.Windows.Window
                 : rows.FirstOrDefault(row => string.Equals(row.Session.SessionId, previousId, StringComparison.Ordinal));
         }
 
-        SessionsMessageText.Text = _session.SessionsMessage ?? (unlocked
+        RenderOutcome(SessionsMessageText, _session.SessionsMessage ?? (unlocked
             ? "No live session has been read in this session. Read them to see each session's effective frozen scope and expiry."
-            : "No private session act is offered while the service does not report the vault unlocked.");
+            : "No private session act is offered while the service does not report the vault unlocked."));
 
         var openSession = SessionsList.SelectedItem as AgentSessionRow;
         SessionDetailText.Text = openSession is null

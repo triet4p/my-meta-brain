@@ -69,6 +69,7 @@ internal static class Program
                string.Equals(args[0], "s5-t6-console-corpus", StringComparison.Ordinal) ||
                string.Equals(args[0], "s5-t7-console-fixture", StringComparison.Ordinal) ||
                string.Equals(args[0], "s5-t7-console-corpus", StringComparison.Ordinal) ||
+               string.Equals(args[0], "s8-t1a", StringComparison.Ordinal) ||
                string.Equals(args[0], "s8-t1", StringComparison.Ordinal))
                 ? args[0]
                 : null;
@@ -289,6 +290,9 @@ internal static class Program
                     break;
                 case "s8-t1":
                     await S8T1InstallLifecycleSmoke.RunAsync(fullPath, Path.GetFullPath(args[2]!)).ConfigureAwait(false);
+                    break;
+                case "s8-t1a":
+                    await OwnerServiceSmoke.RunS8T1AUsabilityAsync(fullPath, Path.GetFullPath(args[2]!)).ConfigureAwait(false);
                     break;
                 default:
                     await OwnerServiceSmoke.RunAsync(fullPath).ConfigureAwait(false);

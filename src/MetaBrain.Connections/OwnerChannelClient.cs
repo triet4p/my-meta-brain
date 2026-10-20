@@ -2568,6 +2568,91 @@ public static class OwnerChannelClient
     }
 
     /// <summary>
+    /// Enrolls one external source under the owner's explicit mapping: the source ID
+    /// and zone the owner names, the declared format/version, and the absolute locator
+    /// file the service will read. The locator travels only in this request and is
+    /// never echoed back; the service validates it against the live filesystem and
+    /// refuses an unregistered format explicitly instead of guessing.
+    /// </summary>
+    public static async Task<OwnerSourceStatusResult> EnrollSourceAsync(
+        string controlPipe,
+        string sourceId,
+        string zoneId,
+        string locator,
+        string format,
+        int formatVersion,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(sourceId);
+        ArgumentNullException.ThrowIfNull(zoneId);
+        ArgumentNullException.ThrowIfNull(locator);
+        ArgumentNullException.ThrowIfNull(format);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceEnrollOperation,
+                ResourceId: sourceId,
+                ZoneId: zoneId,
+                SourceLocator: locator,
+                SourceFormat: format,
+                SourceFormatVersion: formatVersion),
+            "source_enrolled",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerSourceStatusResult(reply.Outcome, reply.ErrorCode, ProjectSourceEnrollment(reply));
+    }
+
+    /// <summary>
+    /// Revokes one enrolled source explicitly. The transcript stays untouched;
+    /// only the enrollment ends.
+    /// </summary>
+    public static async Task<OwnerSourceStatusResult> RevokeSourceAsync(
+        string controlPipe,
+        string sourceId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(sourceId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceRevokeOperation,
+                ResourceId: sourceId),
+            "source_revoked",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerSourceStatusResult(reply.Outcome, reply.ErrorCode, ProjectSourceEnrollment(reply));
+    }
+
+    /// <summary>
+    /// Points one enrolled source at an explicitly supplied candidate locator whose
+    /// bytes match the enrolled generation. No scan, no alternate path search.
+    /// </summary>
+    public static async Task<OwnerSourceStatusResult> RelocateSourceAsync(
+        string controlPipe,
+        string sourceId,
+        long generation,
+        string locator,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(sourceId);
+        ArgumentNullException.ThrowIfNull(locator);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceRelocateOperation,
+                ResourceId: sourceId,
+                SourceGeneration: generation,
+                SourceLocator: locator),
+            "source_relocated",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerSourceStatusResult(reply.Outcome, reply.ErrorCode, ProjectSourceEnrollment(reply));
+    }
+
+    /// <summary>
     /// Reads one source's status: its life, checkpoint, quarantine, exact
     /// availability observation and encrypted cache scope. A held
     /// mapping-unknown submission reports its quarantine record with no probe.

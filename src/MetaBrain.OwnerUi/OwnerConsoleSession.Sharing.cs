@@ -88,8 +88,207 @@ internal sealed partial class OwnerConsoleSession
     /// so no draft of a finished epoch stays on screen.
     /// </summary>
     public long SharingFormVersion => _sharingFormVersion;
+    /// <summary>
+    /// The outcome class of one owner-facing message: success, refusal, error or
+    /// neutral information. The window renders each class with its own label,
+    /// icon and visual style, never by color alone.
+    /// </summary>
+    public enum OwnerOutcomeKind
+    {
+        Info,
+        Success,
+        Refused,
+        Error
+    }
 
     /// <summary>
+    /// One field-level approval validation: which field is unusable and what the
+    /// owner can choose instead. Null means the draft is sendable.
+    /// </summary>
+    public sealed record ApprovalDraftProblem(string Field, string Message);
+
+    /// <summary>
+    /// Maximum bearer cost the service enforces per job. The console states it
+    /// before the owner types a cost so the ceiling is never a surprise.
+    /// </summary>
+    public const decimal MaximumApprovalCostUsd = 0.25m;
+
+    /// <summary>
+    /// Validates an approval draft against the bound preview before anything is
+    /// sent: resource IDs must be a narrowed subset of the preview's resources,
+    /// operations a narrowed subset of the preview's operations, the expiry a
+    /// future UTC instant, and the provider/model/cost fields coherent with the
+    /// preview's disclosure. Returns the first field problem, or null when the
+    /// draft matches what the preview allows. A race that changes the vault
+    /// between this check and the approval still fails closed at the service
+    /// with `request_stale`/`request_invalid`; that refusal is reported
+    /// honestly as not-minted with a take-a-new-preview step.
+    /// </summary>
+    public static ApprovalDraftProblem? ValidateApprovalDraft(
+        OwnerAccessRequestPreviewInfo preview,
+        string[]? resourceIds,
+        string[]? operations,
+        string[]? destinationResourceIds,
+        DateTimeOffset expiresAtUtc,
+        string? provider,
+        string? model,
+        decimal? maximumCostUsd,
+        string handoffPath)
+    {
+        ArgumentNullException.ThrowIfNull(preview);
+        if (resourceIds is not null)
+        {
+            if (resourceIds.Length == 0 || resourceIds.Length > 32)
+            {
+                return new ApprovalDraftProblem("resources", "The narrowed resources name no usable subset: choose one or more of the preview's resources, or leave the choice empty to approve the whole bound snapshot. Nothing was minted.");
+            }
+
+            var allowed = new HashSet<string>(preview.Resources.Select(resource => resource.ResourceId), StringComparer.Ordinal);
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var id in resourceIds)
+            {
+                if (string.IsNullOrWhiteSpace(id) || !seen.Add(id) || !allowed.Contains(id))
+                {
+                    return new ApprovalDraftProblem("resources", "The narrowed resources name \"" + (id ?? "(none)") + "\", which is outside the bound preview (" + (allowed.Count == 0 ? "none" : string.Join(", ", allowed.Order(StringComparer.Ordinal))) + "). Approvals only narrow below the preview, never grow past it. Nothing was minted.");
+                }
+            }
+        }
+
+        if (operations is not null)
+        {
+            if (operations.Length == 0)
+            {
+                return new ApprovalDraftProblem("operations", "The narrowed operations name no usable subset: tick one or more of the preview's operations, or leave the choice empty for read-only. Nothing was minted.");
+            }
+
+            var allowed = new HashSet<string>(preview.Operations, StringComparer.Ordinal);
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var operation in operations)
+            {
+                if (string.IsNullOrWhiteSpace(operation) || !seen.Add(operation) || !allowed.Contains(operation))
+                {
+                    return new ApprovalDraftProblem("operations", "The narrowed operations name \"" + (operation ?? "(none)") + "\", which the bound preview did not offer (" + (allowed.Count == 0 ? "none" : string.Join(", ", allowed.Order(StringComparer.Ordinal))) + "). Approvals only narrow below the preview, never grow past it. Nothing was minted.");
+                }
+            }
+        }
+
+        if (destinationResourceIds is not null)
+        {
+            if (destinationResourceIds.Length == 0)
+            {
+                return new ApprovalDraftProblem("destinations", "The destination choice names no usable ID: leave it empty when this approval needs no write destination. Nothing was minted.");
+            }
+
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var id in destinationResourceIds)
+            {
+                if (string.IsNullOrWhiteSpace(id) || !seen.Add(id))
+                {
+                    return new ApprovalDraftProblem("destinations", "The destination choice names \"" + (id ?? "(none)") + "\", which is empty or repeated. Name each destination once, or leave the choice empty. Nothing was minted.");
+                }
+            }
+        }
+
+        if (expiresAtUtc.Offset != TimeSpan.Zero || expiresAtUtc <= DateTimeOffset.UtcNow)
+        {
+            return new ApprovalDraftProblem("expiry", "The expiry is not a future UTC instant. Pick one of the offered durations or type an explicit UTC time (ISO 8601 with a Z suffix). Nothing was minted.");
+        }
+
+        var wantsEgress = operations is not null && Array.Exists(operations, operation => string.Equals(operation, "provider.egress", StringComparison.Ordinal));
+        var hasEgressFields = provider is not null || model is not null || maximumCostUsd is not null;
+        if (wantsEgress)
+        {
+            if (string.IsNullOrWhiteSpace(provider) || string.IsNullOrWhiteSpace(model) || maximumCostUsd is null)
+            {
+                return new ApprovalDraftProblem("egress", "The provider.egress operation needs the provider, the model and the cost limit together. Fill all three, or untick provider.egress. Nothing was minted.");
+            }
+
+            if (maximumCostUsd <= 0 || maximumCostUsd > MaximumApprovalCostUsd)
+            {
+                return new ApprovalDraftProblem("egress", "The cost limit must be above $0 and at most $" + MaximumApprovalCostUsd.ToString(CultureInfo.InvariantCulture) + " (the per-job ceiling the service enforces). Nothing was minted.");
+            }
+
+            if ((preview.Provider is not null && !string.Equals(preview.Provider, provider, StringComparison.Ordinal)) ||
+                (preview.Model is not null && !string.Equals(preview.Model, model, StringComparison.Ordinal)))
+            {
+                return new ApprovalDraftProblem("egress", "The provider/model (" + provider + "/" + model + ") does not match the request's declared disclosure (" + (preview.Provider ?? "(none)") + "/" + (preview.Model ?? "(none)") + "). Match it exactly, or reject the request. Nothing was minted.");
+            }
+        }
+        else if (hasEgressFields)
+        {
+            return new ApprovalDraftProblem("egress", "The provider/model/cost fields need the provider.egress operation. Tick it to use them, or clear the three fields. Nothing was minted.");
+        }
+
+        if (string.IsNullOrWhiteSpace(handoffPath))
+        {
+            return new ApprovalDraftProblem("handoff", "Name the local handoff file the DPAPI-protected token file will be written to: it must be a new file inside a folder that already exists. Nothing was minted.");
+        }
+
+        return null;
+    }
+
+
+    /// <summary>
+    /// Distinct zones the service named across its answers in this session
+    /// (library hits, enrolled sources, relations, the bound request preview).
+    /// Zones are owner-named permission boundaries with no registry, so the
+    /// service offers no zone list: this is the authoritative set this console
+    /// can state, newest answers first, for pickers that avoid retyping.
+    /// </summary>
+    public string[] KnownZones()
+    {
+        var zones = new List<string>();
+        void Add(string? zone)
+        {
+            if (!string.IsNullOrWhiteSpace(zone) && !zone.StartsWith("(", StringComparison.Ordinal) &&
+                !zones.Contains(zone, StringComparer.Ordinal))
+            {
+                zones.Add(zone);
+            }
+        }
+
+        if (LibraryPage is not null)
+        {
+            foreach (var hit in LibraryPage.Hits)
+            {
+                Add(hit.ZoneId);
+            }
+        }
+
+        if (LibraryItem is not null)
+        {
+            Add(LibraryItem.ZoneId);
+        }
+
+        foreach (var source in Sources)
+        {
+            Add(source.ZoneId);
+        }
+
+        foreach (var relation in Relations)
+        {
+            Add(relation.ZoneId);
+        }
+
+        if (OpenRequestPreview is not null)
+        {
+            foreach (var resource in OpenRequestPreview.Resources)
+            {
+                Add(resource.ZoneId);
+            }
+        }
+
+        return zones.ToArray();
+    }
+
+    /// <summary>
+    /// Distinct collection IDs the service named in this session. Collections
+    /// are owner-side selection metadata, never permission: the picker only
+    /// avoids retyping.
+    /// </summary>
+    public string[] KnownCollections() =>
+        Collections.Select(collection => collection.CollectionId).ToArray();
+
     /// Reads the private catalog mappings of the unlocked vault. Discovery
     /// stays public-triplet only; only this owner channel sees the mapping.
     /// </summary>
@@ -775,6 +974,8 @@ internal sealed partial class OwnerConsoleSession
                     "The service refused because the request is already decided (code: request_not_pending). A decided request never mints a second grant.",
                 "request_stale" =>
                     "The service refused the bound preview as stale (code: request_stale): a resource revision, collection membership, catalog mapping or policy generation changed after the preview. Take a new preview; nothing was minted.",
+                "request_invalid" when string.Equals(act, "request approval", StringComparison.Ordinal) =>
+                    "The service refused the approval (code: request_invalid): the draft passed this console's checks, so a resource revision, collection membership, catalog mapping or policy generation most likely changed after the preview, or a destination is no longer live. Nothing was minted and the preview is unchanged: take a new preview of the request and approve again from it.",
                 "request_invalid" =>
                     "The service refused the narrowed scope as invalid (code: request_invalid): it names a resource or operation outside the bound preview, or the expiry/provider disclosure is not one the preview allows. Nothing was minted and the preview is unchanged.",
                 "request_unavailable" =>

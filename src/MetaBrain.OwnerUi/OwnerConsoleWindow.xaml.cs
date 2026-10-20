@@ -21,13 +21,80 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     private static readonly Brush DeniedBanner = FrozenBrush(Color.FromRgb(0x9A, 0x1C, 0x1C));
     private static readonly Brush UnlockedBanner = FrozenBrush(Color.FromRgb(0x15, 0x6B, 0x3B));
 
+    private static readonly Brush OutcomeSuccessBrush = FrozenBrush(Color.FromRgb(0x15, 0x6B, 0x3B));
+    private static readonly Brush OutcomeRefusedBrush = FrozenBrush(Color.FromRgb(0xB4, 0x53, 0x09));
+    private static readonly Brush OutcomeErrorBrush = FrozenBrush(Color.FromRgb(0x9A, 0x1C, 0x1C));
+    private static readonly Brush OutcomeInfoBrush = FrozenBrush(Color.FromRgb(0x3F, 0x46, 0x50));
+
     /// <summary>
-    /// A brush for the state banner. The banner brushes are shared by every
-    /// window instance, and WPF only lets a Freezable be used from more than one
-    /// thread once it is frozen, so they are created frozen: this view never
-    /// mutates a brush, and freezing keeps the same rendering on the single UI
-    /// thread the application ships.
+    /// Renders one owner-facing outcome with a label, an icon and a visual
+    /// style — never by color alone. Success carries “✓”, a refusal carries
+    /// “✕ Not done”, an error carries “⚠”, and neutral information carries no
+    /// icon. The classification comes from the message's own wording, never
+    /// from a guess about the service: refused acts say what was not
+    /// saved/minted and what to do next.
     /// </summary>
+    private static void RenderOutcome(System.Windows.Controls.TextBlock target, string? message)
+    {
+        if (string.IsNullOrEmpty(message))
+        {
+            target.Text = string.Empty;
+            target.Foreground = OutcomeInfoBrush;
+            target.FontWeight = FontWeights.Normal;
+            return;
+        }
+
+        var refused = message.StartsWith("This console did not", StringComparison.Ordinal) ||
+            message.StartsWith("This endpoint refused", StringComparison.Ordinal) ||
+            message.StartsWith("The service refused", StringComparison.Ordinal) ||
+            message.StartsWith("No owner-channel answer", StringComparison.Ordinal) ||
+            message.StartsWith("No capture from", StringComparison.Ordinal) ||
+            message.StartsWith("No library act", StringComparison.Ordinal) ||
+            message.StartsWith("NEEDS REVIEW", StringComparison.Ordinal) ||
+            message.StartsWith("UNSAVED", StringComparison.Ordinal) ||
+            message.StartsWith("A rejection needs", StringComparison.Ordinal) ||
+            message.StartsWith("Undoing a decision needs", StringComparison.Ordinal) ||
+            message.StartsWith("The shared core requires", StringComparison.Ordinal) ||
+            message.StartsWith("Cancelling needs", StringComparison.Ordinal) ||
+            message.StartsWith("Saving model settings needs", StringComparison.Ordinal);
+        var error = !refused && (message.StartsWith("No vault act was performed", StringComparison.Ordinal) ||
+            message.Contains("act_failed", StringComparison.Ordinal) ||
+            message.Contains("malformed_reply", StringComparison.Ordinal) ||
+            message.Contains("unexpected_reply", StringComparison.Ordinal) ||
+            message.Contains("transport_", StringComparison.Ordinal));
+        var success = !refused && !error && (message.StartsWith("The service ", StringComparison.Ordinal) ||
+            message.StartsWith("Saved capture", StringComparison.Ordinal) ||
+            message.StartsWith("Batch finished", StringComparison.Ordinal) ||
+            message.StartsWith("Rolling spend", StringComparison.Ordinal) ||
+            message.StartsWith("Configured", StringComparison.Ordinal) ||
+            message.StartsWith("Enabled", StringComparison.Ordinal) ||
+            message.StartsWith("Disabled", StringComparison.Ordinal));
+        if (refused)
+        {
+            target.Text = "✕ Not done — " + message;
+            target.Foreground = OutcomeRefusedBrush;
+            target.FontWeight = FontWeights.SemiBold;
+        }
+        else if (error)
+        {
+            target.Text = "⚠ Error — " + message;
+            target.Foreground = OutcomeErrorBrush;
+            target.FontWeight = FontWeights.SemiBold;
+        }
+        else if (success)
+        {
+            target.Text = "✓ " + message;
+            target.Foreground = OutcomeSuccessBrush;
+            target.FontWeight = FontWeights.SemiBold;
+        }
+        else
+        {
+            target.Text = message;
+            target.Foreground = OutcomeInfoBrush;
+            target.FontWeight = FontWeights.Normal;
+        }
+    }
+
     private static SolidColorBrush FrozenBrush(Color color)
     {
         var brush = new SolidColorBrush(color);
@@ -78,6 +145,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     private long _sharingFormVersion;
     private OwnerCatalogMapping[]? _renderedCatalog;
     private OwnerAccessRequestInfo[]? _renderedRequests;
+    private OwnerAccessRequestPreviewInfo? _renderedApprovalPreview;
     private OwnerAgentSessionInfo[]? _renderedSessions;
     private long _sourcesFormVersion;
     private long _jobsFormVersion;
@@ -96,7 +164,19 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         InitializeInboxControls();
         InitializeRelationControls();
         InitializeJobsControls();
-        LibraryTitleInput.TextChanged += (_, _) => Render();
+        InitializeSharingControls();
+        InitializeSourcesControls();
+        // The session may already hold answers (a window opened mid-workflow):
+        // take its editor text, filters, drafts and lists now instead of
+        // showing empty controls beside reported answers.
+        _captureDraftVersion = _session.CaptureDraftVersion;
+        _reviewDraftVersion = _session.ReviewDraftVersion;
+        _libraryFilterVersion = _session.LibraryFilterVersion;
+        _relationFormVersion = _session.RelationFormVersion;
+        _sharingFormVersion = _session.SharingFormVersion;
+        _sourcesFormVersion = _session.SourcesFormVersion;
+        _jobsFormVersion = _session.JobsFormVersion;
+        SyncInboxEditors();
         LibraryResults.MouseDoubleClick += async (_, _) => await OpenSelectedLibraryResultAsync();
         RelationsList.MouseDoubleClick += async (_, _) => await InspectSelectedRelationAsync();
         _session.Changed += OnSessionChanged;
@@ -105,7 +185,6 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         _timer.Start();
         Render();
     }
-
     /// <summary>
     /// Stops this view from following the session: no timer tick and no
     /// re-render on later session answers. The session itself is untouched.
@@ -187,6 +266,21 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     private async void OnLockClicked(object sender, RoutedEventArgs e) => await _session.LockAsync();
 
     private void OnHideRecoveryClicked(object sender, RoutedEventArgs e) => _session.HideRecoveryCode();
+    /// <summary>
+    /// Task-oriented navigation: each view names where the work continues, so
+    /// the owner never needs a guide for the next button.
+    /// </summary>
+    private void OnGoInboxClicked(object sender, RoutedEventArgs e) => Navigation.SelectedIndex = 4;
+
+    private void OnGoRelationsClicked(object sender, RoutedEventArgs e) => Navigation.SelectedIndex = 5;
+
+    private void OnGoSharingClicked(object sender, RoutedEventArgs e) => Navigation.SelectedIndex = 6;
+
+    private void OnGoLibraryClicked(object sender, RoutedEventArgs e) => Navigation.SelectedIndex = 3;
+
+    private void OnGoSourcesClicked(object sender, RoutedEventArgs e) => Navigation.SelectedIndex = 7;
+
+    private void OnGoJobsClicked(object sender, RoutedEventArgs e) => Navigation.SelectedIndex = 8;
 
     private void OnNavigationChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -210,6 +304,35 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         {
             _ = _session.RefreshReviewQueueAsync();
         }
+
+        // Keyboard and orientation: the scrolled content returns to the top of
+        // the newly shown view, and focus lands on its first actionable
+        // control, so Tab starts inside the view and every view is reachable
+        // without a pointer.
+        ContentScrollViewer.ScrollToTop();
+        FocusView(Navigation.SelectedIndex);
+    }
+
+    /// <summary>
+    /// Moves keyboard focus to the first actionable control of the shown view.
+    /// </summary>
+    private void FocusView(int index)
+    {
+        var target = index switch
+        {
+            0 => (System.Windows.IInputElement?)ConnectButton,
+            2 => (System.Windows.IInputElement?)ProvisionPassphraseInput,
+            3 => (System.Windows.IInputElement?)LibraryQueryInput,
+            4 => (System.Windows.IInputElement?)CaptureTextInput,
+            5 => (System.Windows.IInputElement?)RelationsRefreshButton,
+            6 => (System.Windows.IInputElement?)CatalogPreviewButton,
+            7 => (System.Windows.IInputElement?)SourcesRefreshButton,
+            8 => (System.Windows.IInputElement?)JobsRunButton,
+            9 => (System.Windows.IInputElement?)IntentionsRefreshButton,
+            10 => (System.Windows.IInputElement?)ReviewQueueRefreshButton,
+            _ => null,
+        };
+        target?.Focus();
     }
 
     private void Render()
@@ -240,11 +363,8 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         SessionStateText.Text = attached ? "attached to the owner control pipe" : "no owner session";
         ProtocolText.Text = OwnerChannelClient.ProtocolVersion.ToString(CultureInfo.InvariantCulture);
         LastCheckText.Text = LastCheckText_Value();
-        StatusText.Text = "pipe=" + _session.ControlPipe +
-            " | protocol=" + OwnerChannelClient.ProtocolVersion.ToString(CultureInfo.InvariantCulture) +
-            " | account=" + _session.OwnerAccount +
-            " | session=" + (attached ? "attached" : "none") +
-            " | " + Summary(attached, status) +
+        StatusText.Text = (attached ? "Session: attached" : "Session: none") +
+            " | " + FriendlySummary(attached, status) +
             " | last check: " + LastCheckText_Value();
 
         if (_libraryFilterVersion != _session.LibraryFilterVersion)
@@ -329,6 +449,37 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         return status.Availability == OwnerChannelAvailability.Reachable
             ? "vault=" + OwnerConsoleSession.VaultToken(status.VaultState)
             : "owner channel " + status.Availability + " (code: " + (status.ErrorCode ?? "unknown") + ")";
+    }
+    /// <summary>
+    /// The status-bar summary in owner words: session and vault state without
+    /// pipe names, protocol numbers, account SIDs or wire codes.
+    /// </summary>
+    private static string FriendlySummary(bool attached, OwnerChannelStatus? status)
+    {
+        if (!attached || status is null)
+        {
+            return "service: not contacted yet";
+        }
+
+        if (status.Availability != OwnerChannelAvailability.Reachable)
+        {
+            return status.Availability switch
+            {
+                OwnerChannelAvailability.ServiceUnavailable => "service: unreachable — start it, then Check again",
+                OwnerChannelAvailability.OwnerAuthorityDenied => "service: connected but not the owner channel",
+                OwnerChannelAvailability.ProtocolMismatch => "service: version mismatch — update app or service",
+                _ => "service: no usable answer",
+            };
+        }
+
+        return status.VaultState switch
+        {
+            OwnerVaultState.Unlocked => "vault: unlocked",
+            OwnerVaultState.Locked => "vault: locked",
+            OwnerVaultState.Locking => "vault: locking",
+            OwnerVaultState.Uninitialized => "vault: not created yet",
+            _ => "vault: unknown state",
+        };
     }
 
     private static (string Headline, string Detail, Brush Color) Describe(bool attached, OwnerChannelStatus? status)
@@ -475,8 +626,8 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         LockButton.IsEnabled = state == OwnerVaultState.Unlocked && !inFlight;
         HideRecoveryButton.IsEnabled = recoveryCode is not null;
 
-        VaultMessageText.Text = _session.VaultMessage ??
-            "No owner vault act has been sent in this session. Nothing here acts on the vault until you choose one.";
+        RenderOutcome(VaultMessageText, _session.VaultMessage ??
+            "No owner vault act has been sent in this session. Nothing here acts on the vault until you choose one.");
     }
 
     /// <summary>
@@ -754,6 +905,75 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         e.Handled = true;
         await _session.RenameLibraryItemAsync(LibraryTitleInput.Text);
     }
+    /// <summary>
+    /// Pins the open library item as the relation subject and moves to
+    /// Relations: the live revision travels, no ID to retype.
+    /// </summary>
+    private void OnLibraryUseAsRelationSubjectClicked(object sender, RoutedEventArgs e)
+    {
+        if (_session.LibraryItem is not { } item)
+        {
+            return;
+        }
+
+        _relationSubject = new OwnerConsoleSession.RelationEndpointPick(
+            item.Id, "memoryItem", item.Revision, item.ZoneId,
+            item.Id + "@" + item.Revision.ToString(CultureInfo.InvariantCulture) + "  zone=" + item.ZoneId + "  kind=" + item.Kind);
+        if (string.IsNullOrWhiteSpace(RelationZoneInput.Text))
+        {
+            RelationZoneInput.Text = item.ZoneId;
+        }
+
+        Navigation.SelectedIndex = 5;
+        Render();
+    }
+
+    /// <summary>
+    /// Pins the open library item as the relation object and moves to Relations.
+    /// </summary>
+    private void OnLibraryUseAsRelationObjectClicked(object sender, RoutedEventArgs e)
+    {
+        if (_session.LibraryItem is not { } item)
+        {
+            return;
+        }
+
+        _relationObject = new OwnerConsoleSession.RelationEndpointPick(
+            item.Id, "memoryItem", item.Revision, item.ZoneId,
+            item.Id + "@" + item.Revision.ToString(CultureInfo.InvariantCulture) + "  zone=" + item.ZoneId + "  kind=" + item.Kind);
+        Navigation.SelectedIndex = 5;
+        Render();
+    }
+
+    /// <summary>
+    /// Appends the open library item to the job inputs and moves to Jobs.
+    /// </summary>
+    private void OnLibraryUseInJobsClicked(object sender, RoutedEventArgs e)
+    {
+        if (_session.LibraryItem is not { } item)
+        {
+            return;
+        }
+
+        AppendJobsInput(item.Id, item.Revision, item.Title);
+        Navigation.SelectedIndex = 8;
+        Render();
+    }
+
+    /// <summary>
+    /// Fills the catalog mapping from the open library item and moves to Sharing.
+    /// </summary>
+    private void OnLibraryUseInCatalogClicked(object sender, RoutedEventArgs e)
+    {
+        if (_session.LibraryItem is not { } item)
+        {
+            return;
+        }
+
+        CatalogResourceInput.Text = item.Id;
+        Navigation.SelectedIndex = 6;
+        Render();
+    }
 
     private OwnerItemCitation? SelectedCitation() =>
         LibraryCitations.SelectedItem is LibraryCitationRow row ? row.Citation : null;
@@ -793,8 +1013,8 @@ public partial class OwnerConsoleWindow : System.Windows.Window
 
         query = new OwnerLibraryQuery(
             Text: string.IsNullOrWhiteSpace(LibraryQueryInput.Text) ? null : LibraryQueryInput.Text.Trim(),
-            ZoneId: FilterText(LibraryZoneInput.Text),
-            CollectionId: FilterText(LibraryCollectionInput.Text),
+            ZoneId: EditableFilterText(LibraryZoneInput),
+            CollectionId: EditableFilterText(LibraryCollectionInput),
             Kind: SelectedFilter(LibraryKindInput),
             Level: SelectedFilter(LibraryLevelInput),
             Current: (LibraryCurrentInput.SelectedItem as string) switch
@@ -837,8 +1057,15 @@ public partial class OwnerConsoleWindow : System.Windows.Window
 
     private static string? FilterText(string text) => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
 
+    private static string? EditableFilterText(System.Windows.Controls.ComboBox box)
+    {
+        var text = box.Text;
+        return string.IsNullOrWhiteSpace(text) ? null : text.Trim();
+    }
+
     private static string? SelectedFilter(System.Windows.Controls.ComboBox box) =>
         box.SelectedItem is string value && !string.Equals(value, AnyFilterItem, StringComparison.Ordinal) ? value : null;
+
 
     /// <summary>
     /// Puts the session's own filter state back into the input controls. Used at
@@ -847,6 +1074,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     /// </summary>
     private void SyncLibraryFilterInputs()
     {
+        RefreshLibraryPickerOptions();
         var query = _session.LibraryQuery;
         LibraryQueryInput.Text = query.Text ?? string.Empty;
         LibraryZoneInput.Text = query.ZoneId ?? string.Empty;
@@ -862,6 +1090,30 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         LibraryFromInput.Text = string.Empty;
         LibraryToInput.Text = string.Empty;
         LibraryAsOfInput.Text = string.Empty;
+    }
+
+    /// <summary>
+    /// Refreshes the zone/collection pickers from the zones and collections the
+    /// service named in this session, keeping the owner's typed text.
+    /// </summary>
+    private void RefreshLibraryPickerOptions()
+    {
+        var zoneText = LibraryZoneInput.Text;
+        LibraryZoneInput.Items.Clear();
+        foreach (var zone in _session.KnownZones())
+        {
+            LibraryZoneInput.Items.Add(zone);
+        }
+
+        LibraryZoneInput.Text = zoneText;
+        var collectionText = LibraryCollectionInput.Text;
+        LibraryCollectionInput.Items.Clear();
+        foreach (var collection in _session.KnownCollections())
+        {
+            LibraryCollectionInput.Items.Add(collection);
+        }
+
+        LibraryCollectionInput.Text = collectionText;
     }
 
     /// <summary>
@@ -895,6 +1147,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
                 " rows, schema " + index.SchemaVersion.ToString(CultureInfo.InvariantCulture) +
                 (index.Stale ? " — already behind the vault" : string.Empty)
             : "No index generation has been materialized in this session: the service answers a search only after Rebuild library index.";
+        RefreshLibraryPickerOptions();
 
         var page = _session.LibraryPage;
         if (!ReferenceEquals(_renderedPage, page))
@@ -1036,9 +1289,9 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         LibraryPurgeReasonInput.IsEnabled = canAct;
         LibraryPurgeConfirmInput.IsEnabled = canAct && purge is not null;
 
-        LibraryMessageText.Text = _session.LibraryMessage ?? (unlocked
+        RenderOutcome(LibraryMessageText, _session.LibraryMessage ?? (unlocked
             ? "No library act has been sent in this session. Nothing private is read until you search."
-            : "No private library act is offered while the service does not report the vault unlocked.");
+            : "No private library act is offered while the service does not report the vault unlocked."));
         if (!unlocked)
         {
             LibraryPurgeReasonInput.Text = string.Empty;
@@ -1047,6 +1300,10 @@ public partial class OwnerConsoleWindow : System.Windows.Window
 
         LibraryHistoryButton.IsEnabled = unlocked && !inFlight && detail is not null;
         LibraryRetainedButton.IsEnabled = unlocked && !inFlight && timeline is { RetainedRevisions.Length: > 0 };
+        LibraryUseAsRelationSubjectButton.IsEnabled = canAct;
+        LibraryUseAsRelationObjectButton.IsEnabled = canAct;
+        LibraryUseInJobsButton.IsEnabled = canAct;
+        LibraryUseInCatalogButton.IsEnabled = canAct;
     }
 
     private static string DescribeTimeline(OwnerTimelineDetail timeline)
@@ -1219,6 +1476,23 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         }
 
         await _session.ReadBackCaptureAsync(sourceId, exact);
+    }
+    /// <summary>
+    /// Fills the read-back from the saved capture of this session: the exact ID
+    /// the service stored, with the live revision. No ID to remember.
+    /// </summary>
+    private void OnCaptureReadBackUseSavedClicked(object sender, RoutedEventArgs e)
+    {
+        if (_session.CaptureSource is { } saved)
+        {
+            CaptureReadBackIdInput.Text = saved.Id;
+            CaptureReadBackRevisionInput.Text = string.Empty;
+            Render();
+        }
+        else
+        {
+            _session.ReportInboxInputProblem("No capture from this session is saved yet: save one above first, then read it back. Nothing was sent.");
+        }
     }
 
     /// <summary>
@@ -1404,13 +1678,14 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     /// </summary>
     private void RenderInbox(bool attached)
     {
+        RefreshCapturePickerOptions();
+        RefreshDeclassifyPickerOptions();
         var unlocked = attached && _session.ReportedVaultState == OwnerVaultState.Unlocked;
         var inFlight = _session.InboxActInFlight;
-
         RenderCaptureHint();
-        CaptureMessageText.Text = _session.CaptureMessage ?? (unlocked
+        RenderOutcome(CaptureMessageText, _session.CaptureMessage ?? (unlocked
             ? "No capture has been sent in this session. Nothing private is written until you press Save capture."
-            : "No private capture act is offered while the service does not report the vault unlocked.");
+            : "No private capture act is offered while the service does not report the vault unlocked."));
         CaptureSavedText.Text = _session.CaptureSource is null
             ? "No capture from this session is saved; the editor text is not in the vault."
             : "Saved capture: id=" + _session.CaptureSource.Id +
@@ -1427,7 +1702,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
             CaptureReadBackIdInput.Text = savedSource.Id;
         }
 
-        CaptureReadBackMessageText.Text = _session.CaptureReadBackMessage ?? "No read-back has been sent in this session.";
+        RenderOutcome(CaptureReadBackMessageText, _session.CaptureReadBackMessage ?? "No read-back has been sent in this session.");
         CaptureReadBackSourceText.Text = _session.CaptureReadBackSource is { } readBack
             ? "id=" + readBack.Id + "  revision=" + readBack.Revision.ToString(CultureInfo.InvariantCulture) +
                 "  zone=" + readBack.ZoneId + "  availability=" + readBack.Availability +
@@ -1443,9 +1718,9 @@ public partial class OwnerConsoleWindow : System.Windows.Window
             ReviewProposals.ItemsSource = proposals.Select(identity => new ProposalRow(identity)).ToArray();
         }
 
-        ReviewInboxMessageText.Text = _session.ReviewInboxMessage ?? (unlocked
+        RenderOutcome(ReviewInboxMessageText, _session.ReviewInboxMessage ?? (unlocked
             ? "No inbox listing has been asked for in this session."
-            : "No private review act is offered while the service does not report the vault unlocked.");
+            : "No private review act is offered while the service does not report the vault unlocked."));
 
         var proposal = _session.ReviewProposal;
         ReviewProvenanceText.Text = proposal is null
@@ -1487,9 +1762,9 @@ public partial class OwnerConsoleWindow : System.Windows.Window
                 : string.Empty;
         ReviewSourceMessageText.Text = proposal is null ? string.Empty : _session.ReviewSourceMessage ?? string.Empty;
         ReviewSourceText.Text = _session.ReviewSourceText ?? string.Empty;
-        ReviewMessageText.Text = _session.ReviewMessage ?? (unlocked
+        RenderOutcome(ReviewMessageText, _session.ReviewMessage ?? (unlocked
             ? "No review act has been sent in this session. Publishing writes the content you see; rejecting records your decision without applying the proposal."
-            : "No private review act is offered while the service does not report the vault unlocked.");
+            : "No private review act is offered while the service does not report the vault unlocked."));
         var declassified = _session.DeclassifyPreview;
         DeclassifyPreviewText.Text = declassified is null
             ? string.Empty
@@ -1499,9 +1774,9 @@ public partial class OwnerConsoleWindow : System.Windows.Window
                 (declassified.MismatchedResourceIds.Length == 0 ? string.Empty : "  mismatched=" + string.Join(";", declassified.MismatchedResourceIds)) +
                 "  title=" + (declassified.Item.Title ?? "(none)") + "  bodyChars=" + declassified.Item.Body.Length.ToString(CultureInfo.InvariantCulture) +
                 "  sharedCitations=0";
-        DeclassifyMessageText.Text = _session.DeclassifyMessage ?? (unlocked
+        RenderOutcome(DeclassifyMessageText, _session.DeclassifyMessage ?? (unlocked
             ? "No sanitized publication has been previewed in this session. The shared copy carries the edited content above with no citations."
-            : "No private declassification act is offered while the service does not report the vault unlocked.");
+            : "No private declassification act is offered while the service does not report the vault unlocked."));
 
         CaptureSaveButton.IsEnabled = unlocked && !inFlight;
         CaptureClearButton.IsEnabled = !inFlight;
@@ -1531,6 +1806,36 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         DeclassifyPublishButton.IsEnabled = unlocked && !inFlight && proposal is not null;
     }
 
+    /// <summary>
+    /// Refreshes the capture-zone picker from the zones the service named in
+    /// this session, keeping the owner's typed text.
+    /// </summary>
+    private void RefreshCapturePickerOptions()
+    {
+        var text = CaptureZoneInput.Text;
+        CaptureZoneInput.Items.Clear();
+        foreach (var zone in _session.KnownZones())
+        {
+            CaptureZoneInput.Items.Add(zone);
+        }
+
+        CaptureZoneInput.Text = text;
+    }
+    /// <summary>
+    /// Refreshes the shared-zone picker from the zones the service named in
+    /// this session, keeping the owner's typed text.
+    /// </summary>
+    private void RefreshDeclassifyPickerOptions()
+    {
+        var text = DeclassifyZoneInput.Text;
+        DeclassifyZoneInput.Items.Clear();
+        foreach (var zone in _session.KnownZones())
+        {
+            DeclassifyZoneInput.Items.Add(zone);
+        }
+
+        DeclassifyZoneInput.Text = text;
+    }
     // ---- S5-T5 explicit relations workbench ----
 
     private const string RelationFilterAll = "all";
@@ -1586,8 +1891,8 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         RelationZoneInput.Text = string.Empty;
         RelationReasonInput.Text = string.Empty;
         RelationRationaleInput.Text = string.Empty;
-        RelationSourceIdInput.Text = string.Empty;
-        RelationSourceRevisionInput.Text = string.Empty;
+        RelationSourcePickerInput.ItemsSource = null;
+        RelationSourcePickerInput.SelectedItem = null;
         RelationCandidateQueryInput.Text = string.Empty;
         RelationKindInput.SelectedItem = "relatedTo";
         RelationStateInput.SelectedItem = "accepted";
@@ -1699,30 +2004,78 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     }
 
     /// <summary>
-    /// Pins a registered source the owner named by ID and live registry
-    /// revision. The console does not look the source up itself: the service
-    /// verifies that the registry holds it at exactly that revision when the
-    /// link is written, and refuses the link otherwise.
+    /// Pins a registered source the owner named. Kept for compatibility: the
+    /// picker path reads the live revision from the service instead.
     /// </summary>
     private void SetEndpointFromTypedSource(bool asSubject)
     {
-        var sourceId = RelationSourceIdInput.Text.Trim();
-        var revisionText = RelationSourceRevisionInput.Text.Trim();
-        if (sourceId.Length == 0 ||
-            !long.TryParse(revisionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var revision) ||
-            revision < 1)
+        _session.ReportRelationFormProblem(
+            "Name no source by hand: read Sources, pick the enrolled source, and pin it — its live revision travels. Nothing was pinned.");
+    }
+
+    /// <summary>
+    /// Pins the open library item as a relation endpoint with its live revision.
+    /// </summary>
+    private void OnRelationUseLibrarySubjectClicked(object sender, RoutedEventArgs e) => SetEndpointFromLibraryItem(asSubject: true);
+
+    /// <summary>
+    /// Pins the open library item as a relation endpoint with its live revision.
+    /// </summary>
+    private void OnRelationUseLibraryObjectClicked(object sender, RoutedEventArgs e) => SetEndpointFromLibraryItem(asSubject: false);
+
+    private void SetEndpointFromLibraryItem(bool asSubject)
+    {
+        if (_session.LibraryItem is not { } item)
         {
             _session.ReportRelationFormProblem(
-                "This console did not pin the registered source: name its ID and its live registry revision (a positive number). Nothing was written.");
+                "No library item is open: open one in Library first, then pick it here. Nothing was pinned.");
             return;
         }
 
         var pick = new OwnerConsoleSession.RelationEndpointPick(
-            sourceId,
-            "registeredSource",
-            revision,
-            string.Empty,
-            "source " + sourceId + "@" + revision.ToString(CultureInfo.InvariantCulture) + "  endpointKind=registeredSource");
+            item.Id, "memoryItem", item.Revision, item.ZoneId,
+            item.Id + "@" + item.Revision.ToString(CultureInfo.InvariantCulture) + "  zone=" + item.ZoneId + "  kind=" + item.Kind);
+        if (asSubject)
+        {
+            _relationSubject = pick;
+            if (string.IsNullOrWhiteSpace(RelationZoneInput.Text))
+            {
+                RelationZoneInput.Text = item.ZoneId;
+            }
+        }
+        else
+        {
+            _relationObject = pick;
+        }
+
+        Render();
+    }
+
+    private async void OnRelationUsePickedSourceSubjectClicked(object sender, RoutedEventArgs e) =>
+        await SetEndpointFromPickedSourceAsync(asSubject: true);
+
+    private async void OnRelationUsePickedSourceObjectClicked(object sender, RoutedEventArgs e) =>
+        await SetEndpointFromPickedSourceAsync(asSubject: false);
+
+    /// <summary>
+    /// Pins the enrolled source picked from the Sources answers at its live
+    /// registry revision, read from the service now. The console never invents
+    /// a revision: only a source the service serves now can be pinned.
+    /// </summary>
+    private async Task SetEndpointFromPickedSourceAsync(bool asSubject)
+    {
+        if (RelationSourcePickerInput.SelectedItem is not RelationSourceRow row)
+        {
+            _session.ReportRelationFormProblem(
+                "No enrolled source is picked: read Sources first, then pick one here. Nothing was pinned.");
+            return;
+        }
+
+        if (await _session.ResolveSourceEndpointAsync(row.Source.SourceId).ConfigureAwait(true) is not { } pick)
+        {
+            return;
+        }
+
         if (asSubject)
         {
             _relationSubject = pick;
@@ -1808,9 +2161,9 @@ public partial class OwnerConsoleWindow : System.Windows.Window
                 : rows.FirstOrDefault(row => string.Equals(row.Relation.Id, previousId, StringComparison.Ordinal));
         }
 
-        RelationsMessageText.Text = _session.RelationsMessage ?? (unlocked
+        RenderOutcome(RelationsMessageText, _session.RelationsMessage ?? (unlocked
             ? "No relation set has been read in this session. Read it to see every link, including the proposals agents left for your review."
-            : "No private relation act is offered while the service does not report the vault unlocked.");
+            : "No private relation act is offered while the service does not report the vault unlocked."));
 
         var open = _session.OpenRelation;
         RelationProvenanceText.Text = open is null
@@ -1828,9 +2181,9 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         RelationConfirmationText.Text = open is null ? string.Empty : DescribeRelationConfirmation(open);
         RelationEvidenceText.Text = open is null ? string.Empty : DescribeRelationEvidence(open);
         RelationReviewText.Text = open is null ? string.Empty : DescribeRelationReview(open);
-        RelationMessageText.Text = _session.RelationMessage ?? (unlocked
+        RenderOutcome(RelationMessageText, _session.RelationMessage ?? (unlocked
             ? "No relation act has been sent in this session. Confirming records your own conclusion; removing and rejecting record your rationale."
-            : "No private relation act is offered while the service does not report the vault unlocked.");
+            : "No private relation act is offered while the service does not report the vault unlocked."));
 
         if (!ReferenceEquals(_renderedRelationCandidates, _session.RelationCandidates))
         {
@@ -1844,6 +2197,8 @@ public partial class OwnerConsoleWindow : System.Windows.Window
 
         var selectedRelation = RelationsList.SelectedItem as RelationRow;
         var candidateSelected = RelationCandidates.SelectedItem is OwnerConsoleSession.RelationEndpointPick;
+        RefreshRelationPickerOptions();
+        var sourcePicked = RelationSourcePickerInput.SelectedItem is RelationSourceRow;
 
         RelationsRefreshButton.IsEnabled = unlocked && !inFlight;
         RelationsInspectButton.IsEnabled = unlocked && !inFlight && selectedRelation is not null;
@@ -1859,10 +2214,11 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         RelationCandidates.IsEnabled = unlocked && !inFlight;
         RelationSetSubjectButton.IsEnabled = unlocked && !inFlight && candidateSelected;
         RelationSetObjectButton.IsEnabled = unlocked && !inFlight && candidateSelected;
-        RelationSourceIdInput.IsEnabled = unlocked && !inFlight;
-        RelationSourceRevisionInput.IsEnabled = unlocked && !inFlight;
-        RelationUseSourceSubjectButton.IsEnabled = unlocked && !inFlight;
-        RelationUseSourceObjectButton.IsEnabled = unlocked && !inFlight;
+        RelationUseLibrarySubjectButton.IsEnabled = unlocked && !inFlight && _session.LibraryItem is not null;
+        RelationUseLibraryObjectButton.IsEnabled = unlocked && !inFlight && _session.LibraryItem is not null;
+        RelationSourcePickerInput.IsEnabled = unlocked && !inFlight;
+        RelationUseSourceSubjectButton.IsEnabled = unlocked && !inFlight && sourcePicked;
+        RelationUseSourceObjectButton.IsEnabled = unlocked && !inFlight && sourcePicked;
         RelationIdInput.IsEnabled = unlocked && !inFlight;
         RelationZoneInput.IsEnabled = unlocked && !inFlight;
         RelationKindInput.IsEnabled = unlocked && !inFlight;
@@ -1872,6 +2228,40 @@ public partial class OwnerConsoleWindow : System.Windows.Window
 
         RelationSubjectText.Text = "subject: " + (_relationSubject is { } subject ? subject.Label : "(none picked yet)");
         RelationObjectText.Text = "object:  " + (_relationObject is { } target ? target.Label : "(none picked yet)");
+    }
+    /// <summary>
+    /// Refreshes the zone and source pickers from the service answers in this
+    /// session, keeping the owner's typed zone text.
+    /// </summary>
+    private void RefreshRelationPickerOptions()
+    {
+        var zoneText = RelationZoneInput.Text;
+        RelationZoneInput.Items.Clear();
+        foreach (var zone in _session.KnownZones())
+        {
+            RelationZoneInput.Items.Add(zone);
+        }
+
+        RelationZoneInput.Text = zoneText;
+        var previousId = (RelationSourcePickerInput.SelectedItem as RelationSourceRow)?.Source.SourceId;
+        var rows = _session.Sources
+            .Where(source => source.Quarantine is null || !string.Equals(source.Quarantine.Reason, "mapping_unknown", StringComparison.Ordinal))
+            .Select(source => new RelationSourceRow(source)).ToArray();
+        RelationSourcePickerInput.ItemsSource = rows;
+        RelationSourcePickerInput.SelectedItem = previousId is null
+            ? RelationSourcePickerInput.SelectedItem
+            : rows.FirstOrDefault(row => string.Equals(row.Source.SourceId, previousId, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// One enrolled source as one pinnable endpoint row. The live registry
+    /// revision is read when the owner pins it, so the row shows the identity
+    /// the service listed, never a remembered number.
+    /// </summary>
+    private sealed record RelationSourceRow(OwnerSourceEnrollment Source)
+    {
+        public override string ToString() =>
+            Source.SourceId + "  zone=" + Source.ZoneId + "  life=" + Source.Life;
     }
 
     private static bool MatchesRelationFilter(OwnerRelation relation, string filter) => filter switch
@@ -2045,5 +2435,21 @@ public partial class OwnerConsoleWindow : System.Windows.Window
             "session " + Session.SessionId + "  grant=" + Session.GrantId +
             "  expires=" + Session.ExpiresAtUtc.ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture) +
             "  operations=" + (Session.Operations.Length == 0 ? "(none)" : string.Join(",", Session.Operations));
+    }
+    /// <summary>
+    /// One bound-preview resource as one tickable approval row. The ID stays on
+    /// the row as secondary copyable detail, never as something to memorize.
+    /// </summary>
+    private sealed record ApprovalResourceRow(OwnerScopeResource Resource)
+    {
+        public override string ToString() =>
+            Resource.ResourceId + "  zone=" + Resource.ZoneId +
+            "  revision=" + Resource.Revision.ToString(CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>One bound-preview operation as one tickable approval row.</summary>
+    private sealed record ApprovalOperationRow(string Operation, string Label)
+    {
+        public override string ToString() => Label;
     }
 }

@@ -533,7 +533,7 @@ internal static partial class OwnerServiceSmoke
             "WPF notification acknowledgement incorrectly completed the intention.");
 
         var future = DateTimeOffset.UtcNow.AddHours(1).ToOffset(TimeSpan.FromMinutes(330)).ToString("O", CultureInfo.InvariantCulture);
-        window.IntentionDueAtInput.Text = future;
+        Require(window.TrySetIntentionDue(future), "The WPF due-time control did not accept the explicit-offset timestamp.");
         Require(window.IntentionTriggerSetButton.IsEnabled, "The WPF edit control did not enable for a valid explicit-offset timestamp.");
         window.IntentionTriggerSetButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         Require(await WaitForAsync(() => session.ScheduledIntentions.SingleOrDefault(item => item.ResourceId == S7T2UiAcknowledgeId) is
@@ -590,8 +590,8 @@ internal static partial class OwnerServiceSmoke
             "The actual owner vault lock did not complete during the WPF privacy check.");
         await session.CheckAsync().ConfigureAwait(true);
         Require(session.ReportedVaultState == OwnerVaultState.Locked && session.ScheduledIntentions.Length == 0 &&
-                window.IntentionsList.Items.Count == 0 && window.IntentionResourceIdInput.Text.Length == 0 &&
-                window.IntentionDueAtInput.Text.Length == 0 && window.IntentionRationaleInput.Text.Length == 0 &&
+                window.IntentionsList.Items.Count == 0 && window.IntentionChosenText.Text.Length == 0 &&
+                window.IntentionTimeInput.Text.Length == 0 && window.IntentionRationaleInput.Text.Length == 0 &&
                 !window.IntentionsMessageText.Text.Contains(S7T2UiLockedTitle, StringComparison.Ordinal) &&
                 !window.IntentionsMessageText.Text.Contains(S7T2UiLockedBody, StringComparison.Ordinal),
             "Lock did not clear the actual WPF due list and private intention input/state.");
@@ -600,10 +600,11 @@ internal static partial class OwnerServiceSmoke
 
     private static async Task SetS7T2WpfTriggerAsync(OwnerConsoleWindow window, OwnerConsoleSession session, string resourceId, string dueAt)
     {
-        window.IntentionResourceIdInput.Text = resourceId;
-        window.IntentionDueAtInput.Text = dueAt;
-        Require(window.IntentionTriggerSetButton.IsEnabled,
+        window.SelectIntentionIdentity(resourceId);
+        Require(window.TrySetIntentionDue(dueAt),
             "The WPF trigger control did not accept the explicit timestamp for " + resourceId + ".");
+        Require(window.IntentionTriggerSetButton.IsEnabled,
+            "The WPF trigger control did not enable for " + resourceId + ".");
         window.IntentionTriggerSetButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         Require(await WaitForAsync(() => session.ScheduledIntentions.Any(item => item.ResourceId == resourceId), TimeSpan.FromSeconds(30)).ConfigureAwait(true),
             "The WPF trigger-create/edit operation did not return a schedule row for " + resourceId + ".");

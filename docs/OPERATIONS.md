@@ -113,7 +113,46 @@ The owner console (`owner-ui/MetaBrain.OwnerUi.exe`) drives the same operations.
 ## 5. The owner console and the two clients
 
 - **Owner console**: `owner-ui\MetaBrain.OwnerUi.exe --control-pipe <control-pipe>` — the owner's own
-  surface: unlock, library, review, catalog, tokens, sources.
+  surface: connect, vault status, vault and key, library, inbox capture and proposal
+  review, relations, sharing (catalog, access requests, sessions), sources
+  (allowlist, mapping review, collections, snapshots), jobs, intentions and
+  review queue. Every screen works from lists the service answered: pick a zone,
+  resource, operation, expiry duration or file with the on-screen pickers
+  instead of typing internal IDs; outcomes carry ✓/✕/⚠ labels, never color
+  alone. A zone is a permission boundary, a collection is your own folder
+  label. Collection members are chosen from a library search or the open item
+  (titles first, IDs secondary) and can be removed/re-added before saving. An
+  intention is chosen from the service search, and its trigger is entered as a
+  local date, time and time zone; the console resolves the offset for that date,
+  refuses a local time that is invalid or ambiguous at a daylight-saving
+  boundary, and shows the exact UTC instant before sending. Job inputs are a
+  list added from the open item or the saved capture, not a typed
+  `resourceId@revision` line; provider/model/endpoint remain explicit external
+  configuration and the API key is never shown again. Approving an access
+  request ticks resources and operations from the bound preview (narrowing
+  only), picks an expiry duration (UTC instant) and a new local handoff file;
+  the bearer is sealed into that file and never shown.
+- **Repo-local synthetic UI review instance** (no install, autostart, service
+  registration, profile or permission change). From the repository root:
+
+    ```powershell
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File runtime\s8-t1a\review\start-owner-ui.ps1
+    ```
+
+  The script writes a private settings file with the current user SID, starts
+  the published service on the review data root, waits for the owner channel,
+  opens the published owner console, and stops the service when that console
+  closes. Its synthetic vault is `runtime\s8-t1a\review\data` (first start is
+  uninitialized: use **Vault & key** to create a review-only passphrase). Stop
+  independently with:
+
+    ```powershell
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File runtime\s8-t1a\review\stop-owner-ui.ps1
+    ```
+
+  The stop script writes the service's own `service.stop` request under
+  `runtime\s8-t1a\review\data\runtime` and waits for the host process to exit.
+  Deleting that data root removes only this synthetic review instance.
 - **Official Codex / OMP clients**: they connect as agents over the **agent pipe**, never over the
   owner pipe. The agent pipe carries only what an owner-approved grant allows, and the agent can
   neither unlock, approve, publish nor purge.

@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Meta Brain — Owner console"
-        Width="1020" Height="720"
+        Width="1020" Height="720" MinWidth="940" MinHeight="620"
         FontFamily="Segoe UI" FontSize="13"
         Background="#FFF6F7F9"
         PreviewKeyDown="OnWindowPreviewKeyDown">
@@ -216,7 +216,8 @@
                         <TextBlock x:Name="LibraryStateText" TextWrapping="Wrap" Margin="0,4,0,0" FontSize="16" />
                         <TextBlock x:Name="LibraryIndexText" TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280" />
 
-                        <TextBlock Text="Search and filter (the service applies every filter)" FontWeight="SemiBold" Margin="0,16,0,0" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280"
+                                   Text="A zone is a permission boundary: it decides whose eyes may hold an item. A collection is your own folder label: it organizes, never permits. Pick both from what the service already named — or type a new zone for a new boundary." />
                         <Grid Margin="0,6,0,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="150" />
@@ -236,12 +237,12 @@
                             <TextBox Grid.Row="0" Grid.Column="1" x:Name="LibraryQueryInput" Margin="0,0,10,6"
                                      AutomationProperties.AutomationId="LibraryQueryInput" KeyDown="OnLibraryQueryKeyDown" />
                             <TextBlock Grid.Row="0" Grid.Column="2" Text="Zone" Foreground="#FF6B7280" Margin="0,0,0,6" />
-                            <TextBox Grid.Row="0" Grid.Column="3" x:Name="LibraryZoneInput" Margin="0,0,0,6"
-                                     AutomationProperties.AutomationId="LibraryZoneInput" />
+                            <ComboBox Grid.Row="0" Grid.Column="3" x:Name="LibraryZoneInput" Margin="0,0,0,6"
+                                      IsEditable="True" AutomationProperties.AutomationId="LibraryZoneInput" />
 
                             <TextBlock Grid.Row="1" Grid.Column="0" Text="Collection" Foreground="#FF6B7280" Margin="0,0,0,6" />
-                            <TextBox Grid.Row="1" Grid.Column="1" x:Name="LibraryCollectionInput" Margin="0,0,10,6"
-                                     AutomationProperties.AutomationId="LibraryCollectionInput" />
+                            <ComboBox Grid.Row="1" Grid.Column="1" x:Name="LibraryCollectionInput" Margin="0,0,10,6"
+                                      IsEditable="True" AutomationProperties.AutomationId="LibraryCollectionInput" />
                             <TextBlock Grid.Row="1" Grid.Column="2" Text="Kind" Foreground="#FF6B7280" Margin="0,0,0,6" />
                             <ComboBox Grid.Row="1" Grid.Column="3" x:Name="LibraryKindInput" Margin="0,0,0,6"
                                       AutomationProperties.AutomationId="LibraryKindInput" />
@@ -285,7 +286,14 @@
 
                         <ListBox x:Name="LibraryResults" Height="170" Margin="0,8,0,0" Background="White" BorderBrush="#FFD5D8DC"
                                  AutomationProperties.AutomationId="LibraryResults"
-                                 SelectionChanged="OnLibraryResultChanged" KeyDown="OnLibraryResultsKeyDown" />
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 SelectionChanged="OnLibraryResultChanged" KeyDown="OnLibraryResultsKeyDown">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
 
                         <Border x:Name="LibraryDetailPanel" Margin="0,14,0,0" Padding="14" Background="White"
                                 BorderBrush="#FFD5D8DC" BorderThickness="1" CornerRadius="3">
@@ -301,10 +309,24 @@
                                 <TextBlock x:Name="LibraryDetailBodyText" TextWrapping="Wrap" Margin="0,10,0,0" />
                                 <TextBlock x:Name="LibraryDetailApplicabilityText" TextWrapping="Wrap" Margin="0,8,0,0" Foreground="#FF6B7280" />
                                 <TextBlock x:Name="LibraryDetailWarningsText" TextWrapping="Wrap" Margin="0,8,0,0" Foreground="#FF9A1C1C" />
+                                <TextBlock Text="Use this item elsewhere (no ID to remember)" FontWeight="SemiBold" Margin="0,14,0,2" />
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,0">
+                                    <Button x:Name="LibraryUseAsRelationSubjectButton" Content="Link from this" Padding="14,7" Click="OnLibraryUseAsRelationSubjectClicked" />
+                                    <Button x:Name="LibraryUseAsRelationObjectButton" Content="Link to this" Padding="14,7" Margin="8,0,0,0" Click="OnLibraryUseAsRelationObjectClicked" />
+                                    <Button x:Name="LibraryUseInJobsButton" Content="Add to job inputs" Padding="14,7" Margin="8,0,0,0" Click="OnLibraryUseInJobsClicked" />
+                                    <Button x:Name="LibraryUseInCatalogButton" Content="Publish this" Padding="14,7" Margin="8,0,0,0" Click="OnLibraryUseInCatalogClicked" />
+                                </StackPanel>
 
                                 <TextBlock Text="Stored citations (current / superseded / unknown are the service's answer)" FontWeight="SemiBold" Margin="0,14,0,6" />
                                 <ListBox x:Name="LibraryCitations" Height="110" Background="#FFFDFDFD" BorderBrush="#FFD5D8DC"
-                                         AutomationProperties.AutomationId="LibraryCitations" KeyDown="OnLibraryCitationKeyDown" />
+                                         AutomationProperties.AutomationId="LibraryCitations" KeyDown="OnLibraryCitationKeyDown"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
                                 <Button x:Name="LibraryOpenSourceButton" Content="Open cited source at its revision" Padding="14,7"
                                         Margin="0,8,0,0" HorizontalAlignment="Left" Click="OnLibraryOpenSourceClicked" />
 
@@ -351,6 +373,12 @@
                                 </StackPanel>
                             </StackPanel>
                         </Border>
+                        <TextBlock Text="Next steps" FontWeight="SemiBold" Margin="0,20,0,6" />
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,0">
+                            <Button x:Name="LibraryGoInboxButton" Content="Review proposals in Inbox" Padding="14,7" Click="OnGoInboxClicked" />
+                            <Button x:Name="LibraryGoRelationsButton" Content="Link items in Relations" Padding="14,7" Margin="8,0,0,0" Click="OnGoRelationsClicked" />
+                            <Button x:Name="LibraryGoSharingButton" Content="Share in Sharing" Padding="14,7" Margin="8,0,0,0" Click="OnGoSharingClicked" />
+                        </StackPanel>
 
                         <TextBlock Text="Scope and limits of this view" FontWeight="SemiBold" Margin="0,20,0,6" />
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
@@ -375,6 +403,8 @@
                         <TextBlock Text="Capture a note (text and zone are the write; metadata is optional)" FontWeight="SemiBold" Margin="0,18,0,0" />
                         <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
                                    Text="The text is stored as an encrypted registered source before any structuring step runs, so a note survives a restart and a provider failure. A URL is only a locator: it is never fetched and never treated as a paper you have read. Clearing this editor writes nothing; locking clears it, which is why lock asks first." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280"
+                                   Text="A zone is a permission boundary: pick the boundary this note belongs to, or type a new one. The service stores the note encrypted under exactly that zone." />
 
                         <Grid Margin="0,10,0,0">
                             <Grid.ColumnDefinitions>
@@ -393,8 +423,8 @@
                             <TextBox Grid.Row="0" Grid.Column="1" x:Name="CaptureResourceInput" Margin="0,0,10,6"
                                      AutomationProperties.AutomationId="CaptureResourceInput" />
                             <TextBlock Grid.Row="0" Grid.Column="2" Text="Zone" Foreground="#FF6B7280" Margin="0,0,0,6" />
-                            <TextBox Grid.Row="0" Grid.Column="3" x:Name="CaptureZoneInput" Margin="0,0,0,6"
-                                     AutomationProperties.AutomationId="CaptureZoneInput" />
+                            <ComboBox Grid.Row="0" Grid.Column="3" x:Name="CaptureZoneInput" Margin="0,0,0,6"
+                                      IsEditable="True" AutomationProperties.AutomationId="CaptureZoneInput" />
 
                             <TextBlock Grid.Row="1" Grid.Column="0" Text="Title (optional)" Foreground="#FF6B7280" Margin="0,0,0,6" />
                             <TextBox Grid.Row="1" Grid.Column="1" x:Name="CaptureTitleInput" Margin="0,0,10,6"
@@ -438,6 +468,11 @@
                                      AutomationProperties.AutomationId="CaptureReadBackRevisionInput" />
                             <Button x:Name="CaptureReadBackButton" Content="Read it back" Padding="14,7" Margin="10,0,0,0" Click="OnCaptureReadBackClicked" />
                         </StackPanel>
+                        <TextBlock TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280"
+                                   Text="Tip: after saving above, choose “Use saved capture” to fill this in — no ID to remember. A revision stays empty for the live revision." />
+                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                            <Button x:Name="CaptureReadBackUseSavedButton" Content="Use saved capture" Padding="14,7" Click="OnCaptureReadBackUseSavedClicked" />
+                        </StackPanel>
                         <TextBlock x:Name="CaptureReadBackMessageText" TextWrapping="Wrap" Margin="0,10,0,0" />
                         <TextBlock x:Name="CaptureReadBackSourceText" TextWrapping="Wrap" Margin="0,6,0,0" FontFamily="Consolas" />
                         <TextBox x:Name="CaptureReadBackText" Height="130" Margin="0,6,0,0" IsReadOnly="True" AcceptsReturn="True"
@@ -455,7 +490,14 @@
                         <TextBlock x:Name="ReviewInboxMessageText" TextWrapping="Wrap" Margin="0,10,0,0" />
                         <ListBox x:Name="ReviewProposals" Height="110" Margin="0,8,0,0" Background="White" BorderBrush="#FFD5D8DC"
                                  AutomationProperties.AutomationId="ReviewProposals"
-                                 SelectionChanged="OnReviewProposalSelectionChanged" KeyDown="OnReviewProposalKeyDown" />
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 SelectionChanged="OnReviewProposalSelectionChanged" KeyDown="OnReviewProposalKeyDown">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
 
                         <Border x:Name="ReviewPanel" Margin="0,14,0,0" Padding="14" Background="White"
                                 BorderBrush="#FFD5D8DC" BorderThickness="1" CornerRadius="3">
@@ -517,16 +559,16 @@
                                 <Border Margin="0,14,0,0" Padding="14" Background="#FFF7F9FC" BorderBrush="#FFD5D8DC" BorderThickness="1">
                                     <StackPanel>
                                         <TextBlock Text="Declassify — publish a sanitized copy into an explicit shared zone" FontWeight="SemiBold" FontSize="14" />
-                                        <TextBlock TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280"
-                                                   Text="The shared copy carries the edited title, body and metadata above with no citations. Private lineage stays encrypted and unreadable from the shared zone. Preview first, then type PUBLISH to approve exactly that content." />
                                         <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                                             <TextBlock Text="Shared item ID" Foreground="#FF6B7280" VerticalAlignment="Center" Margin="0,0,6,0" />
                                             <TextBox x:Name="DeclassifyDestinationInput" Width="220" AutomationProperties.AutomationId="DeclassifyDestinationInput" />
                                             <TextBlock Text="Shared zone" Foreground="#FF6B7280" VerticalAlignment="Center" Margin="12,0,6,0" />
-                                            <TextBox x:Name="DeclassifyZoneInput" Width="200" AutomationProperties.AutomationId="DeclassifyZoneInput" />
+                                            <ComboBox x:Name="DeclassifyZoneInput" Width="200" IsEditable="True" AutomationProperties.AutomationId="DeclassifyZoneInput" />
                                             <Button x:Name="DeclassifyPreviewButton" Content="Preview sanitized publication" Padding="14,7" Margin="12,0,0,0" Click="OnDeclassifyPreviewClicked" />
                                         </StackPanel>
                                         <TextBlock x:Name="DeclassifyPreviewText" TextWrapping="Wrap" Margin="0,8,0,0" FontFamily="Consolas" AutomationProperties.AutomationId="DeclassifyPreviewText" />
+                                        <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
+                                                   Text="A shared zone is a boundary agents may already read: pick one you already use, or type a new one. The copy carries no citations." />
                                         <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                                             <TextBlock Text="Type PUBLISH to approve" Foreground="#FF6B7280" VerticalAlignment="Center" Margin="0,0,6,0" />
                                             <TextBox x:Name="DeclassifyConfirmInput" Width="120" AutomationProperties.AutomationId="DeclassifyConfirmInput" />
@@ -539,6 +581,12 @@
                             </StackPanel>
                         </Border>
 
+                        <TextBlock Text="Next steps" FontWeight="SemiBold" Margin="0,20,0,6" />
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,0">
+                            <Button x:Name="InboxGoLibraryButton" Content="Find it in Library" Padding="14,7" Click="OnGoLibraryClicked" />
+                            <Button x:Name="InboxGoSharingButton" Content="Share in Sharing" Padding="14,7" Margin="8,0,0,0" Click="OnGoSharingClicked" />
+                            <Button x:Name="InboxGoJobsButton" Content="Structure in Jobs" Padding="14,7" Margin="8,0,0,0" Click="OnGoJobsClicked" />
+                        </StackPanel>
                         <TextBlock Text="Scope and limits of this view" FontWeight="SemiBold" Margin="0,20,0,6" />
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
                                    Text="• A proposal record is never edited by this console or by any agent act: it stays the pending record the agent wrote, with its executor, its idempotency identity and its content hash, so what you reviewed is retrievable later." />
@@ -575,7 +623,14 @@
 
                         <ListBox x:Name="RelationsList" Height="170" Margin="0,8,0,0" Background="White" BorderBrush="#FFD5D8DC"
                                  AutomationProperties.AutomationId="RelationsList"
-                                 SelectionChanged="OnRelationsSelectionChanged" KeyDown="OnRelationsListKeyDown" />
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 SelectionChanged="OnRelationsSelectionChanged" KeyDown="OnRelationsListKeyDown">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
 
                         <Border x:Name="RelationDetailPanel" Margin="0,14,0,0" Padding="14" Background="White"
                                 BorderBrush="#FFD5D8DC" BorderThickness="1" CornerRadius="3">
@@ -602,11 +657,12 @@
                             </StackPanel>
                         </Border>
 
-                        <TextBlock Text="Create a link between two endpoints you name" FontWeight="SemiBold" Margin="0,20,0,0" />
+                        <TextBlock Text="Create a link between two endpoints you pick" FontWeight="SemiBold" Margin="0,20,0,0" />
                         <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
-                                   Text="Memory items come from the service's own library search (rebuild the library index first); a registered source is named directly by its ID and live registry revision. Nothing here decides the kind for you: related_to is an association, supports asserts that one endpoint is evidence for the other, and the service refuses a derivation cycle while allowing related_to to repeat." />
+                                   Text="Memory items come from the service's own library search below (rebuild the library index first); a registered source comes from the picker further below. Nothing here decides the kind for you: related_to is an association, supports asserts that one endpoint is evidence for the other, and the service refuses a derivation cycle while allowing related_to to repeat." />
 
-                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                        <TextBlock Text="Find memory items in the library index" FontWeight="SemiBold" Margin="0,12,0,2" />
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,0">
                             <TextBox x:Name="RelationCandidateQueryInput" Width="260" VerticalContentAlignment="Center"
                                      AutomationProperties.AutomationId="RelationCandidateQueryInput" KeyDown="OnRelationCandidateQueryKeyDown" />
                             <Button x:Name="RelationCandidateSearchButton" Content="Find endpoints in library" Padding="14,7" Margin="10,0,0,0" Click="OnRelationCandidateSearchClicked" />
@@ -614,21 +670,33 @@
                         <TextBlock x:Name="RelationCandidateMessageText" TextWrapping="Wrap" Margin="0,8,0,0" Foreground="#FF6B7280" />
                         <ListBox x:Name="RelationCandidates" Height="110" Margin="0,8,0,0" Background="White" BorderBrush="#FFD5D8DC"
                                  AutomationProperties.AutomationId="RelationCandidates"
-                                 SelectionChanged="OnRelationCandidateSelectionChanged" KeyDown="OnRelationCandidateKeyDown" />
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 SelectionChanged="OnRelationCandidateSelectionChanged" KeyDown="OnRelationCandidateKeyDown">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
                         <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                             <Button x:Name="RelationSetSubjectButton" Content="Use selected as subject" Padding="14,7" Click="OnRelationSetSubjectClicked" />
                             <Button x:Name="RelationSetObjectButton" Content="Use selected as object" Padding="14,7" Margin="8,0,0,0" Click="OnRelationSetObjectClicked" />
+                            <Button x:Name="RelationUseLibrarySubjectButton" Content="Use open library item as subject" Padding="14,7" Margin="8,0,0,0" Click="OnRelationUseLibrarySubjectClicked" />
+                            <Button x:Name="RelationUseLibraryObjectButton" Content="Use open library item as object" Padding="14,7" Margin="8,0,0,0" Click="OnRelationUseLibraryObjectClicked" />
                         </StackPanel>
 
+                        <TextBlock Text="Registered source endpoint (from the Sources you already read)" FontWeight="SemiBold" Margin="0,12,0,2" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2" Foreground="#FF6B7280"
+                                   Text="Pick an enrolled source below — its live registry revision travels, no ID to retype. Sources appear here after you read them in Sources." />
+                        <ComboBox x:Name="RelationSourcePickerInput" Margin="0,0,0,6"
+                                  AutomationProperties.AutomationId="RelationSourcePickerInput" />
                         <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                            <TextBox x:Name="RelationSourceIdInput" Width="220" VerticalContentAlignment="Center"
-                                     AutomationProperties.AutomationId="RelationSourceIdInput" />
-                            <TextBlock Text="revision" Foreground="#FF6B7280" VerticalAlignment="Center" Margin="10,0,6,0" />
-                            <TextBox x:Name="RelationSourceRevisionInput" Width="60" VerticalContentAlignment="Center"
-                                     AutomationProperties.AutomationId="RelationSourceRevisionInput" />
-                            <Button x:Name="RelationUseSourceSubjectButton" Content="Use source as subject" Padding="14,7" Margin="10,0,0,0" Click="OnRelationUseSourceSubjectClicked" />
-                            <Button x:Name="RelationUseSourceObjectButton" Content="Use source as object" Padding="14,7" Margin="8,0,0,0" Click="OnRelationUseSourceObjectClicked" />
+                            <Button x:Name="RelationUseSourceSubjectButton" Content="Use source as subject" Padding="14,7" Margin="0,0,0,0" Click="OnRelationUsePickedSourceSubjectClicked" />
+                            <Button x:Name="RelationUseSourceObjectButton" Content="Use source as object" Padding="14,7" Margin="8,0,0,0" Click="OnRelationUsePickedSourceObjectClicked" />
                         </StackPanel>
+
+                        <TextBlock TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280"
+                                   Text="A source outside the picker above stays out of reach: read it in Sources first so its live revision is known." />
 
                         <TextBlock x:Name="RelationSubjectText" TextWrapping="Wrap" Margin="0,10,0,0" FontFamily="Consolas" />
                         <TextBlock x:Name="RelationObjectText" TextWrapping="Wrap" Margin="0,4,0,0" FontFamily="Consolas" />
@@ -650,8 +718,8 @@
                             <TextBox Grid.Row="0" Grid.Column="1" x:Name="RelationIdInput" Margin="0,0,10,6"
                                      AutomationProperties.AutomationId="RelationIdInput" />
                             <TextBlock Grid.Row="0" Grid.Column="2" Text="Zone" Foreground="#FF6B7280" Margin="0,0,0,6" />
-                            <TextBox Grid.Row="0" Grid.Column="3" x:Name="RelationZoneInput" Margin="0,0,0,6"
-                                     AutomationProperties.AutomationId="RelationZoneInput" />
+                            <ComboBox Grid.Row="0" Grid.Column="3" x:Name="RelationZoneInput" Margin="0,0,0,6"
+                                      IsEditable="True" AutomationProperties.AutomationId="RelationZoneInput" />
 
                             <TextBlock Grid.Row="1" Grid.Column="0" Text="Kind" Foreground="#FF6B7280" Margin="0,0,0,6" />
                             <ComboBox Grid.Row="1" Grid.Column="1" x:Name="RelationKindInput" Margin="0,0,10,6"
@@ -670,6 +738,11 @@
                         <Button x:Name="RelationCreateButton" Content="Create link" Padding="14,7"
                                 Margin="0,10,0,0" HorizontalAlignment="Left" Click="OnRelationCreateClicked" />
 
+                        <TextBlock Text="Next steps" FontWeight="SemiBold" Margin="0,20,0,6" />
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,0">
+                            <Button x:Name="RelationsGoLibraryButton" Content="Find endpoints in Library" Padding="14,7" Click="OnGoLibraryClicked" />
+                            <Button x:Name="RelationsGoSourcesButton" Content="Tend sources in Sources" Padding="14,7" Margin="8,0,0,0" Click="OnGoSourcesClicked" />
+                        </StackPanel>
                         <TextBlock Text="Scope and limits of this view" FontWeight="SemiBold" Margin="0,20,0,6" />
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
                                    Text="• The relation set shown here is your own vault seen as its owner: the service filters nothing from you. A link an agent wrote is the same canonical record, with its own executor, its reported words and its proposed state, and it is never presented as your confirmation." />
@@ -718,6 +791,12 @@
                             <TextBox Grid.Row="1" Grid.Column="3" x:Name="CatalogDescriptionInput" Margin="0,0,0,6"
                                      AutomationProperties.AutomationId="CatalogDescriptionInput" />
                         </Grid>
+                        <TextBlock TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280"
+                                   Text="The mapped resource is the private item this entry points at. Pick it from what the service already showed you — no ID to memorize." />
+                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                            <Button x:Name="CatalogUseLibraryButton" Content="Use open library item" Padding="14,7" Click="OnCatalogUseLibraryClicked" />
+                            <Button x:Name="CatalogUseCaptureButton" Content="Use saved capture" Padding="14,7" Margin="8,0,0,0" Click="OnCatalogUseCaptureClicked" />
+                        </StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                             <Button x:Name="CatalogPreviewButton" Content="Preview publication" Padding="14,7" Click="OnCatalogPreviewClicked" />
                             <Button x:Name="CatalogPublishButton" Content="Publish this exact metadata" Padding="14,7" Margin="8,0,0,0" Click="OnCatalogPublishClicked" />
@@ -727,7 +806,14 @@
                         <TextBlock x:Name="CatalogMessageText" TextWrapping="Wrap" Margin="0,8,0,0" FontWeight="SemiBold" />
                         <ListBox x:Name="CatalogList" Height="120" Margin="0,8,0,0" Background="White" BorderBrush="#FFD5D8DC"
                                  AutomationProperties.AutomationId="CatalogList"
-                                 SelectionChanged="OnCatalogSelectionChanged" KeyDown="OnCatalogListKeyDown" />
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 SelectionChanged="OnCatalogSelectionChanged" KeyDown="OnCatalogListKeyDown">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
                         <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                             <Button x:Name="CatalogWithdrawButton" Content="Withdraw selected entry" Padding="14,7" Click="OnCatalogWithdrawClicked" />
                         </StackPanel>
@@ -742,7 +828,14 @@
                         <TextBlock x:Name="RequestsMessageText" TextWrapping="Wrap" Margin="0,10,0,0" FontWeight="SemiBold" />
                         <ListBox x:Name="RequestsList" Height="120" Margin="0,8,0,0" Background="White" BorderBrush="#FFD5D8DC"
                                  AutomationProperties.AutomationId="RequestsList"
-                                 SelectionChanged="OnRequestsSelectionChanged" KeyDown="OnRequestsListKeyDown" />
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 SelectionChanged="OnRequestsSelectionChanged" KeyDown="OnRequestsListKeyDown">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
                         <Border x:Name="RequestDetailPanel" Margin="0,14,0,0" Padding="14" Background="White"
                                 BorderBrush="#FFD5D8DC" BorderThickness="1" CornerRadius="3">
                             <StackPanel>
@@ -752,46 +845,70 @@
                                          TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas"
                                          AutomationProperties.AutomationId="RequestPreviewBodiesText" />
                                 <TextBlock Text="Narrow this preview (subsets only — the service refuses any growth)" Foreground="#FF6B7280" Margin="0,12,0,2" />
-                                <Grid Margin="0,6,0,0">
+                                <TextBlock TextWrapping="Wrap" Margin="0,0,0,2" Foreground="#FF6B7280"
+                                           Text="Tick only what this approval should cover. Unticked resources and operations stay out of the grant; leaving every box ticked approves the whole bound snapshot. The lists below are the exact snapshot you previewed — nothing outside them can be approved." />
+                                <TextBlock Text="Resources in this approval" FontWeight="SemiBold" Margin="0,8,0,2" />
+                                <ListBox x:Name="ApproveResourceList" MinHeight="60" MaxHeight="130" Margin="0,0,0,0" Background="White" BorderBrush="#FFD5D8DC"
+                                         AutomationProperties.AutomationId="ApproveResourceList"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                         SelectionMode="Multiple" SelectionChanged="OnApproveSelectionChanged">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                <TextBlock Text="Operations in this approval" FontWeight="SemiBold" Margin="0,8,0,2" />
+                                <ListBox x:Name="ApproveOperationList" MinHeight="44" MaxHeight="110" Margin="0,0,0,0" Background="White" BorderBrush="#FFD5D8DC"
+                                         AutomationProperties.AutomationId="ApproveOperationList"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                         SelectionMode="Multiple" SelectionChanged="OnApproveSelectionChanged">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                <TextBlock x:Name="ApproveOperationsHelpText" TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
+                                           Text="Leave every operation unticked for read-only (resource.read)." />
+                                <TextBlock Text="Write destinations (only when the ticked operations need one)" FontWeight="SemiBold" Margin="0,8,0,2" />
+                                <TextBlock TextWrapping="Wrap" Margin="0,0,0,2" Foreground="#FF6B7280"
+                                           Text="proposal.create, link.create and link.supersede need a destination inbox you name. Leave empty otherwise." />
+                                <TextBox x:Name="ApproveDestinationIdsInput" Margin="0,0,0,6"
+                                         AutomationProperties.AutomationId="ApproveDestinationIdsInput" />
+                                <TextBlock Text="Access ends at (expiry, UTC)" FontWeight="SemiBold" Margin="0,8,0,2" />
+                                <Grid Margin="0,0,0,0">
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="150" />
+                                        <ColumnDefinition Width="170" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                    </Grid.RowDefinitions>
-                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Approve resource IDs" Foreground="#FF6B7280" Margin="0,0,0,6" />
-                                    <TextBox Grid.Row="0" Grid.Column="1" x:Name="ApproveResourceIdsInput" Margin="0,0,0,6"
-                                             AutomationProperties.AutomationId="ApproveResourceIdsInput" />
-                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Approve operations" Foreground="#FF6B7280" Margin="0,0,0,6" />
-                                    <TextBox Grid.Row="1" Grid.Column="1" x:Name="ApproveOperationsInput" Margin="0,0,0,6"
-                                             AutomationProperties.AutomationId="ApproveOperationsInput" />
-                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Destination IDs (optional)" Foreground="#FF6B7280" Margin="0,0,0,6" />
-                                    <TextBox Grid.Row="2" Grid.Column="1" x:Name="ApproveDestinationIdsInput" Margin="0,0,0,6"
-                                             AutomationProperties.AutomationId="ApproveDestinationIdsInput" />
-                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Expires at (UTC)" Foreground="#FF6B7280" Margin="0,0,0,6" />
-                                    <TextBox Grid.Row="3" Grid.Column="1" x:Name="ApproveExpiryInput" Margin="0,0,0,6"
+                                    <ComboBox Grid.Column="0" x:Name="ApproveExpiryPresetInput" Margin="0,0,10,6"
+                                              AutomationProperties.AutomationId="ApproveExpiryPresetInput"
+                                              SelectionChanged="OnApproveExpiryPresetChanged" />
+                                    <TextBox Grid.Column="1" x:Name="ApproveExpiryInput" Margin="0,0,0,6"
                                              AutomationProperties.AutomationId="ApproveExpiryInput" />
-                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Provider/model (egress)" Foreground="#FF6B7280" Margin="0,0,0,6" />
-                                    <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,6">
-                                        <TextBox x:Name="ApproveProviderInput" Width="150" VerticalContentAlignment="Center"
-                                                 AutomationProperties.AutomationId="ApproveProviderInput" />
-                                        <TextBox x:Name="ApproveModelInput" Width="150" VerticalContentAlignment="Center" Margin="8,0,0,0"
-                                                 AutomationProperties.AutomationId="ApproveModelInput" />
-                                        <TextBox x:Name="ApproveMaxCostInput" Width="90" VerticalContentAlignment="Center" Margin="8,0,0,0"
-                                                 AutomationProperties.AutomationId="ApproveMaxCostInput" />
-                                    </StackPanel>
-                                    <TextBlock Grid.Row="5" Grid.Column="0" Text="Local handoff file" Foreground="#FF6B7280" />
-                                    <TextBox Grid.Row="5" Grid.Column="1" x:Name="ApproveHandoffInput"
-                                             AutomationProperties.AutomationId="ApproveHandoffInput" />
                                 </Grid>
-                                <TextBlock TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280"
-                                           Text="Leave the operations empty for read-only. Name concrete IDs to narrow; leaving the IDs empty approves the whole bound snapshot. An expiry in UTC is required (ISO 8601 with an explicit Z or +00:00). Provider fields only with the provider.egress operation and within the frozen $0.25 job ceiling." />
+                                <TextBlock x:Name="ApproveExpiryHelpText" TextWrapping="Wrap" Margin="0,0,0,2" Foreground="#FF6B7280"
+                                           Text="The expiry must be a future UTC instant (ISO 8601 with a Z suffix). After it passes, the session authorizes nothing." />
+                                <TextBlock Text="Provider egress (only with the provider.egress operation)" FontWeight="SemiBold" Margin="0,8,0,2" />
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                    <TextBox x:Name="ApproveProviderInput" Width="150" VerticalContentAlignment="Center"
+                                             AutomationProperties.AutomationId="ApproveProviderInput" />
+                                    <TextBox x:Name="ApproveModelInput" Width="150" VerticalContentAlignment="Center" Margin="8,0,0,0"
+                                             AutomationProperties.AutomationId="ApproveModelInput" />
+                                    <TextBox x:Name="ApproveMaxCostInput" Width="90" VerticalContentAlignment="Center" Margin="8,0,0,0"
+                                             AutomationProperties.AutomationId="ApproveMaxCostInput" />
+                                </StackPanel>
+                                <TextBlock TextWrapping="Wrap" Margin="0,0,0,2" Foreground="#FF6B7280"
+                                           Text="Provider, model and cost limit travel together and must match the request's declared disclosure. The cost limit is at most $0.25 per job." />
+                                <TextBlock Text="Local handoff file (where the token is written)" FontWeight="SemiBold" Margin="0,8,0,2" />
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                    <TextBox x:Name="ApproveHandoffInput" Width="380" VerticalContentAlignment="Center"
+                                             AutomationProperties.AutomationId="ApproveHandoffInput" />
+                                    <Button x:Name="ApproveHandoffBrowseButton" Content="Choose file…" Padding="14,7" Margin="8,0,0,0" Click="OnApproveHandoffBrowseClicked" />
+                                </StackPanel>
+                                <TextBlock TextWrapping="Wrap" Margin="0,0,0,2" Foreground="#FF6B7280"
+                                           Text="Choose a new file inside a folder that already exists. The bearer is sealed for this Windows account into that file only; this console shows the path, never the token." />
                                 <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                                     <Button x:Name="RequestApproveButton" Content="Approve this narrowed scope" Padding="14,7" Click="OnRequestApproveClicked" />
                                     <Button x:Name="RequestRejectButton" Content="Reject request" Padding="14,7" Margin="8,0,0,0" Click="OnRequestRejectClicked" />
@@ -811,9 +928,21 @@
                         <TextBlock x:Name="SessionsMessageText" TextWrapping="Wrap" Margin="0,10,0,0" FontWeight="SemiBold" />
                         <ListBox x:Name="SessionsList" Height="120" Margin="0,8,0,0" Background="White" BorderBrush="#FFD5D8DC"
                                  AutomationProperties.AutomationId="SessionsList"
-                                 SelectionChanged="OnSessionsSelectionChanged" KeyDown="OnSessionsListKeyDown" />
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 SelectionChanged="OnSessionsSelectionChanged" KeyDown="OnSessionsListKeyDown">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
                         <TextBlock x:Name="SessionDetailText" TextWrapping="Wrap" Margin="0,8,0,0" FontFamily="Consolas" />
 
+                        <TextBlock Text="Next steps" FontWeight="SemiBold" Margin="0,20,0,6" />
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,0">
+                            <Button x:Name="SharingGoLibraryButton" Content="Find items in Library" Padding="14,7" Click="OnGoLibraryClicked" />
+                            <Button x:Name="SharingGoInboxButton" Content="Review proposals in Inbox" Padding="14,7" Margin="8,0,0,0" Click="OnGoInboxClicked" />
+                        </StackPanel>
                         <TextBlock Text="Scope and limits of this view" FontWeight="SemiBold" Margin="0,20,0,6" />
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
                                    Text="• The private index is not the catalog: discovery serves only the ID/label/description triplets you published, and searching or reading a body needs a redeemed session inside its own grant — never this screen." />
@@ -849,8 +978,52 @@
                         <TextBlock x:Name="SourcesMessageText" TextWrapping="Wrap" Margin="0,10,0,0" FontWeight="SemiBold" />
                         <ListBox x:Name="SourcesList" Height="130" Margin="0,8,0,0" Background="White" BorderBrush="#FFD5D8DC"
                                  AutomationProperties.AutomationId="SourcesList"
-                                 SelectionChanged="OnSourcesSelectionChanged" KeyDown="OnSourcesListKeyDown" />
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 SelectionChanged="OnSourcesSelectionChanged" KeyDown="OnSourcesListKeyDown">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
                         <TextBlock x:Name="SourceDetailText" TextWrapping="Wrap" Margin="0,8,0,0" FontFamily="Consolas" />
+                        <TextBlock Text="Enroll a source (explicit mapping — nothing enrolls by itself)" FontWeight="SemiBold" Margin="0,22,0,0" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
+                                   Text="Name the source ID, the permission zone it belongs to, the exact file on this machine, and the format that file speaks. The service reads exactly that file and refuses an unregistered format explicitly instead of guessing. A zone is a permission boundary; a file outside this machine cannot be enrolled." />
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Source ID (you name it)" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="EnrollSourceIdInput" Margin="0,0,10,6"
+                                     AutomationProperties.AutomationId="EnrollSourceIdInput" />
+                            <TextBlock Grid.Row="0" Grid.Column="2" Text="Zone" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <ComboBox Grid.Row="0" Grid.Column="3" x:Name="EnrollZoneInput" Margin="0,0,0,6"
+                                      IsEditable="True" AutomationProperties.AutomationId="EnrollZoneInput" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Format" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <ComboBox Grid.Row="1" Grid.Column="1" x:Name="EnrollFormatInput" Margin="0,0,10,6"
+                                      IsEditable="True" AutomationProperties.AutomationId="EnrollFormatInput" />
+                            <TextBlock Grid.Row="1" Grid.Column="2" Text="Format version" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="1" Grid.Column="3" x:Name="EnrollFormatVersionInput" Margin="0,0,0,6"
+                                     AutomationProperties.AutomationId="EnrollFormatVersionInput" />
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="File on this machine" Foreground="#FF6B7280" />
+                            <TextBox Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" x:Name="EnrollLocatorInput" Margin="0,0,10,0"
+                                     AutomationProperties.AutomationId="EnrollLocatorInput" />
+                            <Button Grid.Row="2" Grid.Column="3" x:Name="EnrollBrowseButton" Content="Choose file…" Padding="14,7" Click="OnEnrollBrowseClicked" />
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="EnrollButton" Content="Enroll this source" Padding="14,7" Click="OnEnrollClicked" />
+                            <Button x:Name="SourceRevokeButton" Content="Revoke selected source" Padding="14,7" Margin="8,0,0,0" Click="OnSourceRevokeClicked" />
+                            <Button x:Name="SourceRelocateButton" Content="Relocate selected source…" Padding="14,7" Margin="8,0,0,0" Click="OnSourceRelocateClicked" />
+                        </StackPanel>
                         <TextBlock x:Name="SourceMessageText" TextWrapping="Wrap" Margin="0,8,0,0" FontWeight="SemiBold" />
                         <TextBlock x:Name="IngestOutcomeText" TextWrapping="Wrap" Margin="0,6,0,0" FontFamily="Consolas" />
                         <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
@@ -909,33 +1082,65 @@
 
                         <TextBlock Text="Collections (selection metadata — never a grant)" FontWeight="SemiBold" Margin="0,22,0,0" />
                         <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
-                                   Text="A collection organizes resources you name; adding a member never widens a frozen grant or session. The service resolves every member against the live managed resources, so an unknown member is refused instead of stored." />
+                                   Text="A collection organizes resources you name; adding a member never widens a frozen grant or session. Add members from a library search or from the item you already have open — no resource ID has to be remembered. The service resolves every member against the live managed resources, so an unknown member is refused instead of stored." />
                         <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                             <Button x:Name="CollectionsRefreshButton" Content="Read collections" Padding="14,7" Click="OnCollectionsRefreshClicked" />
+                            <Button x:Name="CollectionNewButton" Content="Start a new collection" Padding="14,7" Margin="8,0,0,0" Click="OnCollectionNewClicked" />
                         </StackPanel>
                         <TextBlock x:Name="CollectionsMessageText" TextWrapping="Wrap" Margin="0,10,0,0" FontWeight="SemiBold" />
                         <ListBox x:Name="CollectionsList" Height="90" Margin="0,8,0,0" Background="White" BorderBrush="#FFD5D8DC"
                                  AutomationProperties.AutomationId="CollectionsList"
-                                 SelectionChanged="OnCollectionsSelectionChanged" KeyDown="OnCollectionsListKeyDown" />
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 SelectionChanged="OnCollectionsSelectionChanged" KeyDown="OnCollectionsListKeyDown">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
                         <Grid Margin="0,8,0,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="150" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                            </Grid.RowDefinitions>
-                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Collection ID" Foreground="#FF6B7280" Margin="0,0,0,6" />
-                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="CollectionIdInput" Margin="0,0,0,6"
+                            <TextBlock Grid.Column="0" Text="Collection name" Foreground="#FF6B7280" VerticalAlignment="Center" />
+                            <TextBox Grid.Column="1" x:Name="CollectionIdInput"
                                      AutomationProperties.AutomationId="CollectionIdInput" />
-                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Member IDs (comma list)" Foreground="#FF6B7280" />
-                            <TextBox Grid.Row="1" Grid.Column="1" x:Name="CollectionMembersInput"
-                                     AutomationProperties.AutomationId="CollectionMembersInput" />
                         </Grid>
-                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                            <Button x:Name="CollectionSaveButton" Content="Save collection membership" Padding="14,7" Click="OnCollectionSaveClicked" />
+                        <TextBlock x:Name="CollectionMembersSummaryText" TextWrapping="Wrap" Margin="0,10,0,0" FontWeight="SemiBold" />
+                        <ListBox x:Name="CollectionMembersList" Height="84" Margin="0,6,0,0" Background="White" BorderBrush="#FFD5D8DC"
+                                 AutomationProperties.AutomationId="CollectionMembersList" SelectionMode="Extended"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 SelectionChanged="OnCollectionMemberSelectionChanged">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                        <Button x:Name="CollectionMemberRemoveButton" Content="Remove selected member(s)" Padding="14,7" Margin="0,8,0,0" Click="OnCollectionMemberRemoveClicked" />
+                        <TextBlock Text="Find library items to add" FontWeight="SemiBold" Margin="0,14,0,0" />
+                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                            <TextBox x:Name="CollectionMemberSearchInput" Width="360"
+                                     AutomationProperties.AutomationId="CollectionMemberSearchInput" />
+                            <Button x:Name="CollectionMemberSearchButton" Content="Search library" Padding="14,7" Margin="8,0,0,0" Click="OnCollectionMemberSearchClicked" />
                         </StackPanel>
+                        <TextBlock x:Name="CollectionMemberSearchMessageText" TextWrapping="Wrap" Margin="0,6,0,0" FontWeight="SemiBold" />
+                        <ListBox x:Name="CollectionMemberCandidatesList" Height="96" Margin="0,6,0,0" Background="White" BorderBrush="#FFD5D8DC"
+                                 AutomationProperties.AutomationId="CollectionMemberCandidatesList" SelectionMode="Extended"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 SelectionChanged="OnCollectionMemberSelectionChanged">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <Button x:Name="CollectionMemberAddButton" Content="Add selected search results" Padding="14,7" Click="OnCollectionMemberAddSelectedClicked" />
+                            <Button x:Name="CollectionMemberAddOpenItemButton" Content="Add open library item" Padding="14,7" Margin="8,0,0,0" Click="OnCollectionMemberAddOpenItemClicked" />
+                        </StackPanel>
+                        <Button x:Name="CollectionSaveButton" Content="Save collection membership" Padding="14,7" Margin="0,10,0,0" Click="OnCollectionSaveClicked" />
 
                         <TextBlock Text="Preserved snapshots (explicit opt-in — never automatic)" FontWeight="SemiBold" Margin="0,22,0,0" />
                         <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
@@ -974,17 +1179,23 @@
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
                             <TextBlock Grid.Row="0" Grid.Column="0" Text="Source ID" Foreground="#FF6B7280" Margin="0,0,0,6" />
-                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="SnapshotSourceIdInput" Margin="0,0,10,6"
-                                     AutomationProperties.AutomationId="SnapshotSourceIdInput" />
+                            <ComboBox Grid.Row="0" Grid.Column="1" x:Name="SnapshotSourceIdInput" Margin="0,0,10,6"
+                                      IsEditable="True" AutomationProperties.AutomationId="SnapshotSourceIdInput" />
                             <TextBlock Grid.Row="0" Grid.Column="2" Text="Source revision" Foreground="#FF6B7280" Margin="0,0,0,6" />
                             <TextBox Grid.Row="0" Grid.Column="3" x:Name="SnapshotSourceRevisionInput" Margin="0,0,0,6"
                                      AutomationProperties.AutomationId="SnapshotSourceRevisionInput" />
                             <TextBlock Grid.Row="1" Grid.Column="0" Text="Retain until (UTC)" Foreground="#FF6B7280" />
-                            <TextBox Grid.Row="1" Grid.Column="1" x:Name="SnapshotRetainInput" Grid.ColumnSpan="3"
+                            <ComboBox Grid.Row="1" Grid.Column="1" x:Name="SnapshotRetainPresetInput" Margin="0,0,10,6"
+                                      AutomationProperties.AutomationId="SnapshotRetainPresetInput"
+                                      SelectionChanged="OnSnapshotRetainPresetChanged" />
+                            <TextBox Grid.Row="1" Grid.Column="2" Grid.ColumnSpan="2" x:Name="SnapshotRetainInput"
                                      AutomationProperties.AutomationId="SnapshotRetainInput" />
                         </Grid>
                         <TextBlock TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280"
-                                   Text="The retention must be an explicit UTC instant (ISO 8601 with a Z or +00:00 suffix) in the future. Extending a snapshot's retention names the snapshot and its live revision." />
+                                   Text="Pick the source above or choose “Use selected source” to fill the ID and its reference revision — no typing. The retention must be a future UTC instant with a Z suffix; after it lapses the bytes authorize nothing." />
+                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                            <Button x:Name="SnapshotUseSelectedButton" Content="Use selected source" Padding="14,7" Click="OnSnapshotUseSelectedClicked" />
+                        </StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                             <Button x:Name="SnapshotPreserveButton" Content="Preserve this snapshot" Padding="14,7" Click="OnSnapshotPreserveClicked" />
                             <Button x:Name="SnapshotRetainButton" Content="Extend selected retention" Padding="14,7" Margin="8,0,0,0" Click="OnSnapshotRetainClicked" />
@@ -1017,6 +1228,8 @@
                         <TextBlock x:Name="JobsStateText" TextWrapping="Wrap" Margin="0,12,0,0" FontSize="16" />
 
                         <TextBlock Text="Model and egress settings (stored encrypted; the key is never shown again)" FontWeight="SemiBold" Margin="0,16,0,0" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
+                                   Text="Provider, model and endpoint are external locator values from your own provider account: enter the provider label your service configuration uses, the exact model ID, and the API base URL (for an OpenAI-compatible API this is the base such as https://api.example.com). The key is sent once, stored encrypted and never shown again. These are not vault IDs and no picker can discover them." />
                         <Grid Margin="0,8,0,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="150" />
@@ -1048,7 +1261,7 @@
                         <TextBlock x:Name="ProviderSettingsText" TextWrapping="Wrap" Margin="0,8,0,0" FontFamily="Consolas" />
                         <TextBlock x:Name="ProviderMessageText" TextWrapping="Wrap" Margin="0,6,0,0" FontWeight="SemiBold" />
 
-                        <TextBlock Text="Selection (explicit, one line per input: resourceId@revision)" FontWeight="SemiBold" Margin="0,18,0,0" />
+                        <TextBlock Text="Selection (explicit: you pick each note and the service pins its live revision)" FontWeight="SemiBold" Margin="0,18,0,0" />
                         <Grid Margin="0,8,0,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="150" />
@@ -1071,11 +1284,14 @@
                             <TextBox Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="3" x:Name="JobsObjectiveInput" Margin="0,0,0,6"
                                      AutomationProperties.AutomationId="JobsObjectiveInput" />
                             <TextBlock Grid.Row="2" Grid.Column="0" Text="Destination zone" Foreground="#FF6B7280" />
-                            <TextBox Grid.Row="2" Grid.Column="1" x:Name="JobsZoneInput" Margin="0,0,10,0"
-                                     AutomationProperties.AutomationId="JobsZoneInput" />
+                            <ComboBox Grid.Row="2" Grid.Column="1" x:Name="JobsZoneInput" Margin="0,0,10,0"
+                                      IsEditable="True" AutomationProperties.AutomationId="JobsZoneInput" />
                             <TextBlock Grid.Row="2" Grid.Column="2" Text="Destination ID" Foreground="#FF6B7280" />
-                            <TextBox Grid.Row="2" Grid.Column="3" x:Name="JobsDestinationInput"
-                                     AutomationProperties.AutomationId="JobsDestinationInput" />
+                            <StackPanel Grid.Row="2" Grid.Column="3" Orientation="Horizontal">
+                                <TextBox x:Name="JobsDestinationInput" Width="170"
+                                         AutomationProperties.AutomationId="JobsDestinationInput" />
+                                <Button x:Name="JobsDestinationUseLibraryButton" Content="Use open item" Padding="10,7" Margin="8,0,0,0" Click="OnJobsDestinationUseLibraryClicked" />
+                            </StackPanel>
                         </Grid>
                         <Grid Margin="0,8,0,0">
                             <Grid.ColumnDefinitions>
@@ -1088,7 +1304,7 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
-                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Destination revision" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Destination revision (from open item)" Foreground="#FF6B7280" Margin="0,0,0,6" />
                             <TextBox Grid.Row="0" Grid.Column="1" x:Name="JobsDestinationRevisionInput" Margin="0,0,10,6"
                                      AutomationProperties.AutomationId="JobsDestinationRevisionInput" />
                             <TextBlock Grid.Row="0" Grid.Column="2" Text="Interval (min)" Foreground="#FF6B7280" Margin="0,0,0,6" />
@@ -1100,9 +1316,17 @@
                             <TextBox Grid.Row="1" Grid.Column="3" x:Name="JobsModelInput"
                                      AutomationProperties.AutomationId="JobsModelInput" />
                         </Grid>
-                        <TextBlock Text="Inputs (the job reads only these IDs at these revisions)" Foreground="#FF6B7280" Margin="0,8,0,2" />
-                        <TextBox x:Name="JobsInputsInput" Height="56" AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
-                                 FontFamily="Consolas" AutomationProperties.AutomationId="JobsInputsInput" />
+                        <TextBlock Text="Inputs the job may read (added from the service, never typed)" Foreground="#FF6B7280" Margin="0,8,0,2" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2" Foreground="#FF6B7280"
+                                   Text="Add inputs from what the service already showed you: each entry pins the live revision the service served. The list is the selection; remove an entry to narrow it." />
+                        <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
+                            <Button x:Name="JobsAddLibraryButton" Content="Add open library item" Padding="14,7" Click="OnJobsAddLibraryClicked" />
+                            <Button x:Name="JobsAddCaptureButton" Content="Add saved capture" Padding="14,7" Margin="8,0,0,0" Click="OnJobsAddCaptureClicked" />
+                            <Button x:Name="JobsRemoveInputButton" Content="Remove selected input" Padding="14,7" Margin="8,0,0,0" Click="OnJobsRemoveInputClicked" />
+                        </StackPanel>
+                        <ListBox x:Name="JobsInputsList" Height="70" Background="White" BorderBrush="#FFD5D8DC"
+                                 AutomationProperties.AutomationId="JobsInputsList" SelectionMode="Extended"
+                                 SelectionChanged="OnJobsInputSelectionChanged" />
 
                         <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                             <Button x:Name="JobsRunButton" Content="Run one job" Padding="14,7" Click="OnJobsRunClicked" />
@@ -1115,7 +1339,14 @@
                         <TextBlock x:Name="BatchMessageText" TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280" />
                         <ListBox x:Name="JobsList" Height="120" Margin="0,8,0,0" Background="White" BorderBrush="#FFD5D8DC"
                                  AutomationProperties.AutomationId="JobsList" SelectionChanged="OnJobsSelectionChanged"
-                                 KeyDown="OnJobsListKeyDown" />
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 KeyDown="OnJobsListKeyDown">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
                         <TextBlock x:Name="JobDetailText" TextWrapping="Wrap" Margin="0,8,0,0" FontFamily="Consolas" />
                         <TextBlock x:Name="SpendText" TextWrapping="Wrap" Margin="0,8,0,0" Foreground="#FF6B7280" />
 
@@ -1149,7 +1380,7 @@
                     <StackPanel x:Name="IntentionsPanel" Visibility="Collapsed">
                         <TextBlock Text="Intentions — scheduled and due" FontSize="19" FontWeight="SemiBold" />
                         <TextBlock TextWrapping="Wrap" Margin="0,8,0,0"
-                                   Text="Create or edit a one-time time trigger for an intention you name, or cancel that trigger without completing the intention. An owner-enabled project/task context trigger surfaces a reminder only when the brief caller explicitly supplies the same configured context and the intention ID/revision is already in that session's approved scope. No context is inferred and scope never grows. Exact ISO-8601 due times require Z or a numeric UTC offset; local times, date-only values, named zones and recurring schedules are unsupported. The owner-only view is the time-notification surface while unlocked; the background scheduler makes no LLM/provider calls." />
+                                   Text="Create or edit a one-time time trigger for an intention you pick, or cancel that trigger without completing the intention. An owner-enabled project/task context trigger surfaces a reminder only when the brief caller explicitly supplies the same configured context and the intention ID/revision is already in that session's approved scope. No context is inferred and scope never grows. The console converts the date and time you choose into one exact UTC instant with the offset you selected; date-only values, named zones and recurring schedules stay unsupported. The owner-only view is the time-notification surface while unlocked; the background scheduler makes no LLM/provider calls." />
                         <TextBlock Text="The service pauses private scheduling and due-list reads while locked, stores no key, and never unlocks for a deadline. Unlock is always your explicit act. Due/context reminders, notification, acknowledgement and completion are separate; reading or acknowledging never completes an intention." TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280" />
                         <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                             <Button x:Name="IntentionsRefreshButton" Content="Read scheduled intentions" Padding="14,7" Click="OnIntentionsRefreshClicked" />
@@ -1157,6 +1388,7 @@
                         <TextBlock x:Name="IntentionsMessageText" TextWrapping="Wrap" Margin="0,8,0,0" FontWeight="SemiBold" />
                         <ListBox x:Name="IntentionsList" Height="210" Margin="0,8,0,0" Background="White" BorderBrush="#FFD5D8DC"
                                  AutomationProperties.AutomationId="IntentionsList" SelectionChanged="OnIntentionsSelectionChanged"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                  KeyDown="OnIntentionsListKeyDown">
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
@@ -1168,23 +1400,49 @@
                             </ListBox.ItemTemplate>
                         </ListBox>
 
-                        <TextBlock Text="One-time time trigger (exact instant with explicit offset)" FontWeight="SemiBold" Margin="0,18,0,0" />
+                        <TextBlock Text="One-time time trigger (choose the intention, then a local date and time)" FontWeight="SemiBold" Margin="0,18,0,0" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280"
+                                   Text="Search for the pending intention, then choose the date and time you mean. Your local time zone is used only when you pick the local option, and the exact UTC instant is shown before you send. No resource ID has to be typed or remembered." />
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBox x:Name="IntentionSearchInput" Width="360"
+                                     AutomationProperties.AutomationId="IntentionSearchInput" />
+                            <Button x:Name="IntentionSearchButton" Content="Find intentions" Padding="14,7" Margin="8,0,0,0" Click="OnIntentionSearchClicked" />
+                            <Button x:Name="IntentionUseSelectedButton" Content="Use selected schedule row" Padding="14,7" Margin="8,0,0,0" Click="OnIntentionUseSelectedClicked" />
+                        </StackPanel>
+                        <TextBlock x:Name="IntentionSearchMessageText" TextWrapping="Wrap" Margin="0,6,0,0" FontWeight="SemiBold" />
+                        <ListBox x:Name="IntentionCandidatesList" Height="84" Margin="0,6,0,0" Background="White" BorderBrush="#FFD5D8DC"
+                                 AutomationProperties.AutomationId="IntentionCandidatesList"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 SelectionChanged="OnIntentionCandidateSelectionChanged">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                        <TextBlock Text="Chosen intention" Foreground="#FF6B7280" Margin="0,10,0,0" />
+                        <TextBox x:Name="IntentionChosenText" IsReadOnly="True" TextWrapping="Wrap"
+                                 AutomationProperties.AutomationId="IntentionChosenText" />
                         <Grid Margin="0,8,0,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="180" />
+                                <ColumnDefinition Width="90" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                            </Grid.RowDefinitions>
-                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Intention resource ID" Foreground="#FF6B7280" Margin="0,0,0,6" />
-                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="IntentionResourceIdInput" Margin="0,0,0,6"
-                                     AutomationProperties.AutomationId="IntentionResourceIdInput" TextChanged="OnIntentionInputChanged" />
-                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Due at" Foreground="#FF6B7280" />
-                            <TextBox Grid.Row="1" Grid.Column="1" x:Name="IntentionDueAtInput"
-                                     AutomationProperties.AutomationId="IntentionDueAtInput" TextChanged="OnIntentionInputChanged" />
+                            <TextBlock Grid.Column="0" Text="Due date / time" Foreground="#FF6B7280" VerticalAlignment="Center" />
+                            <DatePicker Grid.Column="1" x:Name="IntentionDateInput"
+                                        AutomationProperties.AutomationId="IntentionDateInput"
+                                        SelectedDateChanged="OnIntentionTimeInputChanged" />
+                            <TextBox Grid.Column="2" x:Name="IntentionTimeInput" Margin="8,0,0,0"
+                                     AutomationProperties.AutomationId="IntentionTimeInput"
+                                     TextChanged="OnIntentionTimeTextChanged" />
+                            <ComboBox Grid.Column="3" x:Name="IntentionZoneInput" Margin="8,0,0,0"
+                                      AutomationProperties.AutomationId="IntentionZoneInput"
+                                      SelectionChanged="OnIntentionZoneChanged" />
                         </Grid>
+                        <TextBlock x:Name="IntentionDuePreviewText" TextWrapping="Wrap" Margin="0,6,0,0" FontWeight="SemiBold"
+                                   AutomationProperties.AutomationId="IntentionDuePreviewText" />
                         <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                             <Button x:Name="IntentionTriggerSetButton" Content="Create / reschedule trigger" Padding="14,7" Click="OnIntentionTriggerSetClicked" />
                             <Button x:Name="IntentionTriggerCancelButton" Content="Cancel trigger" Padding="14,7" Margin="8,0,0,0" Click="OnIntentionTriggerCancelClicked" />
