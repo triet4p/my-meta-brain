@@ -1,15 +1,12 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
-using System.Security.AccessControl;
 using System.Security.Cryptography;
-using System.Security.Principal;
 using System.Text;
 
 namespace MetaBrain.Connections;
 
 internal sealed class OwnerTokenHandoff : IDisposable
 {
-    private static readonly SecurityIdentifier SystemSid = new("S-1-5-18");
     private const uint CryptProtectUiForbidden = 0x1;
     private static readonly byte[] HandoffPurpose = Encoding.ASCII.GetBytes("MetaBrain|owner-token-handoff|v1");
     private FileStream? _stream;
@@ -35,7 +32,6 @@ internal sealed class OwnerTokenHandoff : IDisposable
 
     [DllImport("kernel32.dll")]
     private static extern IntPtr LocalFree(IntPtr memory);
-    private static readonly SecurityIdentifier AdministratorsSid = new("S-1-5-32-544");
 
     private OwnerTokenHandoff(string path, FileStream stream)
     {
@@ -62,30 +58,8 @@ internal sealed class OwnerTokenHandoff : IDisposable
             throw new IOException("The owner handoff destination must be a new file in an existing non-reparse directory.");
         }
 
-        var ownerSid = WindowsIdentity.GetCurrent().User
-            ?? throw new UnauthorizedAccessException("The owner handoff process has no user SID.");
         var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough);
-        try
-        {
-            var security = new FileSecurity();
-            security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-            security.SetOwner(ownerSid);
-            security.AddAccessRule(new FileSystemAccessRule(ownerSid, FileSystemRights.FullControl, AccessControlType.Allow));
-            security.AddAccessRule(new FileSystemAccessRule(SystemSid, FileSystemRights.FullControl, AccessControlType.Allow));
-            security.AddAccessRule(new FileSystemAccessRule(AdministratorsSid, FileSystemRights.FullControl, AccessControlType.Allow));
-            FileSystemAclExtensions.SetAccessControl(new FileInfo(path), security);
-            return new OwnerTokenHandoff(path, stream);
-        }
-        catch
-        {
-            stream.Dispose();
-            if (File.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0)
-            {
-                File.Delete(path);
-            }
-
-            throw;
-        }
+        return new OwnerTokenHandoff(path, stream);
     }
 
     public void WriteToken(string token)

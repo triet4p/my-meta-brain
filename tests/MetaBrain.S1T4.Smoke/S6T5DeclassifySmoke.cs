@@ -1,7 +1,6 @@
 ﻿using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
-using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using System.Windows;
@@ -56,9 +55,7 @@ internal static partial class OwnerServiceSmoke
     {
         using var fixture = SmokeFixture.CreateUninitialized();
         var passphrase = Convert.ToBase64String(RandomNumberGenerator.GetBytes(24));
-        var ownerSid = WindowsIdentity.GetCurrent().User
-            ?? throw new InvalidOperationException("The smoke harness has no user SID.");
-        var store = new EncryptedVaultStore(Path.Combine(fixture.OutputDirectory, "s6t5-vault"), ownerSid.Value);
+        var store = new EncryptedVaultStore(Path.Combine(fixture.OutputDirectory, "s6t5-vault"));
         var lifecycle = new VaultLifecycle(store);
         lifecycle.Provision(passphrase, out _);
         lifecycle.Unlock(passphrase, false);

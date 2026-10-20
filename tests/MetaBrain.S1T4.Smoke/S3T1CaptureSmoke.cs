@@ -787,7 +787,7 @@ internal sealed class S3T1CoordinatorHarness : IDisposable
 
             var normalizers = new SourceNormalizerRegistry();
             normalizers.Register(new SyntheticLineNormalizer());
-            var store = new EncryptedVaultStore(Path.Combine(serviceDirectory, "vault"), ownerSid.Value);
+            var store = new EncryptedVaultStore(Path.Combine(serviceDirectory, "vault"));
             var lifecycle = new VaultLifecycle(store);
             if (!lifecycle.Provision(SyntheticPassphrase, out var recoveryCode) || recoveryCode is null)
             {

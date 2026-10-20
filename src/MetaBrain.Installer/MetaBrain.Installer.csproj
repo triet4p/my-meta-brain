@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <AssemblyName>MetaBrain.Installer</AssemblyName>
+    <RootNamespace>MetaBrain.Installer</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The installer creates the service settings file, the data root and the
+         runtime state of the installed host, and it reports the service status
+         over the same owner channel the owner console uses. It shares those
+         internals instead of keeping a second settings format or a second
+         status client. -->
+    <ProjectReference Include="..\MetaBrain.Connections\MetaBrain.Connections.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The repository's permanent regression suite drives the installed
+         lifecycle end to end. It is a friend assembly only; nothing here is a
+         product surface. -->
+    <InternalsVisibleTo Include="MetaBrain.S1T4.Smoke" />
+  </ItemGroup>
+</Project>

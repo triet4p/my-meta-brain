@@ -1,4 +1,3 @@
-using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text.Json;
@@ -21,6 +20,15 @@ internal sealed record ServiceSettings(
     public const int LegacySchemaVersion = 1;
     public const int CurrentSchemaVersion = 3;
     internal string VaultDirectoryPath { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The directory that holds the service settings file. The installer uses
+    /// it as the data root: the vault, the runtime directory and every
+    /// owner-private artefact live beside the settings file, so an uninstall
+    /// that keeps the data root keeps the vault, the source snapshots, the
+    /// backups and the recovery material with it.
+    /// </summary>
+    internal string DataRootPath { get; init; } = string.Empty;
     internal string LegacyPolicyStorePath { get; init; } = string.Empty;
     internal string LegacyResourceRootPath { get; init; } = string.Empty;
 }
@@ -71,7 +79,11 @@ internal static partial class ServiceSettingsLoader
             WriteCurrentSettingsAtomically(fullPath, settings);
         }
 
-        return settings with { VaultDirectoryPath = Path.Combine(directory.FullName, "vault") };
+        return settings with
+        {
+            DataRootPath = directory.FullName,
+            VaultDirectoryPath = Path.Combine(directory.FullName, "vault")
+        };
     }
 
     public static ServiceSettings LoadLegacyForMigration(string path)
@@ -79,7 +91,7 @@ internal static partial class ServiceSettingsLoader
         var (settings, ownerSid, directory) = ReadAndValidate(path);
         if (settings.SchemaVersion != ServiceSettings.LegacySchemaVersion)
         {
-            throw new InvalidDataException("Only the current ACL-only settings format can be migrated.");
+            throw new InvalidDataException("Only the legacy settings format can be migrated.");
         }
 
         ValidateLegacy(settings, ownerSid);
@@ -105,12 +117,10 @@ internal static partial class ServiceSettingsLoader
         if (!file.Exists || (file.Attributes & FileAttributes.ReparsePoint) != 0 ||
             !directory.Exists || (directory.Attributes & FileAttributes.ReparsePoint) != 0)
         {
-            throw new InvalidDataException("Service settings must be a regular file in a restricted directory.");
+            throw new InvalidDataException("Service settings must be a regular file in a non-reparse directory.");
         }
 
-        using var identity = WindowsIdentity.GetCurrent();
-        var serviceSid = identity.User?.Value ?? throw new InvalidDataException("The service process has no user SID.");
-        var privateSettings = ProtectedFile.ReadPrivateFile(fullPath, serviceSid, MaximumSettingsBytes);
+        var privateSettings = PrivateFile.Read(fullPath, MaximumSettingsBytes);
         var settings = JsonSerializer.Deserialize<ServiceSettings>(privateSettings.Text, JsonOptions)
             ?? throw new InvalidDataException("Invalid service settings.");
         return (settings, privateSettings.OwnerSid, directory);
@@ -128,9 +138,6 @@ internal static partial class ServiceSettingsLoader
     private static void WriteCurrentSettingsAtomically(string settingsPath, ServiceSettings settings)
     {
         var file = new FileInfo(settingsPath);
-        var security = FileSystemAclExtensions.GetAccessControl(
-            file, AccessControlSections.Access | AccessControlSections.Owner);
-        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
         var content = JsonSerializer.SerializeToUtf8Bytes(new
         {
             schemaVersion = ServiceSettings.CurrentSchemaVersion,
@@ -146,7 +153,6 @@ internal static partial class ServiceSettingsLoader
             using (var stream = new FileStream(
                 temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
             {
-                FileSystemAclExtensions.SetAccessControl(new FileInfo(temporaryPath), security);
                 stream.Write(content);
                 stream.Flush(flushToDisk: true);
             }

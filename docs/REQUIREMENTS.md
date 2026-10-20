@@ -96,3 +96,10 @@ Owner đã chấp thuận encrypted vault, catalog chọn lọc và opaque singl
 - Cutover: S1-CLEAN removes the obsolete protected launcher, AppContainer SID/HMAC bindings, agent endpoints and fixture callers from current source. Retained owner-only status/read is not token, ciphertext, catalog or approval evidence. No data reset/migration or compatibility shims; historical decisions and evidence remain unchanged.
 - Supplemental protected model proof superseded/stopped, không PASS, không tiếp tục dùng test key trong lần docs này; giữ unknown reservation ledger. Real model execution được kiểm chứng ở S6-T1 sau owner consent, không kế thừa test credential như production setting.
 - CR01 planning change (2026-10-01) was documentation-only: no implementation/model/provider/ACL/service setup, product changelog entry, or owner daily-use acceptance occurred in that planning update. The later source cleanup and user-facing removal entry are tracked separately.
+
+### Owner-approved Sprint 8 execution clarification — 2026-10-20
+
+- R04/R05/R35/R36 vẫn bảo vệ bằng encrypted vault/user key/lock và approved scoped APIs, không thêm filesystem ACL hoặc OS-isolation acceptance. Agent bị cấm thay đổi ACL/DACL/owner/permissions và cấu hình/tài nguyên hệ thống, kể cả fixture/temp và execution gián tiếp; authorization fixture ACL trước đó không còn hiệu lực.
+- Giữ outcomes R01–R40, frozen targets, full task evidence/checkpoint và release acceptance. S8-T1 thêm scope correction → package → staged lifecycle → owner-assisted host acceptance; S8-T2–T7 giữ thứ tự, prerequisites/authorization/evidence được chuẩn bị sớm.
+- Data/security impact: không đổi encrypted format/key hierarchy, không sửa quyền dữ liệu hiện hữu, không reset hoặc migrate original sessions. Scoped correction phải loại ACL prerequisite trên đường package/start/unlock có liên quan và bảo toàn encryption/owner-agent API authorization; không mở broad permission refactor.
+- Host install/autostart/client setup/logout/reboot do owner thực hiện, không agent thay đổi máy; missing evidence vẫn là blocker. Đây là planning/rule change, không chứng minh correction đã chạy, runtime PASS hoặc owner acceptance.

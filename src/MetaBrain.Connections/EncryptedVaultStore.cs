@@ -1,6 +1,4 @@
-using System.Security.AccessControl;
 using System.Security.Cryptography;
-using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using MetaBrain.Core.Domain;
@@ -57,8 +55,6 @@ internal sealed class EncryptedVaultStore
     private const int NonceBytes = 12;
     private const int TagBytes = 16;
 
-    private static readonly SecurityIdentifier SystemSid = new("S-1-5-18");
-    private static readonly SecurityIdentifier AdministratorsSid = new("S-1-5-32-544");
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -67,7 +63,6 @@ internal sealed class EncryptedVaultStore
 
     private readonly string _serviceDirectory;
     private readonly string _root;
-    private readonly string _ownerSid;
     private readonly string _headerPath;
     private readonly string _manifestPath;
     private readonly string _resourcesPath;
@@ -83,7 +78,7 @@ internal sealed class EncryptedVaultStore
     private sealed record VaultHeader(int FormatVersion, string VaultId, KeyWrapper PassphraseKey, KeyWrapper RecoveryKey);
     private sealed record EncryptedPayload(int FormatVersion, string Nonce, string Ciphertext, string Tag);
 
-    public EncryptedVaultStore(string root, string ownerSid)
+    public EncryptedVaultStore(string root)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -91,7 +86,6 @@ internal sealed class EncryptedVaultStore
         }
 
         _root = Path.GetFullPath(root);
-        _ownerSid = new SecurityIdentifier(ownerSid).Value;
         _serviceDirectory = Path.GetFullPath(Path.Combine(_root, ".."));
         _headerPath = Path.Combine(_root, "vault-header.json");
         _manifestPath = Path.Combine(_root, "manifest.enc");
@@ -130,10 +124,8 @@ internal sealed class EncryptedVaultStore
             }
 
             Directory.CreateDirectory(stage);
-            ApplyDirectorySecurity(stage);
             var resourceDirectory = Path.Combine(stage, "resources");
             Directory.CreateDirectory(resourceDirectory);
-            ApplyDirectorySecurity(resourceDirectory);
 
             var vaultId = Guid.NewGuid().ToString("N");
             var passphraseWrapper = WrapDataKey(passphrase, dataKey, vaultId, "passphrase");
@@ -257,7 +249,7 @@ internal sealed class EncryptedVaultStore
         byte[]? plaintext = null;
         try
         {
-            var json = ProtectedFile.ReadPrivateFile(_scopeGrantsPath, _ownerSid, MaximumScopeGrantEnvelopeBytes).Text;
+            var json = PrivateFile.Read(_scopeGrantsPath, MaximumScopeGrantEnvelopeBytes).Text;
             var envelope = JsonSerializer.Deserialize<EncryptedPayload>(json, JsonOptions)
                 ?? throw new InvalidDataException("Invalid encrypted owner scope envelope.");
             associatedData = ResourceAssociatedData(
@@ -365,7 +357,7 @@ internal sealed class EncryptedVaultStore
         byte[]? plaintext = null;
         try
         {
-            var json = ProtectedFile.ReadPrivateFile(_catalogPath, _ownerSid, MaximumCatalogEnvelopeBytes).Text;
+            var json = PrivateFile.Read(_catalogPath, MaximumCatalogEnvelopeBytes).Text;
             var envelope = JsonSerializer.Deserialize<EncryptedPayload>(json, JsonOptions)
                 ?? throw new InvalidDataException("Invalid encrypted owner catalog envelope.");
             associatedData = ResourceAssociatedData(
@@ -459,7 +451,7 @@ internal sealed class EncryptedVaultStore
         byte[]? plaintext = null;
         try
         {
-            var json = ProtectedFile.ReadPrivateFile(_recallPolicyPath, _ownerSid, MaximumRecallPolicyEnvelopeBytes).Text;
+            var json = PrivateFile.Read(_recallPolicyPath, MaximumRecallPolicyEnvelopeBytes).Text;
             var envelope = JsonSerializer.Deserialize<EncryptedPayload>(json, JsonOptions)
                 ?? throw new InvalidDataException("Invalid encrypted owner recall policy envelope.");
             associatedData = ResourceAssociatedData(
@@ -553,7 +545,7 @@ internal sealed class EncryptedVaultStore
         byte[]? plaintext = null;
         try
         {
-            var json = ProtectedFile.ReadPrivateFile(_reviewStatePath, _ownerSid, MaximumReviewStateEnvelopeBytes).Text;
+            var json = PrivateFile.Read(_reviewStatePath, MaximumReviewStateEnvelopeBytes).Text;
             var envelope = JsonSerializer.Deserialize<EncryptedPayload>(json, JsonOptions)
                 ?? throw new InvalidDataException("Invalid encrypted owner review state envelope.");
             associatedData = ResourceAssociatedData(
@@ -647,7 +639,7 @@ internal sealed class EncryptedVaultStore
         byte[]? plaintext = null;
         try
         {
-            var json = ProtectedFile.ReadPrivateFile(_purgeLedgerPath, _ownerSid, MaximumPurgeLedgerEnvelopeBytes).Text;
+            var json = PrivateFile.Read(_purgeLedgerPath, MaximumPurgeLedgerEnvelopeBytes).Text;
             var envelope = JsonSerializer.Deserialize<EncryptedPayload>(json, JsonOptions)
                 ?? throw new InvalidDataException("Invalid encrypted owner purge ledger envelope.");
             associatedData = ResourceAssociatedData(
@@ -739,7 +731,7 @@ internal sealed class EncryptedVaultStore
         byte[]? plaintext = null;
         try
         {
-            var json = ProtectedFile.ReadPrivateFile(_sourceEnrollmentPath, _ownerSid, MaximumSourceEnrollmentEnvelopeBytes).Text;
+            var json = PrivateFile.Read(_sourceEnrollmentPath, MaximumSourceEnrollmentEnvelopeBytes).Text;
             var envelope = JsonSerializer.Deserialize<EncryptedPayload>(json, JsonOptions)
                 ?? throw new InvalidDataException("Invalid encrypted source enrollment envelope.");
             associatedData = ResourceAssociatedData(
@@ -895,7 +887,7 @@ internal sealed class EncryptedVaultStore
         var aad = ResourceAssociatedData(manifest.VaultId, descriptor.ResourceId, descriptor.SchemaVersion, descriptor.Revision);
         try
         {
-            var json = ProtectedFile.ReadPrivateFile(path, _ownerSid, MaximumEnvelopeBytes).Text;
+            var json = PrivateFile.Read(path, MaximumEnvelopeBytes).Text;
             var envelope = JsonSerializer.Deserialize<EncryptedPayload>(json, JsonOptions)
                 ?? throw new InvalidDataException("Invalid resource envelope.");
             return DecryptPayload(envelope, dataKey, aad, descriptor.SchemaVersion, descriptor.Revision, MaximumResourceBytes);
@@ -917,7 +909,7 @@ internal sealed class EncryptedVaultStore
     /// <summary>
     /// Reads a bounded batch of envelopes from an already-authorized unlocked
     /// lease. Each element goes through <see cref="ReadResource"/> unchanged, so
-    /// every file keeps its per-read reparse/ACL check, AEAD binding, and exact
+    /// every file keeps its per-read reparse check, AEAD binding, and exact
     /// revision gate; this only overlaps independent reads. Bounded degree and an
     /// initial-failure zeroization keep no plaintext alive past the batch.
     /// </summary>
@@ -1085,7 +1077,7 @@ internal sealed class EncryptedVaultStore
         // first would materialize a UTF-16 copy twice the file size plus the
         // reader's growth buffer, and that allocation stays committed in the
         // unlocked process for the rest of the epoch.
-        var raw = ProtectedFile.ReadPrivateBytes(_manifestPath, _ownerSid, MaximumManifestEnvelopeBytes);
+        var raw = PrivateFile.ReadBytes(_manifestPath, MaximumManifestEnvelopeBytes);
         try
         {
             var envelope = JsonSerializer.Deserialize<EncryptedPayload>(raw, JsonOptions)
@@ -1183,7 +1175,7 @@ internal sealed class EncryptedVaultStore
 
     private T ReadJsonFile<T>(string path, long maximumBytes)
     {
-        var text = ProtectedFile.ReadPrivateFile(path, _ownerSid, maximumBytes).Text;
+        var text = PrivateFile.Read(path, maximumBytes).Text;
         return JsonSerializer.Deserialize<T>(text, JsonOptions) ?? throw new InvalidDataException("Invalid encrypted vault envelope.");
     }
 
@@ -1337,7 +1329,6 @@ internal sealed class EncryptedVaultStore
         {
             using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 8192, FileOptions.WriteThrough))
             {
-                FileSystemAclExtensions.SetAccessControl(new FileInfo(temporaryPath), CreateFileSecurity());
                 stream.Write(content);
                 stream.Flush(flushToDisk: true);
             }
@@ -1455,30 +1446,6 @@ internal sealed class EncryptedVaultStore
         }
 
         return reaped;
-    }
-
-    private FileSecurity CreateFileSecurity()
-    {
-        var security = new FileSecurity();
-        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-        security.SetOwner(new SecurityIdentifier(_ownerSid));
-        security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(_ownerSid), FileSystemRights.FullControl, AccessControlType.Allow));
-        security.AddAccessRule(new FileSystemAccessRule(SystemSid, FileSystemRights.FullControl, AccessControlType.Allow));
-        security.AddAccessRule(new FileSystemAccessRule(AdministratorsSid, FileSystemRights.FullControl, AccessControlType.Allow));
-        return security;
-    }
-
-    private void ApplyDirectorySecurity(string path)
-    {
-        var security = new DirectorySecurity();
-        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-        var owner = new SecurityIdentifier(_ownerSid);
-        security.SetOwner(owner);
-        var inheritance = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
-        security.AddAccessRule(new FileSystemAccessRule(owner, FileSystemRights.FullControl, inheritance, PropagationFlags.None, AccessControlType.Allow));
-        security.AddAccessRule(new FileSystemAccessRule(SystemSid, FileSystemRights.FullControl, inheritance, PropagationFlags.None, AccessControlType.Allow));
-        security.AddAccessRule(new FileSystemAccessRule(AdministratorsSid, FileSystemRights.FullControl, inheritance, PropagationFlags.None, AccessControlType.Allow));
-        FileSystemAclExtensions.SetAccessControl(new DirectoryInfo(path), security);
     }
 
     private string ResolveResourcePath(string storageName)

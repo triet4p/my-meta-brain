@@ -38,7 +38,7 @@ internal sealed class NamedPipeService
         IModelProviderAdapter? modelProvider = null)
     {
         _settings = settings;
-        var store = new EncryptedVaultStore(settings.VaultDirectoryPath, settings.OwnerSid);
+        var store = new EncryptedVaultStore(settings.VaultDirectoryPath);
         _vault = new VaultLifecycle(store);
         var authority = new GrantAuthority(new InMemoryGrantStore());
         _privateIndex = new SqlitePrivateIndexStore();

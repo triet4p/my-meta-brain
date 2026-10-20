@@ -2,7 +2,6 @@ using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
-using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using MetaBrain.Application;
@@ -1026,9 +1025,8 @@ internal static partial class OwnerServiceSmoke
 
             // 9. Mid-flight source-revoke before commit with controlled adapter:
             // S6-T1 contract: scope snapshot/provider consent revalidated before commit; revocation blocks commit and records billable spend.
-            var ownerSid = WindowsIdentity.GetCurrent().User!;
             var midflightVaultDir = Path.Combine(fixture.OutputDirectory, "midflight-vault");
-            var midflightStore = new EncryptedVaultStore(midflightVaultDir, ownerSid.Value);
+            var midflightStore = new EncryptedVaultStore(midflightVaultDir);
             var midflightLifecycle = new VaultLifecycle(midflightStore);
             midflightLifecycle.Provision(passphrase, out _);
             midflightLifecycle.Unlock(passphrase, false);

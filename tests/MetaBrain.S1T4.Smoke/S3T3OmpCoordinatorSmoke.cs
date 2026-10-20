@@ -66,7 +66,7 @@ internal sealed class S3T3OmpCoordinatorHarness : IDisposable
             Directory.CreateDirectory(serviceDirectory);
             SmokeFixture.SetRestrictedDirectoryAcl(serviceDirectory, ownerSid);
 
-            var store = new EncryptedVaultStore(Path.Combine(serviceDirectory, "vault"), ownerSid.Value);
+            var store = new EncryptedVaultStore(Path.Combine(serviceDirectory, "vault"));
             var lifecycle = new VaultLifecycle(store);
             if (!lifecycle.Provision(SyntheticPassphrase, out var recoveryCode) || recoveryCode is null)
             {

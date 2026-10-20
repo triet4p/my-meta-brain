@@ -31,7 +31,7 @@ internal static class LegacyVaultMigration
         var seeds = new List<VaultResourceSeed>(bindings.Length + 1);
         var sources = new List<(string Path, byte[] Content)>(bindings.Length + 1);
         var vaultPath = Path.Combine(Path.GetDirectoryName(fullSettingsPath)!, "vault");
-        var store = new EncryptedVaultStore(vaultPath, ownerSid);
+        var store = new EncryptedVaultStore(vaultPath);
         if (store.Exists)
         {
             throw new IOException("An encrypted vault already exists; migration will not overwrite it.");
@@ -58,7 +58,7 @@ internal static class LegacyVaultMigration
 
             if (File.Exists(settings.LegacyPolicyStorePath))
             {
-                var policyText = ProtectedFile.ReadPrivateFile(settings.LegacyPolicyStorePath, ownerSid, 4 * 1024 * 1024).Text;
+                var policyText = PrivateFile.Read(settings.LegacyPolicyStorePath, 4 * 1024 * 1024).Text;
                 var policyContent = Encoding.UTF8.GetBytes(policyText);
                 const string policyResourceId = "service-policy-state";
                 if (bindings.Any(binding => string.Equals(binding.ResourceId, policyResourceId, StringComparison.Ordinal)))

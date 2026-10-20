@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Security.Cryptography;
-using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using System.Windows;
@@ -48,9 +47,7 @@ internal static partial class OwnerServiceSmoke
     private static async Task RunS7T2ControlledSchedulerAsync()
     {
         using var fixture = SmokeFixture.CreateUninitialized();
-        var ownerSid = WindowsIdentity.GetCurrent().User
-            ?? throw new InvalidOperationException("The controlled S7-T2 fixture has no Windows owner SID.");
-        var store = new EncryptedVaultStore(fixture.VaultDirectoryPath, ownerSid.Value);
+        var store = new EncryptedVaultStore(fixture.VaultDirectoryPath);
         var passphrase = "S7T2-synthetic-controlled-passphrase-" + Guid.NewGuid().ToString("N");
         var vault = new VaultLifecycle(store);
         Require(vault.Provision(passphrase, out var recoveryCode) && recoveryCode is not null,

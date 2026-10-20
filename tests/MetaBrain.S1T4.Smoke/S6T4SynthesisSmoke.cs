@@ -1,5 +1,4 @@
 using System.Security.Cryptography;
-using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using MetaBrain.Application;
@@ -76,10 +75,8 @@ internal static partial class OwnerServiceSmoke
         Console.WriteLine("RUN S6-T4 explicit bounded multi-level synthesis walkthrough");
         using var fixture = SmokeFixture.CreateUninitialized();
         var passphrase = Convert.ToBase64String(RandomNumberGenerator.GetBytes(24));
-        var ownerSid = WindowsIdentity.GetCurrent().User
-            ?? throw new InvalidOperationException("The smoke harness has no user SID.");
 
-        var store = new EncryptedVaultStore(Path.Combine(fixture.OutputDirectory, "s6t4-vault"), ownerSid.Value);
+        var store = new EncryptedVaultStore(Path.Combine(fixture.OutputDirectory, "s6t4-vault"));
         var lifecycle = new VaultLifecycle(store);
         lifecycle.Provision(passphrase, out _);
         lifecycle.Unlock(passphrase, false);

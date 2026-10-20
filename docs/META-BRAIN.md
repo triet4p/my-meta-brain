@@ -127,7 +127,7 @@ Codex/OMP chạy bình thường, không bắt buộc AppContainer, account riê
 
 Vault khởi động locked; wrong/missing key hoặc tampering fail closed. Lock invalidates pending tokens/live sessions, dừng private reads/ingestion/jobs, chặn decrypt/response/send/commit mới tại effective lock boundary; bytes/context đã trả hoặc gửi provider trước đó không thu hồi được. Không persist plaintext để chạy khi khóa. Restart không auto unlock hoặc hồi sinh live/used tokens. Approved catalog có thể xem khi khóa; private access requests không nhận/persist khi chưa thể bảo vệ.
 
-Chỉ giữ plaintext/key cần thiết trong bộ nhớ lúc unlock, giải phóng cache/key handles khi lock; không hứa secure erasure tuyệt đối của mọi managed-memory/OS dump. Backup luôn encrypted; export plaintext chỉ sau owner unlock, chọn scope và xác nhận disclosure. ACL và log hygiene là defense-in-depth, không thay mã hóa hoặc được quảng cáo thành sandbox.
+Chỉ giữ plaintext/key cần thiết trong bộ nhớ lúc unlock, giải phóng cache/key handles khi lock; không hứa secure erasure tuyệt đối của mọi managed-memory/OS dump. Backup luôn encrypted; export plaintext chỉ sau owner unlock, chọn scope và xác nhận disclosure. Log hygiene không thay mã hóa. Owner-approved clarification 2026-10-20: agent không bao giờ được sửa ACL/DACL/owner/permissions hoặc host-system/configuration, kể cả fixture/temp hoặc gián tiếp qua product/scripts/tests; không coi đây là consent option hoặc prerequisite cho packaging. Host setup cần thiết do owner tự thực hiện theo runbook, evidence thiếu vẫn chặn gate. Boundary bảo vệ là encryption/key/lock và approved scoped APIs theo CR01/D016; không quảng cáo thành sandbox.
 
 ### 5.3. Catalog và luồng yêu cầu quyền
 

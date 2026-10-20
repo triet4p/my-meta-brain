@@ -46,7 +46,7 @@ S1-T9 [behavioral evidence A3](../artifacts/sprint-1/reviews/S1-T9-S1T9-REVIEW-2
 | 5 | Complete — M5 | S5-T1–T7 [x] | [Accepted evidence/checkpoints](sprint-plans/sprint-5.md#gate-record), latest commit `925cc3f2`; [final differential PASS](../artifacts/sprint-5/reviews/sprint-5-deep-d1.md), zero actionable findings |
 | 6 | Complete — M6 | S6-T1–T7 [x] | [Accepted task evidence/checkpoints](sprint-plans/sprint-6.md), latest `786267a0`; [final differential PASS](../artifacts/sprint-6/reviews/Sprint-6-S6-DEEP-20261018-R1.md), zero actionable findings. Owner semantic ACCEPT only T2 v3; no push. |
 | 7 | Complete — M7 | S7-T1–T6 [x] | Task evidence/checkpoints plus D1 F1 correction `ebaf0ab4`; [final differential D2 PASS](../artifacts/sprint-7/reviews/S7-DEEP-D2.md), zero actionable findings; [gate records](sprint-plans/sprint-7.md#gate-record); no push |
-| 8 | Not started | S8-T1…S8-T7 | Pending |
+| 8 | In progress — M8; T1 functionality owner-accepted, formal closeout pending | S8-T1 [~]; new S8-T1A full Owner UI audit/remediation immediately next; S8-T2–T7 pending | Full per-task evidence/checkpoint and final differential review; T1A owner usability acceptance required; no ACL/system mutation |
 
 S2-T1–T4 accepted checkpoints retained, latest `1bbdea7321127e2d851c67fac3c90d09db81970e`. Owner authorizes S2-T5–T7 sequential delivery then final deep. S2-T5 `S2T5-IMPL-20261009-A1` / planned agent `S2T5LifecycleA1`, Gold lifecycle/temporal/history integration, resolved `opencode-go/muse-spark-1.3-contributor:xhigh`, non-blocking; quota/provider-applied effort unknown. [Sprint 2 gate record](sprint-plans/sprint-2.md#gate-record) retains routing/evidence/checkpoint links and limitations. Both plans' prior Main-only status carryover/current orchestration explicitly owned by S2-T5 for review/checkpoint. No push or Sprint 3; next tasks wait predecessor PASS/checkpoint.
 
@@ -114,6 +114,7 @@ Giới hạn vận hành được khóa trước tuning, không nâng ngưỡng 
 - Summary drift/user belief: epistemic provenance và owner review giữ xuyên suốt; cross-zone synthesis/publication không tự mở new read grants.
 - UI approval/key management không dùng agent payload hoặc same-owner SID làm user consent; core/policy chung. Actual app API enforcement không ngăn same-owner OS agent giả owner qua host compromise.
 - Yêu cầu “production” bị thu hẹp thành demo: tất cả milestone bắt buộc; không có release completion trước Sprint 8 và owner acceptance.
+- Owner-approved Sprint 8 replans: key-vault scope, R01–R40, frozen targets and no agent ACL/owner/permissions/host-system/config mutations unchanged. Owner accepts T1 functionality; formal review/checkpoint remain pending. [Sprint 8](sprint-plans/sprint-8.md) inserts S8-T1A immediately after T1 for complete Owner UI audit and remediation, including every screen/state/input/navigation/cross-view workflow, accessibility, actionable feedback and privacy. T2–T7 retain IDs/order after T1A; each required checkpoint precedes the next task. UI acceptance requires an owner walkthrough without step-by-step agent guidance; no release PASS from functional T1 acceptance.
 
 ## Backlog / Future Work
 

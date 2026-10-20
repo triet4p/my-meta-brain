@@ -222,6 +222,7 @@ The project follows a phased milestone roadmap defined in [`docs/PLAN.md`](docs/
 - **Architecture & Product Specification:** [`docs/META-BRAIN.md`](docs/META-BRAIN.md)
 - **Requirements & Change Control Registry:** [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md)
 - **Master Plan & Milestones:** [`docs/PLAN.md`](docs/PLAN.md)
+- **Daily Installation and Operations Runbook:** [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
 - **Sprint 1 Execution & Gate Records:** [`docs/sprint-plans/sprint-1.md`](docs/sprint-plans/sprint-1.md)
 - **Architecture Decision Log:** [`.agents/memory/decisions.md`](.agents/memory/decisions.md)
 - **Agent Guidelines & Operational Invariants:** [`AGENTS.md`](AGENTS.md)

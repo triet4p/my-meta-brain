@@ -753,7 +753,7 @@ internal static partial class OwnerServiceSmoke
         // process; the shipping service binary carries no crash path.
         var ownerSid = System.Security.Principal.WindowsIdentity.GetCurrent().User
             ?? throw new InvalidOperationException("The S7-T5 crash fixture has no Windows owner SID.");
-        var store = new EncryptedVaultStore(fixture.VaultDirectoryPath, ownerSid.Value);
+        var store = new EncryptedVaultStore(fixture.VaultDirectoryPath);
         var vault = new VaultLifecycle(store);
         try
         {
@@ -806,7 +806,7 @@ internal static partial class OwnerServiceSmoke
 
     private static int CountS7T5RemainingInVault(SmokeFixture fixture, string ownerSid, string passphrase, string[] impactedTokens)
     {
-        var store = new EncryptedVaultStore(fixture.VaultDirectoryPath, ownerSid);
+        var store = new EncryptedVaultStore(fixture.VaultDirectoryPath);
         var vault = new VaultLifecycle(store);
         try
         {
@@ -841,7 +841,7 @@ internal static partial class OwnerServiceSmoke
         // commits Applying with one fewer Remaining, then faults. The caller
         // holds no service lease across this call, so the durable Applying
         // checkpoint is exactly what a killed service would have left.
-        var store = new EncryptedVaultStore(fixture.VaultDirectoryPath, ownerSid);
+        var store = new EncryptedVaultStore(fixture.VaultDirectoryPath);
         var vault = new VaultLifecycle(store);
         try
         {
@@ -872,7 +872,7 @@ internal static partial class OwnerServiceSmoke
         SmokeFixture fixture, string ownerSid, string passphrase,
         PurgeImpactPreview preview, string purgeId, int alreadySaved, int crashAfterSaves)
     {
-        var store = new EncryptedVaultStore(fixture.VaultDirectoryPath, ownerSid);
+        var store = new EncryptedVaultStore(fixture.VaultDirectoryPath);
         var vault = new VaultLifecycle(store);
         try
         {

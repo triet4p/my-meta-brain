@@ -84,7 +84,14 @@ Không dịch tên flow agents, async lifecycle hoặc artifact URLs của OMP s
 - Artifact when implementing: `artifacts/sprint-<N>/task-<M>.md` is the worker-owned record of CR01 baseline, task/attempt/agent/job IDs, changed scope, exact scenarios/observations/limits/open findings, and bounded advisor evidence. Append corrections to an existing task artifact rather than overwriting history or fabricating PASS. The evidence reviewer owns its report and manifest; the checkpoint executor owns its checkpoint record. Main writes only concise plan/status links, not evidence records. Graph maintenance is retired: no graph searches/checks/absence checks/update, even if a stale skill or agent instruction asks for them.
 - Giữ artifacts/, vault, raw sessions, secrets, token, runtime cache và build outputs ngoài Git. Tạo/cập nhật .gitignore trước khi sinh những dữ liệu đó. Owner-authorized planned implementation theo flow gồm per-task reviewed-snapshot commit checkpoint; ngoài phạm vi đó không tự commit, và không push nếu chưa được yêu cầu. Documentation-only planning không tự launch implementation hoặc tạo checkpoint PASS giả.
 - Cập nhật docs/changelog khi có product change. Documentation-only planning không thêm changelog entry giả về tính năng chưa có.
-- Không đọc private transcripts, gọi model/network provider, đổi ACL, cài service hoặc phá hủy dữ liệu ngoài consent/allowlist đã có. User-visible error là evidence, không rerun chỉ để phủ nhận báo cáo.
+- Không đọc private transcripts, gọi model/network provider hoặc phá hủy dữ liệu ngoài consent/allowlist đã có. User-visible error là evidence, không rerun chỉ để phủ nhận báo cáo. Cấm agent thay đổi ACL/owner/permissions hoặc cấu hình/tài nguyên hệ thống theo rule dưới đây.
+
+### Real-host safety — prohibited host mutations
+
+- Đây là máy thật. Theo owner clarification 2026-10-20 sau CR01/D016, agent KHÔNG BAO GIỜ được thay đổi ACL/DACL, owner, permissions hoặc security policy. Cấm cả fixture/temp và thay đổi gián tiếp qua installer/application/script/test. Consent fixture ACL trước đây đã hết hiệu lực; không hỏi lại để đưa ACL hardening trở lại scope.
+- Agent không thay đổi registry/autostart, service registration, scheduled task, firewall, account/identity, global environment/configuration, agent runtime/profile/settings hoặc tài nguyên/cấu hình hệ thống khác. Không sửa quyền thư mục cha, profile, SDK/cache hay `.omp`; không tự cấp quyền hoặc đổi identity để né `EPERM`/access denied.
+- Được sửa source/docs và dùng output/data ứng dụng trong phạm vi project/fixture đã được duyệt; đó không phải quyền thay đổi máy. Read-only toolchain access, network/provider/data access vẫn theo consent cụ thể, không có quyền ghi ngoài scope.
+- Nếu một path phụ thuộc host mutation: dừng trước execution, nêu chính xác command/API/resource, mục đích, tác động và rollback cho owner tự quyết định/thực hiện. Agent không chạy thay owner; ghi blocker và tiếp tục phần repo-local an toàn, không hạ encryption/API policy hoặc bỏ acceptance gate.
 
 ## Shared Skills — References
 

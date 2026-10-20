@@ -68,20 +68,28 @@ internal static class Program
                string.Equals(args[0], "s5-t4-console-proposals", StringComparison.Ordinal) ||
                string.Equals(args[0], "s5-t6-console-corpus", StringComparison.Ordinal) ||
                string.Equals(args[0], "s5-t7-console-fixture", StringComparison.Ordinal) ||
-               string.Equals(args[0], "s5-t7-console-corpus", StringComparison.Ordinal))
+               string.Equals(args[0], "s5-t7-console-corpus", StringComparison.Ordinal) ||
+               string.Equals(args[0], "s8-t1", StringComparison.Ordinal))
                 ? args[0]
                 : null;
         var executable = scenario is not null ? args[1] : args.Length == 1 ? args[0] : null;
-        if (executable is null || !File.Exists(executable))
+        // The installed lifecycle smoke takes the published payload directory
+        // instead of a single executable.
+        var isPayloadScenario = string.Equals(scenario, "s8-t1", StringComparison.Ordinal);
+        var payloadExists = isPayloadScenario
+            ? executable is not null && Directory.Exists(executable)
+            : executable is not null && File.Exists(executable);
+        if (!payloadExists)
         {
             Console.Error.WriteLine("Usage: MetaBrain.S1T4.Smoke <MetaBrain.Connections.exe> | scope-issue|agent-session|s1-t5|s1-t6|s1-t7|s1-t8|s1-t9|s2-t1|s2-t2|s2-t3|s2-t4|s2-t5|s2-t6|s2-t7|s3-t1|s3-t2|s3-t3|s3-t4|s3-t5|s3-t6|s4-t1|s4-t2|s4-t3|s4-t4|s4-t5|s4-t6|s4-t7|s4-t7-client-fixture|s4-t6-client-fixture|s5-t1 <MetaBrain.Connections.exe> | s5-t2 <MetaBrain.Connections.exe> | s5-t3 <MetaBrain.Connections.exe> | s5-t4 <MetaBrain.Connections.exe> | s5-t5 <MetaBrain.Connections.exe> | s5-t5-console-fixture|s5-t5-console-corpus| s5-t1-console-fixture|s5-t2-console-fixture|s5-t3-console-fixture|s5-t3-console-corpus|s5-t4-console-fixture|s5-t4-console-inbox|s5-t4-console-proposals <MetaBrain.Connections.exe> <fixture-root> | s6-t7|s6-t7-agent-read <MetaBrain.Connections.exe>");
             Console.Error.WriteLine("S7-T3 invocation: MetaBrain.S1T4.Smoke.exe s7-t3 <MetaBrain.Connections.exe>");
+            Console.Error.WriteLine("S8-T1 invocation: MetaBrain.S1T4.Smoke.exe s8-t1 <published-payload-dir> <fixture-root>");
             return 2;
         }
 
         try
         {
-            var fullPath = Path.GetFullPath(executable);
+            var fullPath = Path.GetFullPath(executable!);
             switch (scenario)
             {
                 case "scope-issue":
@@ -278,6 +286,9 @@ internal static class Program
                     break;
                 case "s7-t6":
                     await OwnerServiceSmoke.RunS7T6ReviewAsync(fullPath).ConfigureAwait(false);
+                    break;
+                case "s8-t1":
+                    await S8T1InstallLifecycleSmoke.RunAsync(fullPath, Path.GetFullPath(args[2]!)).ConfigureAwait(false);
                     break;
                 default:
                     await OwnerServiceSmoke.RunAsync(fullPath).ConfigureAwait(false);

@@ -1,22 +1,18 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
-using System.Security.AccessControl;
 using System.Security.Cryptography;
-using System.Security.Principal;
 using System.Text;
 
 namespace MetaBrain.Connections;
 
 /// <summary>
 /// Local DPAPI-protected handoff for the single-use agent session bearer.
-/// Same protection shape as the owner token handoff: CurrentUser DPAPI with an
-/// owner/SYSTEM/Administrators protected ACL. The session bearer is never passed
-/// as args/env/config/log output or embedded in a URI.
+/// Same protection shape as the owner token handoff: the bearer is sealed for
+/// the current user with DPAPI, so only that account can open it. The session
+/// bearer is never passed as args/env/config/log output or embedded in a URI.
 /// </summary>
 internal static class AgentSessionFile
 {
-    private static readonly SecurityIdentifier SystemSid = new("S-1-5-18");
-    private static readonly SecurityIdentifier AdministratorsSid = new("S-1-5-32-544");
     private static readonly byte[] SessionPurpose = Encoding.ASCII.GetBytes("MetaBrain|agent-session-handoff|v1");
     private static readonly byte[] HandoffPurpose = Encoding.ASCII.GetBytes("MetaBrain|owner-token-handoff|v1");
     private const uint CryptProtectUiForbidden = 0x1;
@@ -71,35 +67,12 @@ internal static class AgentSessionFile
             throw new IOException("The agent session destination must be a new file in an existing non-reparse directory.");
         }
 
-        var ownerSid = WindowsIdentity.GetCurrent().User
-            ?? throw new UnauthorizedAccessException("The agent session process has no user SID.");
         var plaintext = Encoding.ASCII.GetBytes(sessionToken);
         byte[]? protectedBytes = null;
         try
         {
             protectedBytes = Protect(plaintext, SessionPurpose);
             using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough);
-            try
-            {
-                var security = new FileSecurity();
-                security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-                security.SetOwner(ownerSid);
-                security.AddAccessRule(new FileSystemAccessRule(ownerSid, FileSystemRights.FullControl, AccessControlType.Allow));
-                security.AddAccessRule(new FileSystemAccessRule(SystemSid, FileSystemRights.FullControl, AccessControlType.Allow));
-                security.AddAccessRule(new FileSystemAccessRule(AdministratorsSid, FileSystemRights.FullControl, AccessControlType.Allow));
-                FileSystemAclExtensions.SetAccessControl(new FileInfo(path), security);
-            }
-            catch
-            {
-                stream.Dispose();
-                if (File.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0)
-                {
-                    File.Delete(path);
-                }
-
-                throw;
-            }
-
             stream.Write(protectedBytes);
             stream.Flush(flushToDisk: true);
         }
