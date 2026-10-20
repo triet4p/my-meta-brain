@@ -6,7 +6,7 @@ Nhớ đúng thời điểm, nhắc đúng ý định đã được yêu cầu, 
 
 ## Status and Dependencies
 
-- Status: In progress — S7-T1–T6 có accepted evidence/checkpoints; final differential FAIL F1 mở lại S7-T3 để sửa archived contextual reminder bypass. S7-T4/T5/T6 vẫn accepted; sprint completion bị chặn tới correction/review/checkpoint và fresh deep PASS.
+- Status: Complete — M7. S7-T1–T6 có accepted runtime evidence, independent evidence PASS và checkpoint riêng; D1 F1 correction có fresh review/checkpoint và sprint-final D2 PASS, không actionable findings. Sprint 8 chưa bắt đầu; không push.
 - [Global plan](../PLAN.md), [specification](../META-BRAIN.md), [requirements](../REQUIREMENTS.md).
 - Requirements: R26–R29; bảo toàn R01, R03–R06, R08, R12, R14, R18, R25, R30, R36.
 
@@ -30,7 +30,7 @@ Workflow S7-T1–T6: full route, tuần tự; mỗi task cần runtime smoke, in
     - Acceptance: explicit create/edit/cancel, timezone/clock policy đúng; offline hoặc locked qua deadline rồi restart/unlock vẫn due, không notified=done hoặc notification storm. Locked không lộ intention/title/body hoặc tự unlock; trạng thái encrypted bền vững.
     - Evidence: actual controlled-time scheduler, offline/lock/restart/unlock/cancel/reschedule, actual UI due list và no private notifications khi locked; không long sleep tests.
 
-- [~] **S7-T3 — Contextual intention recall và owner controls.** Requirements: R27, R01, R24, R30.
+- [x] **S7-T3 — Contextual intention recall và owner controls.** Requirements: R27, R01, R24, R30.
     - Scope: trigger theo project/task context user chỉ định, surfaced qua brief/MCP và timeline UI.
     - Acceptance: enabled trigger và approved ID/revision session scope mới hiện, read không done; explicit owner controls; no private notification khi locked hoặc outside scope. New intention/member/revision không tự vào grant; disable ngừng trigger.
     - Evidence: mở hai project contexts với grants khác nhau; due/context reminder → acknowledge → explicit complete, hỏi lịch sử vẫn thấy motivation gốc.
@@ -73,3 +73,7 @@ S7-T5 accepted: [worker evidence/corrections](../../artifacts/sprint-7/task-5.md
 S7-T6 accepted: [worker evidence](../../artifacts/sprint-7/task-6.md), [R1 evidence PASS](../../artifacts/sprint-7/reviews/S7-T6-R1.md), [exact-snapshot checkpoint](../../artifacts/sprint-7/checkpoints/S7-T6-C1.md), commit `7889fd9ed0d8e62401b42ca5f5f72c3156c25bd1`. Final differential pending; inherited D062 record gap được chuyển cho sprint-final review. Không push.
 
 Final differential [D1 FAIL](../../artifacts/sprint-7/reviews/S7-DEEP-D1.md): F1 (S7-T3 × S7-T4) contextual reminder bypasses archive exclusion; correction cần default omission trace/explicit expansion/restore parity, fresh evidence review và checkpoint trước fresh deep review. D062 empty body và T2 inline hash transcription được phân loại nonblocking trong report; không hạ gate.
+
+D1 F1 correction accepted: [T3 correction evidence](../../artifacts/sprint-7/task-3.md), [R2 evidence PASS](../../artifacts/sprint-7/reviews/S7-T3-R2.md), [C2 exact-snapshot checkpoint](../../artifacts/sprint-7/checkpoints/S7-T3-C2.md), commit `ebaf0ab4e4893100296b03826c70480702adee92`. Fresh deep review pending; không push.
+
+Sprint-final [D2 differential PASS](../../artifacts/sprint-7/reviews/S7-DEEP-D2.md), reviewed commit `ebaf0ab4e4893100296b03826c70480702adee92`, zero actionable findings; D1 F1 đã đóng qua T3 correction/review/C2 checkpoint. D062 historical body gap (LOW) và T2 inline hash transcription (INFO, manifest/checkpoint exact) giữ nonblocking classification. Synthetic encrypted vaults/real named pipes/MCP/WPF đã exercise theo task records; không claim production-vault migration, provider execution mới, physical secure erase hoặc xóa external/retained-backup copies. Final Main status-only plan edits sau checkpoint chưa commit; không push.
