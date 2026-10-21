@@ -45,6 +45,7 @@
                         <ListBoxItem Content="Jobs" Padding="8,6" />
                         <ListBoxItem Content="Intentions" Padding="8,6" />
                         <ListBoxItem Content="Review queue" Padding="8,6" />
+                        <ListBoxItem Content="Backup &amp; export" Padding="8,6" />
                     </ListBox>
                 </DockPanel>
             </Border>
@@ -1535,6 +1536,158 @@
                                    Text="• Locking, losing the service or ending the owner session clears this view and its controls. Your recorded reviews stay in the vault and come back with the next read." />
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
                                    Text="• Keyboard: Enter opens the selected row, F5 reads the queue again, Ctrl+L locks the vault." />
+                    </StackPanel>
+
+                    <StackPanel x:Name="BackupExportPanel" Visibility="Collapsed">
+                        <TextBlock Text="Backup &amp; export — your copy, your scope" FontSize="19" FontWeight="SemiBold" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,8,0,0"
+                                   Text="Three owner acts live here: take an encrypted backup of your vault, restore a backup into a new folder, and write a readable copy of the records you choose. The service does all three on the owner control pipe; this console chooses the file, the folder and the scope, and shows exactly what the service said." />
+                        <TextBlock Text="The backup needs the unlocked vault. The restore does not: you can restore while the vault is locked, because a restore opens a backup file and writes a new folder instead of reading the live vault. The export needs the unlocked vault, because it reads your records." TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280" />
+
+                        <Border x:Name="BackupSectionPanel" Margin="0,16,0,0" Padding="14" Background="White"
+                                BorderBrush="#FFD5D8DC" BorderThickness="1" CornerRadius="3">
+                            <StackPanel>
+                                <TextBlock Text="1. Encrypted backup" FontWeight="SemiBold" FontSize="15" />
+                                <TextBlock TextWrapping="Wrap" Margin="0,6,0,0"
+                                           Text="One file that holds your records sealed with the vault key, plus the same wrapped key the live vault already holds. It never holds the data key, your passphrase, your recovery key, a token or a session, and it never holds readable record text. A backup file on its own opens nothing; a backup file together with your passphrase opens everything — keep it where you keep your recovery key." />
+                                <TextBlock Text="Backup file" Margin="0,10,0,2" Foreground="#FF6B7280" />
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="BackupPathInput" Grid.Column="0" MinWidth="380"
+                                             AutomationProperties.AutomationId="BackupPathInput" />
+                                    <Button x:Name="BackupBrowseButton" Grid.Column="1" Content="Choose file…" Padding="14,7" Margin="8,0,0,0"
+                                            AutomationProperties.AutomationId="BackupBrowseButton" Click="OnBackupBrowseClicked" />
+                                </Grid>
+                                <TextBlock x:Name="BackupPathHintText" TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280" />
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                    <Button x:Name="BackupRunButton" Content="Create encrypted backup" Padding="14,7"
+                                            AutomationProperties.AutomationId="BackupRunButton" Click="OnBackupRunClicked" />
+                                </StackPanel>
+                                <TextBlock x:Name="BackupMessageText" TextWrapping="Wrap" Margin="0,10,0,0" FontWeight="SemiBold"
+                                           AutomationProperties.AutomationId="BackupMessageText" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border x:Name="RestoreSectionPanel" Margin="0,16,0,0" Padding="14" Background="White"
+                                BorderBrush="#FFD5D8DC" BorderThickness="1" CornerRadius="3">
+                            <StackPanel>
+                                <TextBlock Text="2. Clean restore into a new folder" FontWeight="SemiBold" FontSize="15" />
+                                <TextBlock TextWrapping="Wrap" Margin="0,6,0,0"
+                                           Text="A restore writes a brand-new vault folder. The folder must not exist yet, and your live vault is never replaced: the running service keeps serving the live vault, and the restored copy becomes yours to point a vault directory setting at. Your data comes back — records, revisions, relations, sources, lifecycle, archive and the fact that something was deleted — but no live grant, no agent session and no redeemable token does." />
+                                <TextBlock Text="Backup file to restore" Margin="0,10,0,2" Foreground="#FF6B7280" />
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="RestoreBackupPathInput" Grid.Column="0" MinWidth="380"
+                                             AutomationProperties.AutomationId="RestoreBackupPathInput" />
+                                    <Button x:Name="RestoreBackupBrowseButton" Grid.Column="1" Content="Choose file…" Padding="14,7" Margin="8,0,0,0"
+                                            AutomationProperties.AutomationId="RestoreBackupBrowseButton" Click="OnRestoreBackupBrowseClicked" />
+                                </Grid>
+                                <TextBlock Text="New folder for the restored vault (it must not exist yet)" Margin="0,10,0,2" Foreground="#FF6B7280" />
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="RestoreTargetPathInput" Grid.Column="0" MinWidth="380"
+                                             AutomationProperties.AutomationId="RestoreTargetPathInput" />
+                                    <Button x:Name="RestoreTargetBrowseButton" Grid.Column="1" Content="Choose folder…" Padding="14,7" Margin="8,0,0,0"
+                                            AutomationProperties.AutomationId="RestoreTargetBrowseButton" Click="OnRestoreTargetBrowseClicked" />
+                                </Grid>
+                                <TextBlock x:Name="RestoreTargetHintText" TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280" />
+                                <TextBlock Text="Credential that opens this backup" Margin="0,10,0,2" Foreground="#FF6B7280" />
+                                <StackPanel Orientation="Horizontal">
+                                    <ComboBox x:Name="RestoreCredentialModeInput" Width="220"
+                                              AutomationProperties.AutomationId="RestoreCredentialModeInput"
+                                              SelectionChanged="OnRestoreCredentialModeChanged" />
+                                    <PasswordBox x:Name="RestoreCredentialInput" Width="320" Margin="8,0,0,0"
+                                                 AutomationProperties.AutomationId="RestoreCredentialInput"
+                                                 PasswordChanged="OnSecretFieldChanged" />
+                                </StackPanel>
+                                <TextBlock x:Name="RestoreCredentialHintText" TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280" />
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                    <Button x:Name="RestoreRunButton" Content="Restore into the new folder" Padding="14,7"
+                                            AutomationProperties.AutomationId="RestoreRunButton" Click="OnRestoreRunClicked" />
+                                </StackPanel>
+                                <TextBlock x:Name="RestoreMessageText" TextWrapping="Wrap" Margin="0,10,0,0" FontWeight="SemiBold"
+                                           AutomationProperties.AutomationId="RestoreMessageText" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border x:Name="ExportSectionPanel" Margin="0,16,0,0" Padding="14" Background="#FFFFF7E6"
+                                BorderBrush="#FFE0B44A" BorderThickness="1" CornerRadius="3">
+                            <StackPanel>
+                                <TextBlock Text="3. Explicit readable export — a copy that cannot be taken back" FontWeight="SemiBold" FontSize="15" />
+                                <TextBlock TextWrapping="Wrap" Margin="0,6,0,0"
+                                           Text="An export writes your chosen records as plain text that any program can read, outside the encrypted vault. It is a disclosure: a copy that has left the vault is not revoked by a later lock, a later purge or a later export, and only deleting the file removes it. Nothing is exported until you pick the scope and choose the file." />
+                                <TextBlock Text="Find the records to export" Margin="0,10,0,2" Foreground="#FF6B7280" />
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBox x:Name="ExportSearchInput" Width="360"
+                                             AutomationProperties.AutomationId="ExportSearchInput"
+                                             KeyDown="OnExportSearchKeyDown" />
+                                    <Button x:Name="ExportSearchButton" Content="Find records" Padding="14,7" Margin="8,0,0,0"
+                                            AutomationProperties.AutomationId="ExportSearchButton" Click="OnExportSearchClicked" />
+                                </StackPanel>
+                                <TextBlock x:Name="ExportCandidateMessageText" TextWrapping="Wrap" Margin="0,6,0,0" FontWeight="SemiBold"
+                                           AutomationProperties.AutomationId="ExportCandidateMessageText" />
+                                <ListBox x:Name="ExportCandidatesList" Height="150" Margin="0,6,0,0" Background="White" BorderBrush="#FFD5D8DC"
+                                         AutomationProperties.AutomationId="ExportCandidatesList"
+                                         SelectionMode="Extended"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                         SelectionChanged="OnExportCandidatesSelectionChanged">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Margin="2">
+                                                <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                                <TextBlock Text="{Binding Detail}" Foreground="#FF6B7280" TextWrapping="Wrap" Margin="0,2,0,0" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                <TextBlock x:Name="ExportSourceMessageText" TextWrapping="Wrap" Margin="0,6,0,0" FontWeight="SemiBold"
+                                           AutomationProperties.AutomationId="ExportSourceMessageText" />
+                                <TextBlock x:Name="ExportScopeText" TextWrapping="Wrap" Margin="0,8,0,0" FontWeight="SemiBold"
+                                           AutomationProperties.AutomationId="ExportScopeText" />
+                                <CheckBox x:Name="ExportIncludeRelationsCheck" Margin="0,8,0,0" Content="Include the relations between the selected records"
+                                          AutomationProperties.AutomationId="ExportIncludeRelationsCheck" />
+                                <CheckBox x:Name="ExportIncludeLifecycleCheck" Margin="0,4,0,0" Content="Include the lifecycle states of the selected records"
+                                          AutomationProperties.AutomationId="ExportIncludeLifecycleCheck" />
+                                <TextBlock Text="Where to write the readable copy" Margin="0,10,0,2" Foreground="#FF6B7280" />
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="ExportPathInput" Grid.Column="0" MinWidth="380"
+                                             AutomationProperties.AutomationId="ExportPathInput" />
+                                    <Button x:Name="ExportBrowseButton" Grid.Column="1" Content="Choose file…" Padding="14,7" Margin="8,0,0,0"
+                                            AutomationProperties.AutomationId="ExportBrowseButton" Click="OnExportBrowseClicked" />
+                                </Grid>
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                    <Button x:Name="ExportRunButton" Content="Write the readable copy" Padding="14,7"
+                                            AutomationProperties.AutomationId="ExportRunButton" Click="OnExportRunClicked" />
+                                </StackPanel>
+                                <TextBlock x:Name="ExportMessageText" TextWrapping="Wrap" Margin="0,10,0,0" FontWeight="SemiBold"
+                                           AutomationProperties.AutomationId="ExportMessageText" />
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Text="What this view does not do" FontWeight="SemiBold" Margin="0,20,0,6" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• This console holds no vault key, opens no vault file and keeps no copy of your records. The backup, the restore and the export are performed by the service; this console chooses the file, the folder and the scope." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• The restore credential goes from the field above into exactly one request and is cleared straight after. It is never written to a file, never logged and never shown again." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• A restore never replaces the live vault and never asks for a confirmation that could be mistaken for one: it writes a new folder, and it refuses if that folder already exists." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Locking the vault, losing the service or ending the session clears this view: the chosen paths, the export selection and the credential field go with it. Nothing here unlocks the vault by itself." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Keyboard: Tab moves through the fields, Enter in the search field finds the records to export, and Ctrl+L locks the vault." />
                     </StackPanel>
                 </Grid>
             </ScrollViewer>

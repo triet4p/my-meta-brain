@@ -101,6 +101,12 @@ internal sealed class EncryptedVaultStore
 
     public bool Exists => File.Exists(_headerPath) || Directory.Exists(_root);
 
+    /// <summary>The manifest schema version this store writes and reads.</summary>
+    internal int ManifestSchemaVersion => CurrentManifestSchemaVersion;
+
+    /// <summary>The resource schema version this store writes and reads.</summary>
+    internal int ResourceSchemaVersion => CurrentResourceSchemaVersion;
+
     public VaultKeyMaterial Create(string passphrase, IReadOnlyList<VaultResourceSeed> seeds)
     {
         ArgumentNullException.ThrowIfNull(passphrase);
@@ -1446,6 +1452,105 @@ internal sealed class EncryptedVaultStore
         }
 
         return reaped;
+    }
+
+    /// <summary>
+    /// S8-T2 the key envelope of this vault, exactly as the live header holds
+    /// it: the passphrase-wrapped and the recovery-wrapped form of the data
+    /// key. The plaintext data key is never part of it, so a backup can carry
+    /// the envelope without carrying the key.
+    /// </summary>
+    internal string ReadKeyEnvelopeJson()
+    {
+        var text = PrivateFile.Read(_headerPath, 64 * 1024).Text;
+        var header = JsonSerializer.Deserialize<VaultHeader>(text, JsonOptions)
+            ?? throw new InvalidDataException("Invalid encrypted vault header.");
+        ValidateHeader(header);
+        return text;
+    }
+
+    /// <summary>
+    /// S8-T2 unwraps the data key from a key envelope with the owner's
+    /// passphrase or recovery code. A wrong or missing credential fails closed
+    /// with no key, no fallback and no new key material.
+    /// </summary>
+    internal bool TryUnwrapBackupKey(
+        string keyEnvelopeJson,
+        string credential,
+        bool useRecoveryCode,
+        out byte[]? dataKey,
+        out string? vaultId)
+    {
+        dataKey = null;
+        vaultId = null;
+        if (string.IsNullOrEmpty(credential))
+        {
+            return false;
+        }
+
+        try
+        {
+            var header = JsonSerializer.Deserialize<VaultHeader>(keyEnvelopeJson, JsonOptions)
+                ?? throw new InvalidDataException("Invalid encrypted vault header.");
+            ValidateHeader(header);
+            vaultId = header.VaultId;
+            var wrapper = useRecoveryCode ? header.RecoveryKey : header.PassphraseKey;
+            return TryUnwrapDataKey(credential, header.VaultId, useRecoveryCode ? "recovery" : "passphrase", wrapper, out dataKey);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or CryptographicException or ArgumentException or FormatException)
+        {
+            dataKey = null;
+            vaultId = null;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// S8-T2 writes the restored vault header. The header is the owner's own
+    /// envelope, so the restored vault opens with the same passphrase and the
+    /// same recovery code the live vault uses; nothing about it is re-keyed.
+    /// </summary>
+    internal void WriteRestoredHeader(string keyEnvelopeJson)
+    {
+        var header = JsonSerializer.Deserialize<VaultHeader>(keyEnvelopeJson, JsonOptions)
+            ?? throw new InvalidDataException("Invalid encrypted vault header.");
+        ValidateHeader(header);
+        WriteJsonFile(Path.Combine(_root, "vault-header.json"), header);
+    }
+
+    /// <summary>
+    /// S8-T2 writes one restored resource ciphertext. The envelope keeps the
+    /// binding of the live store: the vault, the resource, its schema and its
+    /// exact revision, so the restored record is read back under the same
+    /// revision gate as the record it came from.
+    /// </summary>
+    internal void WriteRestoredResource(
+        string vaultId,
+        VaultResourceDescriptor descriptor,
+        byte[] content,
+        byte[] dataKey)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
+        if (!IsStorageName(descriptor.StorageName) || descriptor.Revision < 1 || content.Length == 0)
+        {
+            throw new InvalidDataException("Invalid encrypted vault resource.");
+        }
+
+        Directory.CreateDirectory(Path.Combine(_root, "resources"));
+        WriteResourceFile(_root, vaultId, descriptor, content, dataKey);
+    }
+
+    /// <summary>
+    /// S8-T2 writes the restored manifest. The manifest keeps the vault, the
+    /// resource identities, the zones and the exact revisions of the snapshot,
+    /// so every relation, source, lifecycle and archive reference in the
+    /// restored records still points at the revision it was written against.
+    /// </summary>
+    internal void WriteRestoredManifest(string vaultId, VaultManifest manifest, byte[] dataKey)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        ValidateManifest(manifest, vaultId);
+        WriteManifest(_root, vaultId, manifest, dataKey);
     }
 
     private string ResolveResourcePath(string storageName)

@@ -102,6 +102,10 @@ internal static class OwnerControlCli
                 "unlock" => await UnlockAsync(options, useRecoveryCode: false).ConfigureAwait(false),
                 "recover" => await UnlockAsync(options, useRecoveryCode: true).ConfigureAwait(false),
                 "lock" => await LockAsync(options).ConfigureAwait(false),
+                "backup" => await BackupAsync(options).ConfigureAwait(false),
+                "restore" => await RestoreAsync(options, useRecoveryCode: false).ConfigureAwait(false),
+                "restore-with-recovery-code" => await RestoreAsync(options, useRecoveryCode: true).ConfigureAwait(false),
+                "export" => await ExportAsync(options).ConfigureAwait(false),
                 "grant" => await GrantAsync(options).ConfigureAwait(false),
                 "grants" => await ListGrantsAsync(options).ConfigureAwait(false),
                 "collection-set" => await SetCollectionAsync(options).ConfigureAwait(false),
@@ -2739,6 +2743,156 @@ internal static class OwnerControlCli
         return 0;
     }
 
+    /// <summary>
+    /// S8-T2 the owner backup act: one encrypted snapshot of the unlocked
+    /// vault. The file holds the encrypted snapshot and the wrapped key
+    /// envelope, never the data key, a credential, a session or a token.
+    /// </summary>
+    private static async Task<int> BackupAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--output-file");
+        var controlPipe = ControlPipe(options);
+        var outputFile = options.Required("--output-file");
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerVaultBackupOperation,
+                BackupPath: outputFile)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "backed_up") ||
+            !result.Reply.TryGetProperty("backup", out var backup))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine(
+            $"BACKUP written id={JsonValueText(backup, "backupId")} path={JsonValueText(backup, "path")} " +
+            $"bytes={JsonNumberText(backup, "bytes")} records={JsonNumberText(backup, "recordCount")} " +
+            $"manifestRevision={JsonNumberText(backup, "manifestRevision")}");
+        return 0;
+    }
+
+    /// <summary>
+    /// S8-T2 the owner restore act: one encrypted backup becomes a clean
+    /// vault directory. The owner presents the passphrase or the recovery
+    /// code; a wrong credential or a damaged backup fails closed with nothing
+    /// written and no reset.
+    /// </summary>
+    private static async Task<int> RestoreAsync(CommandOptions options, bool useRecoveryCode)
+    {
+        options.RequireOnly("--control-pipe", "--backup-file", "--target-directory");
+        var controlPipe = ControlPipe(options);
+        var backupFile = options.Required("--backup-file");
+        var targetDirectory = options.Required("--target-directory");
+        var credential = ReadSecret(useRecoveryCode ? "Backup recovery key: " : "Vault passphrase: ");
+        if (string.IsNullOrEmpty(credential))
+        {
+            Console.Error.WriteLine("ERROR credential_required");
+            return 3;
+        }
+
+        var request = useRecoveryCode
+            ? new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerVaultRestoreOperation,
+                BackupPath: backupFile,
+                TargetPath: targetDirectory,
+                RecoveryCode: credential)
+            : new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerVaultRestoreOperation,
+                BackupPath: backupFile,
+                TargetPath: targetDirectory,
+                Passphrase: credential);
+        var result = await InvokeOwnerAsync(controlPipe, request).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "restored") ||
+            !result.Reply.TryGetProperty("restore", out var restore))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine(
+            $"RESTORE written id={JsonValueText(restore, "backupId")} path={JsonValueText(restore, "path")} " +
+            $"records={JsonNumberText(restore, "recordCount")} liveGrants={JsonNumberText(restore, "liveGrantsRestored")} " +
+            $"consumedTokens={JsonNumberText(restore, "consumedTokensPreserved")}");
+        return 0;
+    }
+
+    /// <summary>
+    /// S8-T2 the owner export act: the records the owner selected leave the
+    /// vault as one readable plaintext file. The file is written once and
+    /// never over an existing file; a copy that was made is not revoked by a
+    /// later purge or lock.
+    /// </summary>
+    private static async Task<int> ExportAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-ids", "--output-file",
+            "--include-relations", "--include-lifecycle-states");
+        var controlPipe = ControlPipe(options);
+        var resourceIds = ParseIdentifiers(options.Required("--resource-ids"));
+        var outputFile = options.Required("--output-file");
+        var includeRelations = ParseBooleanOption(options.Optional("--include-relations"));
+        var includeLifecycle = ParseBooleanOption(options.Optional("--include-lifecycle-states"));
+        if (resourceIds is null || resourceIds.Length == 0)
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerExportOperation,
+                ResourceIds: resourceIds,
+                IncludeRelations: includeRelations,
+                IncludeLifecycleStates: includeLifecycle)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "exported") ||
+            !result.Reply.TryGetProperty("contentBase64", out var content) ||
+            content.ValueKind != JsonValueKind.String)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        var bytes = Convert.FromBase64String(content.GetString() ?? string.Empty);
+        try
+        {
+            await using (var output = new FileStream(outputFile, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                await output.WriteAsync(bytes).ConfigureAwait(false);
+                await output.FlushAsync().ConfigureAwait(false);
+            }
+
+            result.Reply.TryGetProperty("export", out var export);
+            Console.WriteLine(
+                $"EXPORT written path={outputFile} bytes={bytes.LongLength.ToString(CultureInfo.InvariantCulture)} " +
+                $"records={JsonNumberText(export, "recordCount")} relations={JsonNumberText(export, "relationCount")} " +
+                $"withheldCitations={JsonNumberText(export, "withheldCitationCount")} " +
+                $"withheldRelations={JsonNumberText(export, "withheldRelationCount")}");
+            return 0;
+        }
+        catch (IOException)
+        {
+            Console.Error.WriteLine("ERROR export_file_unwritable");
+            return 4;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(bytes);
+        }
+    }
+
+    private static bool ParseBooleanOption(string? value)
+    {
+        if (value is null)
+        {
+            return false;
+        }
+
+        if (bool.TryParse(value, out var parsed))
+        {
+            return parsed;
+        }
+
+        throw new ArgumentException("A boolean option must be true or false.");
+    }
+
     private static async Task<int> GrantAsync(CommandOptions options)
     {
         options.RequireOnly("--control-pipe", "--zone-id", "--collection-id", "--resource-ids", "--operations",
@@ -3543,6 +3697,13 @@ internal static class OwnerControlCli
 
     private static string JsonValueText(JsonElement value, string property) =>
         value.TryGetProperty(property, out var item) ? item.ToString() : "unknown";
+
+    private static string JsonNumberText(JsonElement value, string property) =>
+        value.ValueKind == JsonValueKind.Object &&
+        value.TryGetProperty(property, out var item) &&
+        item.ValueKind == JsonValueKind.Number
+            ? item.GetInt64().ToString(CultureInfo.InvariantCulture)
+            : "unknown";
 
     /// <summary>
     /// Optional string fields (a question state that does not apply, a missing
@@ -5276,6 +5437,8 @@ internal static class OwnerControlCli
         Console.Error.WriteLine("Recall policy: owner recall-apply --resource-id --act {demote|pin|archive|restore} [--reason text] | owner recall-read --resource-id; the act changes only how an item is offered, never its content, evidence, revision or any scope.");
         Console.Error.WriteLine("Owner purge: owner purge-preview --resource-id --resource-revision --reason text | owner purge-confirm --purge-id --resource-id --resource-revision --target-zone --target-kind --impacted id|rev|kind|reason,... --live-generation N [--catalog-ids ...] --reason text (type PURGE) | owner purge-resume --purge-id; deletes exactly the previewed canonical copies and withdraws the mapped catalog.");
         Console.Error.WriteLine("Review queue: owner review-list | owner review-record --resource-id --reason text; the queue reports due review-after, a source that moved past the cited revision, a missing source and an unavailable source, and the act records only that the owner looked.");
+        Console.Error.WriteLine("Owner backup: owner backup --control-pipe --output-file <file> | owner restore --control-pipe --backup-file <file> --target-directory <dir> | owner restore-with-recovery-code --control-pipe --backup-file <file> --target-directory <dir>; the backup is encrypted, the restore needs the passphrase or the recovery key, the target must be a directory that does not exist yet, and a wrong key or a damaged backup writes nothing.");
+        Console.Error.WriteLine("Owner export: owner export --control-pipe --resource-ids id,id --output-file <file> [--include-relations true] [--include-lifecycle-states true]; the export is plaintext, holds exactly the selected records, withholds a citation to a source outside the selection, and is a copy the vault cannot revoke afterwards.");
         return 2;
     }
 

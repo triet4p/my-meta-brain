@@ -110,6 +110,93 @@ MetaBrain.Connections.exe owner lock     --control-pipe <control-pipe>
 outside the vault. `unlock` accepts the passphrase or, with `owner recover`, the recovery key.
 The owner console (`owner-ui/MetaBrain.OwnerUi.exe`) drives the same operations.
 
+### 4.1 Encrypted backup, restore and owner-scoped export
+
+Three owner acts live on the owner control channel. They are owner-only: the agent channel refuses
+them, and no agent can mint, widen or reuse any of them.
+
+```text
+# 1. One encrypted snapshot of the unlocked vault
+MetaBrain.Connections.exe owner backup --control-pipe <control-pipe> --output-file <backup file>
+
+# 2. Restore that snapshot into a clean directory
+MetaBrain.Connections.exe owner restore --control-pipe <control-pipe> \
+    --backup-file <backup file> --target-directory <directory that does not exist yet>
+MetaBrain.Connections.exe owner restore-with-recovery-code --control-pipe <control-pipe> \
+    --backup-file <backup file> --target-directory <directory that does not exist yet>
+
+# 3. Export the records you selected as one readable plaintext file
+MetaBrain.Connections.exe owner export --control-pipe <control-pipe> \
+    --resource-ids <id>,<id> --output-file <file> \
+    [--include-relations true] [--include-lifecycle-states true]
+```
+
+**In the owner console.** The same three acts are on the console view **Backup & export**
+(`owner-ui\MetaBrain.OwnerUi.exe --control-pipe <control-pipe>`), so the owner never has to type an
+operation, a resource ID or a path:
+
+- **1. Encrypted backup** — pick the file with *Choose file…* (or type the path) and choose
+  *Create encrypted backup*. The vault has to be unlocked; the file is written once and an
+  existing file is never overwritten.
+- **2. Clean restore into a new folder** — pick the backup file, pick the folder the restored
+  vault should go into (it must not exist yet), choose *Owner passphrase* or *Recovery key*, type
+  the credential and choose *Restore into the new folder*. The credential travels in that one
+  request and the field is cleared right after it. A restore works while the vault is locked,
+  because it opens a backup file and writes a new folder instead of reading the live vault. The
+  live vault is never replaced: to work with the restored copy, point a vault directory setting at
+  it.
+- **3. Explicit readable export** — search for the records you want to copy out, choose them by
+  their title in the ranked list, and — if the records cite a source — choose the cited source the
+  service names, because a citation to a source outside your selection is withheld whole. Then pick
+  the file and choose *Write the readable copy*. The file is plaintext, it is written once, and a
+  copy that has left the vault is not revoked by a later lock, purge or export.
+
+Locking the vault, losing the service or ending the owner session clears this view: the chosen
+paths, the export selection and the credential field go with it, and no answer that was already in
+flight can restore them.
+
+**What the backup file is.** One file that holds the encrypted snapshot and the wrapped key
+envelope of the vault. It never holds the data key, a passphrase, a recovery key, a token, a session
+or any record content in readable form: the snapshot is sealed with the vault's data key, and the
+envelope in the file is the same passphrase-wrapped and recovery-wrapped key the live vault header
+already holds. A backup file on its own opens nothing; a backup file **together with your
+passphrase or your recovery key** opens your data, which is exactly the same boundary as the live
+vault. Keep backups where you would keep the recovery key.
+
+**What a restore does.** It reproduces your data — every record, its exact revision, its relations,
+its sources, its lifecycle and intention states, its archive and retained revisions, and the fact
+that something was deleted — into a directory that must not exist yet. The restored vault opens with
+your own passphrase or your own recovery key, because the restore carries the owner's key envelope
+and never re-keys it. The restored vault carries **no live authority**: no scope grant, no agent
+session and no redeemable token comes back, and a token that was already used stays used. The
+private index is not restored either; it is rebuilt from the restored canonical records
+(`owner index-rebuild`).
+
+**What fails closed.** A wrong passphrase, a wrong recovery key, a lost key, a tampered container
+and a truncated container all refuse the restore, write nothing, leave no partial vault behind and
+never reset, re-key or invent a recovery. A refused restore leaves no target directory at all. There
+is no fallback key and no "recovered" mode: if you have lost both the passphrase and the recovery
+key, the backup cannot be opened.
+
+**Compatibility.** The backup format is versioned (`metabrain/vault-backup` v1) and the restore
+reads the version it writes. A backup taken by this build restores with this build. A future format
+change must keep reading the older backups or state plainly that it does not; no backup is
+silently dropped.
+
+**Retention.** The product does not delete your backups for you. A backup keeps its own ciphertext
+until you delete that file yourself, and a backup taken before a purge still holds the ciphertext
+of what was purged: the purge ledger names what was deleted, and a restore re-applies that ledger
+instead of resurrecting the purged records. Deleting a backup file is the only way to remove that
+copy.
+
+**The export is a disclosure, and it cannot be taken back.** The export file is plaintext and holds
+exactly the records you selected, in full, as the vault stores them. A citation to a source outside
+your selection is withheld whole — neither the source, its locator nor its span leaves the vault —
+and the export says in its own header how many citations, relations and records it withheld. The
+file is written once and never over an existing file. A copy that was already made is not revoked
+by a later purge, a lock or another export: the vault can delete the record, not the copy you took
+out of it.
+
 ## 5. The owner console and the two clients
 
 - **Owner console**: `owner-ui\MetaBrain.OwnerUi.exe --control-pipe <control-pipe>` — the owner's own
@@ -136,7 +223,32 @@ The owner console (`owner-ui/MetaBrain.OwnerUi.exe`) drives the same operations.
   registration, profile or permission change). From the repository root:
 
     ```powershell
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File runtime\s8-t1a\review\start-owner-ui.ps1
+    powershell.exe -NoProfile -File scripts\owner\start-owner-review.ps1
+    ```
+
+  This script publishes the owner service and the owner console from the
+  repository into `runtime\owner-review\payload` (repository-local toolchain:
+  the CLI home, the package cache and the temp directories all stay inside the
+  repository), writes a synthetic service settings file for the current
+  account, starts the service on `runtime\owner-review\data`, waits for the
+  owner channel and opens the owner console against it. Closing the console
+  stops the synthetic service; stop it independently with the same script and
+  `-Stop`. Add `-ServiceOnly` to start the service without opening the console.
+  The **Backup & export** view of that console is where the owner reviews the
+  encrypted backup, the clean restore and the explicit readable export. This
+  script changes nothing outside the repository: no installation, no service
+  registration, no autostart entry, no registry value, no environment or
+  profile change and no permission change. It runs under the machine's existing
+  PowerShell execution policy: it needs no execution-policy override and never
+  installs a certificate, changes a trust store, runs an update or writes a
+  profile setting. If your policy blocks the script, PowerShell reports that
+  restriction — the launcher does not weaken the policy for you.
+
+  The older launcher of the S8-T1A walkthrough is still there and needs a
+  published payload of its own:
+
+    ```powershell
+    powershell.exe -NoProfile -File runtime\s8-t1a\review\start-owner-ui.ps1
     ```
 
   The script writes a private settings file with the current user SID, starts
@@ -147,7 +259,7 @@ The owner console (`owner-ui/MetaBrain.OwnerUi.exe`) drives the same operations.
   independently with:
 
     ```powershell
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File runtime\s8-t1a\review\stop-owner-ui.ps1
+    powershell.exe -NoProfile -File runtime\s8-t1a\review\stop-owner-ui.ps1
     ```
 
   The stop script writes the service's own `service.stop` request under

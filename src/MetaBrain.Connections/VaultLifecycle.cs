@@ -176,6 +176,75 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
         }
     }
 
+    /// <summary>
+    /// S8-T2 the identity of the unlocked vault. It is the same identity the
+    /// encrypted envelopes are bound to, so a restored vault keeps the
+    /// binding of every record it carries.
+    /// </summary>
+    internal string CurrentVaultId
+    {
+        get
+        {
+            lock (_contentGate)
+            {
+                return _manifest?.VaultId ?? string.Empty;
+            }
+        }
+    }
+
+    /// <summary>
+    /// S8-T2 the live manifest revision. It is the revision of the manifest
+    /// that names the records a snapshot captured.
+    /// </summary>
+    internal long CurrentManifestRevision
+    {
+        get
+        {
+            lock (_contentGate)
+            {
+                return _manifest?.Revision ?? 0;
+            }
+        }
+    }
+
+    /// <summary>
+    /// S8-T2 captures a snapshot under the same gate every read and every
+    /// write takes, so the capture is one point in time: no write can move a
+    /// record between the moment the manifest is listed and the moment its
+    /// bytes are read. A write that arrives during the capture waits for it
+    /// and then commits normally, so the snapshot is consistent and the
+    /// waiting write is neither lost nor half applied.
+    /// </summary>
+    internal T CaptureSnapshot<T>(Func<T> capture)
+    {
+        ArgumentNullException.ThrowIfNull(capture);
+        lock (_contentGate)
+        {
+            return capture();
+        }
+    }
+
+    /// <summary>
+    /// S8-T2 a copy of the unlocked data key for the one act that needs it
+    /// outside the store: sealing an encrypted snapshot of the vault. The copy
+    /// never leaves the process except as the key of the snapshot ciphertext,
+    /// and the caller owns it and must clear it.
+    /// </summary>
+    internal bool TryExportBackupKey(out byte[] dataKey)
+    {
+        lock (_contentGate)
+        {
+            if (_dataKey is null)
+            {
+                dataKey = Array.Empty<byte>();
+                return false;
+            }
+
+            dataKey = (byte[])_dataKey.Clone();
+            return true;
+        }
+    }
+
     public void Dispose()
     {
         LockAsync().GetAwaiter().GetResult();

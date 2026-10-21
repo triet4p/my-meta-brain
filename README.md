@@ -155,6 +155,15 @@ dotnet run --project src/MetaBrain.Connections/MetaBrain.Connections.csproj -- o
 
 # Lock the vault at any time
 dotnet run --project src/MetaBrain.Connections/MetaBrain.Connections.csproj -- owner lock --pipe metabrain-owner
+
+# Take one encrypted snapshot of the unlocked vault (the file holds ciphertext and the wrapped key envelope, never the key itself)
+dotnet run --project src/MetaBrain.Connections/MetaBrain.Connections.csproj -- owner backup --pipe metabrain-owner --output-file "D:\backups\meta-brain-2026-10-20.mbbackup"
+
+# Restore that snapshot into a directory that does not exist yet (needs the passphrase or the recovery key; a wrong key writes nothing)
+dotnet run --project src/MetaBrain.Connections/MetaBrain.Connections.csproj -- owner restore --pipe metabrain-owner --backup-file "D:\backups\meta-brain-2026-10-20.mbbackup" --target-directory "D:\restore\meta-brain"
+
+# Export the records you selected as one readable plaintext file (a citation to a source outside the selection is withheld)
+dotnet run --project src/MetaBrain.Connections/MetaBrain.Connections.csproj -- owner export --pipe metabrain-owner --resource-ids "<id>,<id>" --output-file "D:\export\meta-brain-export.md"
 ```
 
 ### 4. Start the Owner Console
@@ -181,6 +190,8 @@ The **Relations** view is where you see and shape the links of your vault (S5-T5
 
 The **Sharing** view is where you publish what agents may discover and decide what they may read (S5-T6). **Preview publication** shows exactly the label/description you typed with the live mapped revision and mints nothing — this screen never fills public metadata from a private title, path or citation; **Publish this exact metadata** stores that triplet so discovery serves only the approved ID/label/description, and **Withdraw selected entry** removes it from future discovery. **Read access requests** lists each pending request with its purpose and catalogs (a request is never permission); **Preview selected request** binds its frozen snapshot with the exact resources, revisions, bodies and disclosure for your eyes only, and **Approve this narrowed scope** mints only a narrowed subset of those IDs and operations into a DPAPI-protected local handoff file whose path — never the token — is shown. **Reject request** records the terminal refusal with no grant. **Read live sessions** lists each session's effective frozen scope, expiry and egress, and **Revoke selected session** ends its bearer immediately; locking the vault ends every session and clears every sharing view, preview, handoff path and draft.
 
+The **Backup & export** view is where you take your copy, your restore and your explicit readable export (S8-T2). **Create encrypted backup** writes one encrypted snapshot of the unlocked vault to the file you pick — the file holds the sealed snapshot and the wrapped key envelope, never the data key, your passphrase, your recovery key or readable record text, and it never overwrites a file you already have. **Restore into the new folder** turns a backup file into a brand-new vault folder: pick the backup, pick a folder that does not exist yet, choose *Owner passphrase* or *Recovery key*, type it, and the credential travels in that one request and the field is cleared right after it. A restore works while the vault is locked, and it never replaces the live vault — to work with the restored copy, point a vault directory setting at it. **Write the readable copy** exports the records you choose by title from the service-ranked list, together with the sources those records cite if you choose them too, into one plaintext file; a citation to a record outside your selection is withheld whole, and the file itself is never overwritten. Locking the vault, losing the service or ending the session clears the chosen paths, the selection and the credential field.
+
 ### 5. Running the Smoke Test Suite
 
 Verify all security invariants, cryptoproof, token redemption, and IPC boundaries:
@@ -198,7 +209,23 @@ dotnet run --project tests/MetaBrain.S1T4.Smoke/MetaBrain.S1T4.Smoke.csproj -- s
 dotnet run --project tests/MetaBrain.S1T4.Smoke/MetaBrain.S1T4.Smoke.csproj -- s5-t4 src/MetaBrain.Connections/bin/Release/net10.0-windows/MetaBrain.Connections.exe
 dotnet run --project tests/MetaBrain.S1T4.Smoke/MetaBrain.S1T4.Smoke.csproj -- s5-t5 src/MetaBrain.Connections/bin/Release/net10.0-windows/MetaBrain.Connections.exe
 dotnet run --project tests/MetaBrain.S1T4.Smoke/MetaBrain.S1T4.Smoke.csproj -- s5-t6 src/MetaBrain.Connections/bin/Release/net10.0-windows/MetaBrain.Connections.exe
+dotnet run --project tests/MetaBrain.S1T4.Smoke/MetaBrain.S1T4.Smoke.csproj -- s8-t2 src/MetaBrain.Connections/bin/Release/net10.0-windows/MetaBrain.Connections.exe
+dotnet run --project tests/MetaBrain.S1T4.Smoke/MetaBrain.S1T4.Smoke.csproj -- s8-t2-ui src/MetaBrain.Connections/bin/Release/net10.0-windows/MetaBrain.Connections.exe
 ```
+
+`s8-t2` proves the backend acts against the real service: a concurrent encrypted
+backup, the ciphertext and the temporary output, the clean restore with the
+passphrase and with the recovery key, the wrong/missing/lost key and the
+tampered/truncated refusals, the restored records, relations, sources, archive
+and deletion, the rebuilt private index, the restored vault's refusal of an
+already used token as `token_used` (not `token_unknown`), and a scoped readable
+export whose out-of-scope citation is withheld whole. `s8-t2-ui` proves the
+owner console's **Backup & export** view on the real WPF window: the export
+scope picked by title, the readable file written and read back, the encrypted
+backup file inspected as ciphertext, the clean restore, the wrong and missing
+credential refusals, the refusal of an existing target, the recovery key
+restore, the lock that clears the paths, the selection and the credential while
+the restore stays available, and the real renders of the view.
 
 ---
 

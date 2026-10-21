@@ -69,7 +69,11 @@ public sealed record ServiceRequest(
     int? IntervalMinutes = null,
     string? ContextProject = null,
     string? ContextTask = null,
-    bool? IncludeArchived = null);
+    bool? IncludeArchived = null,
+    string? BackupPath = null,
+    string? TargetPath = null,
+    bool? IncludeRelations = null,
+    bool? IncludeLifecycleStates = null);
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
     ScopeResourceRevision[] Resources,
@@ -968,7 +972,10 @@ public sealed record ServiceReply(
     ReviewQueueWire? ReviewQueue = null,
     OwnerReviewWire? Review = null,
     PurgeImpactWire? PurgePreview = null,
-    PurgeResultWire? Purge = null);
+    PurgeResultWire? Purge = null,
+    VaultBackupSummary? Backup = null,
+    VaultRestoreSummary? Restore = null,
+    OwnerExportSummary? Export = null);
 
 public sealed class ServiceRequestHandler
 {
@@ -981,6 +988,9 @@ public sealed class ServiceRequestHandler
     public const string OwnerVaultUnlockOperation = "vault.unlock";
     public const string OwnerVaultRecoverOperation = "vault.recover";
     public const string OwnerVaultLockOperation = "vault.lock";
+    public const string OwnerVaultBackupOperation = "vault.backup";
+    public const string OwnerVaultRestoreOperation = "vault.restore";
+    public const string OwnerExportOperation = "vault.export";
     public const string ResourceReadOperation = "resource.read";
     public const string SourceReadOperation = "source.read";
     public const string ResourceWriteOperation = "resource.write";
@@ -1137,6 +1147,8 @@ public sealed class ServiceRequestHandler
     private readonly ModelJobService _modelJobs;
     private readonly SynthesisScheduleService _synthesisSchedule;
     private readonly IntentionScheduleService _intentionSchedule;
+    private readonly IVaultBackupService? _vaultBackup;
+    private readonly OwnerExportService _exports = new();
 
     public ServiceRequestHandler(
         GrantAuthority grantAuthority,
@@ -1149,7 +1161,8 @@ public sealed class ServiceRequestHandler
         SourceNormalizerRegistry? sourceNormalizers = null,
         ISourceSnapshotReader? sourceReader = null,
         IModelProviderAdapter? modelProvider = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IVaultBackupService? vaultBackup = null)
     {
         _modelJobs = new ModelJobService(vault, modelProvider);
         _synthesisSchedule = new SynthesisScheduleService(_modelJobs);
@@ -1163,6 +1176,7 @@ public sealed class ServiceRequestHandler
         _privateIndex = new PrivateIndexAuthority();
         _privateIndexStore = privateIndex;
         _sourceReader = sourceReader;
+        _vaultBackup = vaultBackup;
         // S3-T1 source enrollment/ingestion. The registry ships empty (real
         // Codex/OMP parsers attach in S3-T2/S3-T3); without both a registry
         // and a reader the owner operations fail closed instead of serving a
@@ -1455,6 +1469,21 @@ public sealed class ServiceRequestHandler
             _agentSessions.ClearSessions();
             ResetPrivateIndex();
             return new ServiceReply(CurrentProtocolVersion, "locked", "owner", null, VaultState: _vault.State);
+        }
+
+        if (string.Equals(request.Operation, OwnerVaultBackupOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerVaultBackup(request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerVaultRestoreOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerVaultRestore(request);
+        }
+
+        if (string.Equals(request.Operation, OwnerExportOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerExport(context, request, operation);
         }
 
         if (string.Equals(request.Operation, OwnerScopePreviewOperation, StringComparison.Ordinal))
@@ -1831,6 +1860,174 @@ public sealed class ServiceRequestHandler
 
         return Error("unknown_operation");
     }
+
+    /// <summary>
+    /// S8-T2 the owner backup act: one encrypted snapshot of the unlocked
+    /// vault, written to the path the owner chose. The snapshot never carries
+    /// the data key, a credential, a session or a token, and the backup
+    /// changes nothing in the live vault.
+    /// </summary>
+    private ServiceReply HandleOwnerVaultBackup(ServiceRequest request, IVaultOperation? operation)
+    {
+        if (_vaultBackup is null || operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.BackupPath) || HasBackupExtras(request))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var summary = _vaultBackup.CreateBackup(operation, request.BackupPath);
+            return new ServiceReply(CurrentProtocolVersion, "backed_up", "owner", null, Backup: summary);
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            return Error("backup_failed");
+        }
+    }
+
+    /// <summary>
+    /// S8-T2 the owner restore act: one encrypted backup becomes a clean
+    /// vault directory. The owner presents the passphrase or the recovery
+    /// code; a wrong credential, a tampered container or a corrupted container
+    /// fails closed with nothing written, no fallback and no reset. The
+    /// restored vault carries the owner's data and none of the live
+    /// authority.
+    /// </summary>
+    private ServiceReply HandleOwnerVaultRestore(ServiceRequest request)
+    {
+        if (_vaultBackup is null)
+        {
+            return Error("restore_unavailable");
+        }
+
+        var useRecoveryCode = request.RecoveryCode is not null;
+        var credential = useRecoveryCode ? request.RecoveryCode : request.Passphrase;
+        if (string.IsNullOrWhiteSpace(request.BackupPath) || string.IsNullOrWhiteSpace(request.TargetPath) ||
+            string.IsNullOrEmpty(credential) ||
+            (request.Passphrase is not null && request.RecoveryCode is not null) ||
+            HasRestoreExtras(request))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var summary = _vaultBackup.Restore(request.BackupPath, request.TargetPath, credential, useRecoveryCode);
+            return new ServiceReply(CurrentProtocolVersion, "restored", "owner", null, Restore: summary);
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (VaultBackupDeniedException)
+        {
+            return Error("restore_denied");
+        }
+        catch (VaultBackupCorruptedException)
+        {
+            return Error("restore_corrupt");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            return Error("restore_failed");
+        }
+    }
+
+    /// <summary>
+    /// S8-T2 the owner export act: the records the owner selected leave the
+    /// vault as one readable plaintext document. The document is returned to
+    /// the owner channel and written by the owner console; nothing outside
+    /// the selected scope travels with it, and a citation to a source outside
+    /// the scope is withheld whole.
+    /// </summary>
+    private ServiceReply HandleOwnerExport(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (request.ResourceIds is null || request.ResourceIds.Length == 0 || HasExportExtras(request))
+        {
+            return Error("invalid_request");
+        }
+
+        byte[]? bytes = null;
+        try
+        {
+            var scope = new OwnerExportScope(
+                request.ResourceIds,
+                request.IncludeRelations == true,
+                request.IncludeLifecycleStates == true);
+            var document = _exports.Build(context, operation, scope);
+            bytes = Encoding.UTF8.GetBytes(document.Text);
+            var summary = new OwnerExportSummary(
+                document.RecordCount,
+                document.RelationCount,
+                document.WithheldCitationCount,
+                document.WithheldRelationCount,
+                document.WithheldRecordCount,
+                bytes.LongLength);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "exported",
+                "owner",
+                null,
+                ContentBase64: Convert.ToBase64String(bytes),
+                ContentType: "text/markdown",
+                Export: summary);
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            return Error("export_failed");
+        }
+        finally
+        {
+            if (bytes is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(bytes);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The backup act names exactly one thing: where the snapshot goes.
+    /// </summary>
+    private static bool HasBackupExtras(ServiceRequest request) =>
+        request.TargetPath is not null || request.IncludeRelations is not null ||
+        request.IncludeLifecycleStates is not null || request.Passphrase is not null ||
+        request.RecoveryCode is not null || request.ResourceIds is not null;
+
+    /// <summary>
+    /// The restore act names the backup, the clean target and one credential.
+    /// </summary>
+    private static bool HasRestoreExtras(ServiceRequest request) =>
+        request.IncludeRelations is not null || request.IncludeLifecycleStates is not null ||
+        request.ResourceIds is not null;
+
+    /// <summary>
+    /// The export act names the selected records and what travels with them.
+    /// It never names a key, a credential or a path inside the vault.
+    /// </summary>
+    private static bool HasExportExtras(ServiceRequest request) =>
+        request.BackupPath is not null || request.TargetPath is not null ||
+        request.Passphrase is not null || request.RecoveryCode is not null;
 
     private ServiceReply HandleOwnerJobCreate(
         AuthenticatedContext context,

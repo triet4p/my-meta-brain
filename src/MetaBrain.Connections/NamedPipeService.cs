@@ -24,6 +24,10 @@ internal sealed class NamedPipeService
     // same kind of room as the index rebuild. Every other request keeps the
     // general 10-second guard.
     private static readonly TimeSpan ReviewListTimeout = TimeSpan.FromMinutes(5);
+    // The S8-T2 backup, restore and export read or write the whole encrypted
+    // vault, so they get the same kind of room as the index rebuild. Every
+    // other request keeps the general 10-second guard.
+    private static readonly TimeSpan VaultSnapshotTimeout = TimeSpan.FromMinutes(10);
     private readonly ServiceSettings _settings;
     private readonly ServiceRequestHandler _handler;
     private readonly VaultLifecycle _vault;
@@ -51,7 +55,8 @@ internal sealed class NamedPipeService
             projections: new FileCatalogProjectionStore(store), privateIndex: _privateIndex,
             sourceNormalizers: sourceNormalizers ?? SourceNormalizerFactory.CreateShipped(),
             sourceReader: new EnrolledSourceFileReader(),
-            modelProvider: modelProvider ?? CreateDefaultModelProvider());
+            modelProvider: modelProvider ?? CreateDefaultModelProvider(),
+            vaultBackup: new VaultBackupService(store, _vault));
         _backgroundRefresh = new SourceRefreshBackgroundService(_handler, _vault);
         _scheduleLoop = new SynthesisScheduleBackgroundService(_handler, _vault);
         _intentionScheduleLoop = new IntentionScheduleBackgroundService(_handler, _vault);
@@ -194,6 +199,15 @@ internal sealed class NamedPipeService
                     timeout.CancelAfter(ReviewListTimeout);
                 }
 
+                if (string.Equals(request.Operation, ServiceRequestHandler.OwnerVaultBackupOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerVaultRestoreOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerExportOperation, StringComparison.Ordinal))
+                {
+                    // A snapshot reads or writes the whole encrypted vault, so
+                    // it needs the same room as the index rebuild.
+                    timeout.CancelAfter(VaultSnapshotTimeout);
+                }
+
                 var needsVaultOperation =
                     string.Equals(request.Operation, ServiceRequestHandler.ResourceReadOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.ResourceWriteOperation, StringComparison.Ordinal) ||
@@ -318,7 +332,9 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerIntentionContextTriggerSetOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerIntentionScheduleRunOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerReviewListOperation, StringComparison.Ordinal) ||
-                    string.Equals(request.Operation, ServiceRequestHandler.OwnerReviewRecordOperation, StringComparison.Ordinal);
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerReviewRecordOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerVaultBackupOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerExportOperation, StringComparison.Ordinal);
                 using var operation = needsVaultOperation ? _vault.TryBeginOperation() : null;
                 if (needsVaultOperation && operation is not null)
                 {

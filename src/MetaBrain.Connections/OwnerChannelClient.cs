@@ -97,6 +97,81 @@ public sealed record OwnerVaultCommandResult(
     string? RecoveryCode);
 
 /// <summary>
+/// What one encrypted backup told the owner, exactly as the service reported
+/// it: the backup, where it was written, how large it is and what it
+/// captured. It names no record, no title, no body, no citation, no key and
+/// no token — the backup file itself is the owner's data, this report is only
+/// its cover.
+/// </summary>
+public sealed record OwnerBackupReport(
+    string BackupId,
+    string Path,
+    long Bytes,
+    int RecordCount,
+    int StateCount,
+    long ManifestRevision,
+    DateTimeOffset CreatedAtUtc);
+
+/// <summary>
+/// What one clean restore told the owner: the restored vault, where it was
+/// written, and what it deliberately did not carry over. A restored vault
+/// holds no live grant, so <see cref="LiveGrantsRestored"/> is always zero;
+/// the consumed-token count is how many already-used tokens stayed used.
+/// </summary>
+public sealed record OwnerRestoreReport(
+    string BackupId,
+    string Path,
+    string VaultId,
+    int RecordCount,
+    long ManifestRevision,
+    DateTimeOffset CreatedAtUtc,
+    int LiveGrantsRestored,
+    int ConsumedTokensPreserved);
+
+/// <summary>
+/// What one export told the owner: how much was written and how much was
+/// deliberately withheld. It never carries record content.
+/// </summary>
+public sealed record OwnerExportReport(
+    int RecordCount,
+    int RelationCount,
+    int WithheldCitationCount,
+    int WithheldRelationCount,
+    int WithheldRecordCount,
+    long Bytes);
+
+/// <summary>
+/// Result of one backup act: the service's own report of the snapshot it
+/// wrote, or the refusal that stopped it. Nothing is written when the
+/// outcome is not <see cref="OwnerCommandOutcome.Completed"/>.
+/// </summary>
+public sealed record OwnerBackupResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerBackupReport? Backup);
+
+/// <summary>
+/// Result of one restore act: the service's own report of the clean vault
+/// directory it materialized, or the refusal that stopped it. A refused
+/// restore writes nothing at all.
+/// </summary>
+public sealed record OwnerRestoreResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerRestoreReport? Restore);
+
+/// <summary>
+/// Result of one export act: the service's own report of the document it
+/// built, and the document itself. The bytes are the readable plaintext the
+/// owner asked to disclose; the caller writes them once and owns the copy.
+/// </summary>
+public sealed record OwnerExportResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerExportReport? Export,
+    byte[]? Document);
+
+/// <summary>
 /// Which items an owner library search may return: <see cref="All"/> applies
 /// no currentness filter, <see cref="Current"/> keeps live, unexpired,
 /// published items, and <see cref="History"/> keeps everything the index still
@@ -3379,6 +3454,93 @@ public static class OwnerChannelClient
             rationale,
             cancellationToken);
 
+    // ---- S8-T2 encrypted backup, clean restore and owner-scoped export ----
+
+    /// <summary>
+    /// Takes one encrypted snapshot of the unlocked vault and writes it to the
+    /// path the owner chose. The service owns the snapshot rules, the sealing
+    /// and the key envelope; this client only carries the owner's chosen path
+    /// and the service's own report back. The live vault is not changed.
+    /// </summary>
+    public static async Task<OwnerBackupResult> BackupVaultAsync(
+        string controlPipe,
+        string backupPath,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(backupPath);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerVaultBackupOperation,
+                BackupPath: backupPath),
+            "backed_up",
+            cancellationToken).ConfigureAwait(false);
+        return new OwnerBackupResult(reply.Outcome, reply.ErrorCode, ProjectBackup(reply));
+    }
+
+    /// <summary>
+    /// Restores one encrypted backup into a clean directory that must not
+    /// exist yet. The owner presents exactly one credential — the passphrase
+    /// or the recovery key — and the service either materializes the restored
+    /// vault or refuses and writes nothing. A wrong credential, a tampered
+    /// container and a lost key all fail closed here.
+    /// </summary>
+    public static async Task<OwnerRestoreResult> RestoreVaultAsync(
+        string controlPipe,
+        string backupPath,
+        string targetPath,
+        string credential,
+        bool useRecoveryCode,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(backupPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(credential);
+        var request = useRecoveryCode
+            ? new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerVaultRestoreOperation,
+                BackupPath: backupPath,
+                TargetPath: targetPath,
+                RecoveryCode: credential)
+            : new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerVaultRestoreOperation,
+                BackupPath: backupPath,
+                TargetPath: targetPath,
+                Passphrase: credential);
+        var reply = await ReadReplyAsync(controlPipe, request, "restored", cancellationToken).ConfigureAwait(false);
+        return new OwnerRestoreResult(reply.Outcome, reply.ErrorCode, ProjectRestore(reply));
+    }
+
+    /// <summary>
+    /// Exports the records the owner selected as one readable plaintext
+    /// document. The service owns the scope, the withheld citations and the
+    /// document itself; this client returns the bytes so the owner
+    /// application can write them to the file the owner chose.
+    /// </summary>
+    public static async Task<OwnerExportResult> ExportRecordsAsync(
+        string controlPipe,
+        string[] resourceIds,
+        bool includeRelations,
+        bool includeLifecycleStates,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(resourceIds);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerExportOperation,
+                ResourceIds: resourceIds,
+                IncludeRelations: includeRelations,
+                IncludeLifecycleStates: includeLifecycleStates),
+            "exported",
+            cancellationToken).ConfigureAwait(false);
+        return new OwnerExportResult(reply.Outcome, reply.ErrorCode, ProjectExport(reply), ProjectExportDocument(reply));
+    }
+
     private static async Task<OwnerRelationResult> TransitionRelationAsync(
         string controlPipe,
         string operation,
@@ -4038,6 +4200,89 @@ public static class OwnerChannelClient
             Timestamp(payload, "recordedAtUtc"),
             history);
     }
+    // ---- S8-T2 backup, restore and export projections ----
+
+    private static OwnerBackupReport? ProjectBackup(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            !reply.Payload.TryGetProperty("backup", out var payload) ||
+            payload.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return new OwnerBackupReport(
+            Text(payload, "backupId") ?? string.Empty,
+            Text(payload, "path") ?? string.Empty,
+            Int64(payload, "bytes"),
+            Int32(payload, "recordCount"),
+            Int32(payload, "stateCount"),
+            Int64(payload, "manifestRevision"),
+            Timestamp(payload, "createdAtUtc") ?? DateTimeOffset.MinValue);
+    }
+
+    private static OwnerRestoreReport? ProjectRestore(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            !reply.Payload.TryGetProperty("restore", out var payload) ||
+            payload.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return new OwnerRestoreReport(
+            Text(payload, "backupId") ?? string.Empty,
+            Text(payload, "path") ?? string.Empty,
+            Text(payload, "vaultId") ?? string.Empty,
+            Int32(payload, "recordCount"),
+            Int64(payload, "manifestRevision"),
+            Timestamp(payload, "createdAtUtc") ?? DateTimeOffset.MinValue,
+            Int32(payload, "liveGrantsRestored"),
+            Int32(payload, "consumedTokensPreserved"));
+    }
+
+    private static OwnerExportReport? ProjectExport(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            !reply.Payload.TryGetProperty("export", out var payload) ||
+            payload.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return new OwnerExportReport(
+            Int32(payload, "recordCount"),
+            Int32(payload, "relationCount"),
+            Int32(payload, "withheldCitationCount"),
+            Int32(payload, "withheldRelationCount"),
+            Int32(payload, "withheldRecordCount"),
+            Int64(payload, "bytes"));
+    }
+
+    /// <summary>
+    /// The readable document the service built for one export. It is returned
+    /// as bytes so the owner application can write it once and drop it; a
+    /// malformed payload yields no document at all instead of a partial one.
+    /// </summary>
+    private static byte[]? ProjectExportDocument(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            !reply.Payload.TryGetProperty("contentBase64", out var content) ||
+            content.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        try
+        {
+            return Convert.FromBase64String(content.GetString() ?? string.Empty);
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+    }
+
     private static OwnerPurgePreview? ProjectPurgePreview(OwnerReply reply)
     {
         if (reply.Outcome != OwnerCommandOutcome.Completed ||

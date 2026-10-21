@@ -149,14 +149,16 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     private OwnerAgentSessionInfo[]? _renderedSessions;
     private long _sourcesFormVersion;
     private long _jobsFormVersion;
+    private long _backupFormVersion;
     private OwnerSourceEnrollment[]? _renderedSources;
     private OwnerSourceRefreshEntry[]? _renderedRefresh;
     private OwnerCollectionMapping[]? _renderedCollections;
     private OwnerSourceSnapshotDescriptor[]? _renderedSnapshots;
 
-    internal OwnerConsoleWindow(OwnerConsoleSession session)
+    internal OwnerConsoleWindow(OwnerConsoleSession session, IOwnerFilePicker? filePicker = null)
     {
         _session = session;
+        _filePicker = filePicker ?? new OwnerSystemFilePicker();
         InitializeComponent();
         Navigation.SelectedIndex = 0;
         ActivityList.ItemsSource = _session.Activity;
@@ -166,6 +168,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         InitializeJobsControls();
         InitializeSharingControls();
         InitializeSourcesControls();
+        InitializeBackupControls();
         // The session may already hold answers (a window opened mid-workflow):
         // take its editor text, filters, drafts and lists now instead of
         // showing empty controls beside reported answers.
@@ -176,6 +179,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         _sharingFormVersion = _session.SharingFormVersion;
         _sourcesFormVersion = _session.SourcesFormVersion;
         _jobsFormVersion = _session.JobsFormVersion;
+        _backupFormVersion = _session.BackupFormVersion;
         SyncInboxEditors();
         LibraryResults.MouseDoubleClick += async (_, _) => await OpenSelectedLibraryResultAsync();
         RelationsList.MouseDoubleClick += async (_, _) => await InspectSelectedRelationAsync();
@@ -229,7 +233,26 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         SyncLibraryFilterInputs();
     }
 
-    private void OnSessionChanged(object? sender, EventArgs e) => Render();
+    /// <summary>
+    /// Renders the session's latest answers. The session is a plain object
+    /// that any thread may answer on, so a change that arrives from another
+    /// thread is handed to the dispatcher instead of touching a control of
+    /// this window from the wrong thread.
+    /// </summary>
+    private void OnSessionChanged(object? sender, EventArgs e)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            if (!Dispatcher.HasShutdownStarted && !Dispatcher.HasShutdownFinished)
+            {
+                Dispatcher.BeginInvoke(new Action(Render));
+            }
+
+            return;
+        }
+
+        Render();
+    }
 
     private async void OnTimerTick(object? sender, EventArgs e)
     {
@@ -295,6 +318,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         JobsPanel.Visibility = Navigation.SelectedIndex == 8 ? Visibility.Visible : Visibility.Collapsed;
         IntentionsPanel.Visibility = Navigation.SelectedIndex == 9 ? Visibility.Visible : Visibility.Collapsed;
         ReviewQueuePanel.Visibility = Navigation.SelectedIndex == 10 ? Visibility.Visible : Visibility.Collapsed;
+        BackupExportPanel.Visibility = Navigation.SelectedIndex == 11 ? Visibility.Visible : Visibility.Collapsed;
         if (Navigation.SelectedIndex == 9)
         {
             _ = _session.RefreshIntentionsAsync();
@@ -330,6 +354,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
             8 => (System.Windows.IInputElement?)JobsRunButton,
             9 => (System.Windows.IInputElement?)IntentionsRefreshButton,
             10 => (System.Windows.IInputElement?)ReviewQueueRefreshButton,
+            11 => (System.Windows.IInputElement?)BackupPathInput,
             _ => null,
         };
         target?.Focus();
@@ -433,6 +458,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         RenderJobs(attached);
         RenderIntentions(attached);
         RenderReview(attached);
+        RenderBackupExport(attached);
     }
 
     private string LastCheckText_Value() => _session.LastCheckLocal is { } last
@@ -677,6 +703,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
             RecoveryInput.Clear();
             ClearIntentionInputs();
             ReviewRationaleInput.Clear();
+            ClearBackupInputs();
         }
         finally
         {

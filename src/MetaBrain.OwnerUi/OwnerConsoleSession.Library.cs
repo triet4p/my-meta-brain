@@ -677,6 +677,7 @@ internal sealed partial class OwnerConsoleSession
         ClearPrivateSourcesState();
         ClearPrivateIntentionsState();
         ClearPrivateReviewState();
+        ClearPrivateBackupState();
         // stops reporting one.
         LibraryIndex = null;
         LibraryMessage = null;
