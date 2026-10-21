@@ -394,6 +394,100 @@ The background host writes its operational messages to `<data root>\runtime\serv
 carries operational envelopes (readiness, refusals, failure types) — never a key, a token or
 private content.
 
+### 9.1 Operations, audit and error diagnostics (S8-T4)
+
+The owner has one place that answers "what did this vault do, and what failed?": the
+**Operations & audit** view of the owner console, and the same four operations on the owner
+channel. All four need the unlocked vault and are refused on the agent channel.
+
+```text
+owner health      --control-pipe <pipe>
+owner audit       --control-pipe <pipe> [--limit N]
+owner diagnostics --control-pipe <pipe> [--limit N]
+owner retention   --control-pipe <pipe> --retention-days N --max-records N [--purge-log true]
+```
+
+- `owner health` reports the vault state, whether the private index is built, whether a provider
+  configuration exists, the rolling spend, how many audit entries and diagnostics the private
+  operations state holds, the retention that applies, the size of the safe operational log and
+  the last recorded error code.
+- `owner audit` lists the recorded operations, newest first: the actor (`owner` or `agent`), the
+  operation, the outcome (`completed` or `refused`), the real error code, the cost the service
+  already charged and the opaque record ID the operation named.
+- `owner diagnostics` lists the recorded failures, newest first: the component that failed, the
+  **real error code the service returned** and the owner-facing sentence that says what to do
+  next. A code the product does not know is still shown, with a generic next action.
+- `owner retention` sets how long the private operations state keeps entries and how many it
+  keeps, and can clear the safe operational log at the same time. The answer reports exactly how
+  many entries were removed. The **whole request is validated first**: a retention choice the
+  product refuses (a window outside 1–3650 days, a ceiling outside 10–5000 records) removes
+  nothing — not one audit entry, not one diagnostic and not one line of the operational log. The
+  private state is written before the log is cleared, so a failed encrypted write leaves the log
+  exactly as it was.
+
+What a refusal carries:
+
+- A refused owner operation answers with the **real error code** the product knows
+  (`pricing_unknown`, `source_unavailable`, `budget_exceeded`, `token_unknown`, …) and, when it has
+  one, the owner's own sentence. The code is what the audit trail and the diagnostics record; the
+  sentence stays the owner's answer. A refusal never answers with a sentence in the code position,
+  so the trail never has to guess what a free text meant.
+- The owner CLI prints the code first and the sentence after it (`ERROR pricing_unknown: …`), and
+  adds the product's own guidance line for a refusal that carries only a code.
+- The **owner channel client** reads that same contract: the code comes from the typed `errorCode`
+  field, the sentence from `error`. A refusal is therefore never reported as an unavailable
+  transport, and the owner's sentence is never read as a code. The client keeps both, so the owner
+  console shows the real code **and** the service's own sentence of a refused job, schedule or
+  recall act (`The service refused this run job (code: pricing_unknown). … The service said: …`),
+  and the console log names the act and the code (`owner act: run job -> refused (pricing_unknown)`).
+  A refusal that carries only a code keeps the console's own wording and its guidance.
+
+Where the data lives:
+
+- The audit trail and the diagnostics live in **one encrypted file of the vault**,
+  `<data root>\vault\operations-audit.enc`, written with the vault's own data key and the same
+  AEAD envelope as the scope grants, the catalog, the recall policy, the review state and the
+  purge ledger. It is not a canonical record, it is not part of the private index and it is never
+  published: the approved catalog stays the only public disclosure of this product.
+- The **safe operational log** is `<data root>\logs\operations.log`. It is a plain text file on
+  purpose: it holds the operation name, the outcome and the error code and nothing else. Every
+  value goes through a sanitizer that replaces anything which is not a short lowercase token with
+  `redacted`, so a credential, a token, a path, a title or a payload cannot reach it — not even
+  through an operation name a caller invented.
+- The audit trail and the diagnostics exist **only while the vault is unlocked**. A refusal that
+  happened while the vault was locked has no private entry: the private state lives inside the
+  unlocked vault, and the product never keeps a second key, never auto-unlocks and never buffers
+  a plaintext queue to write later. Such a refusal is visible in the safe operational log and in
+  the console's own answer.
+
+When the trail itself cannot be written:
+
+- The private operations state is written with the vault's own data key. If that write fails (the
+  file is damaged, the key or the envelope fails, the disk is full, the vault locked between the
+  request and the write), the failure has **one typed form** in the product, so it is never
+  mistaken for a refused operation.
+- The owner's own act has already happened, so **its answer is never replaced by the failure of
+  the trail**. The failure is reported truthfully in the safe operational log as
+  `outcome=audit_failed code=audit_persistence_failed`, which is the one trace that survives a
+  locked vault. The entry is simply not in the private trail, and the owner can see that.
+
+What the retention choice does and does not do:
+
+- A retention pass removes the entries older than the chosen window and the entries beyond the
+  chosen ceiling, and records the removed prefix, so a removed entry does not come back after a
+  restart.
+- A **purge of a record** also removes the audit entries and the diagnostics that named that
+  record, and records their sequence numbers as tombstones. They are not served again by a later
+  read, a restart or a restore.
+- An **encrypted backup taken before a purge still holds the bytes of that moment**, exactly as
+  it still holds the canonical bytes of that moment. A copy is irrevocable: deleting it is the
+  owner's own file operation. What a later backup carries is the purge watermark, so a restore
+  from a backup taken *after* the purge does not resurrect the removed entries.
+- Both halves of that are true at the same time and are proved by the runtime scenario: a restore
+  of the **post-purge** backup into a clean vault serves neither the removed audit entry nor the
+  removed diagnostic, and a restore of the **pre-purge** backup still serves the entry of its
+  moment. The operations state travels with the backup, tombstones included.
+
 ## 10. Verifying the installed lifecycle
 
 The repository's permanent smoke drives the real installer and the real installed host end to end:
@@ -433,3 +527,16 @@ removes the fixture when the run ends.
   rollback point is a ciphertext copy of the rewritten files, restores only files unchanged since
   the upgrade, and is consumed by the first rollback. The upgrade does not re-key the vault, so old
   backups keep restoring with the credential they were taken with.
+- The operations view (§9.1) is a local view of this installation. This build has **no telemetry,
+  no auto-update and no cloud reporting**: nothing about the vault, the owner or the machine is
+  sent anywhere, and the product opens no outbound connection. The cost the audit trail shows is
+  the spend the service already charged against the owner's own provider configuration.
+- The audit trail and the diagnostics are private to the owner channel. An agent never receives
+  them, and there is no operation that enumerates stored credentials: the health view says
+  whether a provider configuration exists, never what it holds.
+- The safe operational log is plain text by design, so it can be read without unlocking the
+  vault. It carries operation names and error codes only; the sanitizer is what keeps a secret
+  out of it, and a sanitized value that is not a plain token is written as `redacted`.
+- The same owner account can read the owner's own files, including the safe operational log and
+  the encrypted operations file. The boundary is the key, the lock and the owner-approved APIs,
+  not the access rights of the file system.

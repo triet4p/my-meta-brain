@@ -171,10 +171,30 @@ public interface IPurgeResourceDeletion
 }
 
 /// <summary>
+/// The private operations state of the unlocked vault: the owner audit trail,
+/// the error diagnostics, the owner's retention choice and the tombstones of
+/// the entries a purge removed.
+/// </summary>
+/// <remarks>
+/// S8-T4. The state lives in one dedicated encrypted file of the vault, with
+/// the same data key and envelope every other dedicated owner state uses. It
+/// is not a canonical resource, it is not part of the private index and it
+/// never reaches the approved catalog. The lease owns the read and the
+/// atomic update, so a concurrent owner act cannot interleave two writes.
+/// </remarks>
+public interface IOperationsAuditPersistence
+{
+    OperationsAuditState LoadOperationsAuditState();
+
+    T UpdateOperationsAuditState<T>(
+        Func<OperationsAuditState, (OperationsAuditState State, T Result)> update);
+}
+
+/// <summary>
 /// Scoped unlocked access to private resource metadata and content. The
 /// application disposes this lease only after the operation response is sent.
 /// </summary>
-public interface IVaultOperation : IManagedResourceStore, IScopeGrantPersistence, ICatalogPersistence, ISourceEnrollmentPersistence, IRecallPolicyPersistence, IReviewStatePersistence, IPurgeLedgerPersistence, IPurgeResourceDeletion, IDisposable
+public interface IVaultOperation : IManagedResourceStore, IScopeGrantPersistence, ICatalogPersistence, ISourceEnrollmentPersistence, IRecallPolicyPersistence, IReviewStatePersistence, IPurgeLedgerPersistence, IOperationsAuditPersistence, IPurgeResourceDeletion, IDisposable
 {
  }
 

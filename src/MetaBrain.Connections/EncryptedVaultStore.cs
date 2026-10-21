@@ -59,6 +59,8 @@ internal sealed class EncryptedVaultStore
     private const int MaximumReviewStateEnvelopeBytes = 6 * 1024 * 1024;
     private const int MaximumPurgeLedgerBytes = 4 * 1024 * 1024;
     private const int MaximumPurgeLedgerEnvelopeBytes = 6 * 1024 * 1024;
+    private const int MaximumOperationsAuditBytes = 4 * 1024 * 1024;
+    private const int MaximumOperationsAuditEnvelopeBytes = 6 * 1024 * 1024;
     private const int MaximumProjectionBytes = 1024 * 1024;
     private const int MaximumResourceBytes = SourceSnapshotCodec.MaximumStoredBytes;
     private const int KeyBytes = 32;
@@ -83,6 +85,7 @@ internal sealed class EncryptedVaultStore
     private readonly string _recallPolicyPath;
     private readonly string _reviewStatePath;
     private readonly string _purgeLedgerPath;
+    private readonly string _operationsAuditPath;
     private readonly string _projectionPath;
 
     private sealed record KeyWrapper(int KdfIterations, string Salt, string Nonce, string Ciphertext, string Tag);
@@ -107,6 +110,7 @@ internal sealed class EncryptedVaultStore
         _recallPolicyPath = Path.Combine(_root, "recall-policy.enc");
         _reviewStatePath = Path.Combine(_root, "review-state.enc");
         _purgeLedgerPath = Path.Combine(_root, "purge-ledger.enc");
+        _operationsAuditPath = Path.Combine(_root, "operations-audit.enc");
         _projectionPath = Path.Combine(_serviceDirectory, "published-catalog.json");
     }
 
@@ -722,6 +726,125 @@ internal sealed class EncryptedVaultStore
             var envelope = EncryptPayload(plaintext, dataKey, associatedData);
             envelopeBytes = JsonSerializer.SerializeToUtf8Bytes(envelope, JsonOptions);
             AtomicWrite(_purgeLedgerPath, envelopeBytes);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(plaintext);
+            CryptographicOperations.ZeroMemory(associatedData);
+            if (envelopeBytes is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(envelopeBytes);
+            }
+        }
+    }
+
+    /// <summary>
+    /// S8-T4 the private operations state: the owner audit trail, the error
+    /// diagnostics, the retention choice and the purge tombstones.
+    /// <para>
+    /// Same dedicated-file pattern as the purge ledger and the review state:
+    /// one regular file inside the vault directory, bound to the vault ID and
+    /// the state schema, encrypted with the data key and written atomically.
+    /// The plaintext exists only inside the caller's memory, and the file
+    /// never leaves the vault directory. It is not a canonical resource, it is
+    /// not indexed by the private index and it is never published.
+    /// </para>
+    /// </summary>
+    public OperationsAuditState LoadOperationsAuditState(VaultManifest manifest, ReadOnlySpan<byte> dataKey)
+    {
+        FileAttributes attributes;
+        try
+        {
+            attributes = File.GetAttributes(_operationsAuditPath);
+        }
+        catch (FileNotFoundException)
+        {
+            return OperationsAuditState.Empty;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return OperationsAuditState.Empty;
+        }
+
+        if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+        {
+            throw new OperationsAuditPersistenceException("The encrypted operations state must be a regular file.");
+        }
+
+        byte[]? associatedData = null;
+        byte[]? plaintext = null;
+        try
+        {
+            var json = PrivateFile.Read(_operationsAuditPath, MaximumOperationsAuditEnvelopeBytes).Text;
+            var envelope = JsonSerializer.Deserialize<EncryptedPayload>(json, JsonOptions)
+                ?? throw new OperationsAuditPersistenceException("Invalid encrypted operations state envelope.");
+            associatedData = ResourceAssociatedData(
+                manifest.VaultId, "operations-audit", OperationsAuditState.CurrentSchemaVersion, 1);
+            plaintext = DecryptPayload(
+                envelope, dataKey, associatedData, OperationsAuditState.CurrentSchemaVersion, 1, MaximumOperationsAuditBytes);
+            return JsonSerializer.Deserialize<OperationsAuditState>(plaintext, JsonOptions)
+                ?? throw new OperationsAuditPersistenceException("Invalid encrypted operations state.");
+        }
+        catch (OperationsAuditPersistenceException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or
+                                   CryptographicException or ArgumentException or FormatException or
+                                   OverflowException or InvalidDataException)
+        {
+            throw new OperationsAuditPersistenceException("The encrypted operations state is unavailable.", ex);
+        }
+        finally
+        {
+            if (associatedData is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(associatedData);
+            }
+
+            if (plaintext is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(plaintext);
+            }
+        }
+    }
+
+    /// <summary>
+    /// S8-T4 writes the private operations state back as one encrypted file.
+    /// The plaintext is zeroed as soon as the envelope is built.
+    /// </summary>
+    public void SaveOperationsAuditState(
+        VaultManifest manifest,
+        ReadOnlySpan<byte> dataKey,
+        OperationsAuditState state)
+    {
+        var plaintext = JsonSerializer.SerializeToUtf8Bytes(state, JsonOptions);
+        if (plaintext.Length is <= 0 or > MaximumOperationsAuditBytes)
+        {
+            CryptographicOperations.ZeroMemory(plaintext);
+            throw new InvalidDataException("The operations state exceeds its storage limit.");
+        }
+
+        var associatedData = ResourceAssociatedData(
+            manifest.VaultId, "operations-audit", OperationsAuditState.CurrentSchemaVersion, 1);
+        byte[]? envelopeBytes = null;
+        try
+        {
+            var envelope = EncryptPayload(plaintext, dataKey, associatedData);
+            envelopeBytes = JsonSerializer.SerializeToUtf8Bytes(envelope, JsonOptions);
+            AtomicWrite(_operationsAuditPath, envelopeBytes);
+        }
+        catch (OperationsAuditPersistenceException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or CryptographicException or
+                                   ArgumentException or FormatException or OverflowException)
+        {
+            // The typed failure of the private operations state: the recorder
+            // tells this one apart from a refused operation, so a failed
+            // audit write never hides the answer of the owner's own act.
+            throw new OperationsAuditPersistenceException("The encrypted operations state could not be written.", ex);
         }
         finally
         {

@@ -35,6 +35,7 @@ internal sealed class NamedPipeService
     private readonly SourceRefreshBackgroundService _backgroundRefresh;
     private readonly SynthesisScheduleBackgroundService _scheduleLoop;
     private readonly IntentionScheduleBackgroundService _intentionScheduleLoop;
+    private readonly SafeOperationalLog _operationalLog;
 
     public NamedPipeService(
         ServiceSettings settings,
@@ -46,6 +47,9 @@ internal sealed class NamedPipeService
         _vault = new VaultLifecycle(store);
         var authority = new GrantAuthority(new InMemoryGrantStore());
         _privateIndex = new SqlitePrivateIndexStore();
+        // S8-T4 the safe operational log: a sanitized trace of what the
+        // service did, in the service data root and never in the repository.
+        _operationalLog = new SafeOperationalLog(settings.DataRootPath);
         // S3-T1: the enrolled-source reader is the only source-byte boundary
         // the coordinator is allowed to use. S3-T2: the shipped service
         // registers the real Codex session parser, so an enrolled Codex
@@ -57,7 +61,8 @@ internal sealed class NamedPipeService
             sourceReader: new EnrolledSourceFileReader(),
             modelProvider: modelProvider ?? CreateDefaultModelProvider(),
             vaultBackup: new VaultBackupService(store, _vault),
-            vaultMaintenance: new VaultMaintenanceService(store, _vault));
+            vaultMaintenance: new VaultMaintenanceService(store, _vault),
+            operationalLog: _operationalLog);
         _backgroundRefresh = new SourceRefreshBackgroundService(_handler, _vault);
         _scheduleLoop = new SynthesisScheduleBackgroundService(_handler, _vault);
         _intentionScheduleLoop = new IntentionScheduleBackgroundService(_handler, _vault);
@@ -339,6 +344,10 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerReviewListOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerReviewRecordOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerVaultBackupOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerOperationsHealthOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerOperationsAuditOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerOperationsDiagnosticsOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerOperationsRetentionOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerExportOperation, StringComparison.Ordinal);
                 using var operation = needsVaultOperation ? _vault.TryBeginOperation() : null;
                 if (needsVaultOperation && operation is not null)

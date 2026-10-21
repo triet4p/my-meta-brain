@@ -241,3 +241,80 @@
 **Root cause:** `OwnerConsoleSession.ProbeAsync` moved the private epoch (`ClearPrivateState`) on every changed status answer that was not the unlocked vault. A maintenance act runs only while the vault is locked, and changing the keyless format record or the rollback availability changes the status record without changing availability or `VaultState`. The maintenance methods guard their reply with `epoch != _privateEpoch`, so the spurious epoch move made them drop their own fresh answer as stale.
 **Fix / workaround:** Move the private epoch only when the serving state itself moves (availability or vault state); keep clearing on a lost service, a lock or any other vault-state change. Permanently exercised by `s8-t3-ui`, which asserts the service's own resume/rollback/discard text on the real WPF card (`runtime/s8-t3/evidence/s8-t3-ui-run.txt`).
 **Watch out for:** Any status field added that changes without a serving-state change (format marker, rollback availability, counts) combined with an act whose answer compares a captured private epoch. The epoch is the lock boundary, not a generic "the status record changed" token.
+
+## [2026-10-21] Some product refusals answer with a sentence, so an "error code" field can carry free text
+
+**Symptom:** The new owner audit trail recorded `code=unspecified` for a failed model job instead of the real failure code `provider_unconfigured`, and the owner diagnostics showed the generic "the service refused this request with the code unspecified" sentence. The same product path also refused a job creation with `pricing_unknown: No approved pricing card found for '...'` — a code and a sentence in one string.
+
+**Root cause:** `ServiceRequestHandler` is not uniform about its `Error` field: most paths return a stable code (`Error("vault_locked")`), but several catch blocks answer `new ServiceReply(protocol, "denied", "owner", ex.Message)` and the job-start path answers with `job.Failure?.Message`. So the wire field that the audit reads as "the error code" is sometimes a human sentence, and a sentence is unbounded, may name a resource, and is not a code at all.
+
+**Fix / workaround:** The S8-T4 recorder normalizes every error value before it is stored: a short token of lowercase letters, digits, dots, dashes and underscores is kept as the code; anything else becomes `unspecified` (the sentence stays the owner's answer in the reply and never enters the private state or the operational log). The job failure is read from `reply.Job.Failure.Code` first, so a failed job keeps its real code even though its reply carries the failure message.
+
+**Watch out for:** Any new audit, log or diagnostic surface that copies `ServiceReply.Error` into a field named "code". Check the producing path first (`grep "denied\", \"owner\", ex.Message"`), and prefer a structured field (`Job.Failure.Code`) over the free-text `Error` when one exists.
+
+## [2026-10-21] A locked write is refused as `invalid_request`, not `vault_locked`, when the handler validates fields before the lease
+
+**Symptom:** An S8-T4 probe of a private write while the vault was locked expected the refusal code `vault_locked` and got `invalid_request`, which made the locked-refusal evidence wrong.
+
+**Root cause:** The handlers are not uniform about the order of their two refusals. `HandleMemoryCreate`/`HandleSourceCreate` fold `operation is null` into the same condition as the field validation and answer `invalid_request`, while `HandleOwnerJobCreate`, `HandleOwnerPurgePreview` and the new operations handlers check the lease first and answer `vault_locked`. Both are refusals; only the code differs.
+
+**Watch out for:** When a smoke asserts a specific refusal code, pick an operation whose handler answers that code, or assert "the request was refused" instead of a code that depends on the handler's check order. The S8-T4 proof uses `owner.job.create` for the locked refusal because that path names `vault_locked`.
+
+## [2026-10-21] A deleting request must be validated completely before the first deletion, not before its own step
+
+**Symptom:** The owner retention act cleared the safe operational log first and validated the retention window and the record ceiling afterwards, so a request with `purgeOperationalLog=true` and an out-of-range window deleted log lines and was still answered with `invalid_request`.
+
+**Root cause:** The validation sat inside the step that needed it (the retention pass), while the *other* removal of the same request (the log purge) ran before it. A request that removes two things needs one validation that covers both, and it has to run before the first removal.
+
+**Fix / workaround:** `OperationsAuditAuthority.ValidateRetentionChoice` validates the whole choice and is called before anything is removed; the private state is written before the log is cleared, so a failed encrypted write also leaves the log intact. The proof sends an invalid choice with the log purge requested and asserts that every log line and every audit entry of the moment is still there afterwards.
+
+**Watch out for:** Any act that removes more than one thing (a log, a file, a row set, a ledger entry). Validate the union of the inputs once, at the top of the act, not inside the step that happens to need the value.
+
+## [2026-10-21] A catch list that mirrors "the exceptions I remember" is not a failure contract
+
+**Symptom:** The recorder of the private audit trail caught `IOException`, `InvalidDataException`, `UnauthorizedAccessException` and `ObjectDisposedException`, but the encrypted write calls `EncryptPayload` without translating cryptographic exceptions, so a crypto failure could escape the recorder after the owner's mutation had already succeeded and replace its answer with a failure.
+
+**Root cause:** The catch list was written from the exceptions the author could remember, while the real failure domain of the encrypted write is larger than that list. A list that is not derived from the producer can never be complete.
+
+**Fix / workaround:** The producer names its failure: the store translates every read and write failure of the private operations state into one typed `OperationsAuditPersistenceException`, and the recorder catches exactly that type plus the locked-vault case. Everything else keeps travelling, because it is a defect. The failure is reported truthfully in the safe operational log (`audit_persistence_failed`), so the owner sees an incomplete trail instead of a silent gap.
+
+**Watch out for:** Whenever a catch block protects "the answer of an act that already happened", the exception type must come from the layer that raises it, not from a list maintained by the caller.
+
+## [2026-10-21] A code that is written into a sentence cannot be recovered later
+
+**Symptom:** A refusal that answered `new ServiceReply(protocol, "denied", "owner", ex.Message)` put a human sentence into the field the audit reads as the error code, so the trail recorded `unspecified` and the owner lost the real failure (`pricing_unknown`, `source_unavailable`, `budget_exceeded`, …).
+
+**Root cause:** The code and the explanation were carried in one string. Everything downstream then had to guess: the recorder normalized the sentence away, and any attempt to recover the code from the text would be a message-parsing heuristic that breaks on the first reworded sentence.
+
+**Fix / workaround:** The code travels in its own typed field (`ServiceReply.ErrorCode`) and the product services raise the refusal through one typed exception (`ServiceRefusalException`). The sentence stays the owner's answer in the reply and in the CLI output (`ERROR <code>: <sentence>`); the trail, the diagnostics and the log record the code. Every caller of the job and schedule services was migrated explicitly, because the typed refusal does not derive from `ArgumentException`.
+
+**Watch out for:** A field that is read as a code must only ever hold a code. If a path wants to answer with a sentence, it needs a second field, not a shared one.
+
+## [2026-10-21] A typed field is a contract only when every consumer reads it
+
+**Symptom:** The service answered a refused job create with the real code in `errorCode` and the
+owner's sentence in `error`, and the audit trail and the CLI read both correctly. The owner channel
+client did not: it read the `error` text as the code, so the console showed
+`code: No approved pricing card found for 'synthetic-provider:synthetic-model'.` and the real code
+`pricing_unknown` was nowhere. A refused job cancel was worse: the typed refusal was never caught
+by its handler, so the connection died without an answer and the client reported
+`transport_unavailable` — a transport failure for a refusal that had a real code.
+
+**Root cause:** The typed field was introduced on the producing side and the recording side, but
+the reading side kept the old convention that `error` holds the code. A field that only some
+consumers read as a code is not a contract. The second defect had the same shape: a service that
+raised a typed refusal was called from a handler whose catch list did not know that type, so the
+refusal escaped as an exception instead of an answer.
+
+**Fix / workaround:** One shared classifier in the client reads the typed code and the sentence
+from their own fields, classifies the answer once for every owner command, and keeps the sentence
+for the console; the handler that calls the job lifecycle catches the typed refusal like its
+siblings do. The proof drives the real client against the real service: the refused job create is
+read as refused with the code `pricing_unknown` and the service's own sentence, and the refused job
+cancel is read as refused with the code `invalid_request` — never as an unavailable transport.
+
+**Watch out for:** After a wire field changes meaning, list every reader of the old meaning, not
+every writer of the new one. `grep` the readers of the field (`TryGetProperty("error"`,
+`reply.Error`, the `ErrorCode` of a result record) and migrate them explicitly. And when a service
+starts raising a typed exception, check the catch list of every handler that calls it: a typed
+refusal that escapes its handler is an unavailable transport in the eyes of every consumer.

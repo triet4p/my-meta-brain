@@ -58,7 +58,9 @@ internal static class Program
                 string.Equals(args[0], "s7-t5", StringComparison.Ordinal) ||
                 string.Equals(args[0], "s7-t6", StringComparison.Ordinal) ||
                 string.Equals(args[0], "s8-t2", StringComparison.Ordinal) ||
-                string.Equals(args[0], "s8-t2-ui", StringComparison.Ordinal))
+                string.Equals(args[0], "s8-t2-ui", StringComparison.Ordinal) ||
+                string.Equals(args[0], "s8-t4", StringComparison.Ordinal) ||
+                string.Equals(args[0], "s8-t4-ui", StringComparison.Ordinal))
             ? args[0]
             : args.Length == 3 &&
               (string.Equals(args[0], "s5-t1-console-fixture", StringComparison.Ordinal) ||
@@ -311,6 +313,12 @@ internal static class Program
                     break;
                 case "s8-t3-ui":
                     await OwnerServiceSmoke.RunS8T3UiAsync(fullPath, Path.GetFullPath(args[2]!)).ConfigureAwait(false);
+                    break;
+                case "s8-t4":
+                    await OwnerServiceSmoke.RunS8T4OperationsAsync(fullPath).ConfigureAwait(false);
+                    break;
+                case "s8-t4-ui":
+                    await OwnerServiceSmoke.RunS8T4OperationsUiAsync(fullPath).ConfigureAwait(false);
                     break;
                 default:
                     await OwnerServiceSmoke.RunAsync(fullPath).ConfigureAwait(false);

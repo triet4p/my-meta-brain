@@ -897,10 +897,10 @@ internal sealed partial class OwnerConsoleSession
         "owner act: " + act + " -> " + outcome.ToString().ToLowerInvariant() +
         (outcome == OwnerCommandOutcome.Completed ? "" : " (" + (errorCode ?? "unknown") + ")");
 
-    private static string DescribeInboxAnswer(string act, OwnerCommandOutcome outcome, string? errorCode)
+    private static string DescribeInboxAnswer(string act, OwnerCommandOutcome outcome, string? errorCode, string? errorMessage = null)
     {
         var code = errorCode ?? "unknown";
-        return outcome switch
+        var answer = outcome switch
         {
             OwnerCommandOutcome.Completed =>
                 "The service completed the " + act + " but returned no payload, so this console shows nothing instead of guessing.",
@@ -924,5 +924,17 @@ internal sealed partial class OwnerConsoleSession
                 "The endpoint speaks a different protocol revision, so no " + act + " was performed.",
             _ => "No owner-channel answer reached the service (code: " + code + "), so no " + act + " was performed."
         };
+        return answer + RefusalSentence(outcome, errorMessage);
     }
+
+    /// <summary>
+    /// The owner's own sentence of a refusal, when the service sent one with
+    /// its typed code. The code stays the identity of the refusal and the
+    /// sentence is the explanation the owner reads; a refusal that carries no
+    /// sentence keeps the console's own wording.
+    /// </summary>
+    private static string RefusalSentence(OwnerCommandOutcome outcome, string? errorMessage) =>
+        outcome == OwnerCommandOutcome.Refused && !string.IsNullOrWhiteSpace(errorMessage)
+            ? " The service said: " + errorMessage
+            : string.Empty;
 }

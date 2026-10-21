@@ -1160,7 +1160,8 @@ internal static partial class OwnerServiceSmoke
                         maxCostUsd: 0.25m,
                         store: wrappedOp);
                 }
-                catch (InvalidOperationException ex) when (ex.Message.Contains("unavailable or corrupt", StringComparison.Ordinal))
+                catch (ServiceRefusalException ex) when (ex.Message.Contains("unavailable or corrupt", StringComparison.Ordinal) &&
+                                                       ex.Code == "source_unavailable")
                 {
                     createThrewTruthfulException = true;
                 }
@@ -1592,6 +1593,8 @@ internal static partial class OwnerServiceSmoke
         public T UpdateReviewState<T>(Func<OwnerReviewState, (OwnerReviewState State, T Result)> update) => _inner.UpdateReviewState(update);
         public OwnerPurgeLedgerState LoadPurgeLedgerState() => _inner.LoadPurgeLedgerState();
         public T UpdatePurgeLedgerState<T>(Func<OwnerPurgeLedgerState, (OwnerPurgeLedgerState State, T Result)> update) => _inner.UpdatePurgeLedgerState(update);
+        public OperationsAuditState LoadOperationsAuditState() => _inner.LoadOperationsAuditState();
+        public T UpdateOperationsAuditState<T>(Func<OperationsAuditState, (OperationsAuditState State, T Result)> update) => _inner.UpdateOperationsAuditState(update);
         public bool DeleteCanonicalResource(string resourceId) => _inner.DeleteCanonicalResource(resourceId);
         public void Dispose() => _inner.Dispose();
     }

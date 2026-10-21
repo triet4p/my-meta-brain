@@ -169,6 +169,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         InitializeSharingControls();
         InitializeSourcesControls();
         InitializeBackupControls();
+        InitializeOperationsControls();
         // The session may already hold answers (a window opened mid-workflow):
         // take its editor text, filters, drafts and lists now instead of
         // showing empty controls beside reported answers.
@@ -319,6 +320,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         IntentionsPanel.Visibility = Navigation.SelectedIndex == 9 ? Visibility.Visible : Visibility.Collapsed;
         ReviewQueuePanel.Visibility = Navigation.SelectedIndex == 10 ? Visibility.Visible : Visibility.Collapsed;
         BackupExportPanel.Visibility = Navigation.SelectedIndex == 11 ? Visibility.Visible : Visibility.Collapsed;
+        OperationsPanel.Visibility = Navigation.SelectedIndex == 12 ? Visibility.Visible : Visibility.Collapsed;
         if (Navigation.SelectedIndex == 9)
         {
             _ = _session.RefreshIntentionsAsync();
@@ -327,6 +329,11 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         if (Navigation.SelectedIndex == 10)
         {
             _ = _session.RefreshReviewQueueAsync();
+        }
+
+        if (Navigation.SelectedIndex == 12)
+        {
+            _ = _session.RefreshOperationsAsync();
         }
 
         // Keyboard and orientation: the scrolled content returns to the top of
@@ -355,6 +362,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
             9 => (System.Windows.IInputElement?)IntentionsRefreshButton,
             10 => (System.Windows.IInputElement?)ReviewQueueRefreshButton,
             11 => (System.Windows.IInputElement?)BackupPathInput,
+            12 => (System.Windows.IInputElement?)OperationsRefreshButton,
             _ => null,
         };
         target?.Focus();
@@ -459,6 +467,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         RenderIntentions(attached);
         RenderReview(attached);
         RenderBackupExport(attached);
+        RenderOperations(attached);
     }
 
     private string LastCheckText_Value() => _session.LastCheckLocal is { } last

@@ -314,6 +314,26 @@ public sealed class PurgeService
             invalidateIndex?.Invoke();
         }
 
+        // S8-T4: the purge covers the private operations state as well. The
+        // audit entries and the error diagnostics that name a purged resource
+        // go with it, and their sequence numbers become tombstones, so a
+        // later read, a restart or a restore cannot serve them again. The
+        // removal is idempotent: a resumed purge removes what is left.
+        var purgedResourceIds = intent.Impacted
+            .Select(item => item.ResourceId)
+            .ToHashSet(StringComparer.Ordinal);
+        if (purgedResourceIds.Count > 0)
+        {
+            operation.UpdateOperationsAuditState(state =>
+            {
+                var next = OperationsAuditAuthority.RemoveForResources(
+                    state,
+                    purgedResourceIds,
+                    _timeProvider.GetUtcNow().ToUniversalTime());
+                return (next, true);
+            });
+        }
+
         // Phase 3 (scope finalization) is idempotent and resumable: catalog
         // withdrawal tolerates unknown entries, and the scope strip below is
         // a set subtraction from live state, so re-running it after a crash

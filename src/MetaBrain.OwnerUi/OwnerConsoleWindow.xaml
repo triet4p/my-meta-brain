@@ -46,6 +46,7 @@
                         <ListBoxItem Content="Intentions" Padding="8,6" />
                         <ListBoxItem Content="Review queue" Padding="8,6" />
                         <ListBoxItem Content="Backup &amp; export" Padding="8,6" />
+                        <ListBoxItem Content="Operations &amp; audit" Padding="8,6" />
                     </ListBox>
                 </DockPanel>
             </Border>
@@ -1721,6 +1722,109 @@
                                    Text="• Locking the vault, losing the service or ending the session clears this view: the chosen paths, the export selection and the credential field go with it. Nothing here unlocks the vault by itself." />
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
                                    Text="• Keyboard: Tab moves through the fields, Enter in the search field finds the records to export, and Ctrl+L locks the vault." />
+                    </StackPanel>
+
+                    <StackPanel x:Name="OperationsPanel" Visibility="Collapsed">
+                        <TextBlock Text="Operations &amp; audit" FontSize="19" FontWeight="SemiBold" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,8,0,0"
+                                   Text="This view shows what this vault did and how it failed: who acted, what they acted on, how it ended, what it cost and the real error code the service returned. Every value here is an answer of the running service while the vault is unlocked. It shows no record body, no title, no query, no credential and no token, and an agent never sees this view." />
+
+                        <Border Margin="0,16,0,0" Padding="14" Background="White"
+                                BorderBrush="#FFD5D8DC" BorderThickness="1" CornerRadius="3">
+                            <StackPanel>
+                                <TextBlock Text="1. Health of this vault" FontWeight="SemiBold" FontSize="15" />
+                                <TextBlock x:Name="OperationsHealthText" TextWrapping="Wrap" Margin="0,6,0,0" FontSize="15"
+                                           AutomationProperties.AutomationId="OperationsHealthText" />
+                                <TextBlock x:Name="OperationsSpendText" TextWrapping="Wrap" Margin="0,4,0,0"
+                                           AutomationProperties.AutomationId="OperationsSpendText" />
+                                <TextBlock x:Name="OperationsLogText" TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
+                                           AutomationProperties.AutomationId="OperationsLogText" />
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                    <Button x:Name="OperationsRefreshButton" Content="Refresh health, audit and diagnostics" Padding="14,7"
+                                            AutomationProperties.AutomationId="OperationsRefreshButton" Click="OnOperationsRefreshClicked" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Margin="0,16,0,0" Padding="14" Background="White"
+                                BorderBrush="#FFD5D8DC" BorderThickness="1" CornerRadius="3">
+                            <StackPanel>
+                                <TextBlock Text="2. Who did what, and what it cost" FontWeight="SemiBold" FontSize="15" />
+                                <TextBlock x:Name="OperationsAuditCountText" TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280"
+                                           AutomationProperties.AutomationId="OperationsAuditCountText" />
+                                <ListBox x:Name="OperationsAuditList" Height="190" Margin="0,6,0,0" Background="White" BorderBrush="#FFD5D8DC"
+                                         AutomationProperties.AutomationId="OperationsAuditList"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Margin="2">
+                                                <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                                <TextBlock Text="{Binding Detail}" Foreground="#FF6B7280" TextWrapping="Wrap" Margin="0,2,0,0" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Margin="0,16,0,0" Padding="14" Background="White"
+                                BorderBrush="#FFD5D8DC" BorderThickness="1" CornerRadius="3">
+                            <StackPanel>
+                                <TextBlock Text="3. What failed, and what to do about it" FontWeight="SemiBold" FontSize="15" />
+                                <TextBlock x:Name="OperationsDiagnosticsCountText" TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280"
+                                           AutomationProperties.AutomationId="OperationsDiagnosticsCountText" />
+                                <ListBox x:Name="OperationsDiagnosticsList" Height="190" Margin="0,6,0,0" Background="White" BorderBrush="#FFD5D8DC"
+                                         AutomationProperties.AutomationId="OperationsDiagnosticsList"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Margin="2">
+                                                <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                                <TextBlock Text="{Binding Detail}" Foreground="#FF3F4650" TextWrapping="Wrap" Margin="0,2,0,0" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Margin="0,16,0,0" Padding="14" Background="#FFFFF7E6"
+                                BorderBrush="#FFE0B44A" BorderThickness="1" CornerRadius="3">
+                            <StackPanel>
+                                <TextBlock Text="4. How long to keep, and what to clear" FontWeight="SemiBold" FontSize="15" />
+                                <TextBlock TextWrapping="Wrap" Margin="0,6,0,0"
+                                           Text="The audit trail and the diagnostics are kept inside the encrypted vault. This choice sets how long they stay and how many are kept; a purge of a record also removes the audit entries and the diagnostics that name it, so a removed record cannot come back through this view." />
+                                <TextBlock Text="Keep entries for" Margin="0,10,0,2" Foreground="#FF6B7280" />
+                                <ComboBox x:Name="OperationsRetentionDaysInput" Width="240"
+                                          AutomationProperties.AutomationId="OperationsRetentionDaysInput"
+                                          SelectionChanged="OnOperationsRetentionChanged" />
+                                <TextBlock Text="Keep at most" Margin="0,10,0,2" Foreground="#FF6B7280" />
+                                <ComboBox x:Name="OperationsRetentionRecordsInput" Width="240"
+                                          AutomationProperties.AutomationId="OperationsRetentionRecordsInput"
+                                          SelectionChanged="OnOperationsRetentionChanged" />
+                                <CheckBox x:Name="OperationsPurgeLogCheck" Margin="0,10,0,0"
+                                          Content="Also clear the safe operational log (it holds only codes, never content)"
+                                          AutomationProperties.AutomationId="OperationsPurgeLogCheck" />
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                    <Button x:Name="OperationsRetentionButton" Content="Apply the retention choice" Padding="14,7"
+                                            AutomationProperties.AutomationId="OperationsRetentionButton" Click="OnOperationsRetentionClicked" />
+                                </StackPanel>
+                                <TextBlock x:Name="OperationsMessageText" TextWrapping="Wrap" Margin="0,10,0,0" FontWeight="SemiBold"
+                                           AutomationProperties.AutomationId="OperationsMessageText" />
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Text="What this view does not do" FontWeight="SemiBold" Margin="0,20,0,6" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• It shows no record, no title, no body, no query and no source content: only the actor, the operation, the outcome, the cost the service already charged and the real error code." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• It never shows a key, a credential, a token or a session, and there is no way to ask it for one: an agent channel cannot reach this view at all." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• It is a local view. Nothing here is sent anywhere: this build has no telemetry, no auto-update and no cloud reporting." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Locking the vault, losing the service or ending the session clears this view, and an answer that arrives after that is dropped instead of restoring it." />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2"
+                                   Text="• Same-owner access to this machine is outside what this product can promise: it protects the data at rest and the boundary between the owner and an agent, not a hostile account on your own Windows account." />
                     </StackPanel>
                 </Grid>
             </ScrollViewer>

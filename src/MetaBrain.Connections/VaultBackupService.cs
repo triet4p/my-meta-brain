@@ -21,16 +21,25 @@ internal sealed record VaultBackupRecord(
 /// <summary>
 /// The dedicated owner states one snapshot carries. They are the encrypted
 /// side files of the vault: the scope grants, the published catalog, the
-/// source enrollments, the recall policy, the review state and the purge
-/// ledger.
+/// source enrollments, the recall policy, the review state, the purge ledger
+/// and the S8-T4 private operations state.
 /// </summary>
+/// <remarks>
+/// The operations state travels with the snapshot for the same reason every
+/// other dedicated state does: a restored vault is a complete vault. A
+/// backup taken before a purge still holds the audit bytes of that moment,
+/// exactly as it still holds the canonical bytes of that moment: the copy is
+/// irrevocable, and the purge watermark that a later backup carries keeps the
+/// purged entries from coming back.
+/// </remarks>
 internal sealed record VaultBackupStates(
     OwnerScopeGrantState ScopeGrants,
     OwnerCatalogState Catalog,
     SourceEnrollmentState SourceEnrollment,
     OwnerRecallPolicyState RecallPolicy,
     OwnerReviewState ReviewState,
-    OwnerPurgeLedgerState PurgeLedger);
+    OwnerPurgeLedgerState PurgeLedger,
+    OperationsAuditState? OperationsAudit = null);
 
 /// <summary>
 /// The captured point in time: the canonical records with their exact
@@ -167,7 +176,7 @@ internal sealed class VaultBackupService : IVaultBackupService
                         path,
                         containerBytes.LongLength,
                         records.Length,
-                        6,
+                        7,
                         manifestRevision,
                         createdAtUtc);
                 }
@@ -328,7 +337,8 @@ internal sealed class VaultBackupService : IVaultBackupService
             operation.LoadSourceEnrollmentState(),
             operation.LoadRecallPolicyState(),
             operation.LoadReviewState(),
-            operation.LoadPurgeLedgerState());
+            operation.LoadPurgeLedgerState(),
+            operation.LoadOperationsAuditState());
         return new VaultBackupSnapshot(records, states, _vault.CurrentManifestRevision);
     }
 
@@ -409,6 +419,14 @@ internal sealed class VaultBackupService : IVaultBackupService
             store.SaveRecallPolicyState(manifest, dataKey, payload.States.RecallPolicy);
             store.SaveReviewState(manifest, dataKey, payload.States.ReviewState);
             store.SavePurgeLedgerState(manifest, dataKey, payload.States.PurgeLedger);
+            // A backup taken before the operations state existed restores an
+            // empty one: the audit trail of the source installation is not
+            // invented, and the restored vault starts with no private
+            // operations history.
+            store.SaveOperationsAuditState(
+                manifest,
+                dataKey,
+                payload.States.OperationsAudit ?? OperationsAuditState.Empty);
             Directory.Move(staging, targetDirectory);
             return targetDirectory;
         }

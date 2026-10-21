@@ -527,6 +527,49 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
         }
     }
 
+    /// <summary>
+    /// S8-T4 the private operations state: the owner audit trail, the error
+    /// diagnostics, the retention choice and the purge tombstones. It lives in
+    /// one dedicated encrypted file of the vault, so it exists only while the
+    /// vault is unlocked and it is never a canonical resource.
+    /// </summary>
+    private OperationsAuditState LoadOperationsAuditState()
+    {
+        lock (_contentGate)
+        {
+            if (_manifest is null || _dataKey is null)
+            {
+                throw new ManagedResourceUnavailableException();
+            }
+
+            return OperationsAuditAuthority.ValidateAndNormalizeState(
+                _store.LoadOperationsAuditState(_manifest, _dataKey));
+        }
+    }
+
+    private T UpdateOperationsAuditState<T>(
+        Func<OperationsAuditState, (OperationsAuditState State, T Result)> update)
+    {
+        lock (_contentGate)
+        {
+            if (_manifest is null || _dataKey is null)
+            {
+                throw new ManagedResourceUnavailableException();
+            }
+
+            var state = OperationsAuditAuthority.ValidateAndNormalizeState(
+                _store.LoadOperationsAuditState(_manifest, _dataKey));
+            var (nextState, result) = update(state);
+            if (!ReferenceEquals(nextState, state))
+            {
+                nextState = OperationsAuditAuthority.ValidateAndNormalizeState(nextState);
+                _store.SaveOperationsAuditState(_manifest, _dataKey, nextState);
+            }
+
+            return result;
+        }
+    }
+
     private bool DeleteCanonicalResource(string resourceId)
     {
         lock (_contentGate)
@@ -785,6 +828,10 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
         public T UpdatePurgeLedgerState<T>(
             Func<OwnerPurgeLedgerState, (OwnerPurgeLedgerState State, T Result)> update) =>
             GetOwner().UpdatePurgeLedgerState(update);
+        public OperationsAuditState LoadOperationsAuditState() => GetOwner().LoadOperationsAuditState();
+        public T UpdateOperationsAuditState<T>(
+            Func<OperationsAuditState, (OperationsAuditState State, T Result)> update) =>
+            GetOwner().UpdateOperationsAuditState(update);
         public bool DeleteCanonicalResource(string resourceId) => GetOwner().DeleteCanonicalResource(resourceId);
         public bool TryGetZone(string resourceId, out string? zoneId) => GetOwner().TryGetZone(resourceId, out zoneId);
         public byte[] ReadContent(string resourceId, long? expectedRevision = null) => GetOwner().ReadContent(resourceId, expectedRevision);

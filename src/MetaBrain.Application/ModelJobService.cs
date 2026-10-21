@@ -59,7 +59,7 @@ public sealed class ModelJobService
 
         if (string.IsNullOrWhiteSpace(destinationZoneId) || string.IsNullOrWhiteSpace(destinationResourceId))
         {
-            throw new ArgumentException("The destination zone and destination resource ID are required.");
+            throw new ServiceRefusalException("invalid_request", "The destination zone and destination resource ID are required.");
         }
 
         // Every selected input must be registered in a zone and still enrolled:
@@ -69,7 +69,7 @@ public sealed class ModelJobService
         {
             if (!store.TryGetZone(input.ResourceId, out var registeredSourceZone) || string.IsNullOrEmpty(registeredSourceZone))
             {
-                throw new ArgumentException($"source_unavailable: The input resource '{input.ResourceId}' is not registered in any zone.");
+                throw new ServiceRefusalException("source_unavailable", $"The input resource '{input.ResourceId}' is not registered in any zone.");
             }
 
             ValidateSourceEnrollment(input.ResourceId, store);
@@ -78,16 +78,16 @@ public sealed class ModelJobService
         // Validate destination resource exists and matches requested destination zone
         if (!store.TryGetZone(destinationResourceId, out var registeredDestZone) || string.IsNullOrEmpty(registeredDestZone))
         {
-            throw new ArgumentException("The destination resource is not registered in any zone.");
+            throw new ServiceRefusalException("destination_unavailable", "The destination resource is not registered in any zone.");
         }
         if (!string.Equals(registeredDestZone, destinationZoneId, StringComparison.Ordinal))
         {
-            throw new ArgumentException($"The destination resource is registered in zone '{registeredDestZone}', which does not match requested destination zone '{destinationZoneId}'.");
+            throw new ServiceRefusalException("destination_unavailable", $"The destination resource is registered in zone '{registeredDestZone}', which does not match requested destination zone '{destinationZoneId}'.");
         }
 
         if (!StructuringProfiles.IsSupported(profile))
         {
-            throw new ArgumentException($"unknown_profile: Structuring profile '{profile}' is not supported.");
+            throw new ServiceRefusalException("unknown_profile", $"Structuring profile '{profile}' is not supported.");
         }
         var effectiveProfile = string.IsNullOrWhiteSpace(profile) ? StructuringProfiles.ResearchNote : profile;
         var isSynthesis = StructuringProfiles.IsSynthesis(effectiveProfile);
@@ -101,23 +101,23 @@ public sealed class ModelJobService
         {
             if (selectedInputs.Length < 2)
             {
-                throw new ArgumentException("synthesis_requires_multiple_inputs: A synthesis job requires at least two explicitly selected inputs.");
+                throw new ServiceRefusalException("synthesis_requires_multiple_inputs", "A synthesis job requires at least two explicitly selected inputs.");
             }
 
             if (string.IsNullOrWhiteSpace(objective))
             {
-                throw new ArgumentException("objective_required: A synthesis job requires the objective the owner wants addressed.");
+                throw new ServiceRefusalException("objective_required", "A synthesis job requires the objective the owner wants addressed.");
             }
 
             effectiveObjective = objective.Trim();
             if (effectiveObjective.Length > JobSelectionCodec.MaximumObjectiveLength)
             {
-                throw new ArgumentException($"objective_too_long: The objective must be at most {JobSelectionCodec.MaximumObjectiveLength} characters.");
+                throw new ServiceRefusalException("objective_too_long", $"The objective must be at most {JobSelectionCodec.MaximumObjectiveLength} characters.");
             }
 
             if (!SynthesisLevels.TryParse(targetLevel, out var parsedLevel))
             {
-                throw new ArgumentException($"synthesis_level_required: The requested level must be one of: {SynthesisLevels.L2}, {SynthesisLevels.L3Plus}.");
+                throw new ServiceRefusalException("synthesis_level_required", $"The requested level must be one of: {SynthesisLevels.L2}, {SynthesisLevels.L3Plus}.");
             }
 
             effectiveTargetLevel = parsedLevel;
@@ -126,19 +126,19 @@ public sealed class ModelJobService
         {
             if (selectedInputs.Length != 1)
             {
-                throw new ArgumentException($"invalid_job_inputs: Profile '{effectiveProfile}' reads exactly one selected input.");
+                throw new ServiceRefusalException("invalid_job_inputs", $"Profile '{effectiveProfile}' reads exactly one selected input.");
             }
 
             if (!string.IsNullOrWhiteSpace(objective) || !string.IsNullOrWhiteSpace(targetLevel))
             {
-                throw new ArgumentException("invalid_job_inputs: An objective and a target level belong to a synthesis job only.");
+                throw new ServiceRefusalException("invalid_job_inputs", "An objective and a target level belong to a synthesis job only.");
             }
         }
 
         // 1. Validate pricing and approved model with known tokenizer/context (fails closed with pricing_unknown or unknown_context)
         if (!ModelPricingCatalog.TryGetApprovedModel(provider, model, out var priceCard, out var modelFailureReason) || priceCard is null)
         {
-            throw new ArgumentException($"{modelFailureReason}: No approved pricing card found for '{provider}:{model}'.");
+            throw new ServiceRefusalException(modelFailureReason ?? "pricing_unknown", $"No approved pricing card found for '{provider}:{model}'.");
         }
 
         // 2. Read every selected input at its pinned revision and validate lineage
@@ -146,9 +146,9 @@ public sealed class ModelJobService
         if (isSynthesis)
         {
             EnsureLineageAcyclic(selectedInputs, store);
-            if (effectiveTargetLevel == AbstractionLevel.L3Plus && !HasSynthesisLevelInput(selectedInputs, store))
+            if (effectiveTargetLevel is AbstractionLevel.L3Plus && !HasSynthesisLevelInput(selectedInputs, store))
             {
-                throw new ArgumentException("synthesis_level_ungrounded: An L3+ synthesis requires at least one selected input that is itself an L2 or L3+ synthesis item; a level is never invented from raw sources.");
+                throw new ServiceRefusalException("synthesis_level_ungrounded", "An L3+ synthesis requires at least one selected input that is itself an L2 or L3+ synthesis item; a level is never invented from raw sources.");
             }
         }
 
@@ -161,7 +161,7 @@ public sealed class ModelJobService
         var estimatedInputTokens = EstimateFramedInputTokens(provider, model, systemPrompt, userPrompt, (int)SpendLedger.MaximumJobOutputTokens);
         if (estimatedInputTokens > SpendLedger.MaximumJobInputTokens)
         {
-            throw new ArgumentException($"Estimated framed input tokens ({estimatedInputTokens}) exceed the whole-job cap of {SpendLedger.MaximumJobInputTokens}.");
+            throw new ServiceRefusalException("input_cap_exceeded", $"Estimated framed input tokens ({estimatedInputTokens}) exceed the whole-job cap of {SpendLedger.MaximumJobInputTokens}.");
         }
         var maxOutputTokens = SpendLedger.MaximumJobOutputTokens;
         var now = DateTimeOffset.UtcNow;
@@ -170,7 +170,7 @@ public sealed class ModelJobService
         var reservationCost = ApprovedReservationCostUsd;
         if (maxCostUsd.HasValue && maxCostUsd.Value < reservationCost)
         {
-            throw new ArgumentException($"The specified maximum cost (${maxCostUsd.Value}) is less than the required pre-send reservation (${reservationCost}).");
+            throw new ServiceRefusalException("cost_limit_exceeded", $"The specified maximum cost (${maxCostUsd.Value}) is less than the required pre-send reservation (${reservationCost}).");
         }
 
         // 3. Pre-send budget & rolling ledger check
@@ -180,7 +180,7 @@ public sealed class ModelJobService
             var ledger = LoadSpendLedger(store);
             if (!ledger.CanReserve(reservationCost, now, out var refusalCode))
             {
-                throw new InvalidOperationException(refusalCode ?? "budget_exceeded");
+                throw new ServiceRefusalException(refusalCode ?? "budget_exceeded", "The rolling spend budget would be exceeded by this job.");
             }
 
             jobId = DomainIdentifiers.JobIdPrefix + Guid.NewGuid().ToString("N");
@@ -240,13 +240,13 @@ public sealed class ModelJobService
 
         if (!DomainIdentifiers.IsJobId(jobId))
         {
-            throw new ArgumentException("The job ID must be a valid job identifier.");
+            throw new ServiceRefusalException("invalid_request", "The job ID must be a valid job identifier.");
         }
 
         var stored = ReadStoredJob(jobId, store, out var liveRevision);
         if (stored.State != JobState.Pending)
         {
-            throw new InvalidOperationException($"Job '{jobId}' is in state '{stored.State}' and cannot be started.");
+            throw new ServiceRefusalException("job_not_startable", $"Job '{jobId}' is in state '{stored.State}' and cannot be started.");
         }
 
         // 1. Revalidate the whole scope snapshot and every selected input before
@@ -281,6 +281,10 @@ public sealed class ModelJobService
         {
             inputTexts = ReadInputTexts(stored.Scope.Inputs, store);
         }
+        catch (ServiceRefusalException refusal)
+        {
+            return ReleaseAndFail(stored, liveRevision, refusal.Code, refusal.Message, store);
+        }
         catch (Exception ex)
         {
             return ReleaseAndFail(stored, liveRevision, "source_unavailable", ex.Message, store);
@@ -293,6 +297,10 @@ public sealed class ModelJobService
                 ValidateSourceEnrollment(input.ResourceId, store);
             }
         }
+        catch (ServiceRefusalException refusal)
+        {
+            return ReleaseAndFail(stored, liveRevision, refusal.Code, refusal.Message, store);
+        }
         catch (Exception ex)
         {
             return ReleaseAndFail(stored, liveRevision, "source_unavailable", ex.Message, store);
@@ -304,9 +312,9 @@ public sealed class ModelJobService
             {
                 EnsureLineageAcyclic(stored.Scope.Inputs, store);
             }
-            catch (ArgumentException ex)
+            catch (ServiceRefusalException refusal)
             {
-                return ReleaseAndFail(stored, liveRevision, "lineage_cycle", ex.Message, store);
+                return ReleaseAndFail(stored, liveRevision, refusal.Code, refusal.Message, store);
             }
         }
 
@@ -678,7 +686,7 @@ public sealed class ModelJobService
 
         if (!DomainIdentifiers.IsJobId(jobId))
         {
-            throw new ArgumentException("The job ID must be a valid job identifier.");
+            throw new ServiceRefusalException("invalid_request", "The job ID must be a valid job identifier.");
         }
 
         var stored = ReadStoredJob(jobId, store, out var liveRevision);
@@ -838,7 +846,7 @@ public sealed class ModelJobService
         ArgumentNullException.ThrowIfNull(inputs);
         if (inputs.Count is < 1 or > MemoryEnvelopeCodec.MaximumSources)
         {
-            throw new ArgumentException($"invalid_job_inputs: A job requires between 1 and {MemoryEnvelopeCodec.MaximumSources} explicitly selected inputs.");
+            throw new ServiceRefusalException("invalid_job_inputs", $"A job requires between 1 and {MemoryEnvelopeCodec.MaximumSources} explicitly selected inputs.");
         }
 
         var selected = new JobInputReference[inputs.Count];
@@ -848,23 +856,23 @@ public sealed class ModelJobService
             var input = inputs[index];
             if (input is null)
             {
-                throw new ArgumentException("invalid_job_inputs: A job input reference is invalid.");
+                throw new ServiceRefusalException("invalid_job_inputs", "A job input reference is invalid.");
             }
 
             if (string.IsNullOrWhiteSpace(input.ResourceId) ||
                 (!DomainIdentifiers.IsDomainIdentifier(input.ResourceId) && !SourceSnapshotIds.IsSnapshotId(input.ResourceId)))
             {
-                throw new ArgumentException("invalid_job_inputs: Each job input must be an opaque domain identifier or source snapshot identifier.");
+                throw new ServiceRefusalException("invalid_job_inputs", "Each job input must be an opaque domain identifier or source snapshot identifier.");
             }
 
             if (input.Revision < 1)
             {
-                throw new ArgumentException("invalid_job_inputs: Each job input must pin a positive revision.");
+                throw new ServiceRefusalException("invalid_job_inputs", "Each job input must pin a positive revision.");
             }
 
             if (!seen.Add(input.ResourceId))
             {
-                throw new ArgumentException("invalid_job_inputs: A repeated job input does not count as a second source.");
+                throw new ServiceRefusalException("invalid_job_inputs", "A repeated job input does not count as a second source.");
             }
 
             selected[index] = input;
@@ -912,7 +920,7 @@ public sealed class ModelJobService
         if (source is not null)
         {
             return source.Text is null
-                ? throw new ArgumentException($"input_not_readable: The input resource '{input.ResourceId}' is a registered source without captured text.")
+                ? throw new ServiceRefusalException("input_not_readable", $"The input resource '{input.ResourceId}' is a registered source without captured text.")
                 : new JobInputText(input.ResourceId, input.Revision, source.Text, IsSourceText: true);
         }
 
@@ -922,7 +930,7 @@ public sealed class ModelJobService
         }
         catch (ArgumentException ex)
         {
-            throw new ArgumentException($"input_not_readable: The input resource '{input.ResourceId}' is neither a registered source with text nor a memory item.", ex);
+            throw new ServiceRefusalException("input_not_readable", $"The input resource '{input.ResourceId}' is neither a registered source with text nor a memory item.", ex);
         }
     }
 
@@ -941,12 +949,12 @@ public sealed class ModelJobService
         var walk = MemoryLineage.Walk(inputs.Select(input => (input.ResourceId, input.Revision)), store);
         if (walk.Cycle is { } cycle)
         {
-            throw new ArgumentException($"lineage_cycle: The selected input lineage revisits '{cycle.ResourceId}' at revision {cycle.Revision}, so it cannot be traced to a permitted root.");
+            throw new ServiceRefusalException("lineage_cycle", $"The selected input lineage revisits '{cycle.ResourceId}' at revision {cycle.Revision}, so it cannot be traced to a permitted root.");
         }
 
         if (walk.Bounded is not null)
         {
-            throw new ArgumentException("lineage_unbounded: The selected input lineage is too deep to validate inside a bounded job.");
+            throw new ServiceRefusalException("lineage_unbounded", "The selected input lineage is too deep to validate inside a bounded job.");
         }
     }
 
@@ -1455,7 +1463,7 @@ public sealed class ModelJobService
     {
         if (context.Kind != PrincipalKind.Owner)
         {
-            throw new InvalidOperationException("Only trusted owner context can execute model job operations.");
+            throw new ServiceRefusalException("forbidden", "Only trusted owner context can execute model job operations.");
         }
     }
 
@@ -1470,7 +1478,7 @@ public sealed class ModelJobService
             }
             catch (Exception ex) when (ex is InvalidDataException or IOException or CryptographicException)
             {
-                throw new InvalidOperationException($"Source enrollment state is unavailable or corrupt: {ex.Message}", ex);
+                throw new ServiceRefusalException("source_unavailable", "The source enrollment state is unavailable or corrupt, so the source could not be checked.", ex);
             }
 
             var effectiveSourceId = sourceResourceId;
@@ -1485,28 +1493,28 @@ public sealed class ModelJobService
                 }
                 catch (Exception ex)
                 {
-                    throw new ArgumentException($"The source snapshot '{sourceResourceId}' could not be decoded: {ex.Message}", ex);
+                    throw new ServiceRefusalException("source_unavailable", $"The source snapshot '{sourceResourceId}' could not be decoded.", ex);
                 }
             }
 
             var enrollment = SourceEnrollmentAuthority.FindEnrollment(state, effectiveSourceId);
             if (enrollment is not null && enrollment.RevokedAtUtc is not null)
             {
-                throw new ArgumentException($"The source resource '{sourceResourceId}' is revoked.");
+                throw new ServiceRefusalException("source_revoked", $"The source resource '{sourceResourceId}' is revoked.");
             }
             if (!string.Equals(sourceResourceId, effectiveSourceId, StringComparison.Ordinal))
             {
                 var directEnrollment = SourceEnrollmentAuthority.FindEnrollment(state, sourceResourceId);
                 if (directEnrollment is not null && directEnrollment.RevokedAtUtc is not null)
                 {
-                    throw new ArgumentException($"The source resource '{sourceResourceId}' is revoked.");
+                    throw new ServiceRefusalException("source_revoked", $"The source resource '{sourceResourceId}' is revoked.");
                 }
             }
 
             if (SourceEnrollmentAuthority.FindQuarantine(state, effectiveSourceId) is not null ||
                 SourceEnrollmentAuthority.FindQuarantine(state, sourceResourceId) is not null)
             {
-                throw new ArgumentException($"The source resource '{sourceResourceId}' is quarantined.");
+                throw new ServiceRefusalException("source_quarantined", $"The source resource '{sourceResourceId}' is quarantined.");
             }
         }
     }

@@ -74,7 +74,12 @@ public sealed record ServiceRequest(
     string? TargetPath = null,
     bool? IncludeRelations = null,
     bool? IncludeLifecycleStates = null,
-    bool? DiscardRollback = null);
+    bool? DiscardRollback = null,
+    int? OperationsOffset = null,
+    int? OperationsLimit = null,
+    int? RetentionDays = null,
+    int? RetentionMaxRecords = null,
+    bool? PurgeOperationalLog = null);
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
     ScopeResourceRevision[] Resources,
@@ -979,7 +984,12 @@ public sealed record ServiceReply(
     OwnerExportSummary? Export = null,
     VaultFormatStatus? VaultFormat = null,
     VaultUpgradeSummary? VaultUpgrade = null,
-    VaultRollbackSummary? VaultRollback = null);
+    VaultRollbackSummary? VaultRollback = null,
+    OperationsHealthWire? OperationsHealth = null,
+    OperationsAuditWire[]? OperationsAudit = null,
+    OperationsDiagnosticWire[]? OperationsDiagnostics = null,
+    OperationsRetentionWire? OperationsRetention = null,
+    string? ErrorCode = null);
 
 public sealed class ServiceRequestHandler
 {
@@ -1094,6 +1104,10 @@ public sealed class ServiceRequestHandler
     public const string LifecycleRetainRevisionOperation = "lifecycle.retain";
     public const string OwnerIndexStatusOperation = "owner.index.status";
     public const string OwnerIndexRebuildOperation = "owner.index.rebuild";
+    public const string OwnerOperationsHealthOperation = "owner.operations.health";
+    public const string OwnerOperationsAuditOperation = "owner.operations.audit";
+    public const string OwnerOperationsDiagnosticsOperation = "owner.operations.diagnostics";
+    public const string OwnerOperationsRetentionOperation = "owner.operations.retention";
     public const string OwnerLibrarySearchOperation = "owner.library.search";
     public const string OwnerRecallApplyOperation = "owner.recall.apply";
     public const string OwnerRecallReadOperation = "owner.recall.read";
@@ -1156,6 +1170,9 @@ public sealed class ServiceRequestHandler
     private readonly IVaultBackupService? _vaultBackup;
     private readonly IVaultMaintenanceService? _vaultMaintenance;
     private readonly OwnerExportService _exports = new();
+    private readonly OperationsService _operations;
+    private readonly OperationsAuditRecorder _auditRecorder;
+    private readonly IOperationalLog? _operationalLog;
 
     public ServiceRequestHandler(
         GrantAuthority grantAuthority,
@@ -1170,7 +1187,8 @@ public sealed class ServiceRequestHandler
         IModelProviderAdapter? modelProvider = null,
         TimeProvider? timeProvider = null,
         IVaultBackupService? vaultBackup = null,
-        IVaultMaintenanceService? vaultMaintenance = null)
+        IVaultMaintenanceService? vaultMaintenance = null,
+        IOperationalLog? operationalLog = null)
     {
         _modelJobs = new ModelJobService(vault, modelProvider);
         _synthesisSchedule = new SynthesisScheduleService(_modelJobs);
@@ -1186,6 +1204,9 @@ public sealed class ServiceRequestHandler
         _sourceReader = sourceReader;
         _vaultBackup = vaultBackup;
         _vaultMaintenance = vaultMaintenance;
+        _operations = new OperationsService(timeProvider);
+        _auditRecorder = new OperationsAuditRecorder(operationalLog, timeProvider);
+        _operationalLog = operationalLog;
         // S3-T1 source enrollment/ingestion. The registry ships empty (real
         // Codex/OMP parsers attach in S3-T2/S3-T3); without both a registry
         // and a reader the owner operations fail closed instead of serving a
@@ -1198,6 +1219,170 @@ public sealed class ServiceRequestHandler
     }
 
     public async Task<ServiceReply> HandleAsync(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(request);
+
+        ServiceReply reply;
+        try
+        {
+            reply = await HandleRequestAsync(context, request, operation, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // An unexpected failure is recorded as a failed operation with its
+            // own code; the exception itself never reaches the audit trail,
+            // the operational log or the owner, because its message can carry
+            // a path or a payload.
+            RecordOperation(context, request, OperationsAuditAuthority.FailedOutcome, "internal_failure", null, operation);
+            throw;
+        }
+
+        RecordOperation(
+            context,
+            request,
+            OutcomeOf(reply),
+            reply.Job?.Failure?.Code ?? reply.ErrorCode ?? reply.Error,
+            reply.Job?.Usage?.CostUsd,
+            operation);
+        return reply;
+    }
+
+    /// <summary>
+    /// The outcome the audit trail records: a refusal when the service
+    /// answered an error or a denial, a completion otherwise.
+    /// </summary>
+    private static string OutcomeOf(ServiceReply reply)
+    {
+        if (reply.Error is not null || reply.ErrorCode is not null)
+        {
+            return OperationsAuditAuthority.RefusedOutcome;
+        }
+
+        return reply.Status is "denied" or "failed" or "refused"
+            ? OperationsAuditAuthority.RefusedOutcome
+            : OperationsAuditAuthority.CompletedOutcome;
+    }
+
+    /// <summary>
+    /// Records one finished operation in the private operations state and in
+    /// the safe operational log.
+    /// </summary>
+    private void RecordOperation(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        string outcome,
+        string? errorCode,
+        decimal? costUsd,
+        IVaultOperation? operation)
+    {
+        _auditRecorder.Record(
+            context,
+            request.Operation,
+            IsAuditedOperation(request.Operation),
+            outcome,
+            errorCode,
+            costUsd,
+            request.ResourceId,
+            operation);
+    }
+
+    /// <summary>
+    /// True for the operations that change something or that a person needs to
+    /// be able to see afterwards. A pure read is not audited: the private
+    /// audit trail is a record of acts, and a read that changes nothing must
+    /// not push the owner's own trail forward. An operation name the service
+    /// does not know is never audited and never logged under its own name,
+    /// because that name came from the caller.
+    /// </summary>
+    private static bool IsAuditedOperation(string? operation) =>
+        operation is not null && KnownOperations.Contains(operation) && !UnauditedOperations.Contains(operation);
+
+    /// <summary>
+    /// Every operation name this service knows, read from the operation
+    /// constants themselves so the list can never drift from the dispatcher.
+    /// </summary>
+    private static readonly HashSet<string> KnownOperations = BuildKnownOperations();
+
+    private static HashSet<string> BuildKnownOperations()
+    {
+        var operations = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var field in typeof(ServiceRequestHandler).GetFields(
+                     System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static))
+        {
+            if (field.FieldType == typeof(string) &&
+                field.Name.EndsWith("Operation", StringComparison.Ordinal) &&
+                field.GetValue(null) is string value &&
+                value.Length > 0)
+            {
+                operations.Add(value);
+            }
+        }
+
+        return operations;
+    }
+
+    /// <summary>
+    /// The operations that are never audited: the status probes, the private
+    /// reads, the listings and the S8-T4 operations views themselves.
+    /// </summary>
+    private static readonly HashSet<string> UnauditedOperations = new(StringComparer.Ordinal)
+    {
+        OwnerStatusOperation,
+        OwnerLibrarySearchOperation,
+        OwnerRecallReadOperation,
+        OwnerIndexStatusOperation,
+        OwnerOperationsHealthOperation,
+        OwnerOperationsAuditOperation,
+        OwnerOperationsDiagnosticsOperation,
+        MemoryReadOperation,
+        SourceReadOperation,
+        LifecycleRetainedRevisionReadOperation,
+        RelationReadOperation,
+        ProposalListOperation,
+        FeedbackReadOperation,
+        ResearchReadOperation,
+        OwnerJobListOperation,
+        OwnerJobStatusOperation,
+        OwnerJobLedgerOperation,
+        OwnerProviderStatusOperation,
+        OwnerScheduleStatusOperation,
+        OwnerIntentionScheduleListOperation,
+        OwnerReviewListOperation,
+        OwnerRelationListOperation,
+        OwnerAccessRequestListOperation,
+        OwnerAccessRequestPreviewOperation,
+        OwnerCatalogListOperation,
+        OwnerCatalogPreviewOperation,
+        OwnerSessionListOperation,
+        OwnerPurgePreviewOperation,
+        SourceListOperation,
+        SourceStatusOperation,
+        SourceSnapshotListOperation,
+        SourceSnapshotReadOperation,
+        AgentSessionInspectOperation,
+        AgentCollectionViewOperation,
+        AgentMemoryReadOperation,
+        AgentMemorySearchOperation,
+        AgentMemoryBriefOperation,
+        AgentFeedbackReadOperation,
+        AgentRelationListOperation,
+        AgentRelationReadOperation,
+        AgentResourceReadOperation,
+        AgentSourceReadOperation,
+        AgentSourceSnapshotReadOperation,
+        CatalogListOperation,
+        CatalogQueryOperation,
+        MemorySearchAccessOperation,
+        MemoryContextAccessOperation,
+        MemoryFeedbackAccessOperation,
+    };
+
+    private async Task<ServiceReply> HandleRequestAsync(
         AuthenticatedContext context,
         ServiceRequest request,
         IVaultOperation? operation,
@@ -1583,6 +1768,26 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, OwnerIndexRebuildOperation, StringComparison.Ordinal))
         {
             return HandleIndexRebuild(context, request, operation, cancellationToken);
+        }
+
+        if (string.Equals(request.Operation, OwnerOperationsHealthOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerOperationsHealth(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerOperationsAuditOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerOperationsAudit(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerOperationsDiagnosticsOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerOperationsDiagnostics(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerOperationsRetentionOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerOperationsRetention(context, request, operation);
         }
 
         if (string.Equals(request.Operation, SourceEnrollOperation, StringComparison.Ordinal) ||
@@ -2219,7 +2424,7 @@ public sealed class ServiceRequestHandler
             }
             catch (ArgumentException ex)
             {
-                return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+                return Refusal("invalid_request", ex.Message);
             }
             finally
             {
@@ -2262,17 +2467,21 @@ public sealed class ServiceRequestHandler
                 null,
                 Job: ToJobWire(job));
         }
+        catch (ServiceRefusalException ex)
+        {
+            return Refusal(ex.Code, ex.Message);
+        }
         catch (ArgumentException ex)
         {
-            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+            return Refusal("invalid_request", ex.Message);
         }
         catch (InvalidOperationException ex)
         {
-            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+            return Refusal("invalid_request", ex.Message);
         }
         catch (InvalidDataException ex)
         {
-            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+            return Refusal("resource_unavailable", ex.Message);
         }
         catch (ManagedResourceUnavailableException)
         {
@@ -2318,17 +2527,21 @@ public sealed class ServiceRequestHandler
                 job.Failure?.Message,
                 Job: ToJobWire(job));
         }
+        catch (ServiceRefusalException ex)
+        {
+            return Refusal(ex.Code, ex.Message);
+        }
         catch (ArgumentException)
         {
             return Error("invalid_request");
         }
         catch (InvalidOperationException ex)
         {
-            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+            return Refusal("invalid_request", ex.Message);
         }
         catch (InvalidDataException ex)
         {
-            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+            return Refusal("resource_unavailable", ex.Message);
         }
         catch (ManagedResourceUnavailableException)
         {
@@ -2365,6 +2578,10 @@ public sealed class ServiceRequestHandler
                 "owner",
                 null,
                 Job: ToJobWire(job));
+        }
+        catch (ServiceRefusalException ex)
+        {
+            return Refusal(ex.Code, ex.Message);
         }
         catch (ArgumentException)
         {
@@ -2625,17 +2842,21 @@ public sealed class ServiceRequestHandler
         {
             return Error("invalid_request");
         }
+        catch (ServiceRefusalException ex)
+        {
+            return Refusal(ex.Code, ex.Message);
+        }
         catch (ArgumentException ex)
         {
-            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+            return Refusal("invalid_request", ex.Message);
         }
         catch (InvalidOperationException ex)
         {
-            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+            return Refusal("invalid_request", ex.Message);
         }
         catch (InvalidDataException ex)
         {
-            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+            return Refusal("resource_unavailable", ex.Message);
         }
         catch (ManagedResourceUnavailableException)
         {
@@ -2676,13 +2897,17 @@ public sealed class ServiceRequestHandler
                 null,
                 SynthesisSchedule: ToScheduleWire(schedule));
         }
+        catch (ServiceRefusalException ex)
+        {
+            return Refusal(ex.Code, ex.Message);
+        }
         catch (InvalidOperationException ex)
         {
-            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+            return Refusal("invalid_request", ex.Message);
         }
         catch (ArgumentException ex)
         {
-            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+            return Refusal("invalid_request", ex.Message);
         }
         catch (ManagedResourceUnavailableException)
         {
@@ -2762,17 +2987,21 @@ public sealed class ServiceRequestHandler
                     run.NextDueAtUtc,
                     run.Message));
         }
+        catch (ServiceRefusalException ex)
+        {
+            return Refusal(ex.Code, ex.Message);
+        }
         catch (ArgumentException ex)
         {
-            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+            return Refusal("invalid_request", ex.Message);
         }
         catch (InvalidOperationException ex)
         {
-            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+            return Refusal("invalid_request", ex.Message);
         }
         catch (InvalidDataException ex)
         {
-            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+            return Refusal("resource_unavailable", ex.Message);
         }
         catch (ManagedResourceUnavailableException)
         {
@@ -6269,9 +6498,13 @@ public sealed class ServiceRequestHandler
         {
             entry = new RecallPolicyService().Apply(context, subjectId, act, rationale, operation);
         }
+        catch (ServiceRefusalException ex)
+        {
+            return Refusal(ex.Code, ex.Message);
+        }
         catch (ArgumentException ex)
         {
-            return new ServiceReply(CurrentProtocolVersion, "denied", "owner", ex.Message);
+            return Refusal("invalid_request", ex.Message);
         }
         catch (UnauthorizedAccessException)
         {
@@ -9034,6 +9267,273 @@ public sealed class ServiceRequestHandler
     }
 
     /// <summary>
+    /// S8-T4 the owner's operational health: the vault state, the private
+    /// index, the provider configuration, the recorded spend, the size of the
+    /// private operations state and the size of the safe operational log.
+    /// </summary>
+    private ServiceReply HandleOwnerOperationsHealth(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasOperationsExtras(request, allowPage: false, allowRetention: false))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var materialized = _privateIndexMaterialized;
+            var providerConfigured = _modelJobs.LoadProviderConfig(operation) is not null;
+            var rollingSpend = _modelJobs.LoadSpendLedger(operation)
+                .CalculateRollingSpend(DateTimeOffset.UtcNow);
+            var health = _operations.Health(
+                context,
+                operation,
+                _vault.State,
+                materialized is not null,
+                materialized?.Rows.Length ?? 0,
+                providerConfigured,
+                rollingSpend,
+                _operationalLog);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "operations_health",
+                "owner",
+                null,
+                OperationsHealth: health);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (ManagedResourceUnavailableException)
+        {
+            return Error("vault_locked");
+        }
+    }
+
+    /// <summary>
+    /// S8-T4 one page of the private audit trail: who acted, what they acted
+    /// on, how it ended, what it cost and which error code it produced.
+    /// </summary>
+    private ServiceReply HandleOwnerOperationsAudit(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasOperationsExtras(request, allowPage: true, allowRetention: false))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var entries = _operations.Audit(
+                context,
+                operation,
+                request.OperationsOffset ?? 0,
+                request.OperationsLimit ?? 100);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "operations_audit",
+                "owner",
+                null,
+                OperationsAudit: entries);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (ManagedResourceUnavailableException)
+        {
+            return Error("vault_locked");
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return Error("invalid_request");
+        }
+    }
+
+    /// <summary>
+    /// S8-T4 one page of the error diagnostics: the real error code of every
+    /// recorded failure and the owner-facing sentence that says what to do.
+    /// </summary>
+    private ServiceReply HandleOwnerOperationsDiagnostics(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasOperationsExtras(request, allowPage: true, allowRetention: false))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var entries = _operations.Diagnostics(
+                context,
+                operation,
+                request.OperationsOffset ?? 0,
+                request.OperationsLimit ?? 100);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "operations_diagnostics",
+                "owner",
+                null,
+                OperationsDiagnostics: entries);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (ManagedResourceUnavailableException)
+        {
+            return Error("vault_locked");
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return Error("invalid_request");
+        }
+    }
+
+    /// <summary>
+    /// S8-T4 applies one retention choice to the private operations state and,
+    /// when the owner asks for it, clears the safe operational log. The answer
+    /// reports exactly how many entries were removed.
+    /// </summary>
+    private ServiceReply HandleOwnerOperationsRetention(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasOperationsExtras(request, allowPage: false, allowRetention: true) ||
+            request.RetentionDays is null ||
+            request.RetentionMaxRecords is null)
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var outcome = _operations.ApplyRetention(
+                context,
+                operation,
+                request.RetentionDays.Value,
+                request.RetentionMaxRecords.Value,
+                request.PurgeOperationalLog ?? false,
+                _operationalLog);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "operations_retention",
+                "owner",
+                null,
+                OperationsRetention: outcome);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (ManagedResourceUnavailableException)
+        {
+            return Error("vault_locked");
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return Error("invalid_request");
+        }
+    }
+
+    /// <summary>
+    /// The operations surfaces take their own fields and nothing else: the
+    /// health read takes no field, the two listings take only their page
+    /// bounds, and the retention act takes only the retention choice. Any
+    /// other field fails closed instead of being ignored.
+    /// </summary>
+    private static bool HasOperationsExtras(ServiceRequest request, bool allowPage, bool allowRetention)
+    {
+        if (!allowPage &&
+            (request.OperationsOffset is not null || request.OperationsLimit is not null))
+        {
+            return true;
+        }
+
+        if (!allowRetention &&
+            (request.RetentionDays is not null || request.RetentionMaxRecords is not null ||
+             request.PurgeOperationalLog is not null))
+        {
+            return true;
+        }
+
+        return request.ResourceId is not null || request.ZoneId is not null ||
+            request.Passphrase is not null || request.RecoveryCode is not null ||
+            request.ContentBase64 is not null || request.ResourceIds is not null ||
+            request.Operations is not null || request.DestinationResourceIds is not null ||
+            request.ExpiresAtUtc is not null || request.Provider is not null || request.Model is not null ||
+            request.MaximumCostUsd is not null || request.PreviewId is not null || request.CollectionId is not null ||
+            request.Token is not null || request.SessionToken is not null || request.SessionId is not null ||
+            request.AccessOperation is not null || request.ResourceRevision is not null ||
+            request.DestinationResourceId is not null || request.DestinationRevision is not null ||
+            request.EstimatedCostUsd is not null || request.InputTokens is not null || request.OutputTokens is not null ||
+            request.CatalogId is not null || request.CatalogIds is not null || request.BudgetChars is not null ||
+            request.Purpose is not null || request.AgentId is not null || request.AgentContext is not null ||
+            request.DisclosureContext is not null || request.RequestId is not null ||
+            request.SourceLocator is not null || request.SourceFormat is not null ||
+            request.SourceFormatVersion is not null || request.SourceTitle is not null ||
+            request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
+            request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null ||
+            request.SearchLevel is not null || request.SearchFromUtc is not null || request.SearchToUtc is not null ||
+            request.SearchAsOfUtc is not null || request.SearchOffset is not null || request.SearchLimit is not null ||
+            request.SearchKind is not null || request.SearchCurrent is not null || request.JobId is not null ||
+            request.BaseUrl is not null || request.ApiKey is not null || request.Profile is not null ||
+            request.IntervalMinutes is not null || request.ContextProject is not null || request.ContextTask is not null ||
+            request.IncludeArchived is not null || request.BackupPath is not null || request.TargetPath is not null ||
+            request.IncludeRelations is not null || request.IncludeLifecycleStates is not null ||
+            request.DiscardRollback is not null || request.Query is not null || request.Label is not null ||
+            request.Description is not null;
+    }
+
+    /// <summary>
     /// Projects materialized rows for the owner wire reply. The reply carries at
     /// most <see cref="MaximumIndexRows"/> rows so a large vault cannot grow an
     /// unbounded pipe message; the materialized generation itself is never
@@ -9928,6 +10428,21 @@ public sealed class ServiceRequestHandler
         new(CurrentProtocolVersion, "no_match", null, "catalog_no_match");
 
     private static ServiceReply Error(string error) => new(CurrentProtocolVersion, null, null, error);
+
+    /// <summary>
+    /// One refusal answer: the real error code the service knows and the
+    /// owner's own sentence (S8-T4 correction).
+    /// </summary>
+    /// <remarks>
+    /// The code travels in <see cref="ServiceReply.ErrorCode"/> and the
+    /// sentence stays in <see cref="ServiceReply.Error"/>. The audit trail and
+    /// the diagnostics record the code, so a real failure keeps its real
+    /// identity, while the owner still reads the explanation. The sentence is
+    /// free text and can name a resource, so it never enters the private
+    /// state, the diagnostics or the safe operational log.
+    /// </remarks>
+    private static ServiceReply Refusal(string code, string message) =>
+        new(CurrentProtocolVersion, "denied", "owner", message, ErrorCode: code);
 
     /// <summary>
     /// Reads the owner's recall policy for this unlocked epoch. A policy that

@@ -622,3 +622,58 @@ Append-only. Baseline chi tiết: [đặc tả](../../docs/META-BRAIN.md), [yêu
 **Reason:** The owner must be able to schedule a reminder in the time they actually mean without knowing ISO-8601, and collection membership must not require remembering opaque IDs. Both acts keep the service authoritative: the console only turns an explicit owner choice into the already-supported request shape, and the service still validates the subject, the lifecycle revision and every member ID.
 
 **Consequences:** A stale schedule row remains detectable: the write carries the revision the owner last read, the service refuses a moved lifecycle, and the console tells the owner to re-read and retry rather than guessing. A local time at a DST gap/overlap requires choosing UTC (or another explicit offset) so no instant is invented. The job selection is likewise a list of service-served items/revisions; provider/model/endpoint remain explicit external configuration because no vault picker can discover them.
+
+## [2026-10-21] D068 — Keep the owner audit and the error diagnostics in one encrypted vault control file, and the operational log a sanitized plaintext file
+
+**Decision:** Store the owner audit trail and the error diagnostics in one new dedicated owner state file of the vault (`operations-audit.enc`), written with the vault's own data key and the same AEAD envelope as the scope-grant, catalog, recall-policy, review-state and purge-ledger states; serve it through four owner-only owner-channel operations (`owner.operations.health`, `.audit`, `.diagnostics`, `.retention`); and keep a separate **safe operational log** (`logs/operations.log`) whose every value passes a strict token sanitizer, as the only place a refusal that happened while the vault was locked is recorded.
+
+**Alternatives considered:** Store the audit as canonical records in the vault (rejected: a canonical write advances the canonical digest, makes the materialized private index stale and forces an index rebuild after every audited act, and would put operational rows into the owner's searchable library); keep the audit only in memory (rejected: it would not survive a restart and would have to be re-derived from the canonical set, which cannot name the actor of an act); buffer a locked refusal in plaintext and write it at the next unlock (rejected: that is a deferred plaintext queue of private events outside the encrypted vault, and it is exactly the "keep a second copy of the private state" shape the lock boundary forbids); write the audit to the safe log only (rejected: a plain text file cannot be the owner-visible record of the actor, the cost and the error code of every act, and it would make the private trail readable by anyone who can read the data root); exclude the new state from the backup container (rejected: the S8-T2 contract carries every dedicated owner state, and a silent exclusion would be a loss the owner cannot see).
+
+**Reason:** R36 asks for encrypted private persisted data with only the approved catalog public; R29 asks that a purge cover the derived records so purged data cannot come back; R07 asks that the owner see the cost and the failure of an internal call. The private operations state therefore has to live inside the unlocked vault, encrypted with the same key and envelope as the other owner states, must not be a canonical record and must never be published. The locked case cannot use that state at all — the vault is closed and the product must not keep a second key, auto-unlock or buffer plaintext — so the operational log exists precisely for that case and carries only tokens, never content.
+
+**Consequences:** The owner sees the actor, the action, the outcome, the cost and the real error code of an act, and every recorded failure carries the code the service actually returned plus an owner-facing next action; an agent never sees any of it. The audit and the diagnostics are bounded, retention is an explicit owner choice that reports how many entries it removed, and a purge removes the entries that named the purged record with sequence tombstones so a later read, restart or restore cannot serve them again. An encrypted backup taken before a purge still holds the bytes of that moment — a copy is irrevocable under the S8-T2 contract — while a backup taken after the purge carries the watermark and does not resurrect them. A free-text refusal answer (some product paths answer with a sentence instead of a code) is never recorded: it stays the owner's answer in the reply and is normalized to `unspecified` in the private state and the log.
+
+## [2026-10-21] D069 — Validate the whole retention request before the first removal, and give the trail one typed failure
+
+**Decision:** Validate the complete owner retention request (window and ceiling) **before** the first removal, write the private operations state before the safe operational log is cleared, and give the private operations state exactly one typed failure (`OperationsAuditPersistenceException`). The recorder catches that typed failure and the locked-vault case, and reports the failure truthfully in the safe operational log as `outcome=audit_failed code=audit_persistence_failed`; it never lets a persistence failure replace the answer of the owner's own act. A refused owner operation answers with the real error code it knows, carried in a typed field (`ServiceReply.ErrorCode`) next to the owner's own sentence, and the product services raise that refusal through one typed exception (`ServiceRefusalException`).
+
+**Alternatives considered:** Clear the log first and validate afterwards (rejected: a refused request would still have deleted operational data, which is avoidable loss on a request the product refused); let a persistence failure travel and fail the request (rejected: the owner's act already happened, so the answer of a successful mutation must not be replaced by a failure of the trail, and a blanket catch would hide a defect); swallow every exception of the trail write (rejected: an unnamed failure is not a truthful report); put the real code in the existing error field and drop the sentence (rejected: the sentence is the owner's explanation and the legacy surfaces assert on it); parse the sentence to recover the code (rejected: message parsing is exactly the heuristic that made the code unknowable); keep one catch-all list of exception types in the recorder (rejected: the failure domain of the encrypted write is knowable, so the store names it and the recorder catches that one type).
+
+**Reason:** The S8-T4 evidence review found that an invalid retention request could delete the operational log before it was refused, that a cryptographic failure of the encrypted write could escape the recorder and suppress a successful mutation's answer, and that refusals which answered with a sentence were recorded as `unspecified` instead of the real code. Each of those is a truthfulness defect of the operations surface, not a cosmetic one.
+
+**Consequences:** A refused retention removes nothing, and the order of the two removals is observable. A failure of the trail is visible to the owner as `audit_persistence_failed` in the safe operational log and never hides behind a success or behind a refusal. The audit trail and the diagnostics record the real code of every refusal, and the owner keeps the sentence in the reply and in the CLI output. The store translates its own failures, so the recorder's catch list is explicit and short; every caller of the job and schedule services was migrated to the typed refusal, and the sentence a refusal carries never reaches the private state, the diagnostics or the log.
+
+## [2026-10-21] D070 — The owner channel client reads the typed refusal code and the sentence from their own fields
+
+**Decision:** The owner channel client reads the refusal contract the service already answers with:
+the real error code comes from the typed `errorCode` field and the owner's own sentence from
+`error`. One shared classifier (`TryClassifyRefusal`) serves both reply readers of the client, so
+the code is never taken from the sentence, the sentence is never taken from the code, and a refusal
+is reported as **refused** (or as an owner-authority refusal / a protocol mismatch for the codes
+that mean that) instead of an unavailable transport. An answer that carries no typed code keeps the
+legacy meaning of `error` (the code itself), and a `denied` answer without any code is still a
+refusal. The client keeps the sentence next to the code, and the results of the surfaces the
+service can refuse with a typed refusal — the job, the synthesis schedule and the recall act — carry
+it to the owner console, which shows the code first and the service's own sentence after it.
+
+**Alternatives considered:** Parse the code out of the sentence (rejected: a message heuristic that
+breaks on the first reworded sentence and would put free text into a code field); keep the sentence
+in the code position and let the console show it (rejected: that is the defect — the real code is
+lost and the code position holds text that names a resource); add a second error field to every
+reply (rejected: the typed field already exists, the client was the only reader that ignored it);
+carry the sentence on every client result (rejected: the service sends a sentence only with a typed
+refusal, so the other results would carry a permanently null field).
+
+**Reason:** The S8-T4 evidence review found that the client — the consumer every owner tool and the
+owner console use — dropped the typed code of a refused job create and read the owner's sentence as
+the code, so the owner saw `code: No approved pricing card found for …` instead of
+`pricing_unknown`, and the diagnostics, the audit trail and the console all disagreed about the
+identity of the failure. The refusal contract is only a contract when every consumer reads it the
+same way.
+
+**Consequences:** The owner sees one identity for a failure everywhere: the code in the console
+message, the code in the console log (`owner act: run job -> refused (pricing_unknown)`), the code
+in the audit trail and the code in the diagnostics, with the service's own sentence as the
+explanation. A refused act is never reported as an unavailable transport, so a real refusal and a
+lost service stay distinguishable. The client stays the only place that knows how a reply is
+shaped: the service, the CLI and the console all keep their own contracts.

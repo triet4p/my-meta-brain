@@ -437,7 +437,8 @@ internal sealed partial class OwnerConsoleSession
         }
 
         LibraryMessage = "The service refused the recall act (code: " + (result.ErrorCode ?? "unknown") +
-            "). The item keeps the recall decision it already had.";
+            "). The item keeps the recall decision it already had." +
+            RefusalSentence(result.Outcome, result.ErrorMessage);
         ApplyPrivateRefusal(result.Outcome, result.ErrorCode);
         return true;
     }
@@ -678,6 +679,7 @@ internal sealed partial class OwnerConsoleSession
         ClearPrivateIntentionsState();
         ClearPrivateReviewState();
         ClearPrivateBackupState();
+        ClearPrivateOperationsState();
         // stops reporting one.
         LibraryIndex = null;
         LibraryMessage = null;

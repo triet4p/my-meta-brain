@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using MetaBrain.Application;
 using MetaBrain.Core.Domain;
+using MetaBrain.Core.Security;
 
 namespace MetaBrain.Connections;
 
@@ -106,6 +107,10 @@ internal static class OwnerControlCli
                 "restore" => await RestoreAsync(options, useRecoveryCode: false).ConfigureAwait(false),
                 "restore-with-recovery-code" => await RestoreAsync(options, useRecoveryCode: true).ConfigureAwait(false),
                 "export" => await ExportAsync(options).ConfigureAwait(false),
+                "health" => await OperationsHealthAsync(options).ConfigureAwait(false),
+                "audit" => await OperationsAuditAsync(options).ConfigureAwait(false),
+                "diagnostics" => await OperationsDiagnosticsAsync(options).ConfigureAwait(false),
+                "retention" => await OperationsRetentionAsync(options).ConfigureAwait(false),
                 "upgrade" => await UpgradeAsync(options, useRecoveryCode: false).ConfigureAwait(false),
                 "upgrade-with-recovery-code" => await UpgradeAsync(options, useRecoveryCode: true).ConfigureAwait(false),
                 "rollback" => await RollbackAsync(options, useRecoveryCode: false).ConfigureAwait(false),
@@ -3838,6 +3843,16 @@ internal static class OwnerControlCli
             : "unknown";
 
     /// <summary>
+    /// An optional field prints as a dash when the service reported none, so a
+    /// missing error code never looks like an empty success.
+    /// </summary>
+    private static string DisplayText(JsonElement value, string property)
+    {
+        var text = JsonValueText(value, property);
+        return string.IsNullOrEmpty(text) ? "-" : text;
+    }
+
+    /// <summary>
     /// Optional string fields (a question state that does not apply, a missing
     /// rationale, a supersession pointer) print as <c>none</c> instead of an
     /// empty value.
@@ -5562,12 +5577,37 @@ internal static class OwnerControlCli
         reply.ValueKind == JsonValueKind.Object &&
         reply.TryGetProperty("status", out var status) &&
         string.Equals(status.GetString(), expected, StringComparison.Ordinal);
+    /// <summary>
+    /// Prints one refusal of the service.
+    /// <para>
+    /// The service answers a refusal with the real error code and, when it has
+    /// one, the owner's own sentence. The code is printed first, because it is
+    /// the identity of the refusal and the value the Operations diagnostics
+    /// record; the sentence follows, because it is what the owner reads. A
+    /// refusal that carries only a code gets the product's own guidance line
+    /// for that code, so the owner never faces a bare token.
+    /// </para>
+    /// </summary>
     private static void WriteServiceError((bool Success, JsonElement Reply) result)
     {
         var error = result.Reply.ValueKind == JsonValueKind.Object && result.Reply.TryGetProperty("error", out var value)
             ? value.GetString()
             : null;
-        Console.Error.WriteLine("ERROR " + (error ?? (result.Success ? "service_rejected_request" : "service_unavailable")));
+        var code = result.Reply.ValueKind == JsonValueKind.Object && result.Reply.TryGetProperty("errorCode", out var codeValue)
+            ? codeValue.GetString()
+            : null;
+        if (code is not null && error is not null && !string.Equals(code, error, StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine("ERROR " + code + ": " + error);
+            return;
+        }
+
+        var reported = error ?? code;
+        Console.Error.WriteLine("ERROR " + (reported ?? (result.Success ? "service_rejected_request" : "service_unavailable")));
+        if (reported is not null && OwnerGuidance.TryGetForCode(reported, out var guidance))
+        {
+            Console.Error.WriteLine("HINT " + guidance);
+        }
     }
 
     private static int Usage()
@@ -5580,7 +5620,158 @@ internal static class OwnerControlCli
         Console.Error.WriteLine("Owner backup: owner backup --control-pipe --output-file <file> | owner restore --control-pipe --backup-file <file> --target-directory <dir> | owner restore-with-recovery-code --control-pipe --backup-file <file> --target-directory <dir>; the backup is encrypted, the restore needs the passphrase or the recovery key, the target must be a directory that does not exist yet, and a wrong key or a damaged backup writes nothing.");
         Console.Error.WriteLine("Owner export: owner export --control-pipe --resource-ids id,id --output-file <file> [--include-relations true] [--include-lifecycle-states true]; the export is plaintext, holds exactly the selected records, withholds a citation to a source outside the selection, and is a copy the vault cannot revoke afterwards.");
         Console.Error.WriteLine("Owner vault format: owner upgrade --control-pipe | owner upgrade-with-recovery-code --control-pipe | owner rollback --control-pipe [--discard true] | owner rollback-with-recovery-code --control-pipe [--discard true]; the act runs only while the vault is locked, leaves it locked, keeps an encrypted rollback point of the files it rewrote, and a wrong or missing credential writes nothing.");
+        Console.Error.WriteLine("Owner operations: owner health --control-pipe | owner audit --control-pipe [--limit N] | owner diagnostics --control-pipe [--limit N] | owner retention --control-pipe --retention-days N --max-records N [--purge-log true]; the reads need the unlocked vault, they show the actor, the action, the outcome, the recorded cost and the real error code, and they never show a body, a title, a credential or a token.");
         return 2;
+    }
+
+    /// <summary>
+    /// S8-T4 reads the owner's operational health: the vault state, the private
+    /// index, the provider configuration, the recorded spend, the size of the
+    /// private operations state and the size of the safe operational log.
+    /// </summary>
+    private static async Task<int> OperationsHealthAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerOperationsHealthOperation)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "operations_health") ||
+            !result.Reply.TryGetProperty("operationsHealth", out var health) || health.ValueKind != JsonValueKind.Object)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine($"HEALTH vaultState={JsonValueText(health, "vaultState")} indexMaterialized={JsonValueText(health, "privateIndexMaterialized")} indexRows={JsonValueText(health, "privateIndexRows")} providerConfigured={JsonValueText(health, "providerConfigured")} rollingSpendUsd={JsonValueText(health, "rollingSpendUsd")}");
+        Console.WriteLine($"OPERATIONS auditEntries={JsonValueText(health, "auditEntries")} diagnosticEntries={JsonValueText(health, "diagnosticEntries")} retentionDays={JsonValueText(health, "retentionDays")} maxRecords={JsonValueText(health, "maximumRecords")} purgedThrough={JsonValueText(health, "purgedThroughSequence")}");
+        var lastError = JsonValueText(health, "lastErrorCode");
+        Console.WriteLine($"LASTERROR code={(string.IsNullOrEmpty(lastError) ? "-" : lastError)}");
+        if (health.TryGetProperty("operationalLog", out var log) && log.ValueKind == JsonValueKind.Object)
+        {
+            Console.WriteLine($"OPERATIONALLOG name={JsonValueText(log, "name")} bytes={JsonValueText(log, "bytes")} entries={JsonValueText(log, "entries")}");
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// S8-T4 reads one page of the private audit trail: who acted, what they
+    /// acted on, how it ended, what it cost and which error code it produced.
+    /// </summary>
+    private static async Task<int> OperationsAuditAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--limit");
+        var limit = 100;
+        if (options.Optional("--limit") is { } limitText &&
+            (!int.TryParse(limitText, NumberStyles.Integer, CultureInfo.InvariantCulture, out limit) || limit is < 1 or > 500))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerOperationsAuditOperation,
+                OperationsOffset: 0,
+                OperationsLimit: limit)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "operations_audit") ||
+            !result.Reply.TryGetProperty("operationsAudit", out var entries) || entries.ValueKind != JsonValueKind.Array)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        foreach (var entry in entries.EnumerateArray())
+        {
+            Console.WriteLine(
+                $"AUDIT seq={JsonValueText(entry, "sequence")} at={JsonValueText(entry, "recordedAtUtc")} actor={JsonValueText(entry, "actor")} action={JsonValueText(entry, "action")} outcome={JsonValueText(entry, "outcome")} code={DisplayText(entry, "errorCode")} costUsd={JsonValueText(entry, "costUsd")} resource={DisplayText(entry, "resourceId")}");
+        }
+
+        Console.WriteLine($"AUDIT count={entries.GetArrayLength()}");
+        return 0;
+    }
+
+    /// <summary>
+    /// S8-T4 reads one page of the error diagnostics: the real error code of
+    /// every recorded failure and the owner-facing sentence that says what to
+    /// do about it.
+    /// </summary>
+    private static async Task<int> OperationsDiagnosticsAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--limit");
+        var limit = 100;
+        if (options.Optional("--limit") is { } limitText &&
+            (!int.TryParse(limitText, NumberStyles.Integer, CultureInfo.InvariantCulture, out limit) || limit is < 1 or > 500))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerOperationsDiagnosticsOperation,
+                OperationsOffset: 0,
+                OperationsLimit: limit)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "operations_diagnostics") ||
+            !result.Reply.TryGetProperty("operationsDiagnostics", out var entries) || entries.ValueKind != JsonValueKind.Array)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        foreach (var entry in entries.EnumerateArray())
+        {
+            Console.WriteLine(
+                $"DIAGNOSTIC seq={JsonValueText(entry, "sequence")} at={JsonValueText(entry, "recordedAtUtc")} component={JsonValueText(entry, "component")} code={JsonValueText(entry, "code")} resource={DisplayText(entry, "resourceId")}");
+            Console.WriteLine($"  {JsonValueText(entry, "ownerMessage")}");
+        }
+
+        Console.WriteLine($"DIAGNOSTICS count={entries.GetArrayLength()}");
+        return 0;
+    }
+
+    /// <summary>
+    /// S8-T4 applies one retention choice to the private operations state and,
+    /// when the owner asks for it, clears the safe operational log.
+    /// </summary>
+    private static async Task<int> OperationsRetentionAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--retention-days", "--max-records", "--purge-log");
+        if (!int.TryParse(options.Required("--retention-days"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var retentionDays) ||
+            retentionDays is < 1 or > 3650)
+        {
+            return Usage();
+        }
+
+        if (!int.TryParse(options.Required("--max-records"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var maxRecords) ||
+            maxRecords is < 10 or > 5000)
+        {
+            return Usage();
+        }
+
+        var purgeLog = false;
+        if (options.Optional("--purge-log") is { } purgeText)
+        {
+            if (!bool.TryParse(purgeText, out purgeLog))
+            {
+                return Usage();
+            }
+        }
+
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerOperationsRetentionOperation,
+                RetentionDays: retentionDays,
+                RetentionMaxRecords: maxRecords,
+                PurgeOperationalLog: purgeLog)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "operations_retention") ||
+            !result.Reply.TryGetProperty("operationsRetention", out var retention) || retention.ValueKind != JsonValueKind.Object)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine(
+            $"RETENTION days={JsonValueText(retention, "retentionDays")} maxRecords={JsonValueText(retention, "maximumRecords")} removedAudit={JsonValueText(retention, "removedAuditEntries")} removedDiagnostics={JsonValueText(retention, "removedDiagnosticEntries")} auditEntries={JsonValueText(retention, "auditEntries")} diagnosticEntries={JsonValueText(retention, "diagnosticEntries")} logPurged={JsonValueText(retention, "operationalLogPurged")} logEntriesRemoved={JsonValueText(retention, "operationalLogEntriesRemoved")}");
+        return 0;
     }
 
     private static async Task<int> JobCreateAsync(CommandOptions options)

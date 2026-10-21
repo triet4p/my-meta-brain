@@ -429,7 +429,7 @@ internal sealed partial class OwnerConsoleSession
         }
         else
         {
-            JobsMessage = DescribeInboxAnswer("cancel job", result.Outcome, result.ErrorCode);
+            JobsMessage = DescribeInboxAnswer("cancel job", result.Outcome, result.ErrorCode, result.ErrorMessage);
         }
 
         Append(DescribeInboxActForLog("cancel job", result.Outcome, result.ErrorCode));
@@ -511,7 +511,7 @@ internal sealed partial class OwnerConsoleSession
         }
 
         JobsDetail = null;
-        JobsMessage = DescribeInboxAnswer("read job", result.Outcome, result.ErrorCode);
+        JobsMessage = DescribeInboxAnswer("read job", result.Outcome, result.ErrorCode, result.ErrorMessage);
         return true;
     }
 
@@ -543,7 +543,7 @@ internal sealed partial class OwnerConsoleSession
         }
         else
         {
-            JobsMessage = DescribeInboxAnswer("run job", result.Outcome, result.ErrorCode) +
+            JobsMessage = DescribeInboxAnswer("run job", result.Outcome, result.ErrorCode, result.ErrorMessage) +
                 (LastCreatedJobId is { } jobId
                     ? " The created job " + jobId + " was not started and stays Pending; it can be cancelled from the list."
                     : string.Empty);
@@ -722,7 +722,7 @@ internal sealed partial class OwnerConsoleSession
             return true;
         }
 
-        ScheduleMessage = DescribeInboxAnswer(act, result.Outcome, result.ErrorCode);
+        ScheduleMessage = DescribeInboxAnswer(act, result.Outcome, result.ErrorCode, result.ErrorMessage);
         return true;
     }
 

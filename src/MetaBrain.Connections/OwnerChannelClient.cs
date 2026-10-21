@@ -550,11 +550,14 @@ public sealed record OwnerRecallChange(
 
 /// <summary>
 /// The outcome of one S7-T4 owner recall act or read on the owner channel.
+/// <see cref="ErrorMessage"/> is the owner's own sentence of a refusal, and it
+/// is present only when the service sent one with its typed code.
 /// </summary>
 public sealed record OwnerRecallResult(
     OwnerCommandOutcome Outcome,
     string? ErrorCode,
-    OwnerRecallState? Recall);
+    OwnerRecallState? Recall,
+    string? ErrorMessage = null);
 
 /// <summary>
 /// One cited source as the S7-T6 review evaluation reported it: the exact
@@ -1132,7 +1135,17 @@ public sealed record OwnerJob(
     DateTimeOffset? StartedAtUtc,
     DateTimeOffset? CompletedAtUtc);
 
-public sealed record OwnerJobResult(OwnerCommandOutcome Outcome, string? ErrorCode, OwnerJob? Job);
+/// <summary>
+/// One job answer. <see cref="ErrorCode"/> is the real code of a refusal and
+/// <see cref="ErrorMessage"/> is the owner's own sentence of it: the service
+/// sends a sentence only with a typed refusal, so the message is null for
+/// every answer that carries no explanation.
+/// </summary>
+public sealed record OwnerJobResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerJob? Job,
+    string? ErrorMessage = null);
 
 public sealed record OwnerJobListResult(OwnerCommandOutcome Outcome, string? ErrorCode, OwnerJob[]? Jobs);
 
@@ -1177,9 +1190,15 @@ public sealed record OwnerSchedule(
 
 /// <summary>
 /// A schedule answer: <see cref="Schedule"/> is null only when the service
-/// reported that no schedule is configured.
+/// reported that no schedule is configured. <see cref="ErrorMessage"/> is the
+/// owner's own sentence of a refusal, and it is present only when the service
+/// sent one with its typed code.
 /// </summary>
-public sealed record OwnerScheduleResult(OwnerCommandOutcome Outcome, string? ErrorCode, OwnerSchedule? Schedule);
+public sealed record OwnerScheduleResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerSchedule? Schedule,
+    string? ErrorMessage = null);
 
 /// <summary>What one evaluation of the owner's schedule did, and nothing more.</summary>
 public sealed record OwnerScheduleRun(
@@ -1244,7 +1263,7 @@ public sealed record OwnerSpendLedgerResult(OwnerCommandOutcome Outcome, string?
 /// token on the owner pipe. Identity-shaped body fields, Origin/localhost or
 /// agent claims are never consulted here or by the service.
 /// </summary>
-public static class OwnerChannelClient
+public static partial class OwnerChannelClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
@@ -1456,7 +1475,7 @@ public static class OwnerChannelClient
                 Description: rationale),
             "recall_applied",
             cancellationToken).ConfigureAwait(false);
-        return new OwnerRecallResult(reply.Outcome, reply.ErrorCode, ProjectRecallState(reply));
+        return new OwnerRecallResult(reply.Outcome, reply.ErrorCode, ProjectRecallState(reply), reply.ErrorMessage);
     }
 
     /// <summary>
@@ -1477,7 +1496,7 @@ public static class OwnerChannelClient
                 ResourceId: resourceId),
             "recall_read",
             cancellationToken).ConfigureAwait(false);
-        return new OwnerRecallResult(reply.Outcome, reply.ErrorCode, ProjectRecallState(reply));
+        return new OwnerRecallResult(reply.Outcome, reply.ErrorCode, ProjectRecallState(reply), reply.ErrorMessage);
     }
 
     /// <summary>
@@ -3185,7 +3204,7 @@ public static class OwnerChannelClient
                 JobId: jobId),
             "job_status",
             cancellationToken).ConfigureAwait(false);
-        return new OwnerJobResult(reply.Outcome, reply.ErrorCode, ProjectJob(reply));
+        return new OwnerJobResult(reply.Outcome, reply.ErrorCode, ProjectJob(reply), reply.ErrorMessage);
     }
 
     /// <summary>
@@ -3229,7 +3248,7 @@ public static class OwnerChannelClient
                     ContentBase64: Convert.ToBase64String(draft)),
                 "job_created",
                 cancellationToken).ConfigureAwait(false);
-            return new OwnerJobResult(reply.Outcome, reply.ErrorCode, ProjectJob(reply));
+            return new OwnerJobResult(reply.Outcome, reply.ErrorCode, ProjectJob(reply), reply.ErrorMessage);
         }
         finally
         {
@@ -3253,7 +3272,7 @@ public static class OwnerChannelClient
                 JobId: jobId),
             new[] { "job_completed", "job_failed", "job_cancelled" },
             cancellationToken).ConfigureAwait(false);
-        return new OwnerJobResult(reply.Outcome, reply.ErrorCode, ProjectJob(reply));
+        return new OwnerJobResult(reply.Outcome, reply.ErrorCode, ProjectJob(reply), reply.ErrorMessage);
     }
 
     /// <summary>
@@ -3272,7 +3291,7 @@ public static class OwnerChannelClient
                 JobId: jobId),
             "job_cancelled",
             cancellationToken).ConfigureAwait(false);
-        return new OwnerJobResult(reply.Outcome, reply.ErrorCode, ProjectJob(reply));
+        return new OwnerJobResult(reply.Outcome, reply.ErrorCode, ProjectJob(reply), reply.ErrorMessage);
     }
 
     /// <summary>Reads the encrypted spend ledger: reservations, settlements and the rolling spend.</summary>
@@ -3329,7 +3348,7 @@ public static class OwnerChannelClient
                     ContentBase64: Convert.ToBase64String(draft)),
                 "schedule_enabled",
                 cancellationToken).ConfigureAwait(false);
-            return new OwnerScheduleResult(reply.Outcome, reply.ErrorCode, ProjectSchedule(reply));
+            return new OwnerScheduleResult(reply.Outcome, reply.ErrorCode, ProjectSchedule(reply), reply.ErrorMessage);
         }
         finally
         {
@@ -3349,7 +3368,7 @@ public static class OwnerChannelClient
             new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerScheduleDisableOperation),
             "schedule_disabled",
             cancellationToken).ConfigureAwait(false);
-        return new OwnerScheduleResult(reply.Outcome, reply.ErrorCode, ProjectSchedule(reply));
+        return new OwnerScheduleResult(reply.Outcome, reply.ErrorCode, ProjectSchedule(reply), reply.ErrorMessage);
     }
 
     /// <summary>
@@ -3364,7 +3383,7 @@ public static class OwnerChannelClient
             new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerScheduleStatusOperation),
             new[] { "schedule_status", "schedule_absent" },
             cancellationToken).ConfigureAwait(false);
-        return new OwnerScheduleResult(reply.Outcome, reply.ErrorCode, ProjectSchedule(reply));
+        return new OwnerScheduleResult(reply.Outcome, reply.ErrorCode, ProjectSchedule(reply), reply.ErrorMessage);
     }
 
     public static async Task<OwnerIntentionScheduleListResult> ListScheduledIntentionsAsync(
@@ -3836,19 +3855,71 @@ public static class OwnerChannelClient
 
     /// <summary>
     /// One owner-channel answer, classified once for every owner command: the
-    /// outcome, the service's own error code when it refused, the vault state
-    /// and one-time recovery material a vault command may carry, and — only
-    /// for a completed command — the reply payload the caller projects.
+    /// outcome, the service's own error code when it refused, the owner's own
+    /// sentence when the service sent one, the vault state and one-time
+    /// recovery material a vault command may carry, and — only for a completed
+    /// command — the reply payload the caller projects.
     /// </summary>
     private sealed record OwnerReply(
         OwnerCommandOutcome Outcome,
         OwnerVaultState VaultState,
         string? ErrorCode,
         string? RecoveryCode,
-        JsonElement Payload)
+        JsonElement Payload,
+        string? ErrorMessage = null)
     {
         public static OwnerReply Unavailable(string errorCode) =>
             new(OwnerCommandOutcome.Unavailable, OwnerVaultState.Unknown, errorCode, null, default);
+    }
+
+    /// <summary>
+    /// Classifies one refusal answer of the service, once for every owner
+    /// command.
+    /// <para>
+    /// The typed refusal contract: the service answers a refusal with the real
+    /// error code in <c>errorCode</c> and the owner's own sentence in
+    /// <c>error</c>. An answer that carries no typed code is a legacy answer
+    /// whose <c>error</c> is the code itself. The sentence is therefore never
+    /// read as a code, the real code is never dropped, and a refused answer is
+    /// never reported as an unavailable transport.
+    /// </para>
+    /// </summary>
+    private static bool TryClassifyRefusal(JsonElement reply, out OwnerReply refusal)
+    {
+        var typedCode = Text(reply, "errorCode");
+        if (string.IsNullOrWhiteSpace(typedCode))
+        {
+            typedCode = null;
+        }
+
+        var errorText = Text(reply, "error");
+        if (string.IsNullOrWhiteSpace(errorText))
+        {
+            errorText = null;
+        }
+
+        var code = typedCode ?? errorText;
+        if (code is null)
+        {
+            refusal = default!;
+            return false;
+        }
+
+        // Only a typed answer carries a sentence; a legacy answer's `error` is
+        // its code, so the same text is never shown as an explanation.
+        var message = typedCode is null ? null : errorText;
+        refusal = code switch
+        {
+            "forbidden" or "unauthorized" => new OwnerReply(OwnerCommandOutcome.OwnerAuthorityDenied, OwnerVaultState.Unknown, code, null, default, message),
+            "unsupported_protocol" => new OwnerReply(OwnerCommandOutcome.ProtocolMismatch, OwnerVaultState.Unknown, code, null, default, message),
+            // Every other code came back from a running service that
+            // understood the request and declined it; only the codes this
+            // client fabricates describe a transport that never answered.
+            _ => IsLocalTransportCode(code)
+                ? OwnerReply.Unavailable(code)
+                : new OwnerReply(OwnerCommandOutcome.Refused, OwnerVaultState.Unknown, code, null, default, message)
+        };
+        return true;
     }
 
     private static Task<OwnerReply> ReadReplyAsync(
@@ -3890,24 +3961,21 @@ public static class OwnerChannelClient
                 return OwnerReply.Unavailable("malformed_reply");
             }
 
-            if (reply.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String)
+            if (TryClassifyRefusal(reply, out var refusal))
             {
-                var code = error.GetString()!;
-                return code switch
-                {
-                    "forbidden" or "unauthorized" => new OwnerReply(OwnerCommandOutcome.OwnerAuthorityDenied, OwnerVaultState.Unknown, code, null, default),
-                    "unsupported_protocol" => new OwnerReply(OwnerCommandOutcome.ProtocolMismatch, OwnerVaultState.Unknown, code, null, default),
-                    // Every other code came back from a running service that
-                    // understood the request and declined it; only the codes this
-                    // client fabricates describe a transport that never answered.
-                    _ => IsLocalTransportCode(code)
-                        ? OwnerReply.Unavailable(code)
-                        : new OwnerReply(OwnerCommandOutcome.Refused, OwnerVaultState.Unknown, code, null, default)
-                };
+                return refusal;
             }
 
             if (!expectedStatuses.Any(status => HasText(reply, "status", status)))
             {
+                // A denied answer is a refusal of the service, never a
+                // transport that never answered: it is reported as refused
+                // even when the service named no code for it.
+                if (HasText(reply, "status", "denied"))
+                {
+                    return new OwnerReply(OwnerCommandOutcome.Refused, OwnerVaultState.Unknown, null, null, default);
+                }
+
                 return OwnerReply.Unavailable("unexpected_reply");
             }
 
@@ -5252,17 +5320,9 @@ public static class OwnerChannelClient
                 return OwnerReply.Unavailable("malformed_reply");
             }
 
-            if (reply.TryGetProperty("error", out var error) && error.ValueKind == System.Text.Json.JsonValueKind.String)
+            if (TryClassifyRefusal(reply, out var refusal))
             {
-                var code = error.GetString()!;
-                return code switch
-                {
-                    "forbidden" or "unauthorized" => new OwnerReply(OwnerCommandOutcome.OwnerAuthorityDenied, OwnerVaultState.Unknown, code, null, default),
-                    "unsupported_protocol" => new OwnerReply(OwnerCommandOutcome.ProtocolMismatch, OwnerVaultState.Unknown, code, null, default),
-                    _ => IsLocalTransportCode(code)
-                        ? OwnerReply.Unavailable(code)
-                        : new OwnerReply(OwnerCommandOutcome.Refused, OwnerVaultState.Unknown, code, null, default)
-                };
+                return refusal;
             }
 
             if (!HasText(reply, "principal", "owner"))

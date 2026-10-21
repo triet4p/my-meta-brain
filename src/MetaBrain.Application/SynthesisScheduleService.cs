@@ -74,43 +74,43 @@ public sealed class SynthesisScheduleService
 
         if (!SynthesisSchedulePolicy.IsValidInterval(draft.IntervalMinutes))
         {
-            throw new ArgumentException($"synthesis_schedule_invalid: the interval must be between {SynthesisSchedulePolicy.MinimumIntervalMinutes} and {SynthesisSchedulePolicy.MaximumIntervalMinutes} minutes.");
+            throw new ServiceRefusalException("synthesis_schedule_invalid", $"The interval must be between {SynthesisSchedulePolicy.MinimumIntervalMinutes} and {SynthesisSchedulePolicy.MaximumIntervalMinutes} minutes.");
         }
 
         var selectedInputs = draft.Selection.Inputs ?? Array.Empty<JobInputReference>();
         if (selectedInputs.Length < 2)
         {
-            throw new ArgumentException("synthesis_requires_multiple_inputs: A scheduled synthesis requires at least two explicitly selected inputs.");
+            throw new ServiceRefusalException("synthesis_requires_multiple_inputs", "A scheduled synthesis requires at least two explicitly selected inputs.");
         }
 
         if (selectedInputs.Length > MemoryEnvelopeCodec.MaximumSources)
         {
-            throw new ArgumentException($"invalid_job_inputs: A synthesis schedule selects between 2 and {MemoryEnvelopeCodec.MaximumSources} inputs.");
+            throw new ServiceRefusalException("invalid_job_inputs", $"A synthesis schedule selects between 2 and {MemoryEnvelopeCodec.MaximumSources} inputs.");
         }
 
         if (string.IsNullOrWhiteSpace(draft.Selection.Objective))
         {
-            throw new ArgumentException("objective_required: A scheduled synthesis requires the objective the owner wants addressed.");
+            throw new ServiceRefusalException("objective_required", "A scheduled synthesis requires the objective the owner wants addressed.");
         }
 
         if (draft.Selection.Objective.Length > JobSelectionCodec.MaximumObjectiveLength)
         {
-            throw new ArgumentException($"objective_too_long: The objective must be at most {JobSelectionCodec.MaximumObjectiveLength} characters.");
+            throw new ServiceRefusalException("objective_too_long", $"The objective must be at most {JobSelectionCodec.MaximumObjectiveLength} characters.");
         }
 
         if (!SynthesisLevels.TryParse(draft.Selection.TargetLevel, out _))
         {
-            throw new ArgumentException($"synthesis_level_required: The requested level must be one of: {SynthesisLevels.L2}, {SynthesisLevels.L3Plus}.");
+            throw new ServiceRefusalException("synthesis_level_required", $"The requested level must be one of: {SynthesisLevels.L2}, {SynthesisLevels.L3Plus}.");
         }
 
         if (string.IsNullOrWhiteSpace(draft.DestinationZoneId) || string.IsNullOrWhiteSpace(draft.DestinationResourceId) || draft.DestinationRevision < 1)
         {
-            throw new ArgumentException("invalid_request: The destination zone, destination resource and its revision are required.");
+            throw new ServiceRefusalException("invalid_request", "The destination zone, destination resource and its revision are required.");
         }
 
         if (string.IsNullOrWhiteSpace(draft.Provider) || string.IsNullOrWhiteSpace(draft.Model))
         {
-            throw new ArgumentException("invalid_request: The provider and model of a scheduled run are required.");
+            throw new ServiceRefusalException("invalid_request", "The provider and model of a scheduled run are required.");
         }
 
         var previous = TryRead(store);
@@ -154,7 +154,7 @@ public sealed class SynthesisScheduleService
         EnsureOwner(context);
 
         var schedule = TryRead(store)
-            ?? throw new InvalidOperationException("schedule_absent: no synthesis schedule is configured, so there is nothing to disable.");
+            ?? throw new ServiceRefusalException("schedule_absent", "No synthesis schedule is configured, so there is nothing to disable.");
         var disabled = schedule with
         {
             Enabled = false,
@@ -233,6 +233,7 @@ public sealed class SynthesisScheduleService
         string? jobId = null;
         string? jobState = null;
         string? failureCode = null;
+        string? refusalMessage = null;
         string outcome;
         try
         {
@@ -260,14 +261,27 @@ public sealed class SynthesisScheduleService
                 _ => "failed"
             };
         }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or InvalidDataException)
+        catch (ServiceRefusalException refusal)
         {
             // The shared lifecycle refused the scheduled job before it could send
             // anything (a moved or revoked input, unknown pricing, a budget
             // refusal). The refusal is recorded on the schedule and the window
             // still advances, so a refused schedule does not retry every poll.
             outcome = "refused";
-            failureCode = ex.Message;
+            failureCode = refusal.Code;
+            refusalMessage = refusal.Message;
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or InvalidDataException)
+        {
+            // The shared lifecycle refused the scheduled job before it could send
+            // anything (a moved or revoked input, unknown pricing, a budget
+            // refusal). The refusal is recorded on the schedule and the window
+            // still advances, so a refused schedule does not retry every poll.
+            // The code position keeps a code and the sentence stays the owner's
+            // explanation; a sentence is never stored as a code.
+            outcome = "refused";
+            failureCode = ex is InvalidDataException ? "resource_unavailable" : "invalid_request";
+            refusalMessage = ex.Message;
         }
 
         var finished = DateTimeOffset.UtcNow;
@@ -292,7 +306,8 @@ public sealed class SynthesisScheduleService
                 "ran" => "The scheduled synthesis job " + jobId + " completed and committed pending proposal(s) for the owner to review.",
                 "cancelled" => "The scheduled synthesis job " + jobId + " was cancelled; the schedule window advanced and nothing was published.",
                 "failed" => "The scheduled synthesis job " + jobId + " failed (" + (failureCode ?? "unknown") + "); nothing was published.",
-                _ => "The scheduled run was refused by the shared job contract (" + (failureCode ?? "unknown") + ") before any provider send."
+                _ => "The scheduled run was refused by the shared job contract (" + (failureCode ?? "unknown") + ") before any provider send." +
+                     (refusalMessage is null ? string.Empty : " The service said: " + refusalMessage)
             });
     }
 
@@ -319,7 +334,7 @@ public sealed class SynthesisScheduleService
     {
         if (context.Kind != PrincipalKind.Owner)
         {
-            throw new InvalidOperationException("Only trusted owner context can manage the synthesis schedule.");
+            throw new ServiceRefusalException("forbidden", "Only trusted owner context can manage the synthesis schedule.");
         }
     }
 }

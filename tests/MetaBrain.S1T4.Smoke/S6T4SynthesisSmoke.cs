@@ -392,14 +392,14 @@ internal static partial class OwnerServiceSmoke
     {
         var jobs = new ModelJobService(lifecycle, new SynthesisStubAdapter());
 
-        static void RequireCreateRefusal(Func<JobRecord> create, string expectedFragment, string scenario)
+        static void RequireCreateRefusal(Func<JobRecord> create, string expectedCode, string scenario)
         {
             try
             {
                 _ = create();
                 throw new InvalidOperationException(scenario + " did not fail closed.");
             }
-            catch (ArgumentException ex) when (ex.Message.Contains(expectedFragment, StringComparison.Ordinal))
+            catch (ServiceRefusalException ex) when (string.Equals(ex.Code, expectedCode, StringComparison.Ordinal))
             {
             }
         }
