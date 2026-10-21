@@ -47,6 +47,10 @@ internal sealed partial class OwnerConsoleSession
 {
     private static readonly TimeSpan BackupActTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan RestoreActTimeout = TimeSpan.FromMinutes(5);
+    // The schema upgrade rewrites every old canonical record and copies the
+    // files it will touch; the service gives the request the same bound as a
+    // whole-vault snapshot, and the console waits for it.
+    private static readonly TimeSpan VaultFormatActTimeout = TimeSpan.FromMinutes(10);
 
     private bool _backupActInFlight;
 
@@ -58,6 +62,16 @@ internal sealed partial class OwnerConsoleSession
 
     /// <summary>Owner-facing outcome of the last export act.</summary>
     public string? ExportMessage { get; private set; }
+
+    /// <summary>
+    /// S8-T3 the vault-format state the service last reported (keyless): a
+    /// current format, an available or interrupted upgrade, or no record yet,
+    /// plus whether an encrypted rollback point is available.
+    /// </summary>
+    public OwnerVaultFormatInfo? VaultFormat => Status?.VaultFormat;
+
+    /// <summary>Owner-facing outcome of the last format upgrade or rollback.</summary>
+    public string? VaultFormatMessage { get; private set; }
 
     /// <summary>
     /// Records the service ranked for the export scope, exactly as the service
@@ -487,6 +501,167 @@ internal sealed partial class OwnerConsoleSession
     /// when the act may run. An act that is not offered is never dropped
     /// silently: the owner always learns why and what to do next.
     /// </summary>
+    /// <summary>
+    /// S8-T3 raises the locked vault to the content schema this build writes.
+    /// The credential travels from the owner's input field into exactly this
+    /// one request; the act leaves the vault locked and keeps an encrypted
+    /// rollback point of every file it rewrote.
+    /// </summary>
+    public async Task UpgradeVaultFormatAsync(string? credential, bool useRecoveryCode)
+    {
+        if (string.IsNullOrEmpty(credential))
+        {
+            VaultFormatMessage = "No format upgrade was attempted: type the " +
+                (useRecoveryCode ? "recovery key" : "owner passphrase") + " that opens this vault.";
+            RaiseChanged();
+            return;
+        }
+
+        if (VaultMaintenanceRefusal("upgrade the vault format") is { } refusal)
+        {
+            VaultFormatMessage = refusal;
+            RaiseChanged();
+            return;
+        }
+
+        if (TryBeginBackupAct(requireUnlocked: false) is not { } epoch)
+        {
+            return;
+        }
+
+        var result = await ExecuteBackupCallAsync(
+            VaultFormatActTimeout,
+            token => OwnerChannelClient.UpgradeVaultFormatAsync(ControlPipe, credential, useRecoveryCode, token),
+            code => new OwnerVaultMaintenanceResult(OwnerCommandOutcome.Unavailable, code, null, null)).ConfigureAwait(true);
+
+        await ProbeAsync().ConfigureAwait(true);
+        if (epoch != _privateEpoch)
+        {
+            Append("ignored a stale format-upgrade answer; the private view stays cleared");
+            RaiseChanged();
+            return;
+        }
+
+        VaultFormatMessage = DescribeMaintenanceOutcome("upgrade the vault format", result);
+        Append("owner act: vault format upgrade -> " + result.Outcome.ToString().ToLowerInvariant() +
+            (result.Outcome == OwnerCommandOutcome.Completed ? string.Empty : " (" + (result.ErrorCode ?? "unknown") + ")"));
+        RaiseChanged();
+    }
+
+    /// <summary>
+    /// S8-T3 restores the files the last format upgrade wrote, or with
+    /// <paramref name="discard"/> drops the rollback point. The vault must be
+    /// locked and the same credential is required.
+    /// </summary>
+    public async Task RollbackVaultFormatAsync(string? credential, bool useRecoveryCode, bool discard)
+    {
+        if (string.IsNullOrEmpty(credential))
+        {
+            VaultFormatMessage = "No rollback was attempted: type the " +
+                (useRecoveryCode ? "recovery key" : "owner passphrase") + " that opens this vault.";
+            RaiseChanged();
+            return;
+        }
+
+        if (VaultMaintenanceRefusal(discard ? "discard the format rollback point" : "roll the vault format back") is { } refusal)
+        {
+            VaultFormatMessage = refusal;
+            RaiseChanged();
+            return;
+        }
+
+        if (TryBeginBackupAct(requireUnlocked: false) is not { } epoch)
+        {
+            return;
+        }
+
+        var result = await ExecuteBackupCallAsync(
+            VaultFormatActTimeout,
+            token => OwnerChannelClient.RollbackVaultFormatAsync(ControlPipe, credential, useRecoveryCode, discard, token),
+            code => new OwnerVaultMaintenanceResult(OwnerCommandOutcome.Unavailable, code, null, null)).ConfigureAwait(true);
+
+        await ProbeAsync().ConfigureAwait(true);
+        if (epoch != _privateEpoch)
+        {
+            Append("ignored a stale format-rollback answer; the private view stays cleared");
+            RaiseChanged();
+            return;
+        }
+
+        VaultFormatMessage = DescribeMaintenanceOutcome(discard ? "discard the format rollback point" : "roll the vault format back", result);
+        Append("owner act: vault format rollback -> " + result.Outcome.ToString().ToLowerInvariant() +
+            (result.Outcome == OwnerCommandOutcome.Completed ? string.Empty : " (" + (result.ErrorCode ?? "unknown") + ")"));
+        RaiseChanged();
+    }
+
+    /// <summary>
+    /// The maintenance acts rewrite or restore vault files, so the service
+    /// offers them only while the vault is locked and no private operation is
+    /// running. This checks the same preconditions the service enforces and
+    /// tells the owner what to do instead of sending a request that must fail.
+    /// </summary>
+    private string? VaultMaintenanceRefusal(string act)
+    {
+        if (!Attached)
+        {
+            return "This console did not " + act + ": no owner session is attached to the service. Connect to the service first.";
+        }
+
+        if (_backupActInFlight)
+        {
+            return "This console did not " + act + ": another owner act is still running. Wait for it to finish and try again.";
+        }
+
+        return ReportedVaultState switch
+        {
+            OwnerVaultState.Unlocked =>
+                "This console did not " + act + ": the vault is unlocked. Lock it in Vault & key first — the act rewrites vault files and runs only while the vault is locked.",
+            OwnerVaultState.Locked => null,
+            OwnerVaultState.Locking =>
+                "This console did not " + act + ": the vault is locking. Wait for the lock to finish and try again.",
+            OwnerVaultState.Uninitialized =>
+                "This console did not " + act + ": this service has no vault yet. Create it in Vault & key first.",
+            _ =>
+                "This console did not " + act + ": the vault state is unknown. Reconnect to the service and try again."
+        };
+    }
+
+    /// <summary>
+    /// The owner's answer for one format act. A completed act shows the
+    /// service's own report; a refusal names the reason and states that nothing
+    /// was written, so a failed upgrade never reads like a partial one.
+    /// </summary>
+    private static string DescribeMaintenanceOutcome(string act, OwnerVaultMaintenanceResult result)
+    {
+        var code = result.ErrorCode ?? "unknown";
+        return result.Outcome switch
+        {
+            OwnerCommandOutcome.Completed =>
+                "The service " + act + ": " + (result.Summary ?? "completed."),
+            OwnerCommandOutcome.Refused when code.StartsWith("act_failed", StringComparison.Ordinal) =>
+                "The request to " + act + " did not reach the service (code: " + code + "). Nothing was written.",
+            OwnerCommandOutcome.Refused => code switch
+            {
+                "vault_busy" =>
+                    "The service did not " + act + " because another owner act is running or the vault is not idle (code: vault_busy). Wait for the running act to finish, keep the vault locked, and try again. Nothing was written.",
+                "vault_denied" =>
+                    "The service refused this credential (code: vault_denied). Nothing was written, no key was reset and the vault is unchanged. Check the passphrase, or use the recovery key you saved outside the vault.",
+                "upgrade_failed" or "rollback_failed" =>
+                    "The service could not complete the act (code: " + code + "). The vault still opens; an interrupted upgrade can be run again, and its encrypted rollback point is kept if one was written.",
+                "invalid_request" =>
+                    "The service refused the request as invalid (code: invalid_request). Type one credential and try again.",
+                "upgrade_unavailable" or "rollback_unavailable" =>
+                    "This service was started without the maintenance authority (code: " + code + "), so nothing was written.",
+                _ => "The service refused the act (code: " + code + "). Nothing was written and the vault is unchanged."
+            },
+            OwnerCommandOutcome.OwnerAuthorityDenied =>
+                "This endpoint refused owner authority for the act (code: " + code + "). A format change is owner-only.",
+            OwnerCommandOutcome.ProtocolMismatch =>
+                "The endpoint speaks a different protocol revision, so the act was not attempted.",
+            _ => "No owner-channel answer reached the service (code: " + code + "), so nothing was written."
+        };
+    }
+
     private string? BackupActRefusal(bool requireUnlocked, string act)
     {
         if (!Attached)

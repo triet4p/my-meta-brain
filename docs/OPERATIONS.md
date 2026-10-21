@@ -33,12 +33,17 @@ file system. The owner channel and the agent pipe are the two endpoints, and eac
 the owner account only; a pipe receives that descriptor when the endpoint is created, which is not
 a change to the permissions of an existing path.
 
-**One exception, outside the daily path.** The inherited legacy migration command
-(`MetaBrain.Connections.exe owner migrate --config <legacy-settings.json>`) still applies an
-owner-only access rule and takes the owner of the migrated settings file. It is not reachable from
-the daily path — the service refuses a legacy settings file with `Legacy plaintext settings
-require the explicit owner migration command before service startup.` — it was not exercised for
-this release, and **it must not be run while it still mutates permissions** (§11).
+**The inherited legacy cutover, outside the daily path.** The legacy migration command
+(`MetaBrain.Connections.exe owner migrate --config <legacy-settings.json>`) creates the encrypted
+vault from the inherited plaintext settings and resource files, writes the current settings file,
+and only then removes the plaintext copies it migrated. It is not reachable from the daily path —
+the service refuses a legacy settings file with `Legacy plaintext settings require the explicit
+owner migration command before service startup.` It applies **no access rule and takes no
+ownership**: the migrated data is protected by the owner's key and the encrypted envelopes, exactly
+like the rest of the vault. The service must be stopped. A cutover interrupted after the vault
+exists and before the settings write is resumed by the same command when the passphrase opens the
+new vault and every legacy record is still byte-identical; otherwise it refuses untouched. The
+recovery key was shown by the interrupted run and is not shown again.
 
 ## 2. Install
 
@@ -196,6 +201,66 @@ and the export says in its own header how many citations, relations and records 
 file is written once and never over an existing file. A copy that was already made is not revoked
 by a later purge, a lock or another export: the vault can delete the record, not the copy you took
 out of it.
+
+### 4.2 Vault format upgrade, interruption recovery and rollback
+
+A vault written by an older version still opens. Its records keep the content schema they were
+written with, and the owner raises them to the format this build writes with one owner act:
+
+```text
+MetaBrain.Connections.exe owner upgrade --control-pipe <control-pipe>
+MetaBrain.Connections.exe owner upgrade-with-recovery-code --control-pipe <control-pipe>
+MetaBrain.Connections.exe owner rollback --control-pipe <control-pipe> [--discard true]
+MetaBrain.Connections.exe owner rollback-with-recovery-code --control-pipe <control-pipe> [--discard true]
+```
+
+The act runs only while the vault is **locked** — the service is running, the vault is locked and
+no private operation is in flight — takes the passphrase or the recovery key, and leaves the vault
+locked. It rewrites only the files whose stored content schema is older than this build writes: the
+owner scope-grant control state (v2/v3 to v4) and the canonical lifecycle (v1/v2 to v3) and model
+job (v1 to v2) records. Every record keeps its resource ID, zone, attribution, relations, lifecycle
+state, archive references and exact revision; the key envelope and the manifest are not rewritten.
+The envelope and manifest format stay 1: this is a content-schema upgrade, not an envelope change,
+and no key is re-wrapped.
+
+**Interruption.** Before the first rewrite the act copies every file it will change into an
+encrypted rollback point at `<vault>\rollback\<upgrade id>\`: those copies are the vault's own
+ciphertext, so the point needs no second key and holds no plaintext. Each rewrite is the same
+atomic temp-then-move write the rest of the vault uses, so a killed process leaves, per file, the
+old bytes or the new bytes, and both open. The next `owner upgrade` resumes: the journal says which
+files the point covers, already-current files are skipped, and the lossless re-encoding of every
+rewritten file is verified before the journal is marked complete. `owner status` reports
+`format=interrupted` while a point is unresolved.
+
+**Status without a credential.** `owner status` shows `format=current`, `format=upgrade_available`,
+`format=interrupted` or `format=unknown`, plus `rollback=available` or `rollback=none`, from the
+non-sensitive format record (`vault\vault-format.json`: schema versions and counts only) and the
+journal. The encrypted inventory stays authoritative; this line only tells the owner whether an
+upgrade is worth starting.
+
+**Rollback limits.** A rollback restores *only* the files the upgrade wrote and that still hold
+exactly what the upgrade left. A record you changed after the upgrade (a new revision has its own
+ciphertext file) and a control state that changed after the upgrade (an unlock moves the epoch) are
+kept, not reverted, and are reported as `skipped`. The rollback point is consumed by the first
+successful rollback; `owner rollback --discard true` drops it instead, which is how you reclaim its
+space. The point is a copy of ciphertext and grows with the number of rewritten files.
+
+**Key and backup compatibility.** The upgrade does not change the passphrase, the recovery key, the
+KDF parameters or the key envelope: the header file stays byte-identical, so the same credential
+opens the vault before and after. A backup taken *before* the upgrade carries its own copy of that
+envelope and the records it captured, so it still restores after the upgrade with the credential it
+was taken with. A backup taken after the upgrade restores just the same. There is no reset and no
+re-key: losing both the passphrase and the recovery key still means the vault and every backup are
+unreadable.
+
+**In the owner console.** The **Backup & export** view carries a *Vault format* card with the same
+keyless status line, a passphrase/recovery selector, *Upgrade the vault format*, *Roll back to the
+previous format* and the discard choice. The credential goes from the field into exactly one
+request and is cleared right after it, and the card's acts are enabled only while the vault is
+locked. After an act the card shows the service's own report — the migrated record and control-state
+counts, the schema before and after, whether the run resumed an interrupted upgrade, and where the
+encrypted rollback point is kept (or that it was restored or discarded); the status line then
+re-reads the new format and rollback state.
 
 ## 5. The owner console and the two clients
 
@@ -359,7 +424,12 @@ removes the fixture when the run ends.
 - The same owner account can read the owner's own files. The boundary is the key, the lock and the
   owner-approved APIs, not the access rights of the file system: malware running as that account is
   not stopped by file permissions.
-- The legacy migration command (`owner migrate`, §1) still applies an owner-only access rule and
-  takes the owner of the migrated settings file. It is not on the daily path, it was not exercised,
-  and it must not be run while it still mutates permissions; the migration path belongs to the
-  schema and key-format migration work and has to be brought inside the same boundary first.
+- The legacy cutover (`owner migrate`, §1) removes the plaintext copies it migrated once the
+  encrypted vault and the settings file are committed. It changes no permission and no ownership,
+  and the service must be stopped. A cutover interrupted between the vault creation and the
+  settings write is resumed only when the passphrase opens the new vault and every legacy record is
+  byte-identical; otherwise it refuses untouched.
+- The format upgrade (§4.2) runs only while the vault is locked and the service is running. Its
+  rollback point is a ciphertext copy of the rewritten files, restores only files unchanged since
+  the upgrade, and is consumed by the first rollback. The upgrade does not re-key the vault, so old
+  backups keep restoring with the credential they were taken with.

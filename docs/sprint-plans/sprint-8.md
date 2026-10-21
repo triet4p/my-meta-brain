@@ -6,7 +6,7 @@ Owner cài, vận hành, nâng cấp, khôi phục và dùng Meta Brain hằng n
 
 ## Status and Dependencies
 
-- Status: In progress — S8-T1 and S8-T1A complete with owner acceptance, independent evidence PASS and exact-snapshot checkpoints; latest `9ae2a2cea9df5f3a1d0348932e11e35aa80aeb86`. S8-T2–T7 pending; CR01 gates and S1 targets unchanged.
+- Status: In progress — S8-T1, S8-T1A and S8-T2 complete with their assigned evidence/checkpoint gates; latest `ba6f461e62a957e1b9a35dc30297cd0179913bad`. S8-T3–T7 pending; CR01 gates and S1 targets unchanged.
 - [Global plan](../PLAN.md), [specification](../META-BRAIN.md), [requirements](../REQUIREMENTS.md).
 - Requirements chính: R34, R35, R36, R37, R38, R39, R40. Release phải có evidence cho toàn bộ R01–R40.
 - Đây là production-readiness work, không thay cho security/integrity checks đã bắt buộc từ các sprint trước.
@@ -70,17 +70,18 @@ Workflow: full route; mỗi task cần independent evidence PASS và Bronze-only
     - Workflow/dependency: full route, owner-selected Gold; một task-level independent evidence PASS và fresh Bronze-only exact-snapshot checkpoint sau toàn bộ work packages và owner usability acceptance, không phase-PASS/commit giả. T1 checkpoint đã hoàn tất; T1A checkpoint trước T2. Không commit/push bởi worker. Nếu cần chia execution attempts, giữ một scope/coverage ledger và handoff đầy đủ, không thu hẹp deliverable. ACL/permissions/system/config mutations vẫn tuyệt đối cấm.
     - Outcome: owner confirmed independent walkthrough and usability; [R2 evidence PASS](../../artifacts/sprint-8/reviews/S8-T1A-R2.md), [C1 checkpoint success](../../artifacts/sprint-8/checkpoints/S8-T1A-C1.md), commit `9ae2a2cea9df5f3a1d0348932e11e35aa80aeb86`. [A2 handoff](../../artifacts/sprint-8/handoffs/S8T1A-CORRECTION-A2.md) retains actual WPF proof/package and limits. Provider-only execution remains unexercised without consent, not inferred passed. No push.
 
-- [~] **S8-T2 — Encrypted backup/restore và explicit portable export.** Requirements: R04, R34, R29, R36.
+- [x] **S8-T2 — Encrypted backup/restore và explicit portable export.** Requirements: R04, R34, R29, R36.
     - Scope: consistent encrypted snapshot/lineage/lifecycle, restore/key-recovery và owner-scoped export; không live credentials/master key kèm backup.
     - Acceptance: wrong/missing key và tampered backup fail closed; clean restore sau unlock giữ records/revisions/relations/source/intention/archive/deletions, rebuild private index; no live grant/session/used token resurrection. Key/recovery user tự giữ, mất key không fake recovery/reset. Plaintext export phải explicit scope/disclosure, no private citations ngoài phạm vi; encrypted backup/retention limits rõ.
     - Evidence: actual concurrent backup, inspect ciphertext/temp, restore clean location với valid/wrong/recovery key và corruption; lost-key denial; export đọc được ngoài app chỉ qua owner-selected disclosure, old copied data không thu hồi.
     - Workflow: full route, owner-selected Silver; actual runtime proof → independent evidence PASS → fresh Bronze-only exact-snapshot checkpoint before T3. Worker không stage/commit/push; checkpoint chỉ commit reviewed owned scope, không push. No ACL/permissions/system/config mutations; synthetic repo-local verification.
-    - Status: resumed by owner; UI correction in progress from [paused handoff](../../artifacts/sprint-8/handoffs/S8T2-CORRECTION-A2.md). [R1 evidence FAIL](../../artifacts/sprint-8/reviews/S8-T2-R1.md): required Owner UI backup/restore/export missing; backend/CLI runtime evidence recorded in [worker artifact](../../artifacts/sprint-8/task-2.md). No evidence PASS/checkpoint/commit for T2 yet.
+    - Outcome: owner CLI and WPF backup/restore/export delivered; real service/WPF runtime proof in [worker artifact](../../artifacts/sprint-8/task-2.md). [R3 evidence PASS](../../artifacts/sprint-8/reviews/S8-T2-R3.md), [C1 checkpoint success](../../artifacts/sprint-8/checkpoints/S8-T2-C1.md), commit `ba6f461e62a957e1b9a35dc30297cd0179913bad`. R1/R2 FAIL and safety incidents preserved with corrections; native dialogs and independent owner walkthrough not observed (reviewed limits, not claimed PASS). No push.
 
-- [ ] **S8-T3 — Encrypted schema/key-format migration và interrupted recovery.** Requirements: R04, R35, R39, R33.
+- [~] **S8-T3 — Encrypted schema/key-format migration và interrupted recovery.** Requirements: R04, R35, R39, R33.
     - Scope: versioned crypto-envelope/canonical/control/private-index migration và rollback/recovery; key-format/KDF compatibility, không speculative key hierarchy hoặc reset.
     - Acceptance: real prior dataset giữ IDs/scopes/attribution/relations/lifecycle; migration temp/rollback encrypted, interruption recover và wrong-key deny; no saved record loss/auto-unlock. Thay passphrase/wrapping nếu format hỗ trợ không silently xóa khả năng restore backup cũ; docs ghi key/backup compatibility và rollback limits.
     - Evidence: genuine old encrypted schema + upgrade/fault injection/write/job/purge/lock/restart, actual UI/MCP reads; migrate existing legacy plaintext fixture nếu còn bằng explicit owner cutover, no source migration hoặc new leak.
+    - Workflow: full route, owner-selected Gold; genuine prior encrypted dataset/runtime interruption proof → independent evidence PASS → fresh Bronze-only exact-snapshot checkpoint before T4. Worker không stage/commit/push; checkpoint chỉ reviewed owned scope, không push. No ACL/permissions/system/config mutations or policy bypass; synthetic repo-local verification.
 
 - [ ] **S8-T4 — Privacy-safe operations và audit.** Requirements: R36, R07, R29.
     - Scope: owner health/audit/error diagnostics, retention và vận hành log/secret/artifact; không thêm telemetry cloud mặc định.
@@ -115,4 +116,4 @@ Owner-approved replans: scope key-vault/no-host-mutations giữ nguyên; owner n
 
 ## Gate Record
 
-S8-T1: [R2 PASS](../../artifacts/sprint-8/reviews/S8-T1-R2.md), [C1 success](../../artifacts/sprint-8/checkpoints/S8-T1-C1.md), commit `1b9e3993660081e74f23b733e48ef08c1adb348c`. S8-T1A: owner independent walkthrough confirmed, [R2 PASS](../../artifacts/sprint-8/reviews/S8-T1A-R2.md), [C1 success](../../artifacts/sprint-8/checkpoints/S8-T1A-C1.md), commit `9ae2a2cea9df5f3a1d0348932e11e35aa80aeb86`. No push. S8-T2–T7 gates and sprint/release acceptance pending.
+S8-T1: [R2 PASS](../../artifacts/sprint-8/reviews/S8-T1-R2.md), [C1 success](../../artifacts/sprint-8/checkpoints/S8-T1-C1.md), commit `1b9e3993660081e74f23b733e48ef08c1adb348c`. S8-T1A: owner independent walkthrough confirmed, [R2 PASS](../../artifacts/sprint-8/reviews/S8-T1A-R2.md), [C1 success](../../artifacts/sprint-8/checkpoints/S8-T1A-C1.md), commit `9ae2a2cea9df5f3a1d0348932e11e35aa80aeb86`. S8-T2: [R3 PASS](../../artifacts/sprint-8/reviews/S8-T2-R3.md), [C1 success](../../artifacts/sprint-8/checkpoints/S8-T2-C1.md), commit `ba6f461e62a957e1b9a35dc30297cd0179913bad`. No push. S8-T3–T7 gates and sprint/release acceptance pending.

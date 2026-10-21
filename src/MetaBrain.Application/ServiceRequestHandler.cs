@@ -73,7 +73,8 @@ public sealed record ServiceRequest(
     string? BackupPath = null,
     string? TargetPath = null,
     bool? IncludeRelations = null,
-    bool? IncludeLifecycleStates = null);
+    bool? IncludeLifecycleStates = null,
+    bool? DiscardRollback = null);
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
     ScopeResourceRevision[] Resources,
@@ -975,7 +976,10 @@ public sealed record ServiceReply(
     PurgeResultWire? Purge = null,
     VaultBackupSummary? Backup = null,
     VaultRestoreSummary? Restore = null,
-    OwnerExportSummary? Export = null);
+    OwnerExportSummary? Export = null,
+    VaultFormatStatus? VaultFormat = null,
+    VaultUpgradeSummary? VaultUpgrade = null,
+    VaultRollbackSummary? VaultRollback = null);
 
 public sealed class ServiceRequestHandler
 {
@@ -990,6 +994,8 @@ public sealed class ServiceRequestHandler
     public const string OwnerVaultLockOperation = "vault.lock";
     public const string OwnerVaultBackupOperation = "vault.backup";
     public const string OwnerVaultRestoreOperation = "vault.restore";
+    public const string OwnerVaultUpgradeOperation = "vault.upgrade";
+    public const string OwnerVaultRollbackOperation = "vault.rollback";
     public const string OwnerExportOperation = "vault.export";
     public const string ResourceReadOperation = "resource.read";
     public const string SourceReadOperation = "source.read";
@@ -1148,6 +1154,7 @@ public sealed class ServiceRequestHandler
     private readonly SynthesisScheduleService _synthesisSchedule;
     private readonly IntentionScheduleService _intentionSchedule;
     private readonly IVaultBackupService? _vaultBackup;
+    private readonly IVaultMaintenanceService? _vaultMaintenance;
     private readonly OwnerExportService _exports = new();
 
     public ServiceRequestHandler(
@@ -1162,7 +1169,8 @@ public sealed class ServiceRequestHandler
         ISourceSnapshotReader? sourceReader = null,
         IModelProviderAdapter? modelProvider = null,
         TimeProvider? timeProvider = null,
-        IVaultBackupService? vaultBackup = null)
+        IVaultBackupService? vaultBackup = null,
+        IVaultMaintenanceService? vaultMaintenance = null)
     {
         _modelJobs = new ModelJobService(vault, modelProvider);
         _synthesisSchedule = new SynthesisScheduleService(_modelJobs);
@@ -1177,6 +1185,7 @@ public sealed class ServiceRequestHandler
         _privateIndexStore = privateIndex;
         _sourceReader = sourceReader;
         _vaultBackup = vaultBackup;
+        _vaultMaintenance = vaultMaintenance;
         // S3-T1 source enrollment/ingestion. The registry ships empty (real
         // Codex/OMP parsers attach in S3-T2/S3-T3); without both a registry
         // and a reader the owner operations fail closed instead of serving a
@@ -1242,7 +1251,8 @@ public sealed class ServiceRequestHandler
                 return Error("forbidden");
             }
 
-            return new ServiceReply(CurrentProtocolVersion, "running", "owner", null, VaultState: _vault.State);
+            return new ServiceReply(CurrentProtocolVersion, "running", "owner", null,
+                VaultState: _vault.State, VaultFormat: _vaultMaintenance?.ReadFormatStatus());
         }
 
         if (string.Equals(request.Operation, AgentRedeemOperation, StringComparison.Ordinal))
@@ -1479,6 +1489,16 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, OwnerVaultRestoreOperation, StringComparison.Ordinal))
         {
             return HandleOwnerVaultRestore(request);
+        }
+
+        if (string.Equals(request.Operation, OwnerVaultUpgradeOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerVaultUpgrade(request);
+        }
+
+        if (string.Equals(request.Operation, OwnerVaultRollbackOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerVaultRollback(request);
         }
 
         if (string.Equals(request.Operation, OwnerExportOperation, StringComparison.Ordinal))
@@ -2009,6 +2029,122 @@ public sealed class ServiceRequestHandler
     /// <summary>
     /// The backup act names exactly one thing: where the snapshot goes.
     /// </summary>
+    /// <summary>
+    /// S8-T3 the owner schema upgrade: one owner act over the locked vault,
+    /// reachable from the console and the CLI. The owner presents the
+    /// passphrase or the recovery code; a wrong credential, a vault that is
+    /// unlocked, a private operation in flight or another maintenance act
+    /// fails closed with nothing written. The act leaves the vault locked.
+    /// </summary>
+    private ServiceReply HandleOwnerVaultUpgrade(ServiceRequest request)
+    {
+        if (_vaultMaintenance is null)
+        {
+            return Error("upgrade_unavailable");
+        }
+
+        var useRecoveryCode = request.RecoveryCode is not null;
+        var credential = useRecoveryCode ? request.RecoveryCode : request.Passphrase;
+        if (string.IsNullOrEmpty(credential) ||
+            (request.Passphrase is not null && request.RecoveryCode is not null) ||
+            HasMaintenanceExtras(request))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var summary = _vaultMaintenance.Upgrade(credential, useRecoveryCode);
+            return new ServiceReply(CurrentProtocolVersion, "upgraded", "owner", null,
+                VaultState: _vault.State, VaultUpgrade: summary, VaultFormat: _vaultMaintenance.ReadFormatStatus());
+        }
+        catch (VaultMaintenanceDeniedException ex)
+        {
+            return Error(ex.Reason);
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or CryptographicException)
+        {
+            return Error("upgrade_failed");
+        }
+    }
+
+    /// <summary>
+    /// S8-T3 the owner rollback: restores the files the last upgrade wrote and
+    /// that the owner has not changed since, or discards the rollback point.
+    /// The owner presents the same credential; the vault stays locked.
+    /// </summary>
+    private ServiceReply HandleOwnerVaultRollback(ServiceRequest request)
+    {
+        if (_vaultMaintenance is null)
+        {
+            return Error("rollback_unavailable");
+        }
+
+        var useRecoveryCode = request.RecoveryCode is not null;
+        var credential = useRecoveryCode ? request.RecoveryCode : request.Passphrase;
+        if (string.IsNullOrEmpty(credential) ||
+            (request.Passphrase is not null && request.RecoveryCode is not null) ||
+            HasMaintenanceExtras(request, allowDiscard: true))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var summary = _vaultMaintenance.Rollback(
+                credential, useRecoveryCode, request.DiscardRollback.GetValueOrDefault());
+            return new ServiceReply(CurrentProtocolVersion, "rolled_back", "owner", null,
+                VaultState: _vault.State, VaultRollback: summary, VaultFormat: _vaultMaintenance.ReadFormatStatus());
+        }
+        catch (VaultMaintenanceDeniedException ex)
+        {
+            return Error(ex.Reason);
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or CryptographicException)
+        {
+            return Error("rollback_failed");
+        }
+    }
+
+    /// <summary>
+    /// The maintenance operations take exactly one credential and, for the
+    /// rollback, the discard choice. Any other request field means the caller
+    /// is not making the act this handler implements.
+    /// </summary>
+    private static bool HasMaintenanceExtras(ServiceRequest request, bool allowDiscard = false) =>
+        request.ResourceId is not null || request.ZoneId is not null || request.ContentBase64 is not null ||
+        request.ResourceIds is not null || request.Operations is not null ||
+        request.DestinationResourceIds is not null || request.ExpiresAtUtc is not null ||
+        request.Provider is not null || request.Model is not null || request.MaximumCostUsd is not null ||
+        request.PreviewId is not null || request.CollectionId is not null || request.Token is not null ||
+        request.SessionToken is not null || request.SessionId is not null || request.AccessOperation is not null ||
+        request.ResourceRevision is not null || request.DestinationResourceId is not null ||
+        request.DestinationRevision is not null || request.EstimatedCostUsd is not null ||
+        request.InputTokens is not null || request.OutputTokens is not null || request.CatalogId is not null ||
+        request.Label is not null || request.Description is not null || request.Query is not null ||
+        request.CatalogIds is not null || request.SearchOffset is not null || request.SearchLimit is not null ||
+        request.SearchKind is not null || request.SearchCurrent is not null || request.BudgetChars is not null ||
+        request.Purpose is not null || request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null || request.SourceLocator is not null ||
+        request.SourceFormat is not null || request.SourceFormatVersion is not null || request.SourceTitle is not null ||
+        request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null || request.SourceGeneration is not null ||
+        request.SnapshotRetainUntilUtc is not null || request.SearchLevel is not null ||
+        request.SearchFromUtc is not null || request.SearchToUtc is not null || request.SearchAsOfUtc is not null ||
+        request.JobId is not null || request.BaseUrl is not null || request.ApiKey is not null ||
+        request.Profile is not null || request.IntervalMinutes is not null || request.ContextProject is not null ||
+        request.ContextTask is not null || request.IncludeArchived is not null || request.BackupPath is not null ||
+        request.TargetPath is not null || request.IncludeRelations is not null ||
+        request.IncludeLifecycleStates is not null ||
+        (!allowDiscard && request.DiscardRollback is not null);
+
     private static bool HasBackupExtras(ServiceRequest request) =>
         request.TargetPath is not null || request.IncludeRelations is not null ||
         request.IncludeLifecycleStates is not null || request.Passphrase is not null ||

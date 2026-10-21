@@ -47,7 +47,7 @@ public partial class OwnerConsoleWindow
     /// The two credentials a restore can use. The label is what the owner
     /// reads; the flag is what the request carries.
     /// </summary>
-    private sealed record RestoreCredentialOption(string Label, bool UseRecoveryCode)
+    private sealed record CredentialOption(string Label, bool UseRecoveryCode)
     {
         public override string ToString() => Label;
     }
@@ -59,9 +59,12 @@ public partial class OwnerConsoleWindow
             return;
         }
 
-        RestoreCredentialModeInput.Items.Add(new RestoreCredentialOption("Owner passphrase", false));
-        RestoreCredentialModeInput.Items.Add(new RestoreCredentialOption("Recovery key", true));
+        RestoreCredentialModeInput.Items.Add(new CredentialOption("Owner passphrase", false));
+        RestoreCredentialModeInput.Items.Add(new CredentialOption("Recovery key", true));
         RestoreCredentialModeInput.SelectedIndex = 0;
+        VaultFormatCredentialModeInput.Items.Add(new CredentialOption("Owner passphrase", false));
+        VaultFormatCredentialModeInput.Items.Add(new CredentialOption("Recovery key", true));
+        VaultFormatCredentialModeInput.SelectedIndex = 0;
     }
 
     private void RenderBackupExport(bool attached)
@@ -127,6 +130,21 @@ public partial class OwnerConsoleWindow
                 ? "Choose the records and the file, then write the readable copy. Nothing is exported before you ask for it."
                 : "The vault is locked, so the service reads no records. Unlock it in Vault & key first."));
 
+        var format = _session.VaultFormat;
+        var vaultLocked = attached && _session.ReportedVaultState == OwnerVaultState.Locked;
+        RenderOutcome(VaultFormatStateText, format is null
+            ? "The service did not report a stored format yet."
+            : DescribeVaultFormat(format));
+        RenderOutcome(VaultFormatMessageText, _session.VaultFormatMessage ??
+            (vaultLocked
+                ? "An old vault is raised to the format this build writes by one owner act. Your records, revisions, relations, sources and lifecycle states are kept exactly as they are."
+                : "Lock the vault in Vault & key to check or change its stored format: the act rewrites vault files and runs only while the vault is locked."));
+        VaultFormatCredentialModeInput.IsEnabled = !busy;
+        VaultFormatCredentialInput.IsEnabled = !busy;
+        VaultFormatDiscardCheck.IsEnabled = vaultLocked && !busy && format?.RollbackAvailable == true;
+        VaultFormatUpgradeButton.IsEnabled = vaultLocked && !busy;
+        VaultFormatRollbackButton.IsEnabled = vaultLocked && !busy && format?.RollbackAvailable == true;
+
         BackupPathInput.IsEnabled = !busy;
         BackupBrowseButton.IsEnabled = !busy;
         BackupRunButton.IsEnabled = unlocked && !busy;
@@ -156,7 +174,7 @@ public partial class OwnerConsoleWindow
             : Directory.Exists(RestoreTargetPathInput.Text)
                 ? "That folder already exists. Choose a folder that does not exist yet: the service refuses to write into it."
                 : "The restored vault will be written to " + RestoreTargetPathInput.Text + ". Your live vault stays untouched.";
-        RestoreCredentialHintText.Text = SelectedRestoreCredentialOption() is { UseRecoveryCode: true }
+        RestoreCredentialHintText.Text = SelectedCredentialOption() is { UseRecoveryCode: true }
             ? "The recovery key you saved outside the vault opens this backup. It is sent in one request, never stored and never shown again."
             : "The owner passphrase that opened this vault opens this backup. It is sent in one request, never stored and never shown again.";
         ExportScopeText.Text = scope == 0
@@ -165,6 +183,63 @@ public partial class OwnerConsoleWindow
               string.Join(", ", selection.Select(row => row.Title)) +
               ". A citation to a record outside this selection is withheld whole.";
     }
+
+    /// <summary>
+    /// S8-T3 the keyless format line: what the service recorded about the
+    /// stored format and whether a rollback point is available. It carries no
+    /// record content.
+    /// </summary>
+    private static string DescribeVaultFormat(OwnerVaultFormatInfo format) =>
+        format.State switch
+        {
+            "current" => "Stored format: current — this vault already holds the format this build writes." +
+                (format.RollbackAvailable ? " An encrypted rollback point from the last upgrade is available." : string.Empty),
+            "upgrade_available" => "Stored format: an upgrade is available — this vault was written by an older build. Run the upgrade while the vault is locked; nothing is reset." +
+                (format.RollbackAvailable ? " An encrypted rollback point from the last upgrade is available." : string.Empty),
+            "interrupted" => "Stored format: an upgrade was interrupted. Every record still opens; run the upgrade again to finish it, or roll back if a rollback point was written.",
+            "unknown" => "Stored format: no verified format record yet. Run the upgrade to check this vault; if it is already current the service says so and writes nothing.",
+            _ => "Stored format: the service did not report a format state."
+        };
+
+    private void OnVaultFormatCredentialModeChanged(object sender, SelectionChangedEventArgs e) =>
+        RenderBackupExport(_session.Attached);
+
+    private async void OnVaultFormatUpgradeClicked(object sender, RoutedEventArgs e)
+    {
+        var useRecoveryCode = SelectedVaultFormatCredentialOption() is { UseRecoveryCode: true };
+        var credential = VaultFormatCredentialInput.Password;
+        try
+        {
+            await _session.UpgradeVaultFormatAsync(credential, useRecoveryCode);
+        }
+        finally
+        {
+            VaultFormatCredentialInput.Clear();
+            credential = string.Empty;
+            RenderBackupExport(_session.Attached);
+        }
+    }
+
+    private async void OnVaultFormatRollbackClicked(object sender, RoutedEventArgs e)
+    {
+        var useRecoveryCode = SelectedVaultFormatCredentialOption() is { UseRecoveryCode: true };
+        var discard = VaultFormatDiscardCheck.IsChecked == true;
+        var credential = VaultFormatCredentialInput.Password;
+        try
+        {
+            await _session.RollbackVaultFormatAsync(credential, useRecoveryCode, discard);
+        }
+        finally
+        {
+            VaultFormatCredentialInput.Clear();
+            VaultFormatDiscardCheck.IsChecked = false;
+            credential = string.Empty;
+            RenderBackupExport(_session.Attached);
+        }
+    }
+
+    private CredentialOption? SelectedVaultFormatCredentialOption() =>
+        VaultFormatCredentialModeInput.SelectedItem as CredentialOption;
 
     private void OnBackupBrowseClicked(object sender, RoutedEventArgs e)
     {
@@ -210,7 +285,7 @@ public partial class OwnerConsoleWindow
 
     private async void OnRestoreRunClicked(object sender, RoutedEventArgs e)
     {
-        var useRecoveryCode = SelectedRestoreCredentialOption() is { UseRecoveryCode: true };
+        var useRecoveryCode = SelectedCredentialOption() is { UseRecoveryCode: true };
         var credential = RestoreCredentialInput.Password;
         try
         {
@@ -308,8 +383,8 @@ public partial class OwnerConsoleWindow
     private List<ExportCandidateRow> SelectedExportRows() =>
         ExportCandidatesList.SelectedItems.OfType<ExportCandidateRow>().ToList();
 
-    private RestoreCredentialOption? SelectedRestoreCredentialOption() =>
-        RestoreCredentialModeInput.SelectedItem as RestoreCredentialOption;
+    private CredentialOption? SelectedCredentialOption() =>
+        RestoreCredentialModeInput.SelectedItem as CredentialOption;
 
     /// <summary>
     /// Drops every draft of this view: the chosen paths, the search text, the
@@ -326,6 +401,8 @@ public partial class OwnerConsoleWindow
             RestoreBackupPathInput.Clear();
             RestoreTargetPathInput.Clear();
             RestoreCredentialInput.Clear();
+            VaultFormatCredentialInput.Clear();
+            VaultFormatDiscardCheck.IsChecked = false;
             ExportSearchInput.Clear();
             ExportPathInput.Clear();
             ExportCandidatesList.ItemsSource = null;

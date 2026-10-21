@@ -1544,6 +1544,39 @@
                                    Text="Three owner acts live here: take an encrypted backup of your vault, restore a backup into a new folder, and write a readable copy of the records you choose. The service does all three on the owner control pipe; this console chooses the file, the folder and the scope, and shows exactly what the service said." />
                         <TextBlock Text="The backup needs the unlocked vault. The restore does not: you can restore while the vault is locked, because a restore opens a backup file and writes a new folder instead of reading the live vault. The export needs the unlocked vault, because it reads your records." TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280" />
 
+                        <Border x:Name="VaultFormatSectionPanel" Margin="0,16,0,0" Padding="14" Background="White"
+                                BorderBrush="#FFD5D8DC" BorderThickness="1" CornerRadius="3">
+                            <StackPanel>
+                                <TextBlock Text="Vault format — keep an old vault readable after an app update" FontWeight="SemiBold" FontSize="15" />
+                                <TextBlock TextWrapping="Wrap" Margin="0,6,0,0"
+                                           Text="A vault written by an older version still opens. This act raises its stored records to the format this version writes, in one step and without resetting anything: record IDs, revisions, zones, relations, sources, lifecycle states and archives are kept exactly as they are. Your passphrase and recovery key do not change, and backups you already took still restore." />
+                                <TextBlock TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280"
+                                           Text="The act runs only while the vault is locked and leaves it locked. Before it rewrites a file it copies that file, still encrypted, into a rollback point; the rollback restores only files you have not changed since the upgrade. Lock the vault in Vault &amp; key first." />
+                                <TextBlock x:Name="VaultFormatStateText" TextWrapping="Wrap" Margin="0,10,0,0" FontWeight="SemiBold"
+                                           AutomationProperties.AutomationId="VaultFormatStateText" />
+                                <TextBlock Text="Credential that opens this vault" Margin="0,10,0,2" Foreground="#FF6B7280" />
+                                <StackPanel Orientation="Horizontal">
+                                    <ComboBox x:Name="VaultFormatCredentialModeInput" Width="220"
+                                              AutomationProperties.AutomationId="VaultFormatCredentialModeInput"
+                                              SelectionChanged="OnVaultFormatCredentialModeChanged" />
+                                    <PasswordBox x:Name="VaultFormatCredentialInput" Width="320" Margin="8,0,0,0"
+                                                 AutomationProperties.AutomationId="VaultFormatCredentialInput"
+                                                 PasswordChanged="OnSecretFieldChanged" />
+                                </StackPanel>
+                                <CheckBox x:Name="VaultFormatDiscardCheck" Margin="0,8,0,0"
+                                          Content="Discard the rollback point instead of rolling back (frees its space; the previous format then cannot be restored)"
+                                          AutomationProperties.AutomationId="VaultFormatDiscardCheck" />
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                    <Button x:Name="VaultFormatUpgradeButton" Content="Upgrade the vault format" Padding="14,7"
+                                            AutomationProperties.AutomationId="VaultFormatUpgradeButton" Click="OnVaultFormatUpgradeClicked" />
+                                    <Button x:Name="VaultFormatRollbackButton" Content="Roll back to the previous format" Padding="14,7" Margin="8,0,0,0"
+                                            AutomationProperties.AutomationId="VaultFormatRollbackButton" Click="OnVaultFormatRollbackClicked" />
+                                </StackPanel>
+                                <TextBlock x:Name="VaultFormatMessageText" TextWrapping="Wrap" Margin="0,10,0,0" FontWeight="SemiBold"
+                                           AutomationProperties.AutomationId="VaultFormatMessageText" />
+                            </StackPanel>
+                        </Border>
+
                         <Border x:Name="BackupSectionPanel" Margin="0,16,0,0" Padding="14" Background="White"
                                 BorderBrush="#FFD5D8DC" BorderThickness="1" CornerRadius="3">
                             <StackPanel>

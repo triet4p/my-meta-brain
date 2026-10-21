@@ -12,6 +12,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
     private VaultManifest? _manifest;
     private int _activeOperations;
     private bool _locking;
+    private bool _maintenance;
     private TaskCompletionSource? _operationsDrained;
     private CancellationTokenSource? _lockCancellation;
     private CancellationTokenSource _refreshCancellation = new();
@@ -33,6 +34,11 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
                     return "locking";
                 }
 
+                if (_maintenance)
+                {
+                    return "upgrading";
+                }
+
                 return _dataKey is not null ? "unlocked" : _store.Exists ? "locked" : "uninitialized";
             }
         }
@@ -44,7 +50,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
         lock (_stateGate)
         {
             recoveryCode = null;
-            if (_dataKey is not null || _locking || _activeOperations != 0 || _store.Exists)
+            if (_dataKey is not null || _locking || _maintenance || _activeOperations != 0 || _store.Exists)
             {
                 return false;
             }
@@ -64,7 +70,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
         ArgumentNullException.ThrowIfNull(credential);
         lock (_stateGate)
         {
-            if (_locking || _activeOperations != 0)
+            if (_locking || _maintenance || _activeOperations != 0)
             {
                 return false;
             }
@@ -144,13 +150,36 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
     {
         lock (_stateGate)
         {
-            if (_dataKey is null || _locking)
+            if (_dataKey is null || _locking || _maintenance)
             {
                 return null;
             }
 
             _activeOperations++;
             return new Operation(this);
+        }
+    }
+
+    /// <summary>
+    /// S8-T3 the exclusive maintenance lease for the owner schema upgrade and
+    /// rollback. It is available only while the vault is locked, no operation
+    /// is in flight, no lock is draining and no other maintenance act is
+    /// running, so the migration is the only writer for its whole duration;
+    /// meanwhile provision, unlock and every private operation refuse. The
+    /// vault is never unlocked by the lease: the migration opens the key
+    /// itself and clears it before the lease ends.
+    /// </summary>
+    public IDisposable? TryBeginMaintenance()
+    {
+        lock (_stateGate)
+        {
+            if (_dataKey is not null || _locking || _maintenance || _activeOperations != 0 || !_store.Exists)
+            {
+                return null;
+            }
+
+            _maintenance = true;
+            return new Maintenance(this);
         }
     }
 
@@ -702,6 +731,27 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
         var previous = _refreshCancellation;
         _refreshCancellation = new CancellationTokenSource();
         previous.Dispose();
+    }
+
+    private sealed class Maintenance : IDisposable
+    {
+        private VaultLifecycle? _owner;
+
+        public Maintenance(VaultLifecycle owner) => _owner = owner;
+
+        public void Dispose()
+        {
+            var owner = Interlocked.Exchange(ref _owner, null);
+            if (owner is null)
+            {
+                return;
+            }
+
+            lock (owner._stateGate)
+            {
+                owner._maintenance = false;
+            }
+        }
     }
 
     private sealed class Operation : IVaultOperation

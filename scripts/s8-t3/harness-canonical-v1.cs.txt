@@ -1,0 +1,198 @@
+// S8-T3 fixture harness for the historical build at 74e2b1f (S5-T3).
+//
+// This file is copied into the *extracted snapshot* of that commit by
+// scripts/s8-t3/prepare-old-vaults.ps1 and compiled into the historical
+// MetaBrain.Connections assembly. It adds only a programmatic entry point: the
+// vault and every record are produced by the historical EncryptedVaultStore /
+// VaultLifecycle / ServiceRequestHandler and domain codecs of that commit,
+// unchanged, so the resulting files carry that commit's content schemas
+// (lifecycle v1, model job v1). The historical settings loader is bypassed
+// because it requires a protected ACL on the settings file, and this task must
+// not mutate an ACL anywhere.
+//
+// The step lines name the fixture step only; they carry no record content.
+using System.Security.Principal;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using MetaBrain.Application;
+using MetaBrain.Core.Domain;
+using MetaBrain.Core.Security;
+
+namespace MetaBrain.Connections;
+
+internal static class S8T3FixtureHarness
+{
+    private static readonly JsonSerializerOptions DraftJson = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+    };
+
+    public static async Task<int> RunAsync(Options options)
+    {
+        var vaultPath = Path.GetFullPath(options.Required("--vault"));
+        var passphrase = Console.ReadLine();
+        if (string.IsNullOrEmpty(passphrase) || passphrase.Length < 12)
+        {
+            Console.Error.WriteLine("FIXTURE credential_required");
+            return 3;
+        }
+
+        var ownerSid = WindowsIdentity.GetCurrent().User?.Value
+            ?? throw new InvalidOperationException("The fixture process has no user SID.");
+        var store = new EncryptedVaultStore(vaultPath, ownerSid);
+        using var vault = new VaultLifecycle(store);
+        if (!vault.Provision(passphrase, out _))
+        {
+            Console.Error.WriteLine("FIXTURE provision_failed");
+            return 4;
+        }
+
+        Console.WriteLine("FIXTURE provisioned");
+        var handler = new ServiceRequestHandler(
+            new GrantAuthority(new InMemoryGrantStore()), vault, new OwnerScopeGrantAuthority());
+        var owner = AuthenticatedContext.ForOwner();
+        var operation = vault.TryBeginOperation();
+        if (operation is null)
+        {
+            Console.Error.WriteLine("FIXTURE no_operation");
+            return 5;
+        }
+
+        try
+        {
+            const string zone = "s8t3-owner-zone";
+            var recordedAt = DateTimeOffset.UtcNow;
+            var memoryA = JsonSerializer.SerializeToUtf8Bytes(new MemoryItemDraft(
+                MemoryKind.Lesson, SpeakerRole.User, CreationMethod.DirectWrite, EvidenceLevel.Unverified,
+                AbstractionLevel.L1, "S8T3_SYNTHETIC_PRIOR_ITEM_A_TITLE", "S8T3_SYNTHETIC_PRIOR_ITEM_A_BODY_7c31",
+                Array.Empty<MemorySourceReference>(), null, recordedAt, null), DraftJson);
+            var memoryB = JsonSerializer.SerializeToUtf8Bytes(new MemoryItemDraft(
+                MemoryKind.Lesson, SpeakerRole.User, CreationMethod.DirectWrite, EvidenceLevel.Unverified,
+                AbstractionLevel.L1, "S8T3_SYNTHETIC_PRIOR_ITEM_B_TITLE", "S8T3_SYNTHETIC_PRIOR_ITEM_B_BODY_2a84",
+                Array.Empty<MemorySourceReference>(), null, recordedAt, null), DraftJson);
+            var lifecycle = JsonSerializer.SerializeToUtf8Bytes(new LifecycleDraft(
+                CreationMethod.DirectWrite, "S8T3 synthetic prior-format lifecycle",
+                null, null, null, null, null), DraftJson);
+            var sourceDraft = JsonSerializer.SerializeToUtf8Bytes(new RegisteredSourceDraft(
+                "S8T3_SYNTHETIC_PRIOR_SOURCE_TITLE", "s8t3-synthetic-prior-locator", "v1",
+                SourceAvailability.Available, CreationMethod.DirectWrite,
+                recordedAt.AddMinutes(-2), recordedAt,
+                Author: SpeakerRole.User, Text: "S8T3_SYNTHETIC_PRIOR_SOURCE_TEXT_3f9a"), DraftJson);
+            var relation = JsonSerializer.SerializeToUtf8Bytes(new RelationDraft(
+                RelationKind.RelatedTo, RelationState.Proposed,
+                new RelationEndpoint("s8t3-item-a", RelationEndpointKind.MemoryItem, 1),
+                new RelationEndpoint("s8t3-item-b", RelationEndpointKind.MemoryItem, 1),
+                CreationMethod.DirectWrite, "S8T3 synthetic prior-format relation",
+                null, null, recordedAt, null), DraftJson);
+
+            Console.WriteLine("FIXTURE step memory-a");
+            if (!await ExpectAsync(handler, owner, operation, new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.MemoryCreateOperation,
+                    ResourceId: "s8t3-item-a", ZoneId: zone, ContentBase64: Convert.ToBase64String(memoryA)),
+                    "memory_created").ConfigureAwait(false))
+            {
+                return 6;
+            }
+
+            Console.WriteLine("FIXTURE step memory-b");
+            if (!await ExpectAsync(handler, owner, operation, new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.MemoryCreateOperation,
+                    ResourceId: "s8t3-item-b", ZoneId: zone, ContentBase64: Convert.ToBase64String(memoryB)),
+                    "memory_created").ConfigureAwait(false))
+            {
+                return 7;
+            }
+
+            Console.WriteLine("FIXTURE step lifecycle");
+            if (!await ExpectAsync(handler, owner, operation, new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.LifecycleCreateOperation,
+                    ResourceId: "s8t3-item-a", ContentBase64: Convert.ToBase64String(lifecycle)),
+                    "lifecycle_created").ConfigureAwait(false))
+            {
+                return 8;
+            }
+
+            Console.WriteLine("FIXTURE step source");
+            if (!await ExpectAsync(handler, owner, operation, new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.SourceCreateOperation,
+                    ResourceId: "s8t3-source-a", ZoneId: zone, ContentBase64: Convert.ToBase64String(sourceDraft)),
+                    "source_created").ConfigureAwait(false))
+            {
+                return 13;
+            }
+
+            Console.WriteLine("FIXTURE step relation");
+            if (!await ExpectAsync(handler, owner, operation, new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.RelationCreateOperation,
+                    ResourceId: "rel-s8t3-a-b", ZoneId: zone, ContentBase64: Convert.ToBase64String(relation)),
+                    "relation_created").ConfigureAwait(false))
+            {
+                return 9;
+            }
+
+            // The historical job service validates the provider/model against its
+            // approved pricing catalogue; this is the pair that commit ships.
+            Console.WriteLine("FIXTURE step job");
+            if (!await ExpectAsync(handler, owner, operation, new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerJobCreateOperation,
+                    ResourceId: "s8t3-source-a", ResourceRevision: 1, ZoneId: zone,
+                    DestinationResourceId: "s8t3-item-a", DestinationRevision: 1,
+                    Provider: "deepseek", Model: "deepseek-flash", MaximumCostUsd: 0.01m),
+                    "job_created").ConfigureAwait(false))
+            {
+                return 10;
+            }
+
+            Console.WriteLine("FIXTURE step grant-preview");
+            var preview = await handler.HandleAsync(owner, new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerScopePreviewOperation,
+                ResourceIds: new[] { "s8t3-item-a" },
+                Operations: new[] { "memory.read" },
+                ExpiresAtUtc: DateTimeOffset.UtcNow.AddHours(4)), operation, CancellationToken.None).ConfigureAwait(false);
+            if (preview.ScopePreview is null)
+            {
+                Console.Error.WriteLine("FIXTURE preview_failed status=" + preview.Status + " error=" + preview.Error);
+                return 11;
+            }
+
+            Console.WriteLine("FIXTURE step grant-issue");
+            var issue = await handler.HandleAsync(owner, new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerScopeIssueOperation,
+                PreviewId: preview.ScopePreview.PreviewId), operation, CancellationToken.None).ConfigureAwait(false);
+            if (!string.Equals(issue.Status, "token_issued", StringComparison.Ordinal))
+            {
+                Console.Error.WriteLine("FIXTURE issue_failed status=" + issue.Status + " error=" + issue.Error);
+                return 12;
+            }
+        }
+        finally
+        {
+            // The lifecycle drains active operations before it clears the key.
+            operation.Dispose();
+        }
+
+        await vault.LockAsync().ConfigureAwait(false);
+        Console.WriteLine("FIXTURE canonical-v1 written");
+        return 0;
+    }
+
+    private static async Task<bool> ExpectAsync(
+        ServiceRequestHandler handler,
+        AuthenticatedContext owner,
+        IVaultOperation operation,
+        ServiceRequest request,
+        string expectedStatus)
+    {
+        var reply = await handler.HandleAsync(owner, request, operation, CancellationToken.None).ConfigureAwait(false);
+        if (string.Equals(reply.Status, expectedStatus, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        Console.Error.WriteLine("FIXTURE step_failed expected=" + expectedStatus + " status=" + reply.Status +
+            " error=" + reply.Error);
+        return false;
+    }
+}

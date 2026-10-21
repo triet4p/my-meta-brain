@@ -1,5 +1,3 @@
-using System.Security.AccessControl;
-using System.Security.Principal;
 using MetaBrain.Core.Security;
 
 namespace MetaBrain.Connections;
@@ -19,10 +17,9 @@ internal sealed class ManagedResourceFileReader : IManagedResourceReader
 
     private readonly object _gate = new();
     private readonly string _root;
-    private readonly SecurityIdentifier _serviceSid;
     private readonly Dictionary<string, string> _fileNamesByResource = new(StringComparer.Ordinal);
 
-    public ManagedResourceFileReader(string root, string serviceSid)
+    public ManagedResourceFileReader(string root)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -30,7 +27,6 @@ internal sealed class ManagedResourceFileReader : IManagedResourceReader
         }
 
         _root = Path.GetFullPath(root);
-        _serviceSid = new SecurityIdentifier(serviceSid);
         var directory = new DirectoryInfo(_root);
         if (!directory.Exists || (directory.Attributes & FileAttributes.ReparsePoint) != 0)
         {
@@ -121,7 +117,6 @@ internal sealed class ManagedResourceFileReader : IManagedResourceReader
             {
                 var finalPath = ResolveFinalPath(stream.SafeFileHandle);
                 AssertContainedFile(finalPath, fileName);
-                AssertRestrictedAcl(finalPath);
 
                 if (stream.Length <= 0 || stream.Length > MaximumResourceBytes)
                 {
@@ -211,41 +206,6 @@ internal sealed class ManagedResourceFileReader : IManagedResourceReader
             relative.Contains('\\') || relative.Contains('/'))
         {
             throw new ManagedResourceUnavailableException();
-        }
-    }
-
-    private void AssertRestrictedAcl(string finalPath)
-    {
-        var fileSecurity = FileSystemAclExtensions.GetAccessControl(
-            new FileInfo(finalPath), AccessControlSections.Access | AccessControlSections.Owner);
-        if (!fileSecurity.AreAccessRulesProtected)
-        {
-            throw new ManagedResourceUnavailableException();
-        }
-
-        var allowed = new HashSet<string>(StringComparer.Ordinal)
-        {
-            _serviceSid.Value,
-            "S-1-5-18",
-            "S-1-5-32-544",
-        };
-        var owner = fileSecurity.GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier;
-        if (owner is not null)
-        {
-            allowed.Add(owner.Value);
-        }
-
-        foreach (AuthorizationRule rule in fileSecurity.GetAccessRules(includeExplicit: true, includeInherited: true, targetType: typeof(SecurityIdentifier)))
-        {
-            if (rule is not FileSystemAccessRule accessRule || accessRule.AccessControlType != AccessControlType.Allow)
-            {
-                continue;
-            }
-
-            if (!allowed.Contains(((SecurityIdentifier)accessRule.IdentityReference).Value))
-            {
-                throw new ManagedResourceUnavailableException();
-            }
         }
     }
 

@@ -53,7 +53,31 @@ public enum OwnerVaultState
 public sealed record OwnerChannelStatus(
     OwnerChannelAvailability Availability,
     OwnerVaultState VaultState,
-    string? ErrorCode);
+    string? ErrorCode,
+    OwnerVaultFormatInfo? VaultFormat = null);
+
+/// <summary>
+/// S8-T3 what the service says about the stored vault format without asking
+/// for a credential: whether the format is current, an upgrade is worth
+/// starting, a previous upgrade was interrupted, or nothing is recorded yet,
+/// plus whether a rollback point is available. It carries schema state only,
+/// never a record, a title, a body, a key or a token.
+/// </summary>
+public sealed record OwnerVaultFormatInfo(
+    string State,
+    bool RollbackAvailable,
+    string? UpgradeId);
+
+/// <summary>
+/// S8-T3 the outcome of one owner maintenance act (upgrade or rollback). The
+/// summary is the service's own compact report of what it did; a refusal is a
+/// concrete answer from a running service with nothing written.
+/// </summary>
+public sealed record OwnerVaultMaintenanceResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerVaultFormatInfo? Format,
+    string? Summary);
 
 /// <summary>
 /// How an owner command ended, as the owner application observed it.
@@ -1242,6 +1266,57 @@ public static class OwnerChannelClient
     /// and classifies the answer. Transport failures, refusals and unrecognized
     /// replies are reported honestly instead of being folded into a success.
     /// </summary>
+    /// <summary>
+    /// S8-T3 asks the service to raise an old vault to the content schema this
+    /// build writes. The vault must be locked; the credential travels in this
+    /// one request and the act leaves the vault locked.
+    /// </summary>
+    public static async Task<OwnerVaultMaintenanceResult> UpgradeVaultFormatAsync(
+        string controlPipe,
+        string credential,
+        bool useRecoveryCode,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(credential);
+        var request = useRecoveryCode
+            ? new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerVaultUpgradeOperation, RecoveryCode: credential)
+            : new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerVaultUpgradeOperation, Passphrase: credential);
+        var reply = await ReadReplyAsync(controlPipe, request, "upgraded", cancellationToken).ConfigureAwait(false);
+        return new OwnerVaultMaintenanceResult(
+            reply.Outcome,
+            reply.ErrorCode,
+            ProjectVaultFormat(reply.Payload),
+            reply.Outcome == OwnerCommandOutcome.Completed ? ProjectUpgradeSummary(reply.Payload) : null);
+    }
+
+    /// <summary>
+    /// S8-T3 asks the service to restore the files the last upgrade wrote, or
+    /// to discard the rollback point. The vault must be locked and the same
+    /// credential is required.
+    /// </summary>
+    public static async Task<OwnerVaultMaintenanceResult> RollbackVaultFormatAsync(
+        string controlPipe,
+        string credential,
+        bool useRecoveryCode,
+        bool discard,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(credential);
+        var request = useRecoveryCode
+            ? new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerVaultRollbackOperation, RecoveryCode: credential, DiscardRollback: discard)
+            : new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerVaultRollbackOperation, Passphrase: credential, DiscardRollback: discard);
+        var reply = await ReadReplyAsync(controlPipe, request, "rolled_back", cancellationToken).ConfigureAwait(false);
+        return new OwnerVaultMaintenanceResult(
+            reply.Outcome,
+            reply.ErrorCode,
+            ProjectVaultFormat(reply.Payload),
+            reply.Outcome == OwnerCommandOutcome.Completed ? ProjectRollbackSummary(reply.Payload) : null);
+    }
+
     public static async Task<OwnerChannelStatus> ReadStatusAsync(string controlPipe, CancellationToken cancellationToken)
     {
         var reply = await ReadReplyAsync(
@@ -1253,7 +1328,8 @@ public static class OwnerChannelClient
         return reply.Outcome switch
         {
             OwnerCommandOutcome.Completed => new OwnerChannelStatus(OwnerChannelAvailability.Reachable, reply.VaultState,
-                reply.VaultState == OwnerVaultState.Unknown ? "vault_state_unknown" : null),
+                reply.VaultState == OwnerVaultState.Unknown ? "vault_state_unknown" : null,
+                ProjectVaultFormat(reply.Payload)),
             OwnerCommandOutcome.OwnerAuthorityDenied => new OwnerChannelStatus(
                 OwnerChannelAvailability.OwnerAuthorityDenied, OwnerVaultState.Unknown, reply.ErrorCode),
             OwnerCommandOutcome.ProtocolMismatch => new OwnerChannelStatus(
@@ -4079,6 +4155,109 @@ public static class OwnerChannelClient
         OwnerLibraryCurrentness.History => "history",
         _ => "all"
     };
+
+    private static OwnerVaultFormatInfo? ProjectVaultFormat(JsonElement payload)
+    {
+        if (payload.ValueKind != JsonValueKind.Object ||
+            !payload.TryGetProperty("vaultFormat", out var format) ||
+            format.ValueKind != JsonValueKind.Object ||
+            !format.TryGetProperty("state", out var state) || state.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        return new OwnerVaultFormatInfo(
+            state.GetString() ?? "unknown",
+            format.TryGetProperty("rollbackAvailable", out var rollback) && rollback.ValueKind == JsonValueKind.True,
+            format.TryGetProperty("upgradeId", out var upgradeId) && upgradeId.ValueKind == JsonValueKind.String
+                ? upgradeId.GetString()
+                : null);
+    }
+
+    /// <summary>
+    /// The upgrade report in the owner's terms: the profile it observed, the
+    /// profile it verified, how many files it rewrote and where the encrypted
+    /// rollback point is. It never names a record.
+    /// </summary>
+    private static string? ProjectUpgradeSummary(JsonElement payload)
+    {
+        if (payload.ValueKind != JsonValueKind.Object ||
+            !payload.TryGetProperty("vaultUpgrade", out var upgrade) || upgrade.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var alreadyCurrent = upgrade.TryGetProperty("alreadyCurrent", out var flag) && flag.ValueKind == JsonValueKind.True;
+        var resumed = upgrade.TryGetProperty("resumed", out var resumedFlag) && resumedFlag.ValueKind == JsonValueKind.True;
+        var records = upgrade.TryGetProperty("migratedRecords", out var recordCount) && recordCount.TryGetInt32(out var count) ? count : 0;
+        var control = upgrade.TryGetProperty("migratedControlStates", out var controlCount) && controlCount.TryGetInt32(out var controlValue) ? controlValue : 0;
+        var rollbackBytes = upgrade.TryGetProperty("rollbackBytes", out var bytes) && bytes.TryGetInt64(out var size) ? size : 0;
+        var rollbackPath = upgrade.TryGetProperty("rollbackPath", out var path) && path.ValueKind == JsonValueKind.String
+            ? path.GetString()
+            : null;
+        return (alreadyCurrent
+                ? "The vault already holds the format this build writes; nothing was rewritten."
+                : "The vault was raised to the format this build writes: " +
+                  records.ToString(CultureInfo.InvariantCulture) + " record(s) and " +
+                  control.ToString(CultureInfo.InvariantCulture) + " control state(s) rewritten" +
+                  (resumed ? ", resuming an interrupted upgrade" : string.Empty) + ".") +
+            " from " + DescribeSchemaReport(upgrade, "from") + " to " + DescribeSchemaReport(upgrade, "to") + "." +
+            (rollbackPath is { Length: > 0 }
+                ? " An encrypted rollback point (" + rollbackBytes.ToString(CultureInfo.InvariantCulture) +
+                  " bytes) is kept at " + rollbackPath + "."
+                : string.Empty);
+    }
+
+    private static string? ProjectRollbackSummary(JsonElement payload)
+    {
+        if (payload.ValueKind != JsonValueKind.Object ||
+            !payload.TryGetProperty("vaultRollback", out var rollback) || rollback.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var discarded = rollback.TryGetProperty("discarded", out var flag) && flag.ValueKind == JsonValueKind.True;
+        var restored = rollback.TryGetProperty("restoredFiles", out var restoredCount) && restoredCount.TryGetInt32(out var restoredValue) ? restoredValue : 0;
+        var skipped = rollback.TryGetProperty("skippedFiles", out var skippedCount) && skippedCount.TryGetInt32(out var skippedValue) ? skippedValue : 0;
+        return discarded
+            ? "The rollback point was discarded; the vault stays at its current format."
+            : "Restored " + restored.ToString(CultureInfo.InvariantCulture) + " file(s); " +
+              skipped.ToString(CultureInfo.InvariantCulture) +
+              " file(s) were kept because they changed after the upgrade. The vault now holds " +
+              DescribeSchemaReport(rollback, "restored") + ".";
+    }
+
+    private static string DescribeSchemaReport(JsonElement summary, string property)
+    {
+        if (!summary.TryGetProperty(property, out var report) || report.ValueKind != JsonValueKind.Object)
+        {
+            return "unknown";
+        }
+
+        var control = report.TryGetProperty("controlSchema", out var controlValue) && controlValue.TryGetInt32(out var controlNumber)
+            ? controlNumber
+            : 0;
+        var parts = new List<string> { "control:" + control.ToString(CultureInfo.InvariantCulture) };
+        if (report.TryGetProperty("canonical", out var canonical) && canonical.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var entry in canonical.EnumerateArray())
+            {
+                var family = entry.TryGetProperty("family", out var familyValue) && familyValue.ValueKind == JsonValueKind.String
+                    ? familyValue.GetString()
+                    : "unknown";
+                var version = entry.TryGetProperty("schemaVersion", out var versionValue) && versionValue.TryGetInt32(out var versionNumber)
+                    ? versionNumber
+                    : 0;
+                var records = entry.TryGetProperty("records", out var recordValue) && recordValue.TryGetInt32(out var recordNumber)
+                    ? recordNumber
+                    : 0;
+                parts.Add(family + ":" + version.ToString(CultureInfo.InvariantCulture) +
+                    "(" + records.ToString(CultureInfo.InvariantCulture) + ")");
+            }
+        }
+
+        return string.Join(",", parts);
+    }
 
     private static OwnerLibraryPage? ProjectLibraryPage(OwnerReply reply)
     {

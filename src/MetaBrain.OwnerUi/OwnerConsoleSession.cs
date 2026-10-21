@@ -296,7 +296,18 @@ internal sealed partial class OwnerConsoleSession
             if (changed)
             {
                 Append("service state " + Describe(previous) + " -> " + Describe(status));
-                if (!HoldsUnlockedPrivateEpoch(status))
+                // A status answer can change without the serving state moving:
+                // the keyless format record and the rollback point live on the
+                // status, and an owner maintenance act changes them while the
+                // vault stays locked. That is not the end of a private epoch —
+                // there is no unlocked private state to drop — and moving the
+                // epoch here would discard the maintenance act's own answer as
+                // if it were stale. A real lost service or a changed vault
+                // state still clears the private views and the typed secrets.
+                var servingStateMoved = previous is null ||
+                    previous.Availability != status.Availability ||
+                    previous.VaultState != status.VaultState;
+                if (!HoldsUnlockedPrivateEpoch(status) && servingStateMoved)
                 {
                     // Nothing private survives a state that is not the unlocked
                     // vault this console was reporting: the once-shown recovery

@@ -29,6 +29,17 @@ internal sealed class EncryptedVaultStore
     private const int PreviousScopeGrantSchemaVersion = 3;
     private const int LegacyScopeGrantSchemaVersion = 2;
     private const int KdfIterations = 600_000;
+    // S8-T3 key-format compatibility: the wrapper records the cost it was
+    // written with, and the AAD binds that exact value, so honouring the
+    // recorded cost is safe (an attacker cannot lower it without producing an
+    // AEAD tag they cannot produce). The window below is the supported range:
+    // an artifact written at any cost inside it keeps opening after this
+    // release raises or lowers its own default, and anything outside it fails
+    // closed instead of being derived with an invented cost.
+    private const int MinimumKdfIterations = 100_000;
+    private const int MaximumKdfIterations = KdfIterations;
+    internal const string FormatRecordFileName = "vault-format.json";
+    internal const string RollbackDirectoryName = "rollback";
     private const int MaximumEnvelopeBytes = 24 * 1024 * 1024;
     // The encrypted resource envelope accommodates the maximum selected source
     // snapshot (16 MiB plus its bounded lineage header) after AEAD and
@@ -101,6 +112,13 @@ internal sealed class EncryptedVaultStore
 
     public bool Exists => File.Exists(_headerPath) || Directory.Exists(_root);
 
+    /// <summary>S8-T3 the vault directory itself; the upgrade engine stages the rollback point beside it.</summary>
+    internal string RootPath => _root;
+
+    internal string FormatRecordPath => Path.Combine(_root, FormatRecordFileName);
+
+    internal string RollbackRootPath => Path.Combine(_root, RollbackDirectoryName);
+
     /// <summary>The manifest schema version this store writes and reads.</summary>
     internal int ManifestSchemaVersion => CurrentManifestSchemaVersion;
 
@@ -156,6 +174,16 @@ internal sealed class EncryptedVaultStore
             WriteManifest(stage, vaultId, manifest, dataKey);
             var header = new VaultHeader(CurrentFormatVersion, vaultId, passphraseWrapper, recoveryWrapper);
             WriteJsonFile(stage, "vault-header.json", header);
+            // S8-T3 the non-sensitive format record is part of the fresh vault:
+            // it describes the empty profile this build writes, so the console
+            // can tell a current vault from an old one without a credential.
+            WriteJsonFile(stage, FormatRecordFileName, new VaultFormatRecord(
+                1,
+                VaultStorageProfile.EnvelopeFormat,
+                VaultStorageProfile.ManifestSchema,
+                OwnerScopeGrantState.CurrentSchemaVersion,
+                Array.Empty<VaultCanonicalVersionCount>(),
+                DateTimeOffset.UtcNow));
 
             Directory.Move(stage, _root);
             return new VaultKeyMaterial(dataKey, manifest, recoveryCode);
@@ -879,9 +907,31 @@ internal sealed class EncryptedVaultStore
         }
     }
 
-    public byte[] ReadResource(VaultManifest manifest, ReadOnlySpan<byte> dataKey, string resourceId, long? expectedRevision = null)
+    public byte[] ReadResource(VaultManifest manifest, ReadOnlySpan<byte> dataKey, string resourceId, long? expectedRevision = null) =>
+        ReadResourceCore(manifest, dataKey, resourceId, expectedRevision, includeInternal: false);
+
+    /// <summary>
+    /// S8-T3 reads one resource by ID including an internal system record, used
+    /// only by the legacy cutover's resume check to prove that the record the
+    /// interrupted cutover stored is byte-for-byte the legacy content. Private
+    /// operations never reach this path: it is not request-reachable.
+    /// </summary>
+    internal byte[] ReadResourceIncludingInternal(
+        VaultManifest manifest,
+        ReadOnlySpan<byte> dataKey,
+        string resourceId,
+        long? expectedRevision = null) =>
+        ReadResourceCore(manifest, dataKey, resourceId, expectedRevision, includeInternal: true);
+
+    private byte[] ReadResourceCore(
+        VaultManifest manifest,
+        ReadOnlySpan<byte> dataKey,
+        string resourceId,
+        long? expectedRevision,
+        bool includeInternal)
     {
-        var descriptor = manifest.Resources.FirstOrDefault(resource => !resource.InternalOnly &&
+        var descriptor = manifest.Resources.FirstOrDefault(resource =>
+            (includeInternal || !resource.InternalOnly) &&
             string.Equals(resource.ResourceId, resourceId, StringComparison.Ordinal));
         if (descriptor is null ||
             (expectedRevision.HasValue && descriptor.Revision != expectedRevision.Value))
@@ -1221,7 +1271,10 @@ internal sealed class EncryptedVaultStore
         byte[]? aad = null;
         try
         {
-            if (wrapper.KdfIterations != KdfIterations)
+            // S8-T3: the cost is read from the wrapper, not compared with a
+            // compiled constant. The AAD below binds the same value, so a
+            // tampered cost fails the tag instead of changing the derivation.
+            if (wrapper.KdfIterations is < MinimumKdfIterations or > MaximumKdfIterations)
             {
                 return false;
             }
@@ -1235,9 +1288,9 @@ internal sealed class EncryptedVaultStore
                 return false;
             }
 
-            wrappingKey = Rfc2898DeriveBytes.Pbkdf2(credential.AsSpan(), salt, KdfIterations, HashAlgorithmName.SHA256, KeyBytes);
+            wrappingKey = Rfc2898DeriveBytes.Pbkdf2(credential.AsSpan(), salt, wrapper.KdfIterations, HashAlgorithmName.SHA256, KeyBytes);
             plaintext = new byte[KeyBytes];
-            aad = KeyAssociatedData(vaultId, purpose, salt, KdfIterations);
+            aad = KeyAssociatedData(vaultId, purpose, salt, wrapper.KdfIterations);
             using var aes = new AesGcm(wrappingKey, TagBytes);
             aes.Decrypt(nonce, ciphertext, tag, plaintext, aad);
             dataKey = plaintext;
@@ -1451,6 +1504,40 @@ internal sealed class EncryptedVaultStore
             }
         }
 
+        // S8-T3 the schema upgrade writes its journal with the same atomic
+        // temp-then-move discipline inside the rollback point. A crash during a
+        // journal write leaves one of those temps there; it is never a vault
+        // file the manifest can address, so unlock reaps it exactly like the
+        // vault-level temps.
+        var rollbackRoot = Path.Combine(_root, RollbackDirectoryName);
+        if (Directory.Exists(rollbackRoot) && (File.GetAttributes(rollbackRoot) & FileAttributes.ReparsePoint) == 0)
+        {
+            string[] rollbackDirectories;
+            try
+            {
+                rollbackDirectories = Directory.GetDirectories(rollbackRoot, "*", SearchOption.TopDirectoryOnly);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                rollbackDirectories = Array.Empty<string>();
+            }
+
+            foreach (var directory in rollbackDirectories)
+            {
+                try
+                {
+                    foreach (var path in Directory.GetFiles(directory, ".*.tmp", SearchOption.TopDirectoryOnly))
+                    {
+                        File.Delete(path);
+                        reaped++;
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+
         return reaped;
     }
 
@@ -1553,6 +1640,170 @@ internal sealed class EncryptedVaultStore
         WriteManifest(_root, vaultId, manifest, dataKey);
     }
 
+    /// <summary>
+    /// S8-T3 reads the stored schema version of the owner scope-grant state.
+    /// The version is the one bound into the file's associated data, not a
+    /// guess from the JSON: the state is decrypted with the current binding
+    /// first and then with the two published legacy bindings, exactly like
+    /// <see cref="LoadScopeGrantState"/>, so the report names the binding the
+    /// file actually carries. A missing file reports 0.
+    /// </summary>
+    internal int ReadScopeGrantSchema(VaultManifest manifest, ReadOnlySpan<byte> dataKey)
+    {
+        FileAttributes attributes;
+        try
+        {
+            attributes = File.GetAttributes(_scopeGrantsPath);
+        }
+        catch (FileNotFoundException)
+        {
+            return 0;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return 0;
+        }
+
+        if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+        {
+            throw new InvalidDataException("The encrypted owner scope state must be a regular file.");
+        }
+
+        var json = PrivateFile.Read(_scopeGrantsPath, MaximumScopeGrantEnvelopeBytes).Text;
+        var envelope = JsonSerializer.Deserialize<EncryptedPayload>(json, JsonOptions)
+            ?? throw new InvalidDataException("Invalid encrypted owner scope envelope.");
+        foreach (var version in new[]
+                 {
+                     CurrentScopeGrantSchemaVersion, PreviousScopeGrantSchemaVersion, LegacyScopeGrantSchemaVersion
+                 })
+        {
+            var associatedData = ResourceAssociatedData(manifest.VaultId, "scope-grants", version, 1);
+            try
+            {
+                var plaintext = DecryptPayload(envelope, dataKey, associatedData, version, 1, MaximumScopeGrantBytes);
+                CryptographicOperations.ZeroMemory(plaintext);
+                return version;
+            }
+            catch (CryptographicException)
+            {
+            }
+            catch (InvalidDataException)
+            {
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(associatedData);
+            }
+        }
+
+        throw new InvalidDataException("The encrypted owner scope state is unavailable.");
+    }
+
+    /// <summary>
+    /// S8-T3 replaces the plaintext bytes of one canonical record without
+    /// changing its identity: the record keeps its resource ID, zone, envelope
+    /// schema version and exact revision, and only the migrated content is
+    /// re-sealed under the same associated data. The write is the same atomic
+    /// staged-temp-then-move every store write uses, so an interruption leaves
+    /// the old bytes or the new bytes and never a half-written record.
+    /// </summary>
+    internal void RewriteResourceAtRevision(
+        VaultManifest manifest,
+        ReadOnlySpan<byte> dataKey,
+        VaultResourceDescriptor descriptor,
+        ReadOnlySpan<byte> content)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        ArgumentNullException.ThrowIfNull(descriptor);
+        if (descriptor.InternalOnly || !IsStorageName(descriptor.StorageName) ||
+            descriptor.Revision < 1 || content.Length <= 0 || content.Length > MaximumResourceBytes)
+        {
+            throw new InvalidDataException("Invalid encrypted vault resource.");
+        }
+
+        WriteResourceFile(_root, manifest.VaultId, descriptor, content, dataKey);
+    }
+
+    /// <summary>
+    /// S8-T3 reads the one canonical resource exactly as the manifest names it,
+    /// without a revision argument: the upgrade is the act that reads the
+    /// stored bytes at the descriptor's own revision before rewriting them.
+    /// </summary>
+    internal byte[] ReadResourceAtStoredRevision(
+        VaultManifest manifest,
+        ReadOnlySpan<byte> dataKey,
+        VaultResourceDescriptor descriptor)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        ArgumentNullException.ThrowIfNull(descriptor);
+        return ReadResource(manifest, dataKey, descriptor.ResourceId, descriptor.Revision);
+    }
+
+    /// <summary>
+    /// S8-T3 reads the non-sensitive format record written after the last
+    /// verified upgrade (or at provisioning). It holds schema versions and
+    /// counts only, never private content, so it can be read while the vault
+    /// is locked.
+    /// </summary>
+    internal VaultFormatRecord? ReadFormatRecord()
+    {
+        byte[] raw;
+        try
+        {
+            raw = File.ReadAllBytes(FormatRecordPath);
+        }
+        catch (FileNotFoundException)
+        {
+            return null;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+
+        if (raw.Length is <= 0 or > 64 * 1024)
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<VaultFormatRecord>(raw, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(raw);
+        }
+    }
+
+    /// <summary>
+    /// S8-T3 records the profile a completed upgrade verified. The file is
+    /// non-sensitive metadata (schema versions and counts), written
+    /// atomically; the encrypted inventory stays the only authority and this
+    /// record is never used to decide what to migrate.
+    /// </summary>
+    internal void WriteFormatRecord(VaultFormatRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(record, JsonOptions);
+        try
+        {
+            AtomicWrite(FormatRecordPath, bytes);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(bytes);
+        }
+    }
+
     private string ResolveResourcePath(string storageName)
     {
         if (!IsStorageName(storageName))
@@ -1562,6 +1813,54 @@ internal sealed class EncryptedVaultStore
 
         return Path.Combine(_resourcesPath, storageName);
     }
+
+    /// <summary>S8-T3 the ciphertext path of one canonical resource, for the rollback copy.</summary>
+    internal string ResolveResourceCiphertextPath(string storageName) => ResolveResourcePath(storageName);
+
+    /// <summary>S8-T3 the ciphertext path of the owner control state, for the rollback copy.</summary>
+    internal string ScopeGrantCiphertextPath => _scopeGrantsPath;
+
+    /// <summary>S8-T3 the largest envelope a canonical resource can occupy on disk.</summary>
+    internal int MaximumResourceEnvelopeBytes => MaximumEnvelopeBytes;
+
+    internal int MaximumScopeGrantEnvelopeBytesValue => MaximumScopeGrantEnvelopeBytes;
+
+    internal int MaximumResourcePlaintextBytes => MaximumResourceBytes;
+
+    internal int MaximumScopeGrantPlaintextBytes => MaximumScopeGrantBytes;
+
+    /// <summary>
+    /// S8-T3 decrypts one copied envelope (a rollback-point file) with the
+    /// binding the descriptor names. The copy is the original ciphertext of the
+    /// vault, so the migration and its verification read exactly the bytes the
+    /// pre-upgrade vault held, under exactly the same associated data.
+    /// </summary>
+    internal byte[] DecryptCopiedEnvelope(
+        string path,
+        ReadOnlySpan<byte> dataKey,
+        string vaultId,
+        string resourceId,
+        int schemaVersion,
+        long revision,
+        int maximumEnvelopeBytes,
+        int maximumPlaintextBytes)
+    {
+        var json = PrivateFile.Read(path, maximumEnvelopeBytes).Text;
+        var envelope = JsonSerializer.Deserialize<EncryptedPayload>(json, JsonOptions)
+            ?? throw new InvalidDataException("Invalid encrypted vault envelope copy.");
+        var associatedData = ResourceAssociatedData(vaultId, resourceId, schemaVersion, revision);
+        try
+        {
+            return DecryptPayload(envelope, dataKey, associatedData, schemaVersion, revision, maximumPlaintextBytes);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(associatedData);
+        }
+    }
+
+    /// <summary>S8-T3 replaces one ciphertext file with the same atomic discipline every vault write uses.</summary>
+    internal void WriteCiphertextAtomically(string path, ReadOnlySpan<byte> content) => AtomicWrite(path, content);
 
     private static void ValidateHeader(VaultHeader header)
     {

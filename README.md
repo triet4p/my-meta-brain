@@ -164,6 +164,12 @@ dotnet run --project src/MetaBrain.Connections/MetaBrain.Connections.csproj -- o
 
 # Export the records you selected as one readable plaintext file (a citation to a source outside the selection is withheld)
 dotnet run --project src/MetaBrain.Connections/MetaBrain.Connections.csproj -- owner export --pipe metabrain-owner --resource-ids "<id>,<id>" --output-file "D:\export\meta-brain-export.md"
+
+# Raise a vault written by an older version to this build's content schema (vault locked).
+# The act keeps every record ID, revision and relation, keeps the key envelope unchanged,
+# and writes an encrypted rollback point of the files it rewrote.
+dotnet run --project src/MetaBrain.Connections/MetaBrain.Connections.csproj -- owner upgrade --pipe metabrain-owner
+dotnet run --project src/MetaBrain.Connections/MetaBrain.Connections.csproj -- owner rollback --pipe metabrain-owner [--discard true]
 ```
 
 ### 4. Start the Owner Console

@@ -1,0 +1,104 @@
+// S8-T3 fixture harness for the historical build at 1ede35e (S1-T7).
+//
+// This file is copied into the *extracted snapshot* of that commit by
+// scripts/s8-t3/prepare-old-vaults.ps1 and compiled into the historical
+// MetaBrain.Connections assembly. It adds only a programmatic entry point: the
+// vault, the owner control state and every record are produced by the
+// historical EncryptedVaultStore / VaultLifecycle / ServiceRequestHandler code
+// of that commit, unchanged. The historical settings loader is bypassed
+// because it requires a protected ACL on the settings file, and this task must
+// not mutate an ACL anywhere.
+//
+// The step lines name the fixture step only; they carry no record content.
+using System.Security.Principal;
+using System.Text;
+using MetaBrain.Application;
+using MetaBrain.Core.Security;
+
+namespace MetaBrain.Connections;
+
+internal static class S8T3FixtureHarness
+{
+    public static async Task<int> RunAsync(Options options)
+    {
+        var vaultPath = Path.GetFullPath(options.Required("--vault"));
+        var passphrase = Console.ReadLine();
+        if (string.IsNullOrEmpty(passphrase) || passphrase.Length < 12)
+        {
+            Console.Error.WriteLine("FIXTURE credential_required");
+            return 3;
+        }
+
+        var ownerSid = WindowsIdentity.GetCurrent().User?.Value
+            ?? throw new InvalidOperationException("The fixture process has no user SID.");
+        var store = new EncryptedVaultStore(vaultPath, ownerSid);
+        using var vault = new VaultLifecycle(store);
+        if (!vault.Provision(passphrase, out _))
+        {
+            Console.Error.WriteLine("FIXTURE provision_failed");
+            return 4;
+        }
+
+        Console.WriteLine("FIXTURE provisioned");
+        var handler = new ServiceRequestHandler(
+            new GrantAuthority(new InMemoryGrantStore()), vault, new OwnerScopeGrantAuthority());
+        var owner = AuthenticatedContext.ForOwner();
+        var operation = vault.TryBeginOperation();
+        if (operation is null)
+        {
+            Console.Error.WriteLine("FIXTURE no_operation");
+            return 5;
+        }
+
+        try
+        {
+            Console.WriteLine("FIXTURE step write");
+            var content = Encoding.UTF8.GetBytes("{\"schemaVersion\":1,\"note\":\"S8T3_SYNTHETIC_CONTROL_ITEM\"}");
+            var write = await handler.HandleAsync(owner, new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.ResourceWriteOperation,
+                ResourceId: "s8t3-control-item",
+                ZoneId: "s8t3-owner-zone",
+                ContentBase64: Convert.ToBase64String(content)), operation).ConfigureAwait(false);
+            if (!string.Equals(write.Status, "written", StringComparison.Ordinal))
+            {
+                Console.Error.WriteLine("FIXTURE write_failed status=" + write.Status + " error=" + write.Error);
+                return 6;
+            }
+
+            // S1-T7 knows `resource.read`; `memory.read` arrived in a later sprint.
+            Console.WriteLine("FIXTURE step grant-preview");
+            var preview = await handler.HandleAsync(owner, new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerScopePreviewOperation,
+                ResourceIds: new[] { "s8t3-control-item" },
+                Operations: new[] { "resource.read" },
+                ExpiresAtUtc: DateTimeOffset.UtcNow.AddHours(4)), operation).ConfigureAwait(false);
+            if (preview.ScopePreview is null)
+            {
+                Console.Error.WriteLine("FIXTURE preview_failed status=" + preview.Status + " error=" + preview.Error);
+                return 7;
+            }
+
+            Console.WriteLine("FIXTURE step grant-issue");
+            var issue = await handler.HandleAsync(owner, new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerScopeIssueOperation,
+                PreviewId: preview.ScopePreview.PreviewId), operation).ConfigureAwait(false);
+            if (!string.Equals(issue.Status, "token_issued", StringComparison.Ordinal))
+            {
+                Console.Error.WriteLine("FIXTURE issue_failed status=" + issue.Status + " error=" + issue.Error);
+                return 8;
+            }
+        }
+        finally
+        {
+            // The lifecycle drains active operations before it clears the key.
+            operation.Dispose();
+        }
+
+        await vault.LockAsync().ConfigureAwait(false);
+        Console.WriteLine("FIXTURE control-v3 written");
+        return 0;
+    }
+}

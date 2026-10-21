@@ -106,6 +106,10 @@ internal static class OwnerControlCli
                 "restore" => await RestoreAsync(options, useRecoveryCode: false).ConfigureAwait(false),
                 "restore-with-recovery-code" => await RestoreAsync(options, useRecoveryCode: true).ConfigureAwait(false),
                 "export" => await ExportAsync(options).ConfigureAwait(false),
+                "upgrade" => await UpgradeAsync(options, useRecoveryCode: false).ConfigureAwait(false),
+                "upgrade-with-recovery-code" => await UpgradeAsync(options, useRecoveryCode: true).ConfigureAwait(false),
+                "rollback" => await RollbackAsync(options, useRecoveryCode: false).ConfigureAwait(false),
+                "rollback-with-recovery-code" => await RollbackAsync(options, useRecoveryCode: true).ConfigureAwait(false),
                 "grant" => await GrantAsync(options).ConfigureAwait(false),
                 "grants" => await ListGrantsAsync(options).ConfigureAwait(false),
                 "collection-set" => await SetCollectionAsync(options).ConfigureAwait(false),
@@ -172,7 +176,14 @@ internal static class OwnerControlCli
         }
 
         var vaultState = result.Reply.TryGetProperty("vaultState", out var state) ? state.GetString() : null;
-        Console.WriteLine($"SERVICE running; vault={vaultState ?? "unknown"}; token issuance is owner-only; agent redemption uses the agent channel");
+        var formatState = result.Reply.TryGetProperty("vaultFormat", out var format) && format.ValueKind == JsonValueKind.Object
+            ? JsonText(format, "state") ?? "unknown"
+            : "unknown";
+        var rollbackAvailable = result.Reply.TryGetProperty("vaultFormat", out var rollbackFormat) &&
+            rollbackFormat.ValueKind == JsonValueKind.Object &&
+            rollbackFormat.TryGetProperty("rollbackAvailable", out var rollbackFlag) &&
+            rollbackFlag.ValueKind == JsonValueKind.True;
+        Console.WriteLine($"SERVICE running; vault={vaultState ?? "unknown"}; format={formatState}; rollback={(rollbackAvailable ? "available" : "none")}; token issuance is owner-only; agent redemption uses the agent channel");
         return 0;
     }
 
@@ -2744,6 +2755,127 @@ internal static class OwnerControlCli
     }
 
     /// <summary>
+    /// S8-T3 the owner schema upgrade: one owner act that raises an old vault
+    /// to the content schema this build writes. The service must be locked, the
+    /// credential is read from the console (never argv), and the act leaves the
+    /// vault locked. A wrong or missing credential writes nothing.
+    /// </summary>
+    private static async Task<int> UpgradeAsync(CommandOptions options, bool useRecoveryCode)
+    {
+        options.RequireOnly("--control-pipe");
+        var controlPipe = ControlPipe(options);
+        var credential = ReadSecret(useRecoveryCode ? "Vault recovery key: " : "Vault passphrase: ");
+        if (string.IsNullOrEmpty(credential))
+        {
+            Console.Error.WriteLine("ERROR credential_required");
+            return 3;
+        }
+
+        var request = useRecoveryCode
+            ? new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerVaultUpgradeOperation, RecoveryCode: credential)
+            : new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerVaultUpgradeOperation, Passphrase: credential);
+        var result = await InvokeOwnerAsync(controlPipe, request).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "upgraded") ||
+            !result.Reply.TryGetProperty("vaultUpgrade", out var summary) || summary.ValueKind != JsonValueKind.Object)
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        var alreadyCurrent = summary.TryGetProperty("alreadyCurrent", out var flag) && flag.ValueKind == JsonValueKind.True;
+        var resumed = summary.TryGetProperty("resumed", out var resumedFlag) && resumedFlag.ValueKind == JsonValueKind.True;
+        Console.WriteLine(
+            (alreadyCurrent ? "UPGRADE current" : "UPGRADE complete") +
+            " id=" + (JsonText(summary, "upgradeId") ?? "none") +
+            " from=" + FormatSchemaReport(summary, "from") +
+            " to=" + FormatSchemaReport(summary, "to") +
+            " records=" + JsonInt(summary, "migratedRecords") +
+            " control=" + JsonInt(summary, "migratedControlStates") +
+            " resumed=" + (resumed ? "true" : "false") +
+            " rollbackBytes=" + JsonLong(summary, "rollbackBytes") +
+            " rollback=" + (JsonText(summary, "rollbackPath") is { Length: > 0 } path ? path : "none"));
+        return 0;
+    }
+
+    /// <summary>
+    /// S8-T3 the owner rollback: restore the files the last upgrade wrote, or
+    /// with <c>--discard true</c> drop the rollback point. The service must be
+    /// locked and the same credential is required.
+    /// </summary>
+    private static async Task<int> RollbackAsync(CommandOptions options, bool useRecoveryCode)
+    {
+        options.RequireOnly("--control-pipe", "--discard");
+        var controlPipe = ControlPipe(options);
+        var discard = string.Equals(options.Optional("--discard"), "true", StringComparison.OrdinalIgnoreCase);
+        var credential = ReadSecret(useRecoveryCode ? "Vault recovery key: " : "Vault passphrase: ");
+        if (string.IsNullOrEmpty(credential))
+        {
+            Console.Error.WriteLine("ERROR credential_required");
+            return 3;
+        }
+
+        var request = useRecoveryCode
+            ? new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerVaultRollbackOperation, RecoveryCode: credential, DiscardRollback: discard)
+            : new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerVaultRollbackOperation, Passphrase: credential, DiscardRollback: discard);
+        var result = await InvokeOwnerAsync(controlPipe, request).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "rolled_back") ||
+            !result.Reply.TryGetProperty("vaultRollback", out var summary) || summary.ValueKind != JsonValueKind.Object)
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        var discarded = summary.TryGetProperty("discarded", out var flag) && flag.ValueKind == JsonValueKind.True;
+        Console.WriteLine(
+            (discarded ? "ROLLBACK discarded" : "ROLLBACK complete") +
+            " id=" + (JsonText(summary, "upgradeId") ?? "none") +
+            " restored=" + JsonInt(summary, "restoredFiles") +
+            " skipped=" + JsonInt(summary, "skippedFiles") +
+            " format=" + FormatSchemaReport(summary, "restored"));
+        return 0;
+    }
+
+    /// <summary>
+    /// The schema profile of an upgrade or rollback summary, in the one compact
+    /// form the owner reads: the control state version and, per canonical
+    /// family, the stored version and how many records it covers.
+    /// </summary>
+    private static string FormatSchemaReport(JsonElement summary, string property)
+    {
+        if (!summary.TryGetProperty(property, out var report) || report.ValueKind != JsonValueKind.Object)
+        {
+            return "unknown";
+        }
+
+        var parts = new List<string> { "control:" + JsonInt(report, "controlSchema") };
+        if (report.TryGetProperty("canonical", out var canonical) && canonical.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var entry in canonical.EnumerateArray())
+            {
+                parts.Add((JsonText(entry, "family") ?? "unknown") + ":" +
+                    JsonInt(entry, "schemaVersion") + "(" + JsonInt(entry, "records") + ")");
+            }
+        }
+
+        return string.Join(",", parts);
+    }
+
+    private static string? JsonText(JsonElement element, string property) =>
+        element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+
+    private static int JsonInt(JsonElement element, string property) =>
+        element.TryGetProperty(property, out var value) && value.TryGetInt32(out var number) ? number : 0;
+
+    private static long JsonLong(JsonElement element, string property) =>
+        element.TryGetProperty(property, out var value) && value.TryGetInt64(out var number) ? number : 0;
+
+    /// <summary>
     /// S8-T2 the owner backup act: one encrypted snapshot of the unlocked
     /// vault. The file holds the encrypted snapshot and the wrapped key
     /// envelope, never the data key, a credential, a session or a token.
@@ -3748,8 +3880,16 @@ internal static class OwnerControlCli
         }
 
         var migrated = LegacyVaultMigration.Migrate(options.Required("--config"), passphrase);
-        Console.WriteLine($"MIGRATION encrypted resources={migrated.ResourceCount}; legacy private policy preserved={migrated.LegacyPolicyPreserved}");
-        Console.WriteLine("RECOVERY KEY (save outside the vault; shown once): " + migrated.RecoveryCode);
+        Console.WriteLine((migrated.Resumed ? "MIGRATION resumed" : "MIGRATION encrypted") +
+            $" resources={migrated.ResourceCount}; legacy private policy preserved={migrated.LegacyPolicyPreserved}; permissions changed=none");
+        if (migrated.Resumed)
+        {
+            Console.WriteLine("RECOVERY KEY the interrupted cutover already showed the recovery key; it cannot be shown again, so keep the copy you saved.");
+        }
+        else
+        {
+            Console.WriteLine("RECOVERY KEY (save outside the vault; shown once): " + migrated.RecoveryCode);
+        }
         if (migrated.CleanupWarning is not null)
         {
             Console.Error.WriteLine("WARNING " + migrated.CleanupWarning);
@@ -5439,6 +5579,7 @@ internal static class OwnerControlCli
         Console.Error.WriteLine("Review queue: owner review-list | owner review-record --resource-id --reason text; the queue reports due review-after, a source that moved past the cited revision, a missing source and an unavailable source, and the act records only that the owner looked.");
         Console.Error.WriteLine("Owner backup: owner backup --control-pipe --output-file <file> | owner restore --control-pipe --backup-file <file> --target-directory <dir> | owner restore-with-recovery-code --control-pipe --backup-file <file> --target-directory <dir>; the backup is encrypted, the restore needs the passphrase or the recovery key, the target must be a directory that does not exist yet, and a wrong key or a damaged backup writes nothing.");
         Console.Error.WriteLine("Owner export: owner export --control-pipe --resource-ids id,id --output-file <file> [--include-relations true] [--include-lifecycle-states true]; the export is plaintext, holds exactly the selected records, withholds a citation to a source outside the selection, and is a copy the vault cannot revoke afterwards.");
+        Console.Error.WriteLine("Owner vault format: owner upgrade --control-pipe | owner upgrade-with-recovery-code --control-pipe | owner rollback --control-pipe [--discard true] | owner rollback-with-recovery-code --control-pipe [--discard true]; the act runs only while the vault is locked, leaves it locked, keeps an encrypted rollback point of the files it rewrote, and a wrong or missing credential writes nothing.");
         return 2;
     }
 
