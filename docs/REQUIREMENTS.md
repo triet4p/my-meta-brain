@@ -62,7 +62,7 @@ Mỗi requirement có một sprint chịu trách nhiệm chính và có thể c�
 | 5 — Owner UI | Sprint 4 pass | UI unlock/recovery, catalog publication, request review/token handoff, access preview cùng capture/library/relations/source thật |
 | 6 — Structuring | Sprint 5 pass; unlocked vault và owner provider/input/budget consent | Real model jobs, encrypted outputs, cross-zone owner publication và injection/egress/lock gates, không raw key vào model |
 | 7 — Lifecycle | Sprint 6 pass | Temporal/lifecycle thật, privacy-safe locked scheduling, purge/catalog withdrawal không resurrection hoặc xóa original source trái ý |
-| 8 — Production | Sprint 7 pass | Installer startup locked; encrypted backup/restore/recovery/export/migration; CR01 security replay, frozen budgets, R01–R40 và owner acceptance |
+| 8 — Production | Sprint 7 pass | Installer startup locked; encrypted backup/restore/recovery/export/migration; CR01 security replay, frozen budgets (riêng T5 dùng baseline vận hành owner chấp nhận 2026-10-23 / D086; các invariant bounded/encrypted giữ nguyên), R01–R40 và owner acceptance |
 
 ## Evidence và Definition of Done
 
@@ -103,3 +103,93 @@ Owner đã chấp thuận encrypted vault, catalog chọn lọc và opaque singl
 - Giữ outcomes R01–R40, frozen targets, full task evidence/checkpoint và release acceptance. S8-T1 thêm scope correction → package → staged lifecycle → owner-assisted host acceptance; S8-T2–T7 giữ thứ tự, prerequisites/authorization/evidence được chuẩn bị sớm.
 - Data/security impact: không đổi encrypted format/key hierarchy, không sửa quyền dữ liệu hiện hữu, không reset hoặc migrate original sessions. Scoped correction phải loại ACL prerequisite trên đường package/start/unlock có liên quan và bảo toàn encryption/owner-agent API authorization; không mở broad permission refactor.
 - Host install/autostart/client setup/logout/reboot do owner thực hiện, không agent thay đổi máy; missing evidence vẫn là blocker. Đây là planning/rule change, không chứng minh correction đã chạy, runtime PASS hoặc owner acceptance.
+
+### Owner-approved S8-T5 correction — bounded-memory, encrypted-at-rest private index (2026-10-22)
+
+- **R23 và R38 giữ nguyên outcome, ngưỡng và phương pháp đo.** Không đổi mục tiêu, không đổi số đo, không
+  đổi tập corpus/truy vấn, không thêm benchmark thay thế. Owner duyệt **hướng hiện thực** của private
+  index, không duyệt việc nới ngưỡng: 256 MiB idle-RAM, 250/500/1.000 ms recall p95 theo cỡ dữ liệu,
+  ngưỡng rebuild 100k và R37 vẫn là ngưỡng.
+- **Luật hiện thực (R23, R36, R38 đọc cùng nhau).** Private index là derivative rebuildable của
+  canonical — canonical là truth duy nhất, không dual truth, không reset vault để né cutover. Index
+  phải **mã hóa at-rest bằng AEAD đã được duyệt của vault**, với key suy ra từ data key của chính
+  vault đó (không key riêng, không tự unlock): không plaintext index, temp, staging, journal, WAL
+  hay spill file nào được ghi xuống đĩa. Generation hiện hành là artifact persistent được AEAD bảo
+  vệ; rebuild có thể tạo staging, posting spill và directory spill nhưng từng record chỉ chứa
+  ciphertext dưới key suy ra từ data key của vault, dùng AEAD/associated-data domain hiện có và
+  identity file riêng cho scratch. Không thêm crypto mới; scratch còn sót được dọn ở lần rebuild
+  tiếp theo. Record generation authenticate identity của generation, kind và offset; generation
+  identity gắn canonical digest, để tamper, truncate, stale hay thay thế file đều **fail closed**.
+  Only explicit, capped structures may grow with the canonical set: one immutable manifest
+  descriptor snapshot (at most 100,000 rows), released before the live reconciliation snapshot;
+  no vault-wide collection of bodies, search documents, token strings or posting pairs. The posting
+  arena is 4 MiB with at most 65,536 pairs per run; encrypted spill chunks are at most 49,160 B,
+  merge fan-in is 8, and source-derived run references are capped at 49 retained across levels.
+  Final posting chunks are at most 32,768 postings / 256 KiB; bucket pages at most 384 entries /
+  256 KiB. The resident directory is capped at 32 MiB and rejected by count-derived preflight
+  before its arrays are allocated; the default decrypted-record cache is capped at 16 MiB and
+  oversized records are not cached. Build/open transient ciphertext and plaintext buffers remain
+  bounded and are measured separately; these caps do not claim zero process-private or managed
+  memory.
+- **Luật truy vấn (R23, R26, R30 đọc cùng nhau).** Truy vấn phải stream/batch qua **toàn bộ** ứng
+  viên trong scope và score tất cả: không cap, không top-K approximate, không đổi tie order, token
+  equality/collation, scope/revision/date/current/provenance/score gate. Ứng viên ngoài scope không
+  được rời engine. Đọc body của ứng viên chỉ xảy ra ở những nơi contract đã yêu cầu (bộ lọc
+  level, và trang được phục vụ), không phải để dựng index.
+- **Lifecycle (R04, R33, R35, R39 đọc cùng nhau).** Lock/restart xóa key, cache và mọi private read;
+  interrupted rebuild không publish gì; generation không đọc được thì owner rebuild tường minh, và
+  canonical không bao giờ bị đụng. Index không nằm trong backup (là derivative rebuildable) và
+  được dựng lại sau restore.
+- **Bằng chứng (R38, R40).** Số đo phải chạy trên sản phẩm thật với phương pháp đã khóa (≥1.000
+  truy vấn đo sau ≥100 warm-up mỗi cỡ), phải báo riêng working set/private/native/managed/cache
+  bytes, cold và warm, thời gian rebuild và throughput, và p95 so với **ngưỡng không đổi**. Phép đo
+  in-process là bằng chứng về index và đường truy vấn, **không** thay bằng chứng service/UI thật và
+  **không** thay phán đoán owner R37.
+
+### Owner-approved S8-T5 acceptance cutover — 2026-10-23 (D086)
+
+Thay đổi này chỉ sửa **tiêu chí nghiệm thu T5**; nó không sửa source, sản phẩm, test hay dữ liệu, và
+không tạo PASS cho bất kỳ kết quả cũ nào. Nó thay thế phần ngưỡng định lượng của mục
+"Owner-approved S8-T5 correction — bounded-memory, encrypted-at-rest private index (2026-10-22)" ở trên
+đúng như change-control yêu cầu; các quyết định và FAIL report cũ vẫn nguyên vẹn.
+
+- **Bị thay thế làm cổng sign-off T5.** Recall p95 250/500/1.000 ms ở 1.000/10.000/100.000 record và
+  rebuild 100k ≤ 20 phút không còn là điều kiện pass/fail của T5, cùng với yêu cầu đo lại bắt buộc
+  handler p95 ở 1k/10k. Đây là các ngưỡng đã miss ở một số run (p95 100k ở A13/A15/A17/A18; rebuild
+  100k ở A18) hoặc chưa từng đo được (handler 1k/10k), và owner đã quyết định không dùng chúng làm
+  cổng nữa. A14 đo p95/rebuild/đĩa trong ngưỡng nhưng vẫn có RAM proxy bất lợi — kết quả đó cũng giữ
+  nguyên.
+- **Bản ghi lịch sử không bị xóa.** Các ngưỡng trên vẫn là **operational envelope Sprint 1** và mọi kết
+  quả đã đo cùng mọi miss đã ghi (A11, A13, A14, A15, A17, A18; R11/R13/R14) vẫn là sự thật, giữ nguyên
+  trong [đặc tả](META-BRAIN.md) và [runbook](OPERATIONS.md). Không có PASS nào được tạo cho chúng và
+  không con số lịch sử nào bị viết lại.
+- **Baseline vận hành được chấp nhận (quan sát, không phải ngưỡng mới).** Run A18-2 (2026-10-23, 100.000
+  record, in-process, 100 warm-up + 1.100 truy vấn) là mốc owner chấp nhận là thực tế dùng được:
+  handler p50/p95 183.937 / 1.668.026 ms; rebuild 1.396.956,547 ms (23 phút 16,957 giây); idle WS
+  207.084.032 B unlocked / 204.846.357 B locked; idle CPU 0,0709 %/0,0729 %; đĩa vault+staging
+  1.132.272.603 B; comparator 1.101 dòng, 0 lệch trường chung. Đây là **số đo lịch sử của snapshot
+  in-process**, không phải service/UI/IPC và không phải bằng chứng cho mọi version sau; thay đổi này
+  **không** tạo trần số mới và **không** nới budget CPU/đĩa/RAM nào.
+- **Điều kiện sign-off T5 mới.** (a) Định lượng: baseline A18 ở trên được ghi nhận là mức hiệu năng
+  thực tế owner chấp nhận cho 100k, không cần đo lại cho thay đổi này (Gold cap 2/2 đã dùng hết).
+  (b) Hành vi (A19/R14): generation mã hóa đã xác thực và khớp canonical được **tái sử dụng sau
+  lock/unlock và restart mà không ghi lại file**; generation thiếu/stale/không đọc được/tamper/wrong-key
+  **fail closed** (`index_not_materialized`, `search_index_stale`, `index_unavailable`) và **rebuild đầy
+  đủ tường minh của owner** là đường phục hồi; lock xóa key/cache/private read; format hiện tại không có
+  delta từng record nên thay đổi canonical đi qua rebuild tường minh.
+- **Invariant giữ nguyên.** Resident directory/cache bounded theo các cap đã ghi (32 MiB directory /
+  16 MiB cache và các cap builder), index/cache/temp mã hóa at-rest bằng AEAD và khóa suy ra từ data key
+  của vault, không plaintext, không crypto mới; scope/revision/currentness/provenance/ranking/tie order,
+  lock và currentness correctness không đổi; không host/ACL/DACL/permission/system mutation.
+- **Không miễn trừ toàn cục.** Thay đổi này **không** thay acceptance của S8-T6 (security/recovery replay)
+  hay S8-T7 (owner daily-use và R37 walkthrough định tính trên công việc thật), không thay evidence
+  real service/WPF/owner UI/IPC, không thay review độc lập và không thay checkpoint. R23 vẫn cần phán
+  đoán owner về độ hữu ích, không suy từ số đo.
+- **Tác động dữ liệu/security/downstream.** Không đổi format/crypto/key, không migration, không reset,
+  không đụng dữ liệu hiện hữu; A19 chỉ đọc generation đã xác thực nên không mở surface mới. R38 giữ
+  nguyên tắc "đo và ghi lại, không tự đổi mục tiêu để che fail": thay đổi này **không** phải để che một
+  fail — nó là quyết định của owner qua change control, có decision [D086](../.agents/memory/decisions.md),
+  và toàn bộ số đo cũ vẫn hiển thị. S8-T5 vẫn `[~]`; các cổng còn mở được giữ nguyên, không xóa.
+- **Còn mở, không xóa.** Owner R37 walkthrough định tính, evidence real service/WPF/owner UI/IPC, review
+  độc lập trên snapshot sau thay đổi và mọi checkpoint vẫn mở. Không product changelog entry: đây là
+  thay đổi tiêu chí nghiệm thu/tài liệu, không phải feature.

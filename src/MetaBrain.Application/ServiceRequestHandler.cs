@@ -1164,6 +1164,11 @@ public sealed class ServiceRequestHandler
     private readonly ISourceSnapshotReader? _sourceReader;
     private readonly SourceSnapshotService _sourceSnapshots = new();
     private PrivateIndexSnapshot? _privateIndexMaterialized;
+    // S8-T5: one lock closes the gap between a lazy authenticated load and a
+    // lock/purge reset, so a partially loaded generation can never be
+    // published as ready after the epoch that owned it is gone.
+    private readonly object _privateIndexGate = new();
+    private bool _privateIndexRebuilding;
     private readonly ModelJobService _modelJobs;
     private readonly SynthesisScheduleService _synthesisSchedule;
     private readonly IntentionScheduleService _intentionSchedule;
@@ -1401,12 +1406,14 @@ public sealed class ServiceRequestHandler
             return Error("invalid_request");
         }
 
-        // The owner library filters are accepted by exactly one operation, plus
-        // the S7-T1 as-of instant which the agent search contract also names.
-        // Any other operation carrying them fails closed here instead of
-        // silently ignoring a field its own request contract does not name.
+        // The owner library accepts abstraction level and inclusive time
+        // filters; scoped agent search accepts the abstraction-level filter
+        // too, but not the owner-only time window. Any other operation carrying
+        // these fields fails closed instead of silently ignoring them.
         if (HasLibraryFilterFields(request) &&
-            !string.Equals(request.Operation, OwnerLibrarySearchOperation, StringComparison.Ordinal))
+            !string.Equals(request.Operation, OwnerLibrarySearchOperation, StringComparison.Ordinal) &&
+            !(string.Equals(request.Operation, AgentMemorySearchOperation, StringComparison.Ordinal) &&
+                request.SearchLevel is not null && request.SearchFromUtc is null && request.SearchToUtc is null))
         {
             return Error("invalid_request");
         }
@@ -6110,22 +6117,42 @@ public sealed class ServiceRequestHandler
             return ResourceDenied();
         }
 
-        var materialized = _privateIndexMaterialized;
-        if (materialized is null)
-        {
-            return ResourceDenied();
-        }
-
+        // S8-T5: the scoped search shares the owner/status readiness policy.
+        // An unchanged published generation is loaded and authenticated for
+        // this unlocked epoch instead of denying every scoped read until an
+        // explicit owner rebuild. Missing or unreadable generations deny with
+        // the same generic refusal; a generation that no longer describes the
+        // live canonical set is reported as stale.
+        PrivateIndexSnapshot materialized;
         try
         {
-            var liveDigest = _privateIndex.Evaluate(operation);
-            if (!string.Equals(materialized.CanonicalDigest, liveDigest, StringComparison.Ordinal))
+            var liveResources = operation.ListResources();
+            var loaded = EnsurePrivateIndexMaterialized(liveResources, out var indexRefusal);
+            if (loaded is null)
+            {
+                return string.Equals(indexRefusal, "search_index_stale", StringComparison.Ordinal)
+                    ? new ServiceReply(CurrentProtocolVersion, "denied", null, "search_index_stale",
+                        Decision: new AuthorizationDecision(false, "search_index_stale", session.PolicyGeneration))
+                    : ResourceDenied();
+            }
+
+            materialized = loaded;
+            if (!string.Equals(materialized.CanonicalDigest, _privateIndex.EvaluateSnapshot(liveResources), StringComparison.Ordinal))
+            {
+                return new ServiceReply(CurrentProtocolVersion, "denied", null, "search_index_stale",
+                    Decision: new AuthorizationDecision(false, "search_index_stale", session.PolicyGeneration));
+            }
+
+            // S8-T5: the generation the engine holds must be the generation
+            // this epoch materialized. A generation file that was replaced
+            // after the rebuild is refused instead of answered from.
+            if (!string.Equals(_privateIndexStore.CanonicalDigest, materialized.CanonicalDigest, StringComparison.Ordinal))
             {
                 return new ServiceReply(CurrentProtocolVersion, "denied", null, "search_index_stale",
                     Decision: new AuthorizationDecision(false, "search_index_stale", session.PolicyGeneration));
             }
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or InvalidDataException or CryptographicException or UnauthorizedAccessException)
         {
             return ResourceDenied();
         }
@@ -6136,6 +6163,12 @@ public sealed class ServiceRequestHandler
         {
             return ResourceDenied();
         }
+        var level = string.IsNullOrWhiteSpace(request.SearchLevel) ? null : request.SearchLevel;
+        if (level is not null && !IsLibraryLevelToken(level))
+        {
+            return ResourceDenied();
+        }
+
 
         if (request.SearchAsOfUtc is { } searchAsOf && (searchAsOf.Offset != TimeSpan.Zero || searchAsOf > DateTimeOffset.UtcNow.AddMinutes(5)))
         {
@@ -6155,14 +6188,18 @@ public sealed class ServiceRequestHandler
             // a member, never widens an operation and never revokes a right.
             var recall = LoadRecallPolicy(operation);
             var includeArchived = request.IncludeArchived == true;
-            total = authority.Count(session, request.Query, request.SearchKind, request.SearchCurrent, materialized, _privateIndexStore, operation, request.SearchAsOfUtc, recall, includeArchived);
-            page = authority.Search(session, request.Query, request.SearchKind, request.SearchCurrent, offset, limit, materialized, _privateIndexStore, operation, request.SearchAsOfUtc, recall, includeArchived);
+            total = authority.Count(
+                session, request.Query, request.SearchKind, request.SearchCurrent, materialized, _privateIndexStore,
+                operation, request.SearchAsOfUtc, recall, includeArchived, cancellationToken, level);
+            page = authority.Search(
+                session, request.Query, request.SearchKind, request.SearchCurrent, offset, limit, materialized,
+                _privateIndexStore, operation, request.SearchAsOfUtc, recall, includeArchived, cancellationToken, level);
         }
         catch (OperationCanceledException)
         {
             throw;
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
+        catch (Exception ex) when (ex is IOException or InvalidDataException or CryptographicException or UnauthorizedAccessException or ArgumentException)
         {
             return ResourceDenied();
         }
@@ -7131,14 +7168,10 @@ public sealed class ServiceRequestHandler
             return Error("index_unavailable");
         }
 
-        var materialized = _privateIndexMaterialized;
-        if (materialized is null)
-        {
-            // Nothing has been materialized for this unlocked epoch, so no
-            // honest library answer exists yet: the owner rebuilds the index
-            // (an explicit owner act) instead of this read scanning the vault.
-            return Error("index_not_materialized");
-        }
+        // The materialized generation is resolved later, after the request is
+        // validated: an unchanged published generation is loaded from its
+        // authenticated file instead of forcing a rebuild in every new
+        // unlocked epoch.
 
         var offset = request.SearchOffset ?? 0;
         var limit = request.SearchLimit ?? ScopedSearchAuthority.DefaultLimit;
@@ -7225,40 +7258,81 @@ public sealed class ServiceRequestHandler
             }
         }
 
-        // Same generation contract as the scoped search: a materialized
-        // generation that no longer equals the live canonical set is refused
-        // instead of scanned, because a row the vault has moved past can no
-        // longer be served at the revision the index names — searching it would
-        // report matches (and a page count) the owner could not open. The owner
-        // rebuilds the index, which is an explicit owner act.
+        // Same generation contract as the scoped search: a generation that no
+        // longer equals the live canonical set is refused instead of scanned,
+        // because a row the vault has moved past can no longer be served at the
+        // revision the index names — searching it would report matches (and a
+        // page count) the owner could not open. The owner rebuilds the index,
+        // which is an explicit owner act.
+        //
+        // S8-T5: when nothing is materialized in this unlocked epoch, the
+        // published generation is loaded and authenticated first. An unchanged
+        // generation becomes ready without a rebuild; a missing, stale or
+        // unreadable one is refused with the same explicit product codes.
+        //
+        // The live canonical snapshot is the owner's scope. It carries the
+        // same authenticated (resource ID, revision, zone) set the materialized
+        // generation was built from, and the digest below proves both name the
+        // same generation, so one request does not decrypt every materialized
+        // row just to rebuild the scope it already has. The one snapshot serves
+        // the digest check, the scope filter and the served-page revision
+        // checks; a generation that moved is still refused before any search.
+        IReadOnlyList<ScopeResourceRevision> liveResources;
+        PrivateIndexSnapshot materialized;
         try
         {
-            if (!string.Equals(materialized.CanonicalDigest, _privateIndex.Evaluate(operation), StringComparison.Ordinal))
+            liveResources = operation.ListResources();
+            var loaded = EnsurePrivateIndexMaterialized(liveResources, out var indexRefusal);
+            if (loaded is null)
+            {
+                return Error(indexRefusal);
+            }
+
+            materialized = loaded;
+            // S8-T5: the generation the engine holds must be the generation
+            // this epoch materialized. A generation file that was replaced
+            // after the rebuild is refused instead of answered from.
+            if (!string.Equals(_privateIndexStore.CanonicalDigest, materialized.CanonicalDigest, StringComparison.Ordinal) ||
+                !string.Equals(materialized.CanonicalDigest, _privateIndex.EvaluateSnapshot(liveResources), StringComparison.Ordinal))
             {
                 return Error("search_index_stale");
             }
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or InvalidDataException or CryptographicException or UnauthorizedAccessException)
         {
             return Error("library_unavailable");
         }
 
-        var rows = materialized.Rows
-            .Where(row => row.RecordKind == PrivateIndexRecordKind.MemoryItem)
-            .Where(row => zoneId is null || string.Equals(row.ZoneId, zoneId, StringComparison.Ordinal))
-            .Where(row => collectionMembers is null || collectionMembers.Contains(row.ResourceId))
-            .ToArray();
-        var zones = rows.ToDictionary(row => row.ResourceId, row => row.ZoneId, StringComparer.Ordinal);
-        var scope = rows
-            .Select(row => new ScopeResourceRevision(row.ResourceId, row.ZoneId, row.Revision))
-            .ToArray();
+        IReadOnlyList<ScopeResourceRevision> scope = liveResources;
+        if (zoneId is not null || collectionMembers is not null)
+        {
+            var filtered = new List<ScopeResourceRevision>(
+                collectionMembers is null ? liveResources.Count : Math.Min(liveResources.Count, collectionMembers.Count));
+            foreach (var resource in liveResources)
+            {
+                if (zoneId is not null && !string.Equals(resource.ZoneId, zoneId, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (collectionMembers is not null && !collectionMembers.Contains(resource.ResourceId))
+                {
+                    continue;
+                }
+
+                filtered.Add(resource);
+            }
+
+            scope = filtered;
+        }
 
         var authority = new ScopedSearchAuthority();
         ScopedSearchAuthority.OwnerLibraryPage page;
         try
         {
-            page = authority.SearchOwner(
+            page = authority.SearchOwnerWithSnapshot(
                 scope,
+                liveResources,
                 new ScopedSearchAuthority.OwnerLibraryQuery(
                     request.Query, kind, current, level, request.SearchFromUtc, request.SearchToUtc, offset, limit, request.SearchAsOfUtc),
                 materialized,
@@ -7274,7 +7348,7 @@ public sealed class ServiceRequestHandler
             // being served into an epoch that no longer exists.
             throw;
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
+        catch (Exception ex) when (ex is IOException or InvalidDataException or CryptographicException or UnauthorizedAccessException or ArgumentException)
         {
             return Error("library_unavailable");
         }
@@ -7282,7 +7356,7 @@ public sealed class ServiceRequestHandler
         var hits = page.Hits.Select(hit => new LibraryHitWire(
             hit.ResourceId,
             hit.Revision,
-            zones.TryGetValue(hit.ResourceId, out var hitZone) ? hitZone : string.Empty,
+            FindOwnerScopeZone(scope, hit.ResourceId),
             ToWireToken(hit.Item.Kind.ToString()),
             ToWireToken(hit.Item.Level.ToString()),
             hit.Item.Title,
@@ -7296,7 +7370,7 @@ public sealed class ServiceRequestHandler
             RankingReason = hit.RankingReason,
         }).ToArray();
 
-        return new ServiceReply(
+        var result = new ServiceReply(
             CurrentProtocolVersion,
             "library_page",
             "owner",
@@ -7316,6 +7390,34 @@ public sealed class ServiceRequestHandler
                 offset + hits.Length < page.Total,
                 hits,
                 request.SearchAsOfUtc));
+        return result;
+    }
+
+    private static string FindOwnerScopeZone(IReadOnlyList<ScopeResourceRevision> scope, string resourceId)
+    {
+        var low = 0;
+        var high = scope.Count - 1;
+        while (low <= high)
+        {
+            var middle = low + ((high - low) / 2);
+            var resource = scope[middle];
+            var comparison = string.CompareOrdinal(resource.ResourceId, resourceId);
+            if (comparison == 0)
+            {
+                return resource.ZoneId;
+            }
+
+            if (comparison < 0)
+            {
+                low = middle + 1;
+            }
+            else
+            {
+                high = middle - 1;
+            }
+        }
+
+        return string.Empty;
     }
 
     /// <summary>
@@ -9163,25 +9265,47 @@ public sealed class ServiceRequestHandler
 
         try
         {
-            var liveDigest = _privateIndex.Evaluate(operation);
-            var materialized = _privateIndexMaterialized;
+            var liveResources = operation.ListResources();
+            var liveDigest = _privateIndex.EvaluateSnapshot(liveResources);
+            // S8-T5: status applies the same readiness policy as owner and
+            // scoped search. An unchanged published generation is loaded and
+            // authenticated so the owner sees the generation that would answer,
+            // not a phantom empty one; a generation that cannot be used is
+            // reported instead of materialized.
+            var materialized = EnsurePrivateIndexMaterialized(liveResources, out var refusal);
             if (materialized is null)
             {
+                if (string.Equals(refusal, "index_unavailable", StringComparison.Ordinal))
+                {
+                    return Error("index_unavailable");
+                }
+
+                // No generation can be loaded. That is truthful only when the
+                // canonical set is empty; otherwise the owner has no current
+                // generation and must rebuild (the same stale signal a moved
+                // generation produces).
+                var unmatched = !string.Equals(refusal, "index_not_materialized", StringComparison.Ordinal) ||
+                    liveResources.Count != 0;
                 return new ServiceReply(
                     CurrentProtocolVersion,
-                    "index_status",
+                    unmatched ? "index_stale" : "index_status",
                     "owner",
                     null,
                     PrivateIndex: new PrivateIndexWire(
                         0,
                         liveDigest,
                         0,
-                        Stale: false,
+                        Stale: unmatched,
                         CanonicalMoved: false,
                         Array.Empty<PrivateIndexRowWire>()));
             }
 
-            var stale = !string.Equals(materialized.CanonicalDigest, liveDigest, StringComparison.Ordinal);
+            // S8-T5: the generation the engine holds must be the generation
+            // this epoch materialized. A generation that was substituted after
+            // the rebuild is reported as stale, never as a current generation
+            // with another generation's rows.
+            var stale = !string.Equals(materialized.CanonicalDigest, liveDigest, StringComparison.Ordinal) ||
+                !string.Equals(_privateIndexStore.CanonicalDigest, materialized.CanonicalDigest, StringComparison.Ordinal);
             return new ServiceReply(
                 CurrentProtocolVersion,
                 stale ? "index_stale" : "index_status",
@@ -9195,7 +9319,7 @@ public sealed class ServiceRequestHandler
                     CanonicalMoved: false,
                     ProjectRows(materialized.Rows)));
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or InvalidDataException or CryptographicException or UnauthorizedAccessException)
         {
             return Error("index_unavailable");
         }
@@ -9229,6 +9353,14 @@ public sealed class ServiceRequestHandler
             return Error("index_unavailable");
         }
 
+        lock (_privateIndexGate)
+        {
+            // A rebuild owns the engine's write scope for its whole run; a
+            // concurrent read must not open the published generation while the
+            // scope is staging the next one.
+            _privateIndexRebuilding = true;
+        }
+
         try
         {
             var outcome = _privateIndex.Rebuild(_privateIndexStore, operation, cancellationToken);
@@ -9237,7 +9369,11 @@ public sealed class ServiceRequestHandler
                 return Error(outcome.CanonicalMoved ? "index_canonical_moved" : "index_unavailable");
             }
 
-            _privateIndexMaterialized = outcome.Snapshot;
+            lock (_privateIndexGate)
+            {
+                _privateIndexMaterialized = outcome.Snapshot;
+            }
+
             return new ServiceReply(
                 CurrentProtocolVersion,
                 "index_rebuilt",
@@ -9250,20 +9386,27 @@ public sealed class ServiceRequestHandler
                     Stale: false,
                     CanonicalMoved: false,
                     ProjectRows(outcome.Snapshot.Rows)));
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // A requested lock cancels the in-flight rebuild at its batch
+            // boundary and no generation is published. This is not the
+            // request's own timeout (that token stays live and propagates
+            // to the pipe layer as request_timeout), so the cancelled
+            // rebuild fails closed under its own status.
+            return Error("index_rebuild_cancelled");
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            return Error("index_unavailable");
+        }
+        finally
+        {
+            lock (_privateIndexGate)
             {
-                // A requested lock cancels the in-flight rebuild at its batch
-                // boundary and no generation is published. This is not the
-                // request's own timeout (that token stays live and propagates
-                // to the pipe layer as request_timeout), so the cancelled
-                // rebuild fails closed under its own status.
-                return Error("index_rebuild_cancelled");
+                _privateIndexRebuilding = false;
             }
-            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
-            {
-                return Error("index_unavailable");
-            }
+        }
     }
 
     /// <summary>
@@ -9302,7 +9445,7 @@ public sealed class ServiceRequestHandler
                 operation,
                 _vault.State,
                 materialized is not null,
-                materialized?.Rows.Length ?? 0,
+                materialized?.RowCount ?? 0,
                 providerConfigured,
                 rollingSpend,
                 _operationalLog);
@@ -9551,6 +9694,58 @@ public sealed class ServiceRequestHandler
                 row.LinkedResourceIds))
             .ToArray();
 
+    /// <summary>
+    /// Resolves the materialized generation for one read. The published
+    /// encrypted generation is loaded and authenticated when this unlocked
+    /// epoch has none; an unchanged generation becomes searchable without a
+    /// rebuild, while a missing, stale or unreadable one is reported through
+    /// the same product refusals the rebuild path already uses. The load and
+    /// the epoch reset share one lock, so a lock or purge can never leave a
+    /// partially loaded generation published as ready.
+    /// </summary>
+    private PrivateIndexSnapshot? EnsurePrivateIndexMaterialized(
+        IReadOnlyList<ScopeResourceRevision> liveResources,
+        out string refusal)
+    {
+        refusal = string.Empty;
+        lock (_privateIndexGate)
+        {
+            if (_privateIndexMaterialized is { } current)
+            {
+                return current;
+            }
+
+            if (_privateIndexStore is null)
+            {
+                refusal = "index_unavailable";
+                return null;
+            }
+
+            if (_privateIndexRebuilding)
+            {
+                // A rebuild owns the engine's write scope; a read neither opens
+                // nor answers from a generation while the next one is staged.
+                refusal = "index_not_materialized";
+                return null;
+            }
+
+            var outcome = _privateIndex.Load(_privateIndexStore, liveResources);
+            if (outcome.Status == PrivateIndexLoadStatus.Loaded && outcome.Snapshot is { } loaded)
+            {
+                _privateIndexMaterialized = loaded;
+                return loaded;
+            }
+
+            refusal = outcome.Status switch
+            {
+                PrivateIndexLoadStatus.Stale => "search_index_stale",
+                PrivateIndexLoadStatus.Unreadable => "index_unavailable",
+                _ => "index_not_materialized"
+            };
+            return null;
+        }
+    }
+
     private void ResetPrivateIndex()
     {
         if (_privateIndexStore is null)
@@ -9558,18 +9753,21 @@ public sealed class ServiceRequestHandler
             return;
         }
 
-        try
+        lock (_privateIndexGate)
         {
-            // Drops every materialized row and releases the in-memory engine,
-            // so no private derived data outlives the unlocked epoch.
-            _privateIndexStore.Reset();
-        }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or ObjectDisposedException)
-        {
-            // The engine is disposable; a failed reset leaves nothing addressable.
-        }
+            try
+            {
+                // Drops every materialized row and releases the in-memory engine,
+                // so no private derived data outlives the unlocked epoch.
+                _privateIndexStore.Reset();
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or ObjectDisposedException)
+            {
+                // The engine is disposable; a failed reset leaves nothing addressable.
+            }
 
-        _privateIndexMaterialized = null;
+            _privateIndexMaterialized = null;
+        }
     }
 
     /// <summary>
@@ -9587,10 +9785,10 @@ public sealed class ServiceRequestHandler
         request.ContentBase64 is not null || request.Operations is not null;
 
     /// <summary>
-    /// The S5-T3 owner library filters — abstraction level and the inclusive
-    /// time window — belong to exactly one operation. <see cref="HandleAsync"/>
-    /// refuses them on every other operation before dispatch, so an operation
-    /// whose own contract does not name them can never silently ignore one.
+    /// The owner library filters are abstraction level and the inclusive time
+    /// window. The scoped agent search separately accepts abstraction level;
+    /// <see cref="HandleAsync"/> keeps the time window owner-only and refuses
+    /// these fields on every other operation.
     /// </summary>
     private static bool HasLibraryFilterFields(ServiceRequest request) =>
         request.SearchLevel is not null || request.SearchFromUtc is not null || request.SearchToUtc is not null;
@@ -10017,7 +10215,7 @@ public sealed class ServiceRequestHandler
         request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null;
     /// <summary>
     /// S4-T2 scoped search carries only the session bearer, the access
-    /// operation name, the query text and its paging/kind/current/as-of filters.
+    /// operation name, the query text, paging, kind, level, current and as-of filters.
     /// Every identity, zone, scope, credential, catalog, egress and
     /// content-draft field is refused, so a query can never steer the search
     /// toward another scope or mint authority.
@@ -10044,7 +10242,7 @@ public sealed class ServiceRequestHandler
         request.SourceFormatVersion is not null || request.SourceTitle is not null ||
         request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
         request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null ||
-        request.SearchLevel is not null || request.SearchFromUtc is not null || request.SearchToUtc is not null;
+        request.SearchFromUtc is not null || request.SearchToUtc is not null;
     // Note: SearchAsOfUtc is intentionally NOT an extra: it is the S7-T1
     // as-of filter of the agent search contract, validated (UTC, not future)
     // in the handler itself.

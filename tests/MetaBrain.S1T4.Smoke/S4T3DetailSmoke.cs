@@ -116,8 +116,9 @@ internal static partial class OwnerServiceSmoke
 
             var rebuild = await RunOwnerCommandAsync(connectionsExecutable,
                 "owner", "index-rebuild", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
-            Require(rebuild.ExitCode == 0 && rebuild.StandardOutput.Contains("INDEX rebuilt schema=2", StringComparison.Ordinal),
-                "The S4-T3 private index rebuild did not materialize schema=2 (exit=" + rebuild.ExitCode + "; stdout=" + rebuild.StandardOutput.Trim() + "; stderr=" + rebuild.StandardError.Trim() + ").");
+            Require(rebuild.ExitCode == 0 && rebuild.StandardOutput.Contains("INDEX rebuilt rows=", StringComparison.Ordinal) &&
+                    !rebuild.StandardOutput.Contains("rows=0", StringComparison.Ordinal),
+                "The S4-T3 private index rebuild did not publish a materialized generation (exit=" + rebuild.ExitCode + "; stdout=" + rebuild.StandardOutput.Trim() + "; stderr=" + rebuild.StandardError.Trim() + ").");
 
             // Owner detail first: exact approved revision, stored span, current warning-free citation.
             var ownerDetail = await RunOwnerCommandAsync(connectionsExecutable,

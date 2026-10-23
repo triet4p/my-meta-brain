@@ -186,8 +186,9 @@ internal static partial class OwnerServiceSmoke
 
             var rebuild = await RunOwnerCommandAsync(connectionsExecutable,
                 "owner", "index-rebuild", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
-            Require(rebuild.ExitCode == 0 && rebuild.StandardOutput.Contains("INDEX rebuilt schema=2", StringComparison.Ordinal),
-                "The S4-T7 private index rebuild did not materialize schema=2 (exit=" + rebuild.ExitCode + "; stdout=" + rebuild.StandardOutput.Trim() + "; stderr=" + rebuild.StandardError.Trim() + ").");
+            Require(rebuild.ExitCode == 0 && rebuild.StandardOutput.Contains("INDEX rebuilt rows=", StringComparison.Ordinal) &&
+                    !rebuild.StandardOutput.Contains("rows=0", StringComparison.Ordinal),
+                "The S4-T7 private index rebuild did not publish a materialized generation (exit=" + rebuild.ExitCode + "; stdout=" + rebuild.StandardOutput.Trim() + "; stderr=" + rebuild.StandardError.Trim() + ").");
 
             // ---- Group 1: discovery -> request -> owner narrow approve -> protected
             // token redemption -> scoped bilingual recall/get/evidence/brief.
@@ -973,7 +974,8 @@ internal static partial class OwnerServiceSmoke
             await PublishS4T7CatalogAsync(connectionsExecutable, fixture, S4T7CatalogSource, S4T7CatalogSourceLabel, S4T7Source).ConfigureAwait(false);
             var rebuild = await RunOwnerCommandAsync(connectionsExecutable,
                 "owner", "index-rebuild", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
-            Require(rebuild.ExitCode == 0 && rebuild.StandardOutput.Contains("INDEX rebuilt schema=2", StringComparison.Ordinal),
+            Require(rebuild.ExitCode == 0 && rebuild.StandardOutput.Contains("INDEX rebuilt rows=", StringComparison.Ordinal) &&
+                    !rebuild.StandardOutput.Contains("rows=0", StringComparison.Ordinal),
                 "The S4-T7 official-client fixture could not rebuild its private index (stderr=" + rebuild.StandardError.Trim() + ").");
 
             var briefSession = await IssueS4T7GrantAsync(connectionsExecutable, fixture, "client-brief",

@@ -199,7 +199,7 @@ internal static class McpAgentBridge
                     ["required"] = new JsonArray("sessionFile", "operation"),
                     ["additionalProperties"] = false,
                 }),
-            Tool("metabrain_memory_search", "Search approved memory items by text (scoped lexical recall, lean hits only; current excludes expired/superseded, history keeps them; asOf replays recorded history through an instant; includeArchived also returns items the owner set aside and never widens the approved scope).",
+            Tool("metabrain_memory_search", "Search approved memory items by text and optional kind/level (scoped lexical recall, lean hits only; current excludes expired/superseded, history keeps them; asOf replays recorded history through an instant; includeArchived also returns items the owner set aside and never widens the approved scope).",
                 new JsonObject
                 {
                     ["type"] = "object",
@@ -210,6 +210,7 @@ internal static class McpAgentBridge
                         ["offset"] = new JsonObject { ["type"] = "string" },
                         ["limit"] = new JsonObject { ["type"] = "string" },
                         ["kind"] = new JsonObject { ["type"] = "string" },
+                        ["level"] = new JsonObject { ["type"] = "string" },
                         ["current"] = new JsonObject { ["type"] = "string" },
                         ["asOf"] = new JsonObject { ["type"] = "string" },
                         ["includeArchived"] = new JsonObject { ["type"] = "string", ["description"] = "Also return items the owner set aside; expands visibility only, never the approved scope." },
@@ -602,10 +603,9 @@ internal static class McpAgentBridge
 
     private static string[] BuildSearchArgs(string agentPipe, JsonObject args)
     {
-        // S4-T2 scoped search dispatch (S7-T1 adds an optional as-of instant):
-        // session path + query text plus optional paging/kind/current/as-of
-        // filters. The bridge never touches private bodies: the service scores
-        // the protected index and serves lean hits only.
+        // S4-T2 scoped search dispatch (S7-T1 adds as-of; S8-T5 adds the
+        // canonical abstraction-level filter). The bridge forwards only the
+        // request fields; the service still applies the frozen grant.
         var full = new List<string>
         {
             "owner", "agent-search", "--agent-pipe", agentPipe,
@@ -616,7 +616,7 @@ internal static class McpAgentBridge
                  {
                      ("--offset", "offset"), ("--limit", "limit"),
                      ("--kind", "kind"), ("--current", "current"),
-                     ("--as-of", "asOf"),
+                     ("--as-of", "asOf"), ("--level", "level"),
                  })
         {
             if (args[key]?.GetValue<string>() is { } value && !string.IsNullOrWhiteSpace(value))

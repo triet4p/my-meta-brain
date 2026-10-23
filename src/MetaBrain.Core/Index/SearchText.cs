@@ -21,9 +21,10 @@ namespace MetaBrain.Core.Index;
 /// </summary>
 public static class SearchText
 {
+    /// <summary>The service's maximum 2 Mi-character JSON request frame.</summary>
+    public const int MaximumQueryInputCodeUnits = 2 * 1024 * 1024;
+    /// <summary>The existing normalized-query boundary, after which no terms are supported.</summary>
     public const int MaximumQueryLength = 256;
-    public const int MaximumQueryTokens = 32;
-
     private static readonly HashSet<string> EnglishStopwords = new(StringComparer.Ordinal)
     {
         "a", "an", "the", "and", "or", "of", "to", "in", "on", "for", "with",
@@ -97,7 +98,7 @@ public static class SearchText
         }
 
         var lowered = value.ToLowerInvariant().Replace('đ', 'd').Replace('Đ', 'd');
-        var decomposed = lowered.Normalize(NormalizationForm.FormD);
+        var decomposed = NormalizeToFormD(lowered);
         var builder = new StringBuilder(decomposed.Length);
         var lastWasSpace = true;
         foreach (var character in decomposed)
@@ -125,6 +126,50 @@ public static class SearchText
 
         return builder.ToString().Trim();
     }
+    private static string NormalizeToFormD(string value)
+    {
+        StringBuilder? sanitized = null;
+        for (var index = 0; index < value.Length;)
+        {
+            var codeUnit = value[index];
+            var codePoint = (int)codeUnit;
+            var codeUnits = 1;
+            if (char.IsHighSurrogate(codeUnit))
+            {
+                if (index + 1 < value.Length && char.IsLowSurrogate(value[index + 1]))
+                {
+                    codePoint = char.ConvertToUtf32(codeUnit, value[index + 1]);
+                    codeUnits = 2;
+                }
+                else
+                {
+                    codePoint = -1;
+                }
+            }
+            else if (char.IsLowSurrogate(codeUnit))
+            {
+                codePoint = -1;
+            }
+
+            if (codePoint < 0 || IsUnicodeNoncharacter(codePoint))
+            {
+                sanitized ??= new StringBuilder(value.Length).Append(value.AsSpan(0, index));
+                sanitized.Append(' ');
+            }
+            else if (sanitized is not null)
+            {
+                sanitized.Append(value.AsSpan(index, codeUnits));
+            }
+
+            index += codeUnits;
+        }
+
+        return (sanitized?.ToString() ?? value).Normalize(NormalizationForm.FormD);
+    }
+
+    private static bool IsUnicodeNoncharacter(int codePoint) =>
+        codePoint is >= 0xFDD0 and <= 0xFDEF || (codePoint & 0xFFFE) == 0xFFFE;
+
 
     /// <summary>
     /// Splits normalized text into index tokens: symbol boundaries, snake and
@@ -270,19 +315,28 @@ public static class SearchText
     /// <summary>
     /// Query-time expansion: each query token contributes itself (weight 1.0)
     /// and its stem (0.8 when different); every general-vocabulary ring member
-    /// whose phrase tokens are all present contributes its tokens at 0.5 (plus
-    /// their stems at 0.4). At most <see cref="MaximumQueryTokens"/> raw tokens
-    /// are honored; the rest are dropped rather than failing the query.
+    /// whose phrase tokens are all present contributes its tokens at 0.5. All
+    /// raw tokens up to MaximumQueryLength participate; an overlength query
+    /// produces no terms rather than being partially matched.
     /// </summary>
     public static QueryTerm[] ExpandQuery(string? query)
     {
-        var normalized = Normalize(query);
-        if (string.IsNullOrWhiteSpace(normalized) || normalized.Length > MaximumQueryLength)
+        if (query is { Length: > MaximumQueryInputCodeUnits })
         {
             return Array.Empty<QueryTerm>();
         }
 
-        var raw = Tokenize(normalized).Take(MaximumQueryTokens).ToArray();
+        var normalized = Normalize(query);
+        if (normalized.Length > MaximumQueryLength)
+        {
+            return Array.Empty<QueryTerm>();
+        }
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return Array.Empty<QueryTerm>();
+        }
+
+        var raw = Tokenize(normalized).ToArray();
         var present = new HashSet<string>(raw, StringComparer.Ordinal);
         var terms = new Dictionary<string, QueryTerm>(StringComparer.Ordinal);
         void Add(string token, double weight, bool expanded)

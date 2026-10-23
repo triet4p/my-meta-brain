@@ -1,4 +1,6 @@
-﻿namespace MetaBrain.S1T4.Smoke;
+﻿using System.Globalization;
+
+namespace MetaBrain.S1T4.Smoke;
 
 internal static class Program
 {
@@ -62,7 +64,22 @@ internal static class Program
                 string.Equals(args[0], "s8-t4", StringComparison.Ordinal) ||
                 string.Equals(args[0], "s8-t4-ui", StringComparison.Ordinal))
             ? args[0]
-            : args.Length == 3 &&
+                : args.Length == 5 &&
+                  string.Equals(args[0], "s8-t5", StringComparison.Ordinal)
+                ? args[0]
+                : args.Length == 4 &&
+                  string.Equals(args[0], "s8-t5-ui", StringComparison.Ordinal)
+                ? args[0]
+                : args.Length == 2 &&
+                  string.Equals(args[0], "s8-t5-relevance", StringComparison.Ordinal)
+                ? args[0]
+                : args.Length == 1 &&
+                  string.Equals(args[0], "s8-t5-index", StringComparison.Ordinal)
+                ? args[0]
+                : args.Length == 3 &&
+                  string.Equals(args[0], "s8-t5-lifecycle", StringComparison.Ordinal)
+                ? args[0]
+                : args.Length == 3 &&
               (string.Equals(args[0], "s5-t1-console-fixture", StringComparison.Ordinal) ||
                string.Equals(args[0], "s5-t2-console-fixture", StringComparison.Ordinal) ||
                string.Equals(args[0], "s5-t3-console-fixture", StringComparison.Ordinal) ||
@@ -79,11 +96,18 @@ internal static class Program
                string.Equals(args[0], "s8-t1", StringComparison.Ordinal))
                 ? args[0]
                 : null;
-        var executable = scenario is not null ? args[1] : args.Length == 1 ? args[0] : null;
+        var executable = scenario is not null ? (args.Length > 1 ? args[1] : null) : args.Length == 1 ? args[0] : null;
         // The installed lifecycle smoke takes the published payload directory
         // instead of a single executable.
         var isPayloadScenario = string.Equals(scenario, "s8-t1", StringComparison.Ordinal);
-        var payloadExists = isPayloadScenario
+        // The private index contract scenario runs the engine in process and
+        // needs no service binary at all. The lifecycle phases are the same
+        // in-process engine and handler, run in two processes by the harness.
+        var isInProcessScenario = string.Equals(scenario, "s8-t5-index", StringComparison.Ordinal) ||
+            string.Equals(scenario, "s8-t5-lifecycle", StringComparison.Ordinal);
+        var payloadExists = isInProcessScenario
+            ? true
+            : isPayloadScenario
             ? executable is not null && Directory.Exists(executable)
             : executable is not null && File.Exists(executable);
         if (!payloadExists)
@@ -93,12 +117,14 @@ internal static class Program
             Console.Error.WriteLine("S8-T1 invocation: MetaBrain.S1T4.Smoke.exe s8-t1 <published-payload-dir> <fixture-root>");
             Console.Error.WriteLine("S8-T3 invocation: MetaBrain.S1T4.Smoke.exe s8-t3 <MetaBrain.Connections.exe> <old-format-artifact-root>");
             Console.Error.WriteLine("S8-T3 console invocation: MetaBrain.S1T4.Smoke.exe s8-t3-ui <MetaBrain.Connections.exe> <old-format-artifact-root>");
+            Console.Error.WriteLine("S8-T5 in-process index invocation: MetaBrain.S1T4.Smoke.exe s8-t5-index");
+            Console.Error.WriteLine("S8-T5 lifecycle invocation: MetaBrain.S1T4.Smoke.exe s8-t5-lifecycle build|reopen <fixture-root>");
             return 2;
         }
 
         try
         {
-            var fullPath = Path.GetFullPath(executable!);
+            var fullPath = executable is null ? string.Empty : Path.GetFullPath(executable);
             switch (scenario)
             {
                 case "scope-issue":
@@ -319,6 +345,28 @@ internal static class Program
                     break;
                 case "s8-t4-ui":
                     await OwnerServiceSmoke.RunS8T4OperationsUiAsync(fullPath).ConfigureAwait(false);
+                    break;
+                case "s8-t5":
+                    await OwnerServiceSmoke.RunS8T5EnvelopeAsync(
+                        fullPath,
+                        int.Parse(args[2], CultureInfo.InvariantCulture),
+                        int.Parse(args[3], CultureInfo.InvariantCulture),
+                        int.Parse(args[4], CultureInfo.InvariantCulture)).ConfigureAwait(false);
+                    break;
+                case "s8-t5-ui":
+                    await OwnerServiceSmoke.RunS8T5UiAsync(
+                        fullPath,
+                        int.Parse(args[2], CultureInfo.InvariantCulture),
+                        int.Parse(args[3], CultureInfo.InvariantCulture)).ConfigureAwait(false);
+                    break;
+                case "s8-t5-relevance":
+                    await OwnerServiceSmoke.RunS8T5RelevanceAsync(fullPath).ConfigureAwait(false);
+                    break;
+                case "s8-t5-index":
+                    await OwnerServiceSmoke.RunS8T5PrivateIndexAsync().ConfigureAwait(false);
+                    break;
+                case "s8-t5-lifecycle":
+                    await OwnerServiceSmoke.RunS8T5LifecyclePhaseAsync(args[1], Path.GetFullPath(args[2])).ConfigureAwait(false);
                     break;
                 default:
                     await OwnerServiceSmoke.RunAsync(fullPath).ConfigureAwait(false);

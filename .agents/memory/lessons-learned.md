@@ -318,3 +318,383 @@ every writer of the new one. `grep` the readers of the field (`TryGetProperty("e
 `reply.Error`, the `ErrorCode` of a result record) and migrate them explicitly. And when a service
 starts raising a typed exception, check the catch list of every handler that calls it: a typed
 refusal that escapes its handler is an unavailable transport in the eyes of every consumer.
+
+## [2026-10-21] A per-item lookup of a list the caller already holds is a quadratic bug in waiting
+
+**Symptom:** The private index rebuild of a 1,120-record vault took 8.140 s (137.6 records/s) and
+the owner library search answered with a p95 of 576.7 ms at the same size, against a frozen
+target of 250 ms at 1,000 records. Both paths got slower as the vault grew, even though the work
+per item did not change.
+
+**Root cause:** Three loops each re-derived something the caller already had. The rebuild asked
+the vault for its whole resource list once per memory item (and then attempted a lifecycle read
+for a record that mostly does not exist); the search asked the vault for its whole resource list
+once per served hit, and read and decrypted every relation again for every candidate. The
+manifest lookup itself was a linear scan of the descriptor array on every read, so the read path
+paid O(n) per read.
+
+**Fix / workaround:** The rebuild takes one descriptor snapshot for the pass and joins the
+lifecycle state from it; the search resolves the live revision set and the superseding relations
+once per query; the manifest keeps a descriptor index for its own lifetime, and a write publishes
+a new manifest instance. The rules the loops fed are unchanged — the same candidates, the same
+staleness flag, the same currentness answer — only the number of walks changed.
+
+**Watch out for:** When a loop body asks a store for a list, check whether the caller already
+holds that list. A snapshot that is taken once per operation and passed down is usually the whole
+fix, and it is the fix that keeps the security properties: the scope filter still runs inside
+the engine, the body is still read at its exact frozen revision, and the index is still a
+disposable in-memory projection.
+
+## [2026-10-21] Two `UtcNow` calls in one row are two different instants
+
+**Symptom:** A measurement harness that wrote synthetic memory items through the real owner pipe
+had every write refused with `invalid_request`, while the same product path succeeded with a
+hand-written payload. The product was right: the message was "Occurred time cannot follow
+recorded time".
+
+**Root cause:** The harness stamped `recordedAtUtc` and `occurredAtUtc` with two separate
+`DateTimeOffset.UtcNow` calls. The second call is later than the first, so the record claimed to
+have happened after it was written, and the domain validator refused it — correctly, because a
+record that claims to have occurred after it was recorded is not a record the product can accept.
+The in-process probe that printed the product's own exception message is what found it; the
+service only answered with a code.
+
+**Fix / workaround:** One instant is captured and both stamps are derived from it (the occurred
+instant is the event, the recorded instant is the write). A harness that drives the product must
+print the product's own message when it can, not only the code the product returns to a caller.
+
+**Watch out for:** Two "now" calls in one record are two facts that will disagree. And when a
+product answers a caller with a code, a harness that cannot see the message behind the code will
+blame the product for its own bug.
+
+## [2026-10-22] High-selectivity recall still paid for per-candidate ranking objects
+
+**Symptom:** With the synthetic corpus and 1,100 timed queries after 100 warm-ups unchanged, 10k
+recall p95 was 647.7 ms against the frozen 500 ms target at 4,940 average matching candidates.
+
+**Root cause:** Even after candidate IDs were filtered inside the index and read in batches, each
+candidate still incurred a `HashSet` allocation during scoring, plus separate temporal/posting
+dictionaries, token lists and a mapped document in the batched materializer. Removing only the
+score-time set improved p95 to 556.2 ms but did not meet the target.
+
+**Fix / workaround:** Preserve term order and membership semantics with allocation-free
+`Array.IndexOf` scoring, then stream temporal metadata and matching postings from one ordered
+candidate-table join. The candidate ordinal and token order preserve the previous result order and
+token set. The same 10k measurement then observed 453.2 ms p95, below the unchanged target.
+
+**Watch out for:** When candidate counts grow, include every per-candidate collection and temporary
+map in the cost model, not just vault reads. Compare identical corpus/query workloads at each
+iteration; do not lower candidate coverage or change the frozen target to hide a miss.
+
+## [2026-10-22] A scope table that is written but never joined leaves the filter to the caller
+
+**Symptom:** The private index bound the caller's approved scope IDs into the engine's own
+`private_index_scope` table, but the candidate query never referenced that table: it returned every
+resource that carried the query's terms and the caller filtered the out-of-scope ones. The
+evidence and the decision log both claimed that the scope filter ran inside SQL before any token
+row left the engine.
+
+**Root cause:** The scope table was introduced to get past the engine's bound-parameter limit, and
+the implementation stopped there. The managed post-filter was added as the obvious way to use the
+rows that had just been bound, and the SQL never joined the table it had paid to fill.
+
+**Fix / workaround:** The candidate query joins the scope table (`INNER JOIN private_index_scope sc
+ON sc.scope_id = t.resource_id`), so the scope is applied before the row leaves the engine, and the
+managed post-filter is deleted. The permanent regression asserts the *observable* exclusion (a
+document outside the scope is not returned for a scope larger than the parameter limit); it does
+not assert the source text, so it protects the behaviour and not the wiring.
+
+**Watch out for:** When a decision log says a filter runs inside the engine, check the query, not
+the prose. A table that is only written is a table nobody reads, and it costs a full rebind of the
+scope on every change.
+
+## [2026-10-22] An identity counter in the engine falls behind the rows a migration brought in
+
+**Symptom:** Indexing a document into a private index that had just been upgraded from the previous
+index schema failed with `SqliteException: SQLite Error 19: 'UNIQUE constraint failed:
+private_index_temporal.doc_id'`. The engine handed out document ids from a counter that started
+at 1, while the migration had already given the migrated rows the ids 1..N.
+
+**Root cause:** The document id was a managed counter (`_nextDocumentId`) next to a database that
+already owned the same fact: the temporal table's `doc_id` is its rowid. The counter was reset on
+clear and on reset, but it was never reconciled with the rows the database held, and a migration
+writes rows the counter never saw.
+
+**Fix / workaround:** The engine no longer keeps a counter. The temporal row is inserted without an
+explicit id and the engine reads back the id SQLite assigned (`last_insert_rowid()`), so the id is
+always free above the rows the database holds. The permanent regression takes over a live
+schema-2 database, lets the engine migrate it, and then indexes a new document, replaces a
+document at the same identity, adds a revision and rebuilds the generation.
+
+**Watch out for:** A migration test that only counts rows after the upgrade does not test the
+first write after the upgrade. And an identity that a database can assign is safer than one the
+process remembers.
+
+## [2026-10-22] Attribute a latency miss only to a path the timed query actually executed
+
+**Symptom:** The 100,000-record recall p95 (6,706.6 ms) was recorded as the cost of reading the
+body of every matching candidate. The timed queries ran with the level filter unset, so the
+owner-library path never called the body reader for an unserved candidate: it read only the 10
+served hits. The body-heavy path is the level-filter scenario of the result dump, a different
+scenario, and one of the four that did not finish at that size.
+
+**Root cause:** The measurement harness ran the timed loop and the result dump with different
+query shapes, and the two were read as one profile. The recorded explanation named a plausible
+code path instead of the one the timed queries execute.
+
+**Fix / workaround:** The timed query's shape is now part of the record (level unset, current
+`all`, as-of unset), and the attribution follows the code path the timed loop actually runs: the
+candidate materialization — 48,686 candidates per query on average, 122 batches of 400 candidate
+rows, 21.0 GB allocated over the 200 timed queries and 106 gen-2 collections during them. The
+preserved profiling separates measured numbers from derived ones, and the split between the
+engine's join and the managed allocation is left unclaimed because it was not measured.
+
+**Watch out for:** Before blaming a code path for a latency miss, check that the timed loop
+reaches it. A filter that is unset in the benchmark is not part of its cost, and a scenario that
+was aborted is not part of the timed profile.
+
+## [2026-10-22] `Data Source=:memory:` with `Cache=Shared` does not share the database
+
+**Symptom:** A second connection opened with `Data Source=:memory;Cache=Shared` did not see the
+table the first connection had created (`no such table`), so a test could not hand a pre-seeded
+database to the engine.
+
+**Root cause:** In shared-cache mode SQLite shares a cache between connections, but the
+`:memory:` name still gives every connection its own private in-memory database. Only a named
+in-memory database (`file:name?mode=memory&cache=shared`) is shared between connections.
+
+**Fix / workaround:** The engine can open on a database the caller already holds (an internal
+constructor that adopts a `SqliteConnection`), which is also how a live schema-2 engine is upgraded
+in place. No shared-cache naming and no file on disk are involved.
+
+**Watch out for:** Do not design a test seam on the assumption that two `:memory:` connections see
+each other. Probe it first; the answer is no.
+
+## [2026-10-22] A `finally` that zeroes the buffer also zeroes the value the method returns
+
+**Symptom:** The private index engine authenticated every record correctly (the AEAD tag verified)
+and then reported "The private index format version is unsupported" while reading the generation
+directory. The decrypted bytes were obviously right when the same record was decrypted by hand.
+
+**Root cause:** The decrypt helper cleared the plaintext buffer in its `finally` block and returned
+that same buffer. In C#, the `finally` block runs **before** the return value reaches the caller, so
+the caller received a buffer of zeroes. The tag verified, so the failure looked like a *format*
+problem while it was a *lifetime* problem.
+
+**Fix / workaround:** The helper now hands the plaintext to a local, clears the local reference
+before the `finally` and only zeroes the buffer when the method did not return it — the same shape
+the vault's own `DecryptPayload` already uses (`var result = plaintext; plaintext = null; return
+result;`).
+
+**Watch out for:** Any helper that returns a buffer it also clears in a `finally`. If a decrypt or
+a decode produces "the right bytes" but the consumer sees zeroes, suspect the lifetime, not the
+format.
+
+## [2026-10-22] A buffered reader that cannot hold the record fails as "truncated"
+
+**Symptom:** The generation file was rejected as truncated as soon as the engine read the
+directory record, even though the file was complete and its length was known from the header.
+
+**Root cause:** The buffered reader filled its 64 KiB buffer with exactly the number of bytes the
+caller asked for, so a record larger than the buffer could never be held: the fill loop stopped
+after the first buffer-full read, reported "not enough bytes" and the caller raised the truncation
+error. The bug only appears on a record bigger than the buffer — the directory record of a
+1,000-record generation is about 1.7 MB.
+
+**Fix / workaround:** The reader now serves a record that fits from the buffer and reads a record
+that does not fit into a right-sized buffer of its own; the fill loop refills the whole buffer
+instead of the requested byte count.
+
+**Watch out for:** Any hand-rolled buffered reader over a file whose records have variable size:
+the buffer must be a *cache*, not a *limit*.
+
+## [2026-10-22] A snapshot's digest and the rows it carries can come from two different generations
+
+**Symptom:** The private index rebuild stamped its snapshot with the digest of the live canonical
+set, while the row count and the row sample it put in the same snapshot came from whatever
+generation the engine had loaded. A generation that was substituted between the publish and the
+read could therefore be published under the live digest, and the owner status reply — which only
+compared the snapshot's digest with the live one — reported another generation's rows as
+`stale: false`.
+
+**Root cause:** The digest and the rows are two independent facts, and only one of them was
+checked. The generation's identity is bound to the canonical set it was built from, so the engine
+can report the digest of the generation it *actually holds*; the rebuild compared the live digest
+against nothing and simply assumed the generation it had just published was the one it was reading.
+
+**Fix / workaround:** The rebuild compares the engine's own generation digest with the digest of
+the live canonical set **after** the publish, and discards and retries the pass when they differ
+(a set that keeps being substituted publishes nothing). The owner index status applies the same
+guard. The invariant is covered by a permanent regression that drives a store reporting a
+canonical digest that is not the one of the generation it holds through the real rebuild authority
+over a real vault: with the check disabled the scenario fails.
+
+**Watch out for:** Any snapshot, cache or report that carries an identity **and** content. Check
+the identity against the source of truth *and* the content against the same source, and make the
+two checks the same check. "The digest I computed" and "the generation I am holding" are not the
+same fact.
+
+## [2026-10-22] A scoped agent filter can be rejected before its handler sees it
+
+**Symptom:** The real in-process agent search returned `invalid_request` for `SearchLevel=l1`, even though the handler and scoped authority already implemented the level filter.
+
+**Root cause:** A protocol-wide guard classified every `SearchLevel` field as owner-library-only and allowed it only on `OwnerLibrarySearchOperation`; the agent-search handler's own allowlist was not the only gate.
+
+**Fix / workaround:** The early guard now permits `SearchLevel` on the scoped agent-search operation only, while keeping `SearchFromUtc`/`SearchToUtc` owner-only. The real grant/redeem/search smoke covers L1 and L2 results.
+
+**Watch out for:** When adding a consumer filter, trace the dispatch guard, operation-specific extras predicate, handler validation and downstream authority. A downstream implementation is unreachable if any earlier field allowlist rejects it.
+
+## [2026-10-22] Form-D normalization rejects code points accepted by canonical memory validation
+
+**Symptom:** The exhaustive BMP token-bound smoke threw `ArgumentException: String contains invalid Unicode code points` inside `string.Normalize(FormD)`.
+
+**Root cause:** Canonical memory validation does not exclude Unicode noncharacters or isolated surrogate code units, while the runtime normalizer rejects those values. An imported but otherwise accepted record could therefore fail during index rebuild.
+
+**Fix / workaround:** Search normalization replaces Unicode noncharacters and unpaired surrogates with token separators before Form-D normalization, leaving valid scalar values and the tokenizer's existing delimiter behavior intact. The full non-surrogate BMP sweep now verifies the nine-byte source bound.
+
+**Watch out for:** Derive index normalization bounds from what canonical validators actually admit, not from typical user text; run the normalizer over unsupported scalars as well as ordinary letters.
+
+## [2026-10-22] Owner scope preview cannot combine a zone and exact resource IDs
+
+**Symptom:** A real owner scope-preview request carrying both `ZoneId` and `ResourceIds` failed with `invalid_grant_request`.
+
+**Root cause:** `ResolveResourceSelection` intentionally treats a zone selection and an exact-resource selection as mutually exclusive; it rejects the combination before building the frozen grant.
+
+**Fix / workaround:** The synthetic proof now previews the exact frozen resource list without also supplying a zone. A revision-pinned query whose term exists only on a later revision expects no candidate from the older approved revision.
+
+**Watch out for:** When proving exact agent grants, send one unambiguous selection form; do not expect the index to emit an empty-match candidate merely because a newer revision contains the searched term.
+
+## [2026-10-22] Count overlapping rebuild buffers, not only steady-state caps
+
+**Symptom:** The bounded-index review found whole-vault transient memory beyond the resident directory: reconciliation retained two manifest snapshots, the canonical digest concatenated the full ID/revision set before UTF-8 encoding, and commit reopened the generation while posting/directory build buffers were still live.
+
+**Root cause:** Each steady-state structure had a cap, but the simultaneous lifetime of snapshots, serialized directory bytes, spill buffers, and the final authenticated readback was not counted as one peak.
+
+**Fix / workaround:** Stream the exact existing digest encoding through `IncrementalHash` and fixed stack buffers, release the build snapshot before requesting the reconciliation snapshot, and dispose posting/directory-spill buffers plus the directory plaintext before reopening the published generation. Reject directory counts from a source-derived resident upper bound before allocating arrays; the focused build and in-process regression pass.
+
+**Watch out for:** A bounded cache or directory does not bound rebuild peaks. Trace which snapshot, serialization, ciphertext/plaintext buffers and reader caches coexist at every transition, and report sampled process-private/managed peaks separately from resident-structure counters.
+
+## [2026-10-22] Apply strict token-record validation on every read path
+
+**Symptom:** The optimized matched-token path rejected malformed UTF-8, while the full-token reader used replacement decoding and accepted non-minimal 7-bit lengths; both parsed the same authenticated record format.
+
+**Root cause:** Hardening the fast query path did not automatically harden the full reader used by other consumers, so authenticated bytes could be interpreted differently depending on the route.
+
+**Fix / workaround:** Both readers now enforce the count and byte caps, strict UTF-8, nonempty entries, minimal length prefixes, and exact end-of-record consumption. Regression cases cover invalid UTF-8, malformed lengths, trailing data, forced digest collisions, and UTF-8 ordering that differs from UTF-16 ordinal ordering; the focused current-source smoke passes.
+
+**Watch out for:** AEAD proves record authenticity, not format validity. Every decoder for a shared record type must reject the same malformed forms and preserve the established ordering/equality contract.
+
+## [2026-10-23] Exact-token verification can dominate 10k recall even when allocations fall
+
+**Symptom:** A complete 10,000-row current-source matcher run measured 1,898.32 ms p95 against the frozen 500 ms target, despite the focused functional smoke passing.
+
+**Root cause:** The matched-token reader computed a SHA-256 digest for every token in every candidate's authenticated token record before determining whether that token was a query term. Static inspection showed this per-entry digest work was on the hot path.
+
+**Fix / workaround:** Sort query beacons by canonical UTF-8 order, binary-search each validated token's exact byte span, and verify the digest only after byte equality. Keep the forced-collision assertion and exact equality so a digest collision cannot become a match. Re-run the complete frozen query method; the final 10k p95 was 186.48 ms, with 100 warm-ups and 1,100 timed queries.
+
+**Watch out for:** A passing fixture, lower allocation count, or 1k p95 does not predict 10k latency. Hashing every authenticated field in each candidate can dominate at scale; retain a full 10k timing result and exact comparison before accepting such a path.
+
+## [2026-10-23] Keep sort-validation operand direction consistent with the comparator
+
+**Symptom:** The grouped spill writer rejected a sorted run during the maximum-term smoke at pair
+17 in bucket 645, reporting a negative digest-order result even though the source array had just
+been sorted.
+
+**Root cause:** The bucket comparison used `current.CompareTo(previous)`, but the digest comparison
+used `CompareBytes(previous, current)` and then applied the same “negative means out of order”
+rule. For increasing digests that operand order correctly returns negative, so a valid run was
+refused.
+
+**Fix / workaround:** Compare the current digest with the previous digest before applying the
+ascending-order check. The focused smoke then passed the maximum 200,900-code-unit canonical
+document (3,005 terms), the 900,000-pair multi-pass grouped spill and all nine exact 100,000-ordinal
+final postings.
+
+**Watch out for:** A sort validator must use one operand convention for every key component. A
+locally reversed tie-break comparison can make a correct `Array.Sort` look invalid; exercise
+different adjacent keys as well as repeated keys.
+
+## [2026-10-23] PowerShell treats `$home` as the reserved `$HOME` variable
+
+**Symptom:** An SDK launcher failed before starting any child when assigning `$home` to the
+repository-local CLI home, with “Cannot overwrite variable HOME because it is read-only or
+constant.”
+
+**Root cause:** PowerShell variable names are case-insensitive, so `$home` resolves to the
+automatic read-only `$HOME` variable.
+
+**Fix / workaround:** Use a nonreserved name such as `$cliHomePath` for the local SDK home, while
+setting only process-scoped `DOTNET_CLI_HOME`.
+
+**Watch out for:** Avoid `$home` in PowerShell scripts that prepare a local .NET CLI environment;
+the assignment can fail before the sentinel check or any child starts.
+
+## [2026-10-23] Time the complete owner handler, not only the search core
+
+**Symptom:** A14’s 100k warm `SearchOwnerCore` p95 was 680.55 ms, while A15’s actual `owner.library.search` handler p95 was 2,167.332 ms. The direct-core number would have hidden a material over-target handler regression.
+
+**Root cause:** The handler performs request validation, canonical generation/digest checks, scope construction, exact served-revision verification, and reply conversion in addition to the core search. Those costs are part of the caller-visible operation and can be significant at 100k resources.
+
+**Fix / workaround:** Time the exact owner-handler entry point with the supported fresh-child protocol, separately retain cold and warmup calls, capture the comparator’s actual result and child exit code, and sample idle working set/CPU independently. Keep partial/interrupted samples as partial evidence rather than calling them API p95.
+
+**Watch out for:** Core p95, a few completed handler calls, an empty stderr file, or a wrapper that merely starts a process does not prove the full protocol passed. Report only a complete timed sample with its comparator and process-exit evidence, and never treat fixture success as service/UI/IPC acceptance.
+
+## [2026-10-23] Assert the owner error code, not a synthetic status token
+
+**Symptom:** The first resumed owner-search smoke expected `ServiceReply.Status == "denied"` for stale-generation and locked-vault refusals and failed, despite the handler returning the intended error.
+
+**Root cause:** The shared `Error(code)` reply uses `Status == null` and stores the refusal in `Error`; `"denied"` is not a status emitted by this handler.
+
+**Fix / workaround:** Assert both the null status and the exact `Error` code (`search_index_stale` or `vault_locked`). Keep the failure output’s actual status and error in the assertion so a later contract change is distinguishable from a test’s guessed token.
+
+**Watch out for:** A mismatched expected status is a test assertion defect, not evidence that the handler refused the wrong way. Inspect the shared reply-construction contract before changing product behavior.
+
+## [2026-10-23] Relocated .NET intermediates need explicit source-glob exclusions
+
+**Symptom:** The isolated A17 focused build first failed with duplicate assembly attributes, and a later runner build included generated files from older `obj*`/intermediate output folders.
+
+**Root cause:** Moving `BaseIntermediateOutputPath` outside the project’s conventional `obj` directory, then building from a harness root that contains multiple output generations, caused generated source trees to fall back into default compile globs unless the local intermediate/output patterns were explicitly excluded.
+
+**Fix / workaround:** Preserve the existing directories and explicitly exclude project-local `obj`/`bin`, `obj*/`, `intermediate-output*/`, `out-*/`, `temp-*/` and evidence trees in both default item-exclusion properties; give each attempt unique intermediate and output paths.
+
+**Watch out for:** Never delete or blanket-clean another attempt’s `obj` or output to work around duplicate attributes. Isolate the new build and correct its compile globs instead.
+
+## [2026-10-23] Move owner collection mutations after agent-session assertions
+
+**Symptom:** A17's focused smoke failed an agent stale-revision assertion after adding an owner collection membership/search case.
+
+**Root cause:** `OwnerScopeGrantAuthority.SetCollection` advances `PolicyGeneration` when collection state changes (`src/MetaBrain.Core/Security/OwnerScopeGrants.cs:168, 216–217`). That invalidates an agent session pinned to the previous policy generation, so mutating the collection before the agent-session checks makes the later stale-revision expectation unreachable.
+
+**Fix / workaround:** Run the owner collection mutation/search after the agent session/revision assertions. The final focused `s8-t5-index` smoke then passed. This was test ordering, not a product behavior defect.
+
+**Watch out for:** Any owner policy-generation mutation can stale existing agent sessions. Keep test setup and policy changes ordered around session-generation expectations; do not weaken the production generation checks to make a test pass.
+
+## [2026-10-23] A faster rebuild batch can be a memory regression; the host guard is the arbiter
+
+**Symptom:** The A18 run with a bounded 8-envelope rebuild read batch made progress faster but hit the mandatory 1 GiB host free-memory guard after ~85 s of rebuild (`free_bytes=1052467200`), while the serial run on the same host completed the whole protocol with a 2,919,084,032 B minimum.
+
+**Root cause:** Not established. No per-process managed/GC/private samples were captured during the batched rebuild, and the only measured difference from the known-serial configuration was the batch. Host free memory is a whole-host quantity, so the decline cannot be attributed to the batch from these counters alone.
+
+**Fix / workaround:** Revert to the serial one-envelope rebuild read for the measured run, record the aborted run's scratch artifacts and hashes, and describe the observation as a correlation. If batching is revisited, capture per-process memory during the rebuild and attribute before claiming a cause.
+
+**Watch out for:** Never present a guard-aborted run as a performance result, and never lower or bypass the free-memory floor to make a run finish. A faster phase that endangers the host is not a safe optimization.
+
+## [2026-10-23] PowerShell `Start-Process -PassThru` without `-Wait` does not expose `ExitCode` here
+
+**Symptom:** The A18 run-1 wrapper recorded `child_exit_code=` (empty) even though the child had exited, and `$process.ExitCode` stayed `$null` after `WaitForExit(milliseconds)` and a second `WaitForExit()`.
+
+**Root cause:** In this environment the `Process` object returned by `Start-Process` without `-Wait` does not surface the child's exit code. A dummy child that runs `exit 88` reproduced the empty value; the same child under `Start-Process -PassThru -Wait` returned 88, and a direct `System.Diagnostics.Process` with `WaitForExit()` also returned 88.
+
+**Fix / workaround:** Use `Start-Process -FilePath ... -PassThru -Wait` then read `ExitCode`, or drive `System.Diagnostics.Process` directly. Record `exit_code_source` in the wrapper and treat an empty code as unknown, never as success.
+
+**Watch out for:** PowerShell event-handler scriptblocks used for asynchronous output redirection did not reliably see script-scope variables in this host; prefer `Start-Process` native redirection. Any harness that prints an exit code must prove the capture path with a synthetic non-zero child before the real run.
+
+## [2026-10-23] A persisted derivative is only as useful as its load path
+
+**Symptom:** After the encrypted private index became persistent, every lock/unlock and every process restart still forced a full rebuild (A18: 1,396,956.547 ms at 100k) before any search could answer, although the encrypted generation was intact and `Open()` already authenticated it.
+
+**Root cause:** `ResetPrivateIndex` clears `_privateIndexMaterialized` and the resident engine on lock and unlock, and only the explicit `owner.index.rebuild` handler ever set the snapshot again. The persistent artifact had no load-only consumer, so persistence saved disk but not restart time.
+
+**Fix / workaround:** Add an authority-level `Load` that opens and authenticates the published generation and returns a snapshot only when its authenticated canonical digest and row count match the live canonical set, then resolve it lazily from owner search, scoped search and index status under one epoch-serialized policy. Fail closed on missing/stale/unreadable and keep the explicit rebuild as the only way to publish a changed set.
+
+**Watch out for:** Do not treat "the file exists" as "the generation is current": compare the authenticated digest to the live canonical set and drop resident state on mismatch. Also do not assume the file format supports record deltas — a whole-generation sealed file with whole-vault postings still requires a full rewrite per change. Test the load path at the handler boundary, including a second process, and assert the encrypted file hash is unchanged by the read.

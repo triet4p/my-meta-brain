@@ -174,8 +174,8 @@ that something was deleted — into a directory that must not exist yet. The res
 your own passphrase or your own recovery key, because the restore carries the owner's key envelope
 and never re-keys it. The restored vault carries **no live authority**: no scope grant, no agent
 session and no redeemable token comes back, and a token that was already used stays used. The
-private index is not restored either; it is rebuilt from the restored canonical records
-(`owner index-rebuild`).
+private index is not restored either; the derivative is excluded from the backup, so the restored
+vault has no published generation and the first search asks for `owner index-rebuild`.
 
 **What fails closed.** A wrong passphrase, a wrong recovery key, a lost key, a tampered container
 and a truncated container all refuse the restore, write nothing, leave no partial vault behind and
@@ -487,6 +487,792 @@ What the retention choice does and does not do:
   of the **post-purge** backup into a clean vault serves neither the removed audit entry nor the
   removed diagnostic, and a restore of the **pre-purge** backup still serves the entry of its
   moment. The operations state travels with the backup, tombstones included.
+
+### 9.2 The operational envelope measurement (S8-T5)
+
+The Sprint 1 targets are frozen budgets, not achievements: recall p95 of 250 ms at 1,000 records,
+500 ms at 10,000 and 1,000 ms at 100,000; owner-UI p95 of 200 ms for a local control action and
+1,500 ms from search submit to visible results; at least 100 records/second of indexing on a cold
+10,000-record fixture and a cold 100,000-record rebuild inside 20 minutes; idle CPU at most 1 % of
+the host over a 5-minute post-warm-up sample; idle RAM at most 256 MiB for the service and 512 MiB
+with an idle owner client; persistent product data at most 1.5 GiB at 100,000 records; provider
+spend $0 by default. Sprint 8 measures them again **without relaxing them**; the owner-approved
+cut-over of 2026-10-23 changes only which of these still gate T5 sign-off, as the next subsection
+records.
+
+#### Owner-approved T5 sign-off cut-over (2026-10-23)
+
+The Sprint 1 numbers above remain the recorded envelope and the gates the A11–A18 runs were measured
+against. The owner has since replaced the **hard latency and rebuild thresholds as T5 sign-off
+gates** (change record "Owner-approved S8-T5 acceptance cutover — 2026-10-23" in
+[requirements](REQUIREMENTS.md) and D086): recall p95 250/500/1,000 ms at 1k/10k/100k and the
+20-minute 100k rebuild no longer decide T5, and no further mandatory 1k/10k actual-handler benchmark
+rerun is a T5 condition. Every prior miss and every historical number below stays as recorded; no
+PASS is created for them.
+
+T5's quantitative basis is the **observed A18 run 2** practical baseline: 100,000 rows in process,
+handler p50/p95 183.937 / 1,668.026 ms, rebuild 1,396,956.547 ms (23 min 16.957 s), comparator 1,101
+rows with 0 common-field mismatches, unlocked/locked idle working set 207,084,032 / 204,846,357 B and
+idle CPU 0.0709 % / 0.0729 %. That is a historical observation of that snapshot, not a new ceiling
+and not a proof for any other build or for the real service. T5 also requires the A19 behaviour: an
+authenticated generation that matches canonical state is reused after lock/unlock and restart
+without rewriting the encrypted file, while a missing, stale, tampered, truncated or wrong-key
+generation fails closed and the explicit owner rebuild is the recovery.
+
+No other budget moves: the bounded directory/cache caps, the encrypted-at-rest index and spill, and
+the recorded CPU, disk and idle-RAM results stay as measured — the A18 values remain historical
+observations, not an expanded budget. Nothing here waives the real service/WPF/owner UI/IPC evidence,
+the S8-T6 security/recovery replay, the S8-T7 owner walkthrough (R37), independent review or any
+checkpoint.
+
+The measurement is a permanent scenario of the repository's smoke suite. It drives the real
+service executable, the real owner control pipe, the real encrypted vault on disk, the real
+private index and the real WPF window; nothing is stubbed and no external service is contacted:
+
+```text
+dotnet run --project tests/MetaBrain.S1T4.Smoke/MetaBrain.S1T4.Smoke.csproj -- s8-t5 <MetaBrain.Connections.exe> <records> <queries> <idle-seconds>
+dotnet run --project tests/MetaBrain.S1T4.Smoke/MetaBrain.S1T4.Smoke.csproj -- s8-t5-ui <MetaBrain.Connections.exe> <records> <searches>
+dotnet run --project tests/MetaBrain.S1T4.Smoke/MetaBrain.S1T4.Smoke.csproj -- s8-t5-relevance <MetaBrain.Connections.exe>
+```
+
+What each scenario does, and how to read its output:
+
+- `s8-t5` writes a deterministic synthetic corpus (bilingual prose, code symbols, decision and
+  question shapes, a 4 KiB mean body and a p95 below 16 KiB) into a synthetic encrypted vault,
+  unlocks it through the real owner command, measures the owner's own per-record write path,
+  rebuilds the real private index, answers at least 1,000 timed recall queries after 100
+  warm-ups over the real owner pipe, reads the real operations health, samples the real service
+  process for CPU and working set while it is idle and again while the vault is locked, and
+  measures the on-disk footprint. Every number is printed as a `MEASURE` line; every `OBSERVATION`
+  line states what the program actually did.
+- `s8-t5-ui` measures the **real WPF window**: the owner types into the real text box, presses the
+  real search button, and the measured interval ends when the window has rendered the new page, so
+  it covers the service IPC and the render. The navigation measurement is a local control action
+  inside the window.
+- `s8-t5-relevance` measures the **qualitative** side on the owner-permitted corpus: the fixed
+  six-document sample the owner authorized for read-only testing access under `F:/ai-ml` is read
+  in place, stored as ciphertext in a synthetic vault, indexed by the product's own rebuild and
+  asked the four query categories the Sprint 1 query plan named (a pre-existing decision, a
+  Vietnamese/English paraphrase across project areas, an exact Python symbol, a date). The
+  scenario reports **which documents the product returned** — program-observed behaviour. Whether
+  those answers are the answers the owner would judge correct, stale or missing is the owner's
+  own judgement (R37) and is **not** claimed by the run.
+
+What the run does not do: it does not relax a target, it does not replace the owner's judgement
+with a synthetic score, and it does not treat the generated scale fixture as the owner's corpus.
+The two are kept apart on purpose — the fixture answers "does the envelope hold at this size",
+the owner-permitted sample and the owner's walkthrough answer "is the recall useful to the owner".
+
+#### Correction A2 measurements and the remaining 100k prerequisite
+
+The final A2 run kept the synthetic corpus generator, query set, 1,100 timed queries and 100
+warm-ups unchanged. It uses the real encrypted vault, private index, service and owner pipe:
+
+| Size | Frozen recall p95 target | A1 candidate result | Final A2 result | Observation |
+| --- | ---: | ---: | ---: | --- |
+| 1,000 records (1,120 indexed) | 250 ms | 71.2 ms | 62.0 ms (p50 8.2, max 85.7) | 545.5 average matches; 1,120 maximum |
+| 10,000 records (10,120 indexed) | 500 ms | 647.7 ms — failed | 453.2 ms (p50 52.3, max 584.3) | 4,940.4 average matches; 10,120 maximum; p95 is below the unchanged target |
+
+The 10k result is a measured pass for that synthetic size only. A2 also measured a cold 10,120-row
+private-index rebuild at 506.6 records/second (target at 10k: at least 100 records/second). The
+real WPF window returned the live service's answer with an 81.4 ms p95 over 30 searches after five
+warm-ups at 1k records, and local navigation measured 8.2 ms p95 over 10 acts. The automated WPF
+driver is not a human owner walkthrough. The A2 envelope runs used `idleSeconds=0`; the earlier
+five-minute idle samples are recorded in the worker evidence and were not repeated by this
+request-path correction. A2 observed no provider call or ledger entry; the reported 0.0054 USD is
+the existing historical reservation, not a charge.
+
+#### Historical FOOTPRINT-A4 sizing correction — pre-encrypted-index measurements (2026-10-22)
+
+This section preserves the A4 analysis of the then-current SQLite/in-memory index; it does not
+measure or size the current v3 encrypted generation. The A12 result is historical; the latest
+current-source evidence is recorded under BOUNDED-A14.
+
+The earlier “roughly 3.3 GiB for the 100k in-memory projection” was withdrawn: its basis was a
+whole-process working-set difference between unlocked and locked service state (37.8 MiB at 1,120
+indexed records), which also included the unlocked vault, manifest, scope state, rebuild transients
+and GC regions the OS had not returned. Do not use that figure as a current index measurement.
+
+At that historical point, SQLite native index memory was 18,675,576 B at 1,000 records and
+185,817,208 B (177.21 MiB) at 10,000 records, or about 18,581.7 B per indexed record. The resulting
+projection of about 1.86 GB (1.73 GiB) at 100,120 rows was an extrapolation for the old engine, not
+a 100k observation and not a current-format estimate. Its 10k whole-process working-set delta of
+225,222,656 B (214.78 MiB) and post-rebuild working set of 287,285,248 B (274.0 MiB) also included
+GC/LOH regions.
+
+The accompanying 4 GiB free-memory floor was a reviewer’s planning estimate for that old
+in-memory design, not a frozen product requirement or a current authorization threshold. The
+historical host samples were 16,122.8 MiB total / 3,327.6 MiB available and later 3,074,248 KiB
+(about 2.93 GiB) available; they are not current headroom evidence. None of those samples or
+projections authorizes a 100k run. Use a newly measured safe-headroom floor for the current
+implementation before any owner-authorized 100k execution, and retain the frozen target.
+
+The frozen 256 MiB service-idle target remains unchanged. A historical estimate of old SQLite
+index size is not evidence for or against the current service-idle target. The A12 measurements
+are historical. BOUNDED-A14 records current v3 in-process results, the adverse >256 MiB
+core-proxy working-set observation and remaining service/UI/IPC, RAM-attribution and owner-R37 gates.
+
+The earlier A4 instructions to run 100k with the old executable are withdrawn with that sizing
+basis. Do not use them for the v3 encrypted generation.
+
+#### COMPACT-A6 — historical disposable SQLite baseline (superseded by BOUNDED-A8/A11) (2026-10-22)
+
+At the COMPACT-A6 snapshot, the in-memory SQLite engine held one copy of each posting key: integer
+document and token IDs in postings, token text in its engine dictionary, and resource identity and
+revision in temporal rows. It created no database, WAL, journal, sort temporary or page cache on
+disk, and its derived index was dropped at lock, restart and crash. This is historical behavior;
+the current engine is the encrypted persistent generation documented below.
+
+All measurements, comparisons, and target conclusions in the following COMPACT-A6 table are
+historical schema-2/schema-3 SQLite results. They do not describe the current encrypted format.
+
+Measured in process against the production store, index and owner search path on the identical
+synthetic corpus, with the schema-2 engine and the schema-3 engine run side by side on the same
+vault and the same query set:
+
+| Observation | 1,000 records (schema 2 → schema 3) | 10,000 records (schema 2 → schema 3) |
+| --- | ---: | ---: |
+| Index engine page bytes | 17,506,304 B → **3,960,832 B** (4.42x) | 173,809,664 B → **39,809,024 B** (4.37x) |
+| Live SQLite native memory after the rebuild | 18,804,720 B → **4,318,600 B** (4.35x) | 185,946,352 B → **42,670,216 B** (4.36x) |
+| Engine bytes per posting | 103.7 B → **23.5 B** | 102.9 B → **23.6 B** |
+| Posting rows / distinct tokens | 168,875 / 1,224 → **identical** | 1,689,186 / 10,224 → **identical** |
+| Token text held by the index | 867,404 B → **14,057 B** (the dictionary) | 8,679,427 B → **131,057 B** (the dictionary) |
+| Rebuild | 2.6 s → 2.7 s | 24.9 s → **16.7 s** |
+| Rebuild peak working set | 98,123,776 B → **77,885,440 B** | 284,061,696 B → **135,036,928 B** |
+| Owner search p50 / p95 (1,100 queries; the 10,000-record pair measured back to back, the 1,000-record pair not) | 7.1 / 47.4 ms → **3.7 / 37.1 ms** | 45.9 / 422.3 ms → **40.2 / 420.1 ms** |
+| Matches mean / max, natural hit rate, symbol hit rate | 488.8 / 1,000, 0.0218, 1.0000 → **identical** | 4,883.7 / 10,000, 0.0218, 1.0000 → **identical** |
+
+The recall answers are not merely equal in the aggregates: the two representations were compared
+**result by result** over 128 scenarios per size (120 corpus text queries — natural and exact
+symbol — a browse, a half scope, a kind filter, a currentness filter, a level filter, a time
+window, an as-of instant and a second-revision marker), each scenario dumping every served hit's
+resource ID, revision, score, direct-hit and stale flags, publication state, kind, **the exact
+token set and its order**, the title, the instants, the applicability and the ranking reason. The
+two dumps are **byte-identical** at 1,000 and at 10,000 records (0 differing lines).
+
+**The frozen target is not met and is not relaxed.** The recall latency at 1,000 and 10,000
+records is not the problem: the compact engine's 10,000-record p95 is 420.1 ms against the frozen
+500 ms line, the same as the text-keyed engine's 422.3 ms in the same back-to-back measurement, and
+the rebuild fell from 24.9 s to 16.7 s. The 100,000-record measurement is now a **measurement**
+rather than an extrapolation: in process, on a synthetic 100,000-record corpus, the compact index
+is **422,518,784 B (403.0 MiB)** over 16,898,431 postings (25.0 B per posting), the cold rebuild
+took **144.7 s (690.9 records/s)**, and the search p50 was 545.6 ms with a p95 of 6,706.6 ms. So:
+
+- the frozen **100,000-record rebuild** lines are met (2.4 min against 20 min; 690.9 records/s
+  against 100);
+- the frozen **256 MiB idle-RAM** line is **not met**: the measured index alone is 403.0 MiB against
+  the ≈70 MiB the target leaves for it once the ≈186 MiB non-index service baseline is counted,
+  so the projected service idle working set is ≈589 MiB, about 2.3x over. The index part of that
+  number is measured; the service part is a projection, because the real service scenario is
+  blocked by the IPC DACL constraint;
+- the frozen **100,000-record recall latency** line is **not met** either (p95 6,706.6 ms against
+  1,000 ms; the p50 is inside it). **Corrected 2026-10-22 (COMPACT-FIX-A7): the cost is not the
+  body read.** The 200 timed queries ran with no level filter, so the owner-library path read no
+  candidate body at all — only the 10 served hits — and the cost is the candidate materialization
+  itself: 48,686 candidates per query on average, bound and read in 122 batches of 400, with
+  21.0 GB allocated over the 200 queries and 106 gen-2 collections during them. The original
+  attribution is preserved unchanged in `artifacts/sprint-8/task-5.md` §15 and corrected in §16.
+
+**That 100,000-record run is a measurement, but not a protocol-compliant one.** The frozen method
+is at least 1,000 timed queries after 100 warm-ups per size; that run used **20 warm-ups and 200
+timed queries**, and its result dump covered **24 of the 28 scenarios** (the level, time-window,
+as-of and revision-marker scenarios each read a body per candidate and did not finish). It
+measures the index and the recall path at that size; it does **not** close the envelope, and no
+envelope claim may be read out of it. The compliant measurement is still outstanding, and the
+frozen targets are unchanged.
+
+Do not read the shrink as a pass: the 100,000-record envelope **on the real service** is still
+unmeasured, and the owner ruling on the service IPC DACL and the owner R37 walkthrough are still
+open. The measured numbers, the exact commands and the bounded next decision are in
+`artifacts/sprint-8/task-5.md` §15 and `artifacts/sprint-8/handoffs/S8T5-COMPACT-A6.md`.
+
+**Historical COMPACT-A6 note:** the immediately following no-persistence description and schema migration refer only to the COMPACT-A6 implementation; they do not describe the current persistent S8-T5 generation.
+A vault written by an older build needs no index migration: the private index has **no persisted
+artifact**. It is materialized from the encrypted canonical records in process memory, so an
+older vault simply rebuilds its index from canonical. The engine's own schema 2 to 3 step moves a
+live schema-2 engine's rows instead of orphaning them, and the rebuild writes nothing to the
+vault: after the measurement, the only vault file whose write time moved is the owner scope-grant
+state, which the unlock refreshes.
+
+#### Historical COMPACT-FIX-A7 — SQLite scope and identity corrections (2026-10-22)
+
+This section preserves the fixes and measurements for the former in-memory SQLite engine. They
+are not implementation details of the current encrypted generation; see BOUNDED-A14 below.
+
+**The scope filter runs inside the engine's SQL.** A scope of more than 900 approved resources is
+bound in the engine's own in-memory scope table. The candidate query now joins that table, so the
+scope is applied before any candidate row leaves the engine. Before the fix the engine returned
+every resource that carried the term and the caller filtered the out-of-scope ones, so
+out-of-scope resource identifiers crossed the engine's boundary on every large-scope query. The
+answers are unchanged: the same documents, revisions, scores, order and provenance.
+
+**The engine's own database assigns the document identity.** The document id is the temporal row's
+rowid, so it is always a free id above the rows the database already holds — including the rows a
+live schema-2 migration carried in. Before the fix the engine kept its own count of identities,
+and the first document indexed after an upgrade was handed an identity the migrated rows already
+held (the write failed with `UNIQUE constraint failed: private_index_temporal.doc_id`). An
+upgraded engine now indexes a new document, replaces a document at the same identity and adds a
+revision exactly as a freshly opened one does.
+
+**The 100,000-record latency miss is not a body-read cost.** The 200 timed queries ran with the
+level filter unset, so the owner-library path read no candidate body at all: only the 10 served
+hits are read. The body-heavy path is the **level filter** scenario of the result dump, which is a
+different scenario and is one of the four that did not finish at that size. What the timed queries
+actually paid is the candidate materialization:
+
+| Observation (100,000 records, 200 timed queries, 20 warm-ups) | Value |
+| --- | ---: |
+| Candidates matched per query, mean / max | 48,686.0 / 99,993 |
+| Batches of 400 candidate rows per query, mean / max | 122 / 250 |
+| Managed bytes allocated per query, p50 / p95 | 21,614,448 B / 199,171,440 B |
+| Managed bytes allocated over the 200 timed queries | 21,038,230,200 B |
+| Gen-2 collections during the 200 timed queries | 106 (153 in total, 47 of them before the timed loop) |
+| Search latency p50 / p95 / max | 545.6 ms / 6,706.6 ms / 9,501.7 ms |
+
+The candidate count, the batch count and the one-document-per-candidate count follow from the code
+path (the candidate read binds 400 rows per batch and returns one document per candidate); the
+allocation and the collection counts are the preserved profiling's own numbers. The split of the
+6.7 s between the engine's join and the managed allocation and ordering was **not** measured and
+is not claimed here.
+
+**What the 100,000-record run is and is not.** It is a measurement of the index (403.0 MiB of page
+bytes) and of the recall path at that size. It is **not** a protocol-compliant envelope
+measurement: the frozen method is at least 1,000 timed queries after 100 warm-ups, that run used
+20 warm-ups and 200 timed queries, and 24 of its 28 result scenarios finished. The frozen 256 MiB
+idle-RAM line and the frozen 100,000-record recall latency line remain **not met**, the
+100,000-record envelope on the real service remains unmeasured, and the owner ruling on the
+service IPC DACL and the owner R37 walkthrough remain open.
+
+The permanent in-process regression is `MetaBrain.S1T4.Smoke.exe s8-t5-index`: it asserts that a
+scope bound inside the engine still excludes the documents outside it, and that an engine upgraded
+from the previous index schema keeps its migrated rows, indexes a new document, replaces a
+document at the same identity, adds a revision and rebuilds its generation without any identity
+collision. The exact commands, the preserved before-arm provenance and the measured comparison
+are in `artifacts/sprint-8/task-5.md` §16 and
+`artifacts/sprint-8/handoffs/S8T5-COMPACT-FIX-A7.md`.
+
+#### BOUNDED-A8 — historical first bounded-memory, encrypted-at-rest index (2026-10-22)
+**Historical A8 snapshot:** the no-spill wording and measurements below are preserved for the A8 binary, which did not use external scratch files. They do not describe the current A11 builder; see the current subsection below.
+
+The owner-approved correction is implemented: the private index is a **persistent generation file
+that is encrypted at rest**, the engine keeps only **bounded structures** in memory, and the recall
+path **streams** the candidates instead of materializing them. The frozen targets are not
+relaxed; they are measured again against the same numbers.
+
+**What is on disk, and what is not.** The generation lives at `<vault>/private-index/index.v1.bin`
+and is a sequence of records, each sealed with the vault's own AES-GCM under a key derived from the
+vault data key (HKDF-SHA256, the label `MetaBrain|private-index|v1`). There is no plaintext index,
+no plaintext staging file, no journal, no write-ahead log and no temporary file: a staged
+generation is ciphertext, and publishing it is one atomic replace. The record's file offset, its
+kind, the format version and the **generation identity** are bound into the associated data; the
+generation identity is derived from the canonical digest of the set the generation was built from,
+so a record of one generation cannot be read as a record of another, and a generation cannot be
+replayed as the generation of a canonical set it was not built from. A tampered or truncated generation **fails closed**; a generation that is not the one the
+current unlocked epoch materialized is refused as well. The owner rebuilds it explicitly with
+`owner index-rebuild`, and the canonical records are never touched. A bounded independent assessment of the file format (whole-generation replay and header
+substitution) was run and answered: a header substitution cannot yield a served path; a whole
+valid-generation replay is not detected by the engine itself but is refused by the rebuild, by the
+owner index status and by both search paths, each of which compares the generation's own canonical
+digest with the snapshot's and with the live canonical set. The gap the assessment found — the
+rebuild could stamp the live canonical digest onto another generation's rows — is fixed, and the
+permanent regression proves it fails without the fix. The assessment is a **diagnosis, not a
+security verdict**: no security PASS is claimed here.
+
+**What is resident.** The engine keeps a **directory** (identity, revision and file offset of every
+indexed document) with a measured byte budget — a generation whose directory would not fit the
+budget is refused instead of being loaded — and a **cache of decrypted records** capped in bytes
+(16 MiB by default) and evicted least-recently-used. The postings are never all resident: a query
+reads the posting list of the terms it asked for, merges them and scores the candidates in
+batches. Locking or restarting drops the key, the cache, the directory and every private read.
+
+**Restart and unlock readiness.** A lock or a process restart does not force a rebuild of an
+unchanged generation. The next owner search, scoped search or `owner index-status` in the new
+unlocked epoch opens the published generation, authenticates its sealed header and directory with
+the borrowed vault key, and loads it only when its authenticated canonical digest and row count
+still equal the live canonical resource/revision set. The load is read-only: no staging file is
+written and the encrypted generation stays byte-identical. A missing generation still asks for the
+explicit `owner index-rebuild`; a generation that describes another canonical set is refused as
+`search_index_stale`; a tampered, truncated or wrong-key generation is refused as
+`index_unavailable`; and the explicit owner rebuild remains the supported recovery for all three.
+A record-level add/revise/delete delta is not applied. The generation is one sealed file whose
+directory, token buckets and postings describe the whole vault, and the write scope only appends
+rows and merges whole-vault postings at commit, so a changed canonical set goes through the
+existing explicit rebuild instead of an unversioned merge.
+
+**The measured comparison (in process, the same corpus generator, the same vault, the same query
+set, the same frozen method: 100 warm-ups and 1,100 timed queries per size).** The before arm is
+the preserved schema-2 product assemblies; the after arm is the current product source.
+
+| Observation (1,000 records) | Before arm (in-memory SQLite) | After arm (bounded, encrypted) |
+| --- | ---: | ---: |
+| Index bytes resident in the process | 17,506,304 B | 94,000 B directory + cache |
+| Index bytes on disk | — (no file at all) | 1,730,702 B, encrypted |
+| Rebuild | 7.339 s | 1.713 s |
+| Recall p50 / p95 | 35.2 / 77.2 ms | 5.1 / 18.0 ms |
+| The result dump (128 scenarios) | 858 lines, SHA-256 `d4b6122b…` | 858 lines, SHA-256 `d4b6122b…` — **0 differing lines** |
+
+**How to reproduce it.** The harness is the preserved A6/A7 measurement harness, with the after arm
+adapted to the new engine; the before arm is unchanged and links the same preserved assemblies
+(`MetaBrain.Core.dll` `ca3ff245…`, `MetaBrain.Application.dll` `ce7073f6…`,
+`MetaBrain.Connections.dll` `c202b9a8…`).
+
+**Historical command block — do not replay.** It uses the pre-A11 home and
+`DOTNET_SKIP_FIRST_TIME_EXPERIENCE`, which is unsupported by the current SDK. It is retained only
+to identify the A8 reproduction; use the repo-local SDK safety preconditions in
+`.agents/tmp/s8t5/a14/evidence/README.md` instead.
+
+```bash
+export DOTNET_CLI_HOME="$PWD/.agents/tmp/s8t5/home" \
+       NUGET_PACKAGES="$PWD/.agents/tmp/s8t5/nuget" \
+       TEMP="$PWD/.agents/tmp/s8t5/temp" \
+       TMP="$PWD/.agents/tmp/s8t5/temp" \
+       DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
+
+dotnet build .agents/tmp/s8t5/bounded-a8/harness-before/FootprintHarness.csproj -c Release -o .agents/tmp/s8t5/bounded-a8/out-before
+dotnet build .agents/tmp/s8t5/bounded-a8/harness-after/FootprintHarness.csproj  -c Release -o .agents/tmp/s8t5/bounded-a8/out-after
+
+out-before/MetaBrain.S1T4.Smoke.exe seed    1000 .agents/tmp/s8t5/bounded-a8/run-1000
+out-before/MetaBrain.S1T4.Smoke.exe measure 1000 .agents/tmp/s8t5/bounded-a8/run-1000 .agents/tmp/s8t5/bounded-a8/dumps/dump-before-1000.txt
+out-after/MetaBrain.S1T4.Smoke.exe  measure 1000 .agents/tmp/s8t5/bounded-a8/run-1000 .agents/tmp/s8t5/bounded-a8/dumps/dump-after-1000.txt
+diff .agents/tmp/s8t5/bounded-a8/dumps/dump-before-1000.txt .agents/tmp/s8t5/bounded-a8/dumps/dump-after-1000.txt
+```
+
+**The permanent in-process regression** is `MetaBrain.S1T4.Smoke.exe s8-t5-index`. It asserts the
+scope boundary, the exact token set and its order, the revision pinning, that **no plaintext private
+byte is on disk**, that a **tampered** and a **truncated** generation fail closed, that the
+decrypted cache stays **inside its byte budget** while the engine keeps answering from the file,
+that a **locked** vault cannot open or read the index at all, and that an **abandoned rebuild**
+publishes nothing and leaves the published generation answering.
+
+**What this measurement is not.** It is an in-process measurement of the index and of the recall
+path. It is **not** the 100,000-record envelope on the real service (the service path applies an
+explicit DACL to its transient named pipes, which the current safety instruction prohibits), and it
+is **not** the owner's R37 qualitative judgement. Both remain open.
+
+#### Historical BOUNDED-A11 — first current-source in-process measurement (2026-10-22)
+
+This was an A11-source run, not a comparison with A8 and not a measurement of the resumed A12
+source. The ignored harness drove the real `EncryptedVaultStore`, `VaultLifecycle`,
+`PrivateIndexAuthority`, `EncryptedPrivateIndexStore` and `ScopedSearchAuthority.SearchOwner` in
+process without service, named pipe, WPF or IPC. Each size used one cold first query, 100 warm-ups
+and 1,100 timed queries; the original outputs and binary hashes remain under
+`.agents/tmp/s8t5/a11/evidence/measurement/`.
+
+| Records | Rebuild / throughput | Generation bytes | Resident directory bytes | Cold first query | Warm p50 / p95 | Rebuild peak WS / private / managed | Post-timed WS / private / managed | Warm cache bytes |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 3.927 s / 254.7 rows/s | 1,892,405 | 166,888 | 233.44 ms | 9.12 / 62.74 ms | 60,305,408 / 29,876,224 / 13,641,296 | 61,927,424 / 25,731,072 / 6,603,776 | 534,392 |
+| 10,000 | 32.584 s / 306.9 rows/s | 17,573,899 | 1,012,888 | 906.95 ms | 91.12 / 671.53 ms | 88,662,016 / 59,174,912 / 34,408,456 | 89,886,720 / 57,565,184 / 16,070,824 | 2,695,408 |
+
+**Historical static allocation trace (A11 source, not a profile):** A11 `StreamTerms` decoded
+complete candidate token sets before filtering. The resumed A12 source now validates each
+authenticated entry while materializing only exact query-term matches; that source change is
+separately tied to the A12 build and measurements below.
+
+Format v3 bounds one document's token text to the source-derived maximum 1,808,100 UTF-8 bytes.
+The A11 builder used fixed 32-byte SHA-256 identities in posting runs and encrypted spill and
+64-character hexadecimal keys in bucket pages. The A12 source retains those identities, validates
+the complete authenticated token payload and confirms exact UTF-8 membership after digest lookup;
+collisions can widen candidate selection but cannot create a match. These source-level bounds do
+not replace the observed A12 measurements below.
+
+All memory values in the table are bytes. The A11 1,000-record warm p95 was inside its frozen
+250 ms line; its 10,000-record p95 **missed** the frozen 500 ms line. Preserve that first-source
+failure; it is not a result for the later A12 binary and is not erased by A12 measurements. A11 did
+not perform a 100,000-record run and proves no service/UI/IPC envelope or owner R37 outcome. The
+Historical A12 evidence follows in its own section; A13 preserves the later 100k miss and
+BOUNDED-A14 records the current correction below.
+
+#### Historical BOUNDED-A12 — resumed source implementation and in-process proof (2026-10-23)
+
+At the A12 source snapshot, the generation was the encrypted v3 derivative at
+`<vault>/private-index/index.v1.bin`. The rebuild uses one immutable, capped canonical manifest
+snapshot for its row pass and releases it before the second live reconciliation snapshot is
+requested. The canonical digest streams the exact prior `MetaBrain|private-index|v1` UTF-8 byte
+encoding in strict ordinal resource-ID order, including invariant decimal revisions; it does not
+create a whole-vault concatenated string. The index format, canonical authority and search contract
+are unchanged.
+
+The 64 MiB resident-directory limit in the R8-reviewed source snapshot is superseded by the current 32 MiB limit for both the sealed directory record and its count-derived pre-allocation resident estimate. The estimate uses the maximum canonical row count, per-row identifier byte bound, bucket/row/sample counts, array-reference and fixed managed overhead; the check runs before the directory arrays are allocated, and the decoded size is checked again after parsing. Sharing this 32 MiB cap between the sealed input and decoded directory halves the worst-case directory ciphertext-plus-plaintext read overlap from 128 MiB to 64 MiB. The default decrypted-record cache has a separate 16 MiB byte budget. The overlap, decoded arrays and cache may therefore sum to 112 MiB before other builder/query/runtime memory; these are not a whole-process cap. Build/reopen and query buffers are measured in the process separately.
+
+The five fixed builder byte arrays total 5,296,128 B: 4 MiB posting arena, 65,536 × 16 B pair
+array, 1,024 × 16 B merge-pair array, 32,768 B spill-token arena and 4,096 B term scratch. At the
+format maximum of 20,090,000,000 pairs (100,000 rows × 200,900 terms), source-derived run count is
+306,550; seven levels retain at most seven references each (49 total). Final merge copies at most
+49 more references into its bounded worklist and processes at most eight runs per merge group.
+Each encrypted spill chunk is capped at 1,024 pairs / 49,160 B plaintext; its sealed frame is at
+most 49,192 B (4-byte length, 12-byte nonce, payload and 16-byte tag). A term has at most four final
+posting chunks (32,768 ordinals / 256 KiB per chunk). A bucket holds at most 4,096 keys across at
+most 11 pages of 384 entries / 256 KiB each; the fixed bucket-offset array has 4,096 entries.
+Vocabulary overflow fails the rebuild closed instead of truncating. These are source-derived
+ceilings, not claims that any measured run or chunk reached its maximum.
+
+Fresh deterministic-corpus measurements for the current source (times in seconds / milliseconds,
+other values in bytes):
+
+| Records | Rebuild / throughput | Generation / resident directory | Cold first query | Warm p50 / p95 | Rebuild peak WS / private / managed | After timed queries WS / private / managed | Warm cache |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 1.647 s / 607.1 rows/s | 1,892,405 / 166,888 | 53.77 ms | 3.74 / 23.15 ms | 58,294,272 / 29,609,984 / 12,732,312 | 72,708,096 / 37,249,024 / 4,770,616 | 534,392 |
+| 10,000 | 12.320 s / 811.7 rows/s | 17,573,899 / 1,012,888 | 223.39 ms | 46.47 / 186.48 ms | 91,729,920 / 61,771,776 / 32,994,408 | 98,668,544 / 62,005,248 / 19,313,392 | 2,695,408 |
+
+Both current-source warm p95s are inside the frozen 250 ms (1,000) and 500 ms (10,000) lines;
+cold first queries are reported separately. Each timed set used 100 warm-ups followed by 1,100
+queries. The 1,000 run allocated 1,710,068,424 B total with 2,840,848 B p95 per query; the 10,000
+run allocated 11,452,893,744 B total with 19,243,920 B p95 per query and 4,883.7 mean / 10,000
+maximum matches. Peaks are 20 ms samples during rebuild, not a full profiling trace. The first
+complete A12 matcher attempt measured a 10,000-record p95 of 1,898.32 ms (target miss); source
+inspection showed SHA-256 was computed for every token in each candidate record. The final A12
+matcher binary-searches the exact UTF-8 query spans and verifies the digest only for byte-exact
+matches, then measured 186.48 ms. The initial 600-second timeout produced no p95 and was excluded.
+
+The A12 focused smoke runs the actual owner status/library and scoped agent handler in-process and
+emits paired before/after handler dumps from the same fixture. It also checks frozen scoped grants
+and revisions, tie/provenance, weights and penalties, temporal/current/history/level filters,
+deleted/purged/unknown lifecycle boundaries, queries over 64 terms, deep offsets, browse,
+backup/restore rebuild, stale-generation replacement, lock/unmaterialized status, partial
+enumeration cleanup, cancellation and exceptions. The served-page full-token path is unchanged; the
+matched-token reader validates every entry, binary-searches pre-encoded query terms by exact UTF-8
+bytes and checks SHA-256 only after a byte-exact match, so a digest collision cannot create a
+result. Header and nonce tests cover malformed lengths and offsets, authentication/tamper/truncation,
+generation replay and counter wrap.
+
+The reproducible A12 evidence (exact source build, focused smoke, fresh 1,000/10,000-record
+measurement outputs, binary/log SHA-256 values and command/environment record) is retained under
+`.agents/tmp/s8t5/a12/evidence/README.md`. Synthetic in-process recall uses a cold first query, then
+100 fixed warm-ups and 1,100 timed queries. Peak working set, private bytes and managed bytes are
+sampled every 20 ms during rebuild; these are process samples, not a full profiling trace. This
+does not exercise the real service, WPF/UI, named pipe or IPC; the static named-pipe ACL restriction
+remains binding. No A12 100,000-record run is claimed: current host headroom is unknown under the
+host-inspection restriction. The owner R37 review and real service/UI/IPC evidence remain external
+gates.
+
+The A11 reproduction source, exact commands, phase samples, console output and SHA-256 provenance
+remain in `.agents/tmp/s8t5/a11/measure-harness/` and
+`.agents/tmp/s8t5/a11/evidence/measurement/README.md`. That historical first-run p95 failure is
+not a security or performance acceptance.
+
+#### BOUNDED-A13 — 100k current-source in-process continuation (2026-10-23)
+
+The exact R9-reviewed final-03 product assemblies and deterministic A8 corpus were used for a
+100,000-resource synthetic run. `PrivateIndexAuthority` completed the encrypted index rebuild in
+223.941 s (446.5 rows/s), inside the frozen 20-minute rebuild limit. The preserved owner query
+method emitted one cold natural query at 3,007.19 ms (reported separately), then 100 warm-ups and
+1,100 timed queries. Warm p50/p95/max were 647.32 / **1,888.23** / 8,061.21 ms: the frozen 1,000
+ms p95 limit is **missed**. Mean/max candidate matches were 48,844.3 / 99,996; the natural/symbol
+expected-hit rates were 0.0218 / 1.0000. No candidates or terms were capped.
+
+| Rows | Rebuild / throughput | Cold first query | Warm p50 / p95 / max | Generation / resident directory / warm cache (B) | Rebuild peak WS / private / managed live (B) | Peak vault with encrypted staging/spill (B) |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 100,000 | 223.941 s / 446.5 rows/s | 3,007.19 ms | 647.32 / **1,888.23** / 8,061.21 ms | 172,188,312 / 9,472,888 / 16,752,768 | 1,030,508,544 / 1,352,286,208 / 1,291,200,528 | 3,321,947,786 |
+
+At the 250 ms disk sample interval, the private-index staging/spill directory reached 2,635,496,576 B;
+the seeded encrypted vault before indexing was 686,451,210 B. The frozen 1.5 GiB product-data
+limit is 1,610,612,736 B: the final encrypted vault was 858,639,799 B, but the combined staging
+and vault build peak **exceeded** the limit. The harness does not split base spill bytes from
+rewritten merged-run bytes.
+
+The follow-up opened the existing published generation (no rebuild or timed-query rerun) and
+sampled 300 s unlocked and 300 s locked in-process core/index proxies. Unlocked process CPU share
+of total host capacity was 0.0814%; working-set average/min/max was 149,198,364 / 119,152,640 /
+224,595,968 B, private bytes 132,363,624 / 101,634,048 / 209,297,408 B, and managed live bytes
+68,964,091 / 37,702,864 / 116,866,696 B. Locked core-proxy CPU share was 0.0443%; working-set
+average/min/max was 119,298,712 / 119,242,752 / 119,455,744 B, private bytes 101,718,071 /
+101,646,336 / 102,576,128 B, and managed live bytes 39,013,026 / 38,321,368 / 39,690,768 B.
+The unlocked engine held the 9,472,888 B directory and a cold 0 B cache; the locked phase held no
+engine/index. Native-private residuals are estimates (`private - GC committed`), not a profiler
+trace. These are **core proxies**, not service-plus-owner-client idle acceptance; real service,
+WPF/UI, pipe/IPC and owner R37 remain open.
+
+The at-rest follow-up found only `index.v1.bin` in the private-index directory after rebuild,
+with no staging/spill files; bounded scans did not find either known synthetic marker in the
+published file. The source-reviewed AEAD v3 contract is unchanged. The primary harness log ends
+with an outer-wrapper `RUN_RESULT=INCOMPLETE` because its WARM-line interception was bypassed
+after the INDEX gate; the preserved `Measure` method returned 0 and its complete COLD/WARM
+metrics are in the log. A separate idle-only probe used the existing generation to complete both
+300 s phases.
+
+The full raw logs, exact 64-character input/product/log hashes, SDK-local environment, run IDs,
+source-derived binding and failure diagnosis are in `.agents/tmp/s8t5/a13/evidence/README.md`;
+the attempt handoff is `artifacts/sprint-8/handoffs/S8T5-BOUNDED-SCALE-A13.md`. This is a measured
+synthetic in-process result, **not a full S8-T5 PASS or service/UI/R37 claim**. Product source was
+not changed; the latency and staging/disk misses remain open for a separately reviewed,
+contract-preserving correction.
+
+#### BOUNDED-A14 — current-source 100k scale correction and remeasurement (2026-10-23)
+
+A14 corrected the two observed local S8-T5 scale failures without relaxing the frozen targets.
+The existing published generation remains encrypted format v3; canonical vault records remain
+the only truth. Rebuild-only posting scratch is version 2: sorted entries with the same full
+SHA-256 digest are grouped into one digest, a count/first ordinal, then positive delta-varint
+ordinals. A 1,024-pair chunk and eight-run fan-in bound each merge level. The scratch remains
+AEAD ciphertext under the existing vault-derived key, separate file identity, nonce sequence and
+offset-bound AAD; no plaintext spill, new crypto or package was added. Orphan scratch is reaped by
+the existing rebuild lifecycle.
+
+The query correction followed one exclusive diagnostic query against the existing 100k generation
+(`S8T5-A14-QUERY-PHASE-01`; no rebuild for this profile). Its 98,538 candidate records spent
+932.785 ms / 116,601,064 B allocated in authenticated token-record reads and 928.742 ms /
+17,310,928 B in exact matching; together these phases accounted for 79.5% of profiled query time.
+The pre-fix reader allocated a plaintext payload, AAD array and `AesGcm` per candidate. The
+current query reader reuses one bounded AEAD context plus ciphertext/plaintext/AAD buffers under
+the store gate, validates every token record, compares exact UTF-8 bytes for membership, and
+zeroes borrowed plaintext before advancing. Exact equality still decides membership; no
+digest-only shortcut or candidate/page cap was introduced. Query-context disposal, cancellation,
+lock and commit cleanup are covered by the focused regression.
+
+The permanent focused scenario `s8-t5-index` passed on current source (full tool output:
+`artifact://2671`). It covers maximum supported queries, forced digest-collision candidates,
+strict malformed-token cases, partial enumeration/cancellation/lock cleanup, maximum canonical
+document bounds, actual owner/scoped-handler filters and ranking behavior, and a 9-token ×
+100,000-ordinal multi-pass grouped-spill proof that verifies every ordinal in the final postings.
+
+The current-source runs used the preserved A8 synthetic corpus generator and the frozen
+100-warm-up / 1,100-timed-query method. The 100k query fixture SHA-256
+(`9781860aecd43d616c814c9078c78682731fb5dcec3ed41b2cf9b2403fc17292`) is identical to A13's.
+Times are seconds / milliseconds; other values are bytes.
+
+| Rows | Rebuild / rows per second | Generation / directory / warm cache | Cold first query | Warm p50 / p95 / max | Warm allocation total |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 1.490 s / 671.3 | 1,892,405 / 166,888 / 534,392 | 39.55 ms | 3.61 / 18.50 / 29.42 ms | 1,070,668,488 |
+| 10,000 | 10.226 s / 977.9 | 17,573,899 / 1,012,888 / 2,695,408 | 221.59 ms | 8.70 / 60.53 / 79.95 ms | 5,096,976,504 |
+| 100,000 | 88.003 s / 1,136.3 | 172,188,312 / 9,472,888 / 16,752,768 | 1,498.11 ms | 118.10 / 680.55 / 847.30 ms | 45,756,489,064 |
+
+The warm-p95 limits remain 250 / 500 / 1,000 ms; all three measured p95 values are within their
+unchanged limits. The 100k cold natural query had 98,538 matches and its expected hit; cold latency
+is reported separately and is not substituted for warm p95. Mean/max matches were 488.8 / 1,000,
+4,883.7 / 10,000 and 48,844.3 / 99,996 at the three sizes. Natural / symbol expected-hit rates
+were 0.0218 / 1.0000. No candidates or terms were capped. The 100k index rebuild also remains
+inside the unchanged 20-minute limit.
+
+Run `S8T5-A14-100K-FINAL-01` rebuilt the fresh 100k encrypted fixture before timing. The 250 ms
+sampler covered the whole vault, including canonical files and private-index staging/spill; it
+observed 351 samples and zero missing-file races:
+
+| 100k disk observation | Result |
+| --- | ---: |
+| Seeded vault before rebuild | 686,461,525 B |
+| Peak private-index directory / staging and spill | 273,620,804 B |
+| Peak total vault bytes with staging | 960,082,329 B |
+| Final index / final vault | 172,188,312 / 858,650,109 B |
+| Frozen combined disk limit | 1,610,612,736 B |
+
+The observed combined peak is below the unchanged 1.5 GiB limit; the A13 3,321,947,786 B peak
+remains preserved as a historical failure. After publication, only `index.v1.bin` remained in the
+private-index directory. The two known synthetic markers were absent from that file; this is a
+bounded marker check, not an exhaustive plaintext search. The final index size matches A13's and
+the generation format remains v3.
+
+The first A14 frozen-query parity result is withdrawn. `rank-parity-100k-01.log` reported equal
+baseline/current result TSVs, but the alleged baseline binaries were not A12: its Core and
+Application DLL hashes were the current A14 hashes (`28c19784cde524c37c042493d770089dc41ff7fdcf7956d927f0ec6232c57113`,
+`043375ae8d4deca5f761ed6176acd535e39a81a0697592d8498e458bc4714a7d`), and its Connections
+hash `60ea90d6b186d4e3bb576804302a938916a305684c10834b5fcaee18366956f0` matched neither
+baseline nor current A14. That result is invalid, not parity evidence.
+
+The corrected isolated baseline harness used A12 `measure-out-final-03` references. Before its
+single baseline arm, all copied product DLL hashes matched A12's authoritative README: Core
+`c4031af4e77efa633cbffd502cb6677ae5b07abf4e3e67031d0da44daca2c91f`, Application
+`eef97d906bb7440dbcc45fca5af337da1b0787a418770af21a40b69603a7ce4f`, and Connections
+`82de5472fcbf6d89f4eda4ee7edbfaa85e4ccd5a59f27788af6952c07529cc85`. No product rebuild or
+current A14 arm was run. On the existing copied v3 generation, the corrected A12 arm emitted
+1,102 rows (cold page plus 1,100 timed pages after 100 warm-ups); its TSV and the retained
+current A14 TSV have the same SHA-256
+`9ea9376c081b6494efd6a9d25df9901ca0cd31e34b2863b7ce5cbcff0f413481`, and `fc /b` returned 0
+with no differences. The query fixture SHA-256 is
+`9781860aecd43d616c814c9078c78682731fb5dcec3ed41b2cf9b2403fc17292`, and the generation index
+hash is `966c35c204a349d732229d75af244c504490e3c6b26f283218bb0c4458e95fa2`. The page digests
+cover serialized totals and all returned scored-hit fields, order, revisions, reasons and
+item/document metadata; query text and bodies are not emitted. This verifies the fixed 1,100
+query sample plus its cold page, not all 200,000 generated rows.
+
+The initial copied-vault comparison differed only in encrypted `scope-grants.enc`; its source
+hash was `f13cabee3a3a921666b59243fd5f492d87137b0891620b3823ec86e30b886a9a`, copied pre-run
+hash `811efaf5a4c3f584f1ca60e9106722e7f9bd4d5619d8e7dde7c699d05affcfe6`, and post-run hash
+`93a5d89b5978b942035cda3041bf272def315e019c4a7693153a7047c958d073`. Its ciphertext change
+reason is unknown. The owner query takes its full 100,000-resource scope from
+`operation.ListResources()` and does not use agent grants; grant-byte equality is not claimed.
+The runner wrote its normal `RANK_PARITY` marker and result TSV with empty stderr, but the
+PowerShell wrapper left its exit-code field blank and returned 1 after output emission, so child
+process exit 0 is not asserted. Raw inputs, outputs, hashes and invalid earlier artifacts are
+listed in `.agents/tmp/s8t5/a14/evidence/README.md`.
+
+**Adverse RAM evidence — not a service pass or a waiver.** The same-process 100k core/index/owner
+harness ran seeding, rebuild, timed queries and both idle phases. Its 300-second unlocked proxy
+averaged 401,365,047 B working set and 740,235,928 B private bytes with a 9,472,888 B directory
+and 16,752,768 B cache. The locked proxy averaged 406,963,128 B working set and 746,482,871 B
+private bytes after the engine/index was disposed. Both raw working-set averages exceed the
+frozen 256 MiB service-idle line. Before rebuild, the same process already reported
+1,268,473,144 B managed and 1,002,147,840 B working set after its 100k `Seed` phase; no forced GC
+or memory-attribution instrumentation was used. The retained seed fixture, query/rebuild phase
+allocations and product contribution cannot be separated from this run, so that attribution is
+**unknown**. Treat the proxy exceedance as adverse evidence requiring review. It is not the real
+service and does not establish either a service-memory pass or a service-memory failure. Source
+caps remain bounded (32 MiB resident directory, 16 MiB decrypted cache, 5,296,128 B fixed posting
+builder arrays, 40,972 B maximum grouped scratch chunk, eight-run fan-in, and token payloads no
+larger than 2,410,804 B); those structure bounds do not override the measured process proxy.
+
+The run began with 5,113,901,056 B free physical memory; its 1,569 read-only guard samples reached
+a minimum of 3,470,528,512 B, above the predeclared 1,073,741,824 B floor. No host mutation or
+application closure occurred. Unlocked / locked 300.01 s core-proxy CPU shares were 0.0495% /
+0.0540%, with 296 / 297 one-second samples. These are not service-plus-owner-client idle
+acceptance; the real service, WPF/UI, pipe/IPC, owner R37 and independent fresh-review gates remain
+open.
+
+#### S8T5-RAM-PROVENANCE-A15 — fresh-child owner-query diagnosis (2026-10-23)
+
+The A15 diagnosis used two sequential fresh children on the existing synthetic A14 100k vault. R1 opened the existing v3 index only; it did not seed, copy, rebuild or score a query. The index had 100,000 rows and matched the live canonical digest, but the fresh owner handler was unmaterialized and the supported `owner.library.search` correctly returned `index_not_materialized`. R1's actual child exit code was 0. Main then authorized one R2 child to call the supported `owner.index.rebuild` on that same vault, followed by one cold, 100 warm-up and 1,100 timed owner searches (`Current="all"`, offset 0, limit 10), 300 s unlocked idle, lock, and 300 s locked idle. No further child was run.
+
+R2 rebuilt 100,000 canonical rows in schema 3 with matching current digest, no stale/moved flag; the normal derivative index hash changed from `966c35c204a349d732229d75af244c504490e3c6b26f283218bb0c4458e95fa2` to `7a8bbd3d64d2b265fa8f62e59ea7c7999335d01b0dbaf497c81d9e99716ee9b6`. The normal audited owner operation created `operations-audit.enc`; the manifest/header/format/query/authoritative-TSV hashes stayed unchanged. Unlock advanced the synthetic grant epoch 2→3 with policy generation 0 and zero grants/tokens/requests/collections. `scope-grants.enc` changed through normal fresh-nonce AEAD reseal on unlock and stayed stable through lock; no ciphertext-equality claim is made. The A14 full-vault hash list still describes the prior derived-index bytes and was not rerun.
+
+The R2 wrapper correctly captured `Process.WaitForExit` then `ExitCode=11`, not 0. Its in-child comparator incorrectly required the expected target to be in the top-10 page for all broad natural queries; that produced 538 flags for `symbol=0` target absences. A separate streamed offline compare of the 1,101 cold/timed rows against the current A14 TSV found 0 differences in the shared phase/index, expected-ID hash, symbol, total, hit-count, and copied A14 page-hash-reference fields; symbol-query target absences were 0. The actual wire page hashes are not compared to the old `ScopedSearchAuthority.OwnerLibraryPage` hashes because their serialized shapes differ. The exit 11 and `DIAGNOSTIC_INCOMPLETE` marker remain intact; neither is rewritten as a pass.
+
+The R2 core/owner-handler proxy working-set average/peak was 286,283,625 / 307,220,480 B during queries. The 300 s unlocked idle average/peak was 289,931,762 / 290,004,992 B; the 300 s locked idle average/peak was 288,975,235 / 290,709,504 B. The locked phase had zero resident index-directory/cache bytes but remained above the frozen 268,435,456 B (256 MiB) line. Private bytes, managed live/committed, GC heap, directory and cache were recorded separately; no forced GC or trimming was used. The snapshot is capped at 512 sampled rows, index directory at 9,472,888 B, and cache payload at 16,777,216 B; owner search still creates per-request full-scope temporary list/dictionary/sorted-array structures. Since the post-lock process remained elevated and no heap/root profile or forced collection was permitted, these proxy numbers do not prove which remaining managed bytes are rooted product data versus uncollected garbage/CLR residency. They remain adverse and open; there is no target waiver or speculative product fix.
+
+R1/R2 used the A15 harness built with SDK 10.0.402 (roll-forward disabled) and ran on .NET 10.0.13. Product DLL hashes matched the R11 current-source binding. The 1 GiB read-only free-memory floor stayed above 4,633,284,608 B; no host mutation or app closure occurred. Raw logs, streamed TSV, offline comparison, SDK/build evidence, and manifest are in `.agents/tmp/s8t5/a15/evidence/README.md` and `manifest.sha256`; details are in `artifacts/sprint-8/handoffs/S8T5-RAM-PROVENANCE-A15.md`. The real service, WPF/owner client, pipe/IPC, R37 proof, independent fresh review, and Main-owned plan/checkpoint gates remain open. This is not service acceptance or a full S8-T5/security PASS.
+
+#### S8T5-HANDLER-RESUME-A17 — actual owner-handler result (2026-10-23)
+
+A17 used the existing synthetic A14 100k vault in a fresh child (`noSeed=1`, `noCopy=1`) and ran one normal owner rebuild in the current unlock epoch. It returned 100,000 rows, schema 3, a current canonical digest, `stale=0`, and `canonical_moved=0`, but took 1,645,385.959 ms (27 min 25.386 s), missing the frozen 20-minute rebuild limit. It then completed one cold call, 100 warm-ups, and all 1,100 timed `owner.library.search` calls (`Current="all"`, offset 0, limit 10). The corrected common-field comparator checked 1,101 cold/timed rows with 0 mismatches; all 600 symbol targets were present, while 576/601 broad natural-query targets absent from top 10 were diagnostic only.
+
+The actual `HandleAsync` p95 was 2,810.977 ms (p50 1,441.776 ms, max 5,680.520 ms), above the unchanged 1,000 ms 100k line and worse than A15's 2,167.332 ms. The timer stops before reply serialization and the harness's JSON/hash, common-field comparison, and TSV write; those outside-handler steps have no separate timing, so their share of wall time is unknown. The streamed TSV is 279,123 B / SHA-256 `48d3af889c5e01d4ae7cec6c4391eff74701d939953a154d2e5498b6c7fab87f` and contains no query text/body or retained result list.
+
+The outer runner job timed out at 3,600.21 s during post-query unlocked idle, after sample 92 of 300. The saved idle fragment has 93 samples (0–92), working-set min/max 253,964,288 / 255,725,568 B, below the 268,435,456 B line but incomplete; it has no phase summary. Locked idle never began. The post-query snapshot was 254,480,384 B working set, 214,532,096 B private, 189,191,648 B managed live, 190,784,040 B GC heap / 199,602,176 B committed, 9,472,888 B index directory, and 16,752,768 B cache. Neither snapshot nor partial idle is a completed idle result. No runner wrapper, `WaitForExit`/child `ExitCode`, `RUN_RESULT`, or final memory summary was written; one post-timeout process query found no matching owned runner, but the child exit remains unknown. The host guard recorded 3,562 samples, with minimum free physical memory 2,026,131,456 B, above the 1 GiB floor.
+
+The exact runner dependency binding is `out-focused-03` Core/Application/Connections SHA-256 `c9a3ad165c540770e36b34ad68b6a2aa7dc632a56e0e55b8ec09f66d6a0068d6`, `1dc6ed231b146e1257e32f377db29d78634fc7e373c7ff48386bccb401349c5d`, and `0efda5f562f68e6ce7b39ec37a80055bbfd98816a6960200f8129a6b6cebbc15`; runner-build-04 and the passing focused-smoke-03 used those same product DLL bytes. Focused-smoke-03 predates A17's added owner-library filter/tie regressions. The final focused-smoke-05 also passed the current expanded tests, but its product DLL hashes differ despite the same reported file sizes; the build logs do not establish the cause. Therefore #05 is current-source smoke evidence, not byte-identity proof for runner-04.
+
+The 1k/10k actual-handler p95, A17 CPU, combined stable-vault-plus-all-staging disk, and a complete unlocked/locked 300 s idle were not measured. A14's direct-core percentiles and older disk result remain historical, not A17 measurements. Raw logs, SDK/runtime provenance, exact binary/source bindings, and the partial TSV are in `.agents/tmp/s8t5/a17/evidence/README.md` and `manifest.sha256`; the full worker handoff is `artifacts/sprint-8/handoffs/S8T5-HANDLER-RESUME-A17.md`. Real service, WPF/owner UI, pipe/IPC, owner R37, independent review, and Main-owned plan/checkpoint gates remain open. No S8-T5 PASS is claimed.
+
+#### S8T5-GOLD-BOUNDED-A18 — owner scope from the canonical snapshot, final measured limits (2026-10-23)
+
+The owner library handler now takes its request scope from the same strict, ordinal-sorted canonical `ListResources()` snapshot that already passes the generation/materialized/live digest checks, applying zone/collection filters to it; the per-request decrypt/parse/sort of every materialized index row is gone. The superseded-target relation scan now runs only for `current` queries. The serial one-envelope rebuild read is retained.
+
+Two Gold measurements were spent (owner cap). Run 1 used a bounded 8-envelope rebuild batch and was stopped by the mandatory 1 GiB host free-memory guard after ~85 s of rebuild (`free_bytes=1052467200`); its actual exit was not captured by a wrapper defect and is unknown, not 0. The batch was withdrawn. Run 2 used the serial rebuild and completed the full protocol with actual child exit **12** (`DIAGNOSTIC_COMPLETE`, p95 miss).
+
+Run 2 (existing A14 100k vault, one actual `owner.index.rebuild`, cold + 100 warm-ups + 1,100 timed, 300 s unlocked + 300 s locked idle; SDK 10.0.402, runtime .NET 10.0.13): handler p50/p95/max/min **183.937 / 1,668.026 / 2,233.389 / 79.250 ms** against the unchanged 1,000 ms line (miss, but better than A15 2,167.332 and A17 2,810.977); average allocation 29,286,018 B (A17: 113,731,085 B); comparator 1,101 rows, 0 common-field mismatches, 600/600 symbol targets present, 576/601 natural top-10 absences diagnostic only; rebuild 1,396,956.547 ms (23 min 16.957 s) against the 20-minute line (miss); combined stable vault + peak staging **1,132,272,603 B** against 1.5 GiB (within); unlocked idle WS 207,084,032 B average / 207,892,480 B max and CPU 0.0709 %; locked idle 204,846,357 / 205,545,472 B and CPU 0.0729 % (both within 256 MiB and 1 %); host guard minimum 2,919,084,032 B. Index `809f78a2…` → `b4732a37…`; grants `1cd3e7e6…` (282 B) and encrypted audit `f8777044…` stayed stable through lock; manifest/header/format/queries/reference unchanged.
+
+1k/10k actual-handler p95, owner-UI p95, provider cost (no provider call), real service/WPF/UI/IPC, owner R37, fresh independent review and Main-owned checkpoint remain open. The A18 snapshot is unreviewed. Raw logs, TSV, SDK/binary bindings and the checksum manifest are in `.agents/tmp/s8t5/a18/evidence/README.md`; the full handoff is `artifacts/sprint-8/handoffs/S8T5-GOLD-BOUNDED-A18.md`. No target was relaxed and no PASS is claimed. The owner-approved 2026-10-23 cut-over above later superseded the 100k latency/rebuild figures and the outstanding 1k/10k handler reruns as T5 sign-off gates; every number in this subsection stays as recorded, and the remaining open items are not waived.
+
+#### Historical SCALE-A3 preflight — 100k not started on the A8 host sample (2026-10-22)
+
+The A3 preflight recorded historical read-only host samples of 16,509,732 KiB total visible memory
+and 2,798,072 KiB available (2.67 GiB), an earlier 4,512,888 KiB available (4.30 GiB), and a prior
+Main sample of 5,212,968 KiB (about 4.97 GiB). A3 compared its latest sample with the then-used
+approximately 4 GiB free-memory planning estimate and the withdrawn 3.3–3.5 GiB size projection.
+Those historical samples and estimates do not establish current headroom or authorize a current
+100k run. A3 did not start its 100k envelope or WPF scenarios.
+
+The independent A3 safety observation was static: its real service path creates named pipes with
+explicit DACLs, so launching that service/UI path is prohibited by the current safety instruction.
+Do not remove or weaken the DACL. The real service/UI/IPC envelope remains an external gate; this
+record is not permission to run it. A3's exact evidence remains in `artifacts/sprint-8/task-5.md`
+§12 and its handoff.
+
+No current total-headroom measurement was obtained for this A12 resume, and the host-inspection
+restriction remains in force. Therefore A12 did not run 100k. Any future owner-authorized 100k
+in-process run requires a fresh, measured safe-headroom margin above its predeclared floor, plus
+the frozen 100-warm-up / at-least-1,000-timed method. It must not close unrelated applications to
+create headroom.
+
+The frozen 100,000-record method does not authorize execution of the prohibited service/UI/IPC
+path. Current A14 in-process evidence is above; this historical A3 host sample grants no permission
+to change host state. The R37 walkthrough below remains pending, not an approval.
+
+
+#### R37 owner walkthrough — pending, not an approval
+
+The program run below supplies the real service's observed answers; only the owner can decide
+whether each answer is useful. It does not gather or imply an owner decision. Keep the existing
+six-file selection fixed; do not add files, sessions, profiles or provider data.
+
+Run this in Windows PowerShell from the assigned repository. The environment variables and all
+build/test output stay inside the worktree; the smoke creates an encrypted synthetic vault under
+`runtime/s8-t5`, reads only the six paths listed below, and prints labels/scores rather than source
+excerpts:
+
+
+The SDK 10.0.402 first-use incident remains unresolved at host level. Before each SDK child, use
+the already-existing repository-local A11 CLI home and verify its sentinel with file tools; never
+create/reset that home or rely on `DOTNET_SKIP_FIRST_TIME_EXPERIENCE` (unsupported since SDK 3.0).
+If the sentinel is missing, stop before invoking the SDK. Set all four process-local safety flags
+below for every SDK child; these prevent known future side effects but do not establish what the
+earlier certificate banner changed.
+
+```powershell
+$repo = 'F:\ai-ml\my-meta-brain'
+Set-Location -LiteralPath $repo
+$env:DOTNET_CLI_HOME = Join-Path $repo '.agents\tmp\s8t5\a11\home'
+$env:NUGET_PACKAGES = Join-Path $repo '.agents\tmp\s8t5\nuget'
+$env:TEMP = Join-Path $repo '.agents\tmp\s8t5\a11\temp'
+$env:TMP = $env:TEMP
+$env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'
+$env:DOTNET_ADD_GLOBAL_TOOLS_TO_PATH = 'false'
+$env:DOTNET_SKIP_WORKLOAD_INTEGRITY_CHECK = 'true'
+$env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
+$sentinel = Join-Path $env:DOTNET_CLI_HOME '.dotnet\10.0.402.dotnetFirstUseSentinel'
+if (-not (Test-Path -LiteralPath $sentinel -PathType Leaf)) {
+    throw 'The pre-existing SDK 10.0.402 first-use sentinel is missing; do not invoke the SDK.'
+}
+$out = Join-Path $repo '.agents\tmp\s8t5\a12\r37-out'
+New-Item -ItemType Directory -Force -Path @(
+    $env:NUGET_PACKAGES, $env:TEMP, $out
+) | Out-Null
+dotnet build tests/MetaBrain.S1T4.Smoke/MetaBrain.S1T4.Smoke.csproj -c Release --no-restore -o $out
+if ($LASTEXITCODE -ne 0) { throw "S8-T5 build failed: $LASTEXITCODE" }
+& (Join-Path $out 'MetaBrain.S1T4.Smoke.exe') 's8-t5-relevance' `
+    (Join-Path $out 'MetaBrain.Connections.exe')
+if ($LASTEXITCODE -ne 0) { throw "S8-T5 relevance run failed: $LASTEXITCODE" }
+```
+
+The fixed selection is the S1-T1 sample relative to `F:\ai-ml`:
+
+| Label | Selected path |
+| --- | --- |
+| `decision-log` | `my-meta-brain/.agents/memory/decisions.md` |
+| `requirements-registry` | `my-meta-brain/docs/REQUIREMENTS.md` |
+| `databricks-plan` | `ecommerce-agent-databricks/docs/PLAN.md` |
+| `databricks-persistence-contract` | `ecommerce-agent-databricks/docs/contracts/conversation-persistence.md` |
+| `databricks-orchestrator-source` | `ecommerce-agent-databricks/agent_core/orchestrator.py` |
+| `bridge-research-kickoff` | `bridge-research/docs/bridge-research-kickoff.md` |
+
+For each `MEASURE owner_query` row, compare the observed top-three labels/scores with the
+scenario's expected document and inspect only the selected source(s) needed to judge the answer.
+The program's expected outputs are not a relevance label:
+
+| # | Prompt / category | Scenario's expected document |
+| --- | --- | --- |
+| 1 | `quyet dinh giu manifest lam nguon su that duy nhat cua vault` — Vietnamese decision/rationale | `decision-log` |
+| 2 | `keep the manifest as the single source of truth of the vault` — English decision/rationale | `decision-log` |
+| 3 | `ghi chu nghien cuu khoi dong du an va ket qua da trien khai` — Vietnamese paraphrase | `bridge-research-kickoff` |
+| 4 | `research note kickoff and what was actually implemented` — English paraphrase | `bridge-research-kickoff` |
+| 5 | `MAX_REQUEST_INPUT_CHARACTERS` — exact symbol | `databricks-orchestrator-source` |
+| 6 | `MAX_AGENT_GRAPH_STEPS` — exact symbol | `databricks-orchestrator-source` |
+| 7 | `2026-01-17 kickoff` — date/time | `bridge-research-kickoff` |
+| 8 | `2026-09-28` — date/time | `decision-log` |
+
+R37 also requires a walk-through of prior errors, decisions, research, explicit links, synthesis and
+intentions. The eight scripted prompts cover decision history, bilingual paraphrase, symbols and
+dates; they do not exercise an error-recall query or create relation, synthesis or intention
+records. The owner must record each remaining category below as either represented by a prompt
+within this same six-file sample or `not represented by the fixed sample`. A category marked
+`not represented` remains open; do not widen the sample or infer acceptance from the scripted
+results.
+
+| R37 category | Owner input |
+| --- | --- |
+| Prior error and correction | Prompt, expected selected document, observed answer, and whether the recalled correction is useful |
+| Decision and rationale | Accept/correct the wording and expected record for prompts 1–2 |
+| Research and uncertainty | Prompt, expected selected document, and whether uncertainty is preserved rather than stated as implemented |
+| Explicit link | Prompt and expected linked records, or `not represented by the fixed sample` |
+| Synthesis | Prompt and expected source set, or `not represented by the fixed sample` |
+| Intention/reminder | Prompt and expected action/time context, or `not represented by the fixed sample` |
+
+Record the owner's judgement for every prompt, including the source(s) expected, whether the
+citation/provenance and temporal or staleness context are adequate, confidence (1–5), and rationale
+or a corrected query. Use `correct`, `partial`, `incorrect`, or `missing` for the answer label;
+note any relevant result the program returned outside the expected set. Also record whether the
+owner accepts the prompt set, the overall R37 decision (`accept`, `reject`, or `needs more
+evidence`), and the owner's date. Leave these fields blank until the owner supplies them. The
+separate `s8-t5-ui` run measures the real WPF surface on synthetic data; it is not a substitute
+for this owner judgement.
 
 ## 10. Verifying the installed lifecycle
 

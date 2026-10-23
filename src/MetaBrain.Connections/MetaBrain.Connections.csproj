@@ -9,7 +9,6 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
     <ProjectReference Include="..\MetaBrain.Core\MetaBrain.Core.csproj" />
     <ProjectReference Include="..\MetaBrain.Application\MetaBrain.Application.csproj" />
   </ItemGroup>

@@ -136,8 +136,9 @@ internal static partial class OwnerServiceSmoke
 
             var rebuild = await RunOwnerCommandAsync(connectionsExecutable,
                 "owner", "index-rebuild", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
-            Require(rebuild.ExitCode == 0 && rebuild.StandardOutput.Contains("INDEX rebuilt schema=2", StringComparison.Ordinal),
-                "The S5-T3 private index rebuild did not materialize schema=2 (exit=" + rebuild.ExitCode + "; stdout=" + rebuild.StandardOutput.Trim() + "; stderr=" + rebuild.StandardError.Trim() + ").");
+            Require(rebuild.ExitCode == 0 && rebuild.StandardOutput.Contains("INDEX rebuilt rows=", StringComparison.Ordinal) &&
+                    !rebuild.StandardOutput.Contains("rows=0", StringComparison.Ordinal),
+                "The S5-T3 private index rebuild did not publish a materialized generation (exit=" + rebuild.ExitCode + "; stdout=" + rebuild.StandardOutput.Trim() + "; stderr=" + rebuild.StandardError.Trim() + ").");
 
             // The console's own session: the library surface under test is the exact
             // class the WPF window drives, over the real owner control pipe.
@@ -352,7 +353,6 @@ internal static partial class OwnerServiceSmoke
             await session.RebuildLibraryIndexAsync().ConfigureAwait(false);
             Require(session.LibraryIndex is { } rebuiltAfterWrite &&
                     rebuiltAfterWrite.RowCount == S5T3CorpusResources &&
-                    rebuiltAfterWrite.SchemaVersion == 2 &&
                     !rebuiltAfterWrite.CanonicalMoved &&
                     !rebuiltAfterWrite.Stale,
                 "The console's rebuild after a write did not report a fresh generation (" + S5T3DescribeIndex(session.LibraryIndex) + ").");
@@ -525,29 +525,29 @@ internal static partial class OwnerServiceSmoke
             Console.WriteLine("S5T3-PROBE locked detail answer outcome=" + lateItem.Outcome + " code=" + (lateItem.ErrorCode ?? "(none)") +
                 "; locked search outcome=" + latePage.Outcome + " code=" + (latePage.ErrorCode ?? "(none)"));
 
-            // A fresh unlock starts a new index epoch: the service answers that no
-            // generation exists instead of searching a stale one.
+            // A fresh unlock reuses the unchanged published generation: the
+            // library answers again without an explicit rebuild, and the
+            // explicit rebuild stays available as the recovery path.
             var unlock = await RunOwnerCommandWithInputAsync(connectionsExecutable,
                 passphrase + Environment.NewLine, "owner", "unlock", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
             Require(unlock.ExitCode == 0, "The synthetic vault did not unlock again (stderr=" + unlock.StandardError.Trim() + ").");
             await session.CheckAsync().ConfigureAwait(false);
             Require(session.ReportedVaultState == OwnerVaultState.Unlocked,
                 "The console session did not observe the re-unlocked vault (" + session.ReportedVaultState + ").");
-            await session.SearchLibraryAsync().ConfigureAwait(false);
-            Require(session.LibraryPage is null && session.LibraryMessage is not null &&
-                    session.LibraryMessage.Contains("Rebuild the library index", StringComparison.Ordinal),
-                "A search in the new unlocked epoch did not report that the index must be rebuilt (" + session.LibraryMessage + ").");
+            var afterUnlock = await S5T3SearchAsync(session, new OwnerLibraryQuery(Text: "login", Limit: 10)).ConfigureAwait(false);
+            Require(afterUnlock is { Total: 2 },
+                "A search in the new unlocked epoch did not reuse the unchanged published index (" +
+                S5T3Describe(afterUnlock) + "; message=" + (session.LibraryMessage ?? "none") + ").");
             await session.RebuildLibraryIndexAsync().ConfigureAwait(false);
             Require(session.LibraryIndex is { } materialized &&
                     materialized.RowCount == S5T3CorpusResources &&
-                    materialized.SchemaVersion == 2 &&
                     !materialized.CanonicalMoved &&
                     !materialized.Stale,
                 "The console's rebuild did not report the service's materialized generation (" + S5T3DescribeIndex(session.LibraryIndex) + ").");
             var afterRebuild = await S5T3SearchAsync(session, new OwnerLibraryQuery(Text: "login", Limit: 10)).ConfigureAwait(false);
             Require(afterRebuild is { Total: 2 },
                 "Searching after the console rebuilt the index did not return the vault's matches (" + S5T3Describe(afterRebuild) + ").");
-            Console.WriteLine("PASS a re-unlock requires an explicit index rebuild, and the console's rebuild makes the library searchable again");
+            Console.WriteLine("PASS a re-unlock reuses the unchanged index without a rebuild, and the explicit rebuild still works");
 
             // No plaintext private content is persisted, and the console's own log
             // carries no private body text.

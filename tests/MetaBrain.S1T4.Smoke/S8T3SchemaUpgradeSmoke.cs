@@ -204,10 +204,10 @@ internal static partial class OwnerServiceSmoke
 
             var rebuilt = await RunOwnerCommandAsync(connectionsExecutable,
                 "owner", "index-rebuild", "--control-pipe", fixture.CanonicalControlPipe).ConfigureAwait(false);
-            Require(rebuilt.ExitCode == 0 && rebuilt.StandardOutput.Contains("INDEX rebuilt schema=2", StringComparison.Ordinal) &&
+            Require(rebuilt.ExitCode == 0 && rebuilt.StandardOutput.Contains("INDEX rebuilt rows=", StringComparison.Ordinal) &&
                     !rebuilt.StandardOutput.Contains("rows=0", StringComparison.Ordinal),
                 "The migrated S8-T3 vault could not rebuild its private index (" + rebuilt.StandardError.Trim() + ").");
-            Console.WriteLine("OBSERVATION the migrated vault kept item body/revision/attribution, the lifecycle record, the relation and the job, and rebuilt the private index at schema 2");
+            Console.WriteLine("OBSERVATION the migrated vault kept item body/revision/attribution, the lifecycle record, the relation and the job, and rebuilt its private index from canonical");
 
             // ----- write, job and agent/MCP read on the migrated vault -----
             var revisionDraft = JsonSerializer.SerializeToUtf8Bytes(new

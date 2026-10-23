@@ -16,7 +16,44 @@ internal sealed record VaultResourceDescriptor(
     string StorageName,
     bool InternalOnly = false);
 
-internal sealed record VaultManifest(int SchemaVersion, string VaultId, long Revision, VaultResourceDescriptor[] Resources);
+/// <summary>
+/// The one private file that lists every canonical resource. The manifest is
+/// immutable for its lifetime: a write publishes a new manifest instance, so
+/// the descriptor index below is built once per manifest instead of scanning
+/// the descriptor array on every read (S8-T5: a read-heavy pass over a
+/// 10,000-record vault paid an O(n) scan per read).
+/// </summary>
+internal sealed record VaultManifest(int SchemaVersion, string VaultId, long Revision, VaultResourceDescriptor[] Resources)
+{
+    private Dictionary<string, VaultResourceDescriptor>? _byResourceId;
+
+    /// <summary>
+    /// The descriptor of one resource, or null when the manifest does not
+    /// hold it. The lookup is exact and ordinal: a resource ID is an opaque
+    /// safe identifier, never a prefix.
+    /// </summary>
+    public VaultResourceDescriptor? FindResource(string resourceId)
+    {
+        if (string.IsNullOrEmpty(resourceId))
+        {
+            return null;
+        }
+
+        var index = _byResourceId ??= BuildResourceIndex(Resources);
+        return index.TryGetValue(resourceId, out var descriptor) ? descriptor : null;
+    }
+
+    private static Dictionary<string, VaultResourceDescriptor> BuildResourceIndex(VaultResourceDescriptor[] resources)
+    {
+        var index = new Dictionary<string, VaultResourceDescriptor>(resources.Length, StringComparer.Ordinal);
+        foreach (var resource in resources)
+        {
+            index[resource.ResourceId] = resource;
+        }
+
+        return index;
+    }
+}
 
 internal sealed record VaultKeyMaterial(byte[] DataKey, VaultManifest Manifest, string RecoveryCode);
 
@@ -250,10 +287,15 @@ internal sealed class EncryptedVaultStore
 
     public bool TryGetZone(VaultManifest manifest, string resourceId, out string? zoneId)
     {
-        var descriptor = manifest.Resources.FirstOrDefault(resource =>
-            !resource.InternalOnly && string.Equals(resource.ResourceId, resourceId, StringComparison.Ordinal));
-        zoneId = descriptor?.ZoneId;
-        return descriptor is not null;
+        var descriptor = manifest.FindResource(resourceId);
+        if (descriptor is null || descriptor.InternalOnly)
+        {
+            zoneId = null;
+            return false;
+        }
+
+        zoneId = descriptor.ZoneId;
+        return true;
     }
     public IReadOnlyList<ScopeResourceRevision> ListResources(VaultManifest manifest) =>
         Array.AsReadOnly(manifest.Resources
@@ -1021,9 +1063,8 @@ internal sealed class EncryptedVaultStore
 
     public void ValidateRegistration(VaultManifest manifest, string resourceId, long? expectedRevision = null)
     {
-        var descriptor = manifest.Resources.FirstOrDefault(resource => !resource.InternalOnly &&
-            string.Equals(resource.ResourceId, resourceId, StringComparison.Ordinal));
-        if (descriptor is null ||
+        var descriptor = manifest.FindResource(resourceId);
+        if (descriptor is null || descriptor.InternalOnly ||
             (expectedRevision.HasValue && descriptor.Revision != expectedRevision.Value))
         {
             throw new ManagedResourceUnavailableException();
@@ -1053,10 +1094,9 @@ internal sealed class EncryptedVaultStore
         long? expectedRevision,
         bool includeInternal)
     {
-        var descriptor = manifest.Resources.FirstOrDefault(resource =>
-            (includeInternal || !resource.InternalOnly) &&
-            string.Equals(resource.ResourceId, resourceId, StringComparison.Ordinal));
+        var descriptor = manifest.FindResource(resourceId);
         if (descriptor is null ||
+            (!includeInternal && descriptor.InternalOnly) ||
             (expectedRevision.HasValue && descriptor.Revision != expectedRevision.Value))
         {
             throw new ManagedResourceUnavailableException();
@@ -1171,8 +1211,7 @@ internal sealed class EncryptedVaultStore
             throw new ManagedResourceUnavailableException();
         }
 
-        var current = manifest.Resources.FirstOrDefault(resource =>
-            string.Equals(resource.ResourceId, resourceId, StringComparison.Ordinal));
+        var current = manifest.FindResource(resourceId);
         if (current?.InternalOnly == true || (current is not null && !string.Equals(current.ZoneId, zoneId, StringComparison.Ordinal)))
         {
             throw new ManagedResourceUnavailableException();

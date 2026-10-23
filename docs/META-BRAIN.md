@@ -175,14 +175,22 @@ Mỗi vault có data key ngẫu nhiên được wrap riêng bằng passphrase v�
 Catalog publication lưu private catalog-ID→resource mapping trong encrypted `owner-catalog.enc` (chỉ explicit owner label/description, không suy từ private text), phục vụ discovery từ plaintext `published-catalog.json` cạnh vault (chỉ approved ID/label/description, rebuildable). Discovery không cần session, hoạt động khi locked/startup/restart; withdrawal xóa record nên list/query/fresh/restart hội tụ `no_match`. Catalog không cấp body/source access. Access request lưu pending/mục đích/agent/provider/disclosure đã khai báo trong encrypted scope state; agent chỉ nhận opaque receipt/status, owner preview đọc exact body/revision/scope/disclosure rồi narrow/approve/reject; chỉ narrowed owner-approved exact scope mint token qua T3. Stale preview (withdrawal/republication/revision/registration/collection change, epoch/generation) phải preview lại, không tự mở scope. Provider egress authorization khớp exact provider/model v…
 Phân tách source references, inbox/proposals, published memories, intentions, private index và catalog công bố. Private policy/grants/audit/locators/revisions cũng phải được bảo vệ; chỉ crypto-format envelope tối thiểu không nhạy cảm và metadata owner chủ động công bố được nằm ngoài encryption. Tên thư mục không tiết lộ private zone/title, và adapters không phụ thuộc physical path.
 
+**Historical S4-T2 baseline (superseded by S8-T5):** the SQLite/schema-2 description immediately below is retained to document the original behavior; it is not the current format.
  Implementation (S4-T2): scoped search (`agent.memory.search` trên agent channel với grant operation `memory.search`, `owner agent-search` trên CLI, `metabrain_memory_search` trên MCP bridge) chạy trên đúng protected private index đã materialize (schema 2, memory-only, thêm token-posting và temporal tables keyed theo resource ID và revision): candidate filter theo snapshot IDs/revisions đã duyệt chạy TRƯỚC mọi private retrieval (scope IDs bind trong SQL WHERE của index engine, chỉ page được phục vụ mới decrypt ở đúng frozen revision với authorize trước/sau và registration check từng hit). Query mở rộng cục bộ không embedding/provider (case/diacritic folding, symbol/camelCase split, light English stemmer, stopwords, bảng general-vocabulary EN/VI như error/bug/lỗi, login/đăng nhập — áp dụng đối xứng mọi query, không lookup theo fixture). Ranking theo token overlap có trọng số, hạ withdrawn/rejected/stale; lọc kind/current theo metadata; pagination ổn định trên frozen order với scope-only totals; stale generation fail closed `search_index_stale`; revision mới không vào grant; lock/revoke deny calls tiếp theo. Catalog query giữ nguyên published labels/descriptions, không private ranking/snippets/counts. Chỉ owner channel được materialize private index; agent channel không có operation index nào. Private index (S2-T7) là SQLite standard (`Microsoft.Data.Sqlite` 10.0.12, MIT) chạy hoàn toàn trong bộ nhớ tiến trình (`Data Source=:memory:`, `PRAGMA temp_store=MEMORY`, `journal_mode=OFF`, `locking_mode=EXCLUSIVE`): không có database file, WAL, rollback journal, sort temp hay page cache nào trên disk và engine không giữ key material. `owner index-rebuild` đọc manifest, giải mã từng canonical envelope và ghi lại đúng ID, revision, zone scope, record kind/state cùng các ID được tham chiếu (citation, relation endpoint, lifecycle subject/supersession/retained archive); `owner index-status` fingerprint SHA-256 tập (resource, revision) canonical đang sống và báo generation đã materialize là `stale` thay vì tin nó. Schema index có version (`PRAGMA user_version`, hiện 1) với migration step 0→1 thật và `RequireSupported` fail closed cho version lạ; S8 thêm step mới không phải sửa caller. Rebuild không ghi canonical: canonical file vẫn là truth duy nhất, lock/unlock/restart/crash đều bỏ index, và rebuild không chứng minh được generation khớp canonical thì trả `index_canonical_moved`. Index không tự công bố title/body/count/embedding vào catalog và không mở surface cho agent; ranking/search thuộc S4.
+
+(S8-T5 cutover: the current private index is the persistent encrypted v3 generation, not the
+historical S2-T7 SQLite engine. Current source and the latest measured evidence are in
+BOUNDED-A14 below; A8/A11/A12/A13 remain historical records. The in-process memory observation
+is an adverse proxy result, not service acceptance. Service/UI/IPC and owner R37 gates remain open.)
+
+**Historical D008 baseline (pre-S8-T5 SQLite, real-service/IPC measurement):** the measurements below are retained as history, not as current index, service/UI or A12 evidence.
 
 Ngân sách vận hành (D008) đã đo thực tế trên máy đích qua real service, real named pipe và real owner CLI với synthetic fixture 1,000/10,000/100,000 records (4 KiB mean body, tạo trong một pass O(n) qua seeded vault path). `owner index-rebuild` đọc envelope theo batch giới hạn (128/batch, song song bậc 8) bên trong một counted operation: mỗi file vẫn giữ reparse/ACL, AEAD binding và revision gate riêng, plaintext được zeroize sau khi insert, và lock chỉ xóa key sau khi operation đã drain. Baseline bất lợi được giữ nguyên làm ground truth: binary trước fix, fixture 10,000 cache-cold, cold rebuild 111,511 ms = 89.7 records/s (< ngưỡng 100 records/s). Sau fix, trên binary cuối cùng (lần rebuild đầu tiên sau khi fixture được tạo và aging tự nhiên ~30 phút, không có flush/trim/admin/forcedGC; wall time không phải chứng cứ miss của OS độc lập): 1,930 ms (518.1 records/s) ở 1,000 / 23,418 ms (427.1 records/s ≥ ngưỡng 100 records/s) ở 10,000 / 271,326 ms (4.5 phút, 368.7 records/s ≤ 20 phút) ở 100,000; idle working set tối đa 77,344,768 B / 103,419,904 B / 237,543,424 B (~73.7 / ~98.6 / ~226.5 MiB ≤ 256 MiB) ở ba kích thước sau warm-up trong cửa sổ 5 phút (61 samples, không forced GC hay OS trim); idle CPU 0.020115% / 0.000649% / 0.003244% host (≤ 1%); persistent product data 8,653,390 B / 86,599,822 B / 866,137,705 B (~826 MiB ≤ 1.5 GiB), index thêm 0 byte persistent và 0 sidecar ở mọi kích thước. Để hỗ trợ kích thước 100,000 resources đã công bố sẵn có, manifest đọc được cấp cap riêng (64 MiB plaintext / 96 MiB envelope, trên worst case 100,000 descriptor) thay vì dùng chung cap envelope 4 MiB của resource, và request `owner.index.rebuild` được re-arm timeout 25 phút cho riêng operation đó (mọi request khác giữ nguyên guard 10 giây). Lock trong lúc rebuild đang chạy dừng rebuild đó thay vì chờ nó chạy hết: lock request huỷ các batch read đang in-flight tại batch boundary, bounded active I/O drain xong mới clear key (các invariant drain/lifetime giữ nguyên — lock vẫn chỉ hoàn tất sau khi counted operation dispose), rebuild bị huỷ fail closed với status riêng `index_rebuild_cancelled` và không publish generation, phân biệt với timeout 25 phút của chính request đó (vẫn trả `request_timeout`). Đã kiểm chứng trên real pipe ở 10,000 và 100,000 records: lock hoàn tất trong 315 ms với rebuild bị huỷ, cùng một request đọc hợp lệ chỉ bị từ chối khi locked và được phục vụ lại đúng body sau re-unlock, rebuild ở epoch mới sau huỷ hoạt động bình thường, hai lock chồng lấn đều an toàn, và negative tamper không đổi. Combined service+idle-client ≤ 512 MiB và latency owner UI/search không được exercise bởi gate này (không có UI/MCP surface trong S2-T7) nên không có số đo nào được tuyên bố cho các mục đó.
 
 Các invariant bắt buộc:
 
 - Cập nhật có revision check, ngăn lost update; publication và relation changes không để trạng thái nửa chừng sau crash.
-- Quyết định thứ tự ghi canonical/index và recovery rõ ràng; không hứa một transaction chung cho file + SQLite nếu chưa có cơ chế thực.
+- Quyết định thứ tự ghi canonical/index và recovery rõ ràng; không hứa một transaction chung cho file + index nếu chưa có cơ chế thực. (S8-T5: index không còn là SQLite — nó là một generation file mã hóa; xem mục BOUNDED-A8 bên dưới.)
 - Journal/recovery chỉ đủ cho invariant cần thiết, không xây event-sourcing platform tổng quát.
 - Rebuild index khi unlocked tái hiện đúng scope, revision, lifecycle và nguồn khả dụng; không viết plaintext DB/WAL/temp hoặc trở thành truth store thứ hai.
 - External ciphertext sửa đổi/truncated, wrong key và stale revision bị reject/recover theo protocol; không hỗ trợ “sửa trực tiếp plaintext canonical file”. Import/export owner rõ ràng thay đường đó.
@@ -397,11 +405,414 @@ Sản phẩm hoàn chỉnh cần cài đặt, khởi động lại, nâng cấp/
 
 Giới hạn dataset, latency, dung lượng, chi phí model và tài nguyên nền được đo trên máy đích ở Sprint 1, khóa thành operational envelope trước tuning. Không dựng con số tùy ý hoặc bỏ tiêu chí vì không có benchmark công khai.
 
+**Historical A2/A4 baseline:** the following measurements and SQLite memory/headroom analysis predate the encrypted persistent v3 cutover; they are not current-format results.
+
+Sprint 8 (S8-T5) kept the frozen R23/R38 targets at the time of the A13/A14 record; the owner-approved
+2026-10-23 cut-over documented at the end of this section supersedes the numeric latency and
+rebuild targets as T5 sign-off gates, and every measurement below stays as recorded. An intended proof surface is not evidence that
+it ran. A14 supplies current-source in-process latency, disk and exact-result evidence on a
+synthetic encrypted vault, but its 300-second core-proxy working-set averages (401,365,047 B
+unlocked / 406,963,128 B locked) exceed the 256 MiB service-idle line. The same process also
+seeded, rebuilt and queried the 100k fixture; attribution of retained fixture/query allocations
+versus product is unknown. Treat the proxy as adverse evidence requiring review, not a service
+pass or waiver. The real service, owner pipe, WPF/UI/IPC, fresh independent review and owner R37
+walkthrough remain open. Synthetic scale fixtures do not replace owner-approved corpus judgment.
+The persistent index remains a rebuildable encrypted derivative, with canonical records as the
+only truth and scope, revision, provenance and ranking contracts unchanged.
+
+**Historical A2 correction and A4 sizing (superseded by encrypted v3):** the old SQLite run reported
+62.0 ms p95 at 1,000 records and 453.2 ms at 10,000; its 100k size and memory figures were
+extrapolations, not current-format measurements. The earlier 3.3 GiB whole-process unlock/lock
+delta was withdrawn as an index estimate; old SQLite index measurements were 18,675,576 B at
+1,000 and 185,817,208 B at 10,000, with a 1.73 GiB linear 100k projection. A contemporaneous
+3,074,248 KiB available-memory sample and reviewer-estimated 4 GiB planning floor are historical,
+not current headroom or a product requirement. The current host headroom is unknown under the
+host-inspection restriction; no current 100k authorization follows from these figures. The real
+service/IPC DACL and owner R37 gates remain open.
+
+**Historical COMPACT-A6 SQLite baseline, superseded by the encrypted persistent generation:** the details below are preserved for provenance only.
+
+Historical COMPACT-A6 2026-10-22 changed the **representation** of the then-current SQLite private index, not its **search rules**:
+mỗi posting giờ chỉ giữ **một** bản của key (doc id dạng số nguyên + token id dạng số nguyên), text
+của token nằm đúng một lần trong dictionary riêng của engine, còn danh tính tài liệu (resource id
++ revision) nằm đúng một lần trong temporal row mà posting trỏ tới. Engine vẫn là cùng một cơ sở
+SQLite trong bộ nhớ tiến trình, không file/WAL/journal/temp/cache trên đĩa, index vẫn là dữ liệu
+dẫn xuất và biến mất khi lock/restart/crash. Đo trong tiến trình trên **cùng** corpus, **cùng**
+vault và **cùng** bộ truy vấn, chạy song song engine schema 2 và schema 3: byte của chính engine
+giảm từ 17.506.304 B xuống **3.960.832 B** ở 1.000 record (4,42x) và từ 173.809.664 B xuống
+**39.809.024 B** ở 10.000 record (4,37x); bộ nhớ native của SQLite giảm 4,35x–4,36x; số posting
+và số token khác nhau **không đổi**. So sánh **từng kết quả** trên 128 kịch bản mỗi cỡ (truy vấn
+text tự nhiên và symbol chính xác, browse, scope nửa, lọc kind/current/level, cửa sổ thời gian,
+as-of và marker của revision thứ hai) cho thấy hai dump **giống nhau từng byte** (0 dòng khác
+biệt): cùng resource id, revision, score, thứ tự, publication, provenance và cùng tập token
+đúng thứ tự. Rebuild ở 10.000 record giảm từ 24,9 s xuống **16,7 s**, còn p95 recall vẫn ở
+**420,1 ms** (trước: 422,3 ms) dưới ngưỡng 500 ms đã khóa. Ở **100.000 record** phép đo đã chạy
+thật (in-process, corpus tổng hợp 100.000 record): index gọn đo được **422.518.784 B (403,0 MiB)
+trên 16.898.431 posting** (25,0 B/posting), rebuild lạnh **144,7 s (690,9 record/s)**, search p50
+545,6 ms và p95 6.706,6 ms. **Mục tiêu đã khóa không được nới**: ngưỡng rebuild 100k **đạt**, còn
+ngưỡng **256 MiB idle-RAM không đạt** (riêng index đã là 403,0 MiB so với ≈70 MiB ngân sách
+còn lại sau nền ~186 MiB của service → working set dự báo ≈589 MiB, vượt khoảng 2,3 lần; phần
+index là **đo**, phần service là **ngoại suy** vì kịch bản service thật vẫn bị chặn bởi DACL của
+IPC), và ngưỡng latency p95 100k cũng **không đạt** (6.706,6 ms so với 1.000 ms; **nguyên nhân
+đã được sửa ở COMPACT-FIX-A7 2026-10-22: không phải số body phải đọc mỗi truy vấn** — 200 truy vấn
+đo chạy không bật bộ lọc level nên không đọc body ứng viên nào, chỉ 10 hit được phục vụ; cái giá
+là **materialize ứng viên**: 48.686 ứng viên/truy vấn trung bình, 122 lô 400 dòng ứng viên mỗi
+truy vấn, 21,0 GB cấp phát trong 200 truy vấn và 106 lần GC gen-2; phép đo 100k dùng **20 warm-up
++ 200 truy vấn** thay vì phương pháp đã khóa 100 warm-up + 1.000 truy vấn, và dump chỉ xong 24/28
+kịch bản, nên nó **không** phải phép đo envelope tuân thủ phương pháp). 100k envelope trên service
+thật vẫn chưa đo,
+At the COMPACT-A6 snapshot, the private index had no persisted artifact and was rebuilt in process.
+That historical no-artifact behavior ended with the encrypted-generation cutover: current v3 stores
+`<vault>/private-index/index.v1.bin`, excludes the derivative from backup, and rebuilds it from
+unchanged canonical records with explicit `owner index-rebuild` after restore or when unavailable.
+No canonical reset or migration is needed to create that derivative.
+
+Within its lifecycle, the current v3 generation is reloaded rather than rebuilt. After a lock and
+unlock or a process restart, the first owner search, scoped search or `owner index-status` opens the
+published generation, authenticates its sealed metadata with the borrowed vault key, and loads it
+only when its canonical digest and row count equal the live canonical resource/revision set; the
+read is read-only and the encrypted file is not rewritten. A missing generation still asks for the
+explicit rebuild, a generation that describes another canonical set is refused as
+`search_index_stale`, and a tampered, truncated or wrong-key generation is refused as
+`index_unavailable`; the explicit owner rebuild is the supported recovery for each. The current
+format has no record-level add/revise/delete delta: one sealed file describes the whole vault and
+its postings, so a changed canonical set goes through the explicit rebuild. The historical results
+remain in [worker evidence](../artifacts/sprint-8/task-5.md) §15 and
+[handoff](../artifacts/sprint-8/handoffs/S8T5-COMPACT-A6.md).
+
+#### Historical COMPACT-FIX-A7 — SQLite scope/identity fixes and corrected 100k attribution (2026-10-22)
+
+The fixes and evidence below apply to the former SQLite engine only; the current v3 encrypted
+implementation and the latest proof are documented in BOUNDED-A14.
+
+- **Bộ lọc scope chạy bên trong SQL của engine.** Scope lớn hơn 900 resource được bind vào bảng
+  scope riêng của engine, và câu truy vấn ứng viên **join** bảng đó, nên scope được áp trước khi
+  bất kỳ dòng ứng viên nào rời engine. Trước đó engine trả về mọi resource mang token và phía
+  gọi lọc lại, nên id ứng viên ngoài scope vẫn vượt qua ranh giới engine. Câu trả lời không đổi.
+- **Chính cơ sở dữ liệu của engine cấp danh tính tài liệu.** doc id là rowid của temporal row, nên
+  schema 2 → 3 mang sang. Trước đó engine tự đếm id trong bộ nhớ, nên tài liệu đầu tiên được
+  index sau khi nâng cấp nhận đúng id mà dòng đã migrate chiếm và ghi thất bại với
+  `UNIQUE constraint failed: private_index_temporal.doc_id`. Engine đã nâng cấp nay index tài liệu
+  mới, thay tài liệu cùng danh tính và thêm revision y hệt engine mới mở.
+- **Nguyên nhân latency 100k không phải đọc body** (chi tiết và bảng số ở
+  [runbook vận hành](OPERATIONS.md) §9.2, mục COMPACT-FIX-A7).
+
+Hai hồi quy vĩnh viễn: `MetaBrain.S1T4.Smoke.exe s8-t5-index` khẳng định scope bind trong engine
+vẫn loại tài liệu ngoài scope, và khẳng định engine đã migrate giữ dòng cũ, index tài liệu mới,
+thay tài liệu cùng danh tính, thêm revision và rebuild thế hệ mà không đụng id nào. Số đo, lệnh và
+hồi quy nằm ở [worker evidence](../artifacts/sprint-8/task-5.md) §16 và
+[handoff](../artifacts/sprint-8/handoffs/S8T5-COMPACT-FIX-A7.md).
+
+**Historical A8 snapshot:** the format, no-spill statements and numeric results below describe the A8 binaries only. Current A14 behavior and measurements are documented later; no A8 figure is an A14 result.
+BOUNDED-A8 2026-10-22 thực hiện hướng owner duyệt: private index trở thành **generation file mã hóa
+at-rest** với **bộ nhớ bounded**, và đường truy vấn **stream ứng viên** thay vì materialize chúng.
+Mục tiêu đã khóa không nới; số đo lại với cùng ngưỡng.
+
+- **Định dạng.** Một generation là chuỗi record, mỗi record được seal bằng **chính AEAD của vault**
+  (AES-GCM) với key suy ra từ data key của vault bằng HKDF-SHA256 dưới nhãn cố định — không có key
+  riêng, không tự unlock, không plaintext key cạnh vault. Associated data của mỗi record bind
+  **identity của generation** (suy ra từ canonical digest của tập record mà generation dựng từ),
+  **kind của record**, **offset của record trong file** và format version: một record không thể bị
+  di chuyển, đổi thứ tự, thay thế hay replay từ generation khác mà không hỏng tag. Nonce của mỗi
+  record là một prefix ngẫu nhiên theo generation cộng một counter theo record, nên cặp
+  (key, nonce) không bao giờ dùng lại. **Không có plaintext index, staging file, journal, WAL hay
+  spill file** trên đĩa: staged generation chỉ là ciphertext, và publish là một thay thế atomic.
+  Generation không đọc được (tamper, truncate, format mới hơn) thì **fail closed**; owner rebuild
+  tường minh, canonical không bao giờ bị đụng. Một đánh giá độc lập có giới hạn (S8-T5) đã trả
+  lời: thay thế header không thể ra đường phục vụ, replay của một generation hợp lệ **không** bị
+  engine tự phát hiện nhưng bị cả hai đường truy vấn, rebuild và status từ chối; lỗ hổng mà
+  đánh giá tìm ra (rebuild có thể stamp digest của canonical sống lên rows của generation khác) đã
+  sửa và có hồi quy vĩnh viễn. Đánh giá là **chẩn đoán, không phải phán quyết bảo mật**, và
+  **không** được tuyên bố là đã chứng minh tại đây.
+- **Bộ nhớ bounded.** Engine giữ đúng hai thứ: **directory** (danh tính, revision và offset của
+  từng tài liệu được index) với **ngân sách byte đo được** — generation vượt ngân sách bị từ chối
+  thay vì được nạp — và **cache record đã giải mã** byte-bounded, evict least-recently-used. Posting
+  **không** bao giờ resident toàn bộ: một truy vấn đọc posting list của đúng các term mình hỏi,
+  merge chúng và score ứng viên theo lô. Từ 1.000 record, resident của engine là **94.000 B**
+  directory + cache, so với **17.506.304 B** của engine SQLite cũ; ở 10.000 record là **940.000 B**
+  so với **173.809.664 B**. Rebuild 1.713 s so với 7.339 s ở 1.000 record và 10.920 s so với
+  23.067 s ở 10.000 record; recall p50/p95 **5,1/18,0 ms** so với **35,2/77,2 ms** ở 1.000 record
+  và **13,4/24,3 ms** so với **120,5/570,3 ms** ở 10.000 record (ngưỡng đã khóa 250/500 ms).
+- **Truy vấn.** Engine tự áp scope của caller, nên id ứng viên ngoài scope không rời engine. **Mọi**
+  ứng viên trong scope đều được thăm và score; thứ tự, tie order, token equality/collation, scope,
+  revision, date, currentness, provenance, score và excerpt **không đổi** — dump kết quả của cùng bộ
+  truy vấn **giống nhau từng byte** so với engine cũ (1.000 record: cùng SHA-256 `d4b6122b…`).
+- **Vòng đời.** Lock/restart xóa key, cache và mọi private read; interrupted rebuild không publish
+  gì; index là derivative nên **không** nằm trong backup và được dựng lại sau restore. Bản ghi quyết
+  định: [D077](../.agents/memory/decisions.md).
+
+
+#### Historical BOUNDED-A11 — first bounded-builder source and measurement (2026-10-22)
+
+At the A11 source snapshot, the private index used the v3 persistent encrypted generation
+(`<vault>/private-index/index.v1.bin`) and built postings through a bounded byte arena with
+dynamic multi-pass fan-in. Rebuild-only `index.v1.building`, `index.v1.spill`, and
+`index.v1.directory-building` files contained individually authenticated ciphertext under the
+existing vault-derived key and separate file identities; no plaintext scratch file or new crypto
+was introduced. `File.Move(..., overwrite:true)` published the staged generation. The format
+bounds one canonical memory document at 200,900 UTF-16 code units, 200,900 distinct tokens, at
+most 1,808,100 UTF-8 token-text bytes, and 2,410,804 serialized token-record bytes. The A11 smoke
+exhaustively checked Form-D output for every non-surrogate BMP code unit (maximum nine UTF-8 bytes
+per code unit) and verified stem expansion within the token-count bound. This is source-derived for
+the current Unicode tables, not an eternal guarantee.
+
+The A11 cutover removed the previous silent 2,048-token/512-byte token rejection. The 256-character
+normalized-query boundary and 2 Mi-character service-frame limit remain; every term in a supported
+query is resolved in 64-term passes. The actual scoped agent handler accepts canonical
+abstraction-level filters while time windows remain owner-only. The nonce counter fails before
+wrap; its random 64-bit per-generation prefix makes cross-generation separation probabilistic, not
+absolute. Per-bucket vocabulary overflow still refuses a rebuild closed rather than truncating
+terms, so this is not a global-scale proof.
+
+**Historical first A11 in-process measurement (not a target pass at 10,000).** The preserved
+synthetic corpus generator ran through that source's encrypted vault, lifecycle, index authority
+and owner search path, with a cold first query, 100 warm-ups and 1,100 timed queries per size:
+
+| Records | Rebuild / throughput | Generation / resident directory | Cold first query | Warm p50 / p95 | Rebuild peak working set / private / managed | After timed queries working set / private / managed | Warm cache |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 3.927 s / 254.7 rows/s | 1,892,405 B / 166,888 B | 233.44 ms | 9.12 / 62.74 ms | 60,305,408 / 29,876,224 / 13,641,296 B | 61,927,424 / 25,731,072 / 6,603,776 B | 534,392 B |
+| 10,000 | 32.584 s / 306.9 rows/s | 17,573,899 B / 1,012,888 B | 906.95 ms | 91.12 / 671.53 ms | 88,662,016 / 59,174,912 / 34,408,456 B | 89,886,720 / 57,565,184 / 16,070,824 B | 2,695,408 B |
+
+The frozen owner-recall p95 limits are 250 ms at 1,000 and 500 ms at 10,000. The A11 1,000-record
+p95 was inside its unchanged limit; its 10,000-record p95 **exceeded 500 ms**. Preserve that miss:
+it is not a result for the resumed A12 binary and is not erased by A12. The native database metric
+is not applicable to this encrypted-file index; working-set, private and managed process values
+were reported separately. The exact A11 runs, outputs and binary fingerprints remain in
+`.agents/tmp/s8t5/a11/evidence/measurement/README.md`. A11 did not run the 100k envelope, real
+service/UI/IPC or owner R37. A12 is historical; the current A14 results follow after the preserved A13 miss.
+
+Historical SCALE-A3/A8 host samples and the old ~4 GiB planning estimate are preserved in the
+runbook and task evidence; they are not current headroom evidence, a frozen product requirement,
+or authority to start 100k. A3 did not run the 100k envelope or WPF path. Its static DACL finding
+still blocks real service/UI/IPC execution under the current safety rules. Current total headroom
+is unknown under the host-inspection restriction, so A12 did not run 100k. A future owner-authorized
+in-process 100k run requires fresh measured headroom above a predeclared safe floor and the frozen
+100-warm-up / at-least-1,000-timed method; it must not close unrelated applications. Owner R37 and
+the real service/UI/IPC evidence remain external gates.
+
+#### Historical BOUNDED-A12 — resumed source implementation and evidence
+
+The current persistent index is the encrypted v3 derivative at `<vault>/private-index/index.v1.bin`.
+The rebuild uses one immutable canonical descriptor snapshot and releases it before the live
+reconciliation snapshot; the canonical SHA-256 digest streams the unchanged legacy byte encoding
+in strict ordinal resource-ID order with invariant revisions. A multi-resource, multi-revision
+handler fixture compares the generated digest directly with the former encoding. The canonical
+store and recall contract were not changed.
+
+The 64 MiB directory ceiling in the R8-reviewed source snapshot is historical; the current sealed
+count-derived resident-directory preflight both use 32 MiB. The preflight accounts for the bounded
+resource, bucket, row and sample counts, maximum identifier bytes, array references and fixed
+managed overhead before allocating decoded arrays, then verifies the decoded footprint again.
+Sharing the 32 MiB file/resident cap halves the maximum directory ciphertext-plus-plaintext read
+overlap from 128 MiB to 64 MiB; with decoded directory and the separate cache, those known
+structures can sum to 112 MiB before any builder, query or runtime memory. This is a budgeting
+rationale, not a whole-process limit.
+
+The separate default decrypted-record cache is capped at 16 MiB. This is not a whole-process cap:
+an open can transiently hold directory ciphertext and plaintext while decoded arrays become
+resident, and builder/query buffers are distinct. The five fixed builder arrays total 5,296,128 B
+(4 MiB arena, 65,536 × 16 B pairs, 1,024 × 16 B merge pairs, 32,768 B spill-token storage and
+4,096 B term scratch). At 20,090,000,000 maximum pairs (100,000 rows × 200,900 terms), there are at
+most 306,550 sorted runs, seven levels and 49 retained level references; final merge adds a
+bounded copy of at most 49 references and reads at most eight runs per group. Each spill chunk is
+at most 1,024 pairs / 49,160 B plaintext / 49,192 B sealed frame. One term can use at most four
+final chunks of 32,768 ordinals / 256 KiB; each 4,096-key bucket has at most 11 pages of 384
+entries / 256 KiB. Vocabulary overflow refuses rebuild instead of losing terms.
+
+The final A12 matcher validates each authenticated token record, binary-searches query terms in
+exact UTF-8 byte order, and verifies the SHA-256 token identity only for byte-exact matches. This
+retains false-positive protection if posting digests collide while avoiding a digest pass over
+every token in every candidate. The served-page full-token path is unchanged.
+
+The fresh final-source synthetic harness used a cold first query, 100 warm-ups and 1,100 timed
+queries at each size. Memory values are bytes; peaks are sampled every 20 ms during rebuild:
+
+| Rows | Rebuild / throughput | Generation / resident directory | Cold query | Warm p50 / p95 | Peak WS / private / managed | After timed WS / private / managed | Warm cache |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 1.647 s / 607.1 rows/s | 1,892,405 / 166,888 | 53.77 ms | 3.74 / 23.15 ms | 58,294,272 / 29,609,984 / 12,732,312 | 72,708,096 / 37,249,024 / 4,770,616 | 534,392 |
+| 10,000 | 12.320 s / 811.7 rows/s | 17,573,899 / 1,012,888 | 223.39 ms | 46.47 / 186.48 ms | 91,729,920 / 61,771,776 / 32,994,408 | 98,668,544 / 62,005,248 / 19,313,392 | 2,695,408 |
+
+Both warm p95 values meet their unchanged 250 ms / 500 ms limits. The earlier complete A12
+matcher measurement is retained as a miss (1,898.32 ms at 10,000); the timed-out initial attempt
+has no p95 and is not reused. The exact-query-byte search was the measured, scope-preserving fix.
+
+The A12 in-process smoke exercises actual owner status/library and scoped agent handlers with
+before/after dumps, grant and frozen-revision boundaries, ranking/provenance, lifecycle filters,
+pagination/browse, restore-and-rebuild, purge staleness, owner generation substitution, lock,
+unmaterialized status, iterator failure/cancellation cleanup, malformed authenticated token
+payloads, strict headers and nonce wrap. Exact build/smoke and fresh 1,000/10,000-record evidence
+with hashes are kept in `.agents/tmp/s8t5/a12/evidence/README.md`. This synthetic harness does not
+exercise the real service, WPF/UI, pipe or IPC. A12 had unknown host headroom and did not run
+100,000 records; A14's later in-process run is not service/UI/IPC evidence. Those and owner R37
+gates remain open.
+
+#### BOUNDED-A13 — 100k current-source measurement (2026-10-23)
+
+The A13 continuation used the exact R9-reviewed final-03 product assemblies and unchanged
+deterministic synthetic corpus/query method; it changed no product code or acceptance target. At
+100,000 rows, the in-process rebuild completed in 223.941 s. The preserved owner query method ran
+100 warm-ups and 1,100 timed searches; warm p50/p95/max was 647.32 / **1,888.23** / 8,061.21 ms,
+missing the frozen 1,000 ms p95 limit. The 2,635,496,576 B encrypted staging/spill peak combined
+with the seeded vault for a 3,321,947,786 B build-disk peak, missing the 1.5 GiB limit of
+1,610,612,736 B. The final encrypted vault was 858,639,799 B; a below-limit final artifact does
+not erase the staging/build-peak miss.
+
+| 100,000-row observation | Result |
+| --- | ---: |
+| Rebuild / throughput | 223.941 s / 446.5 rows/s |
+| Generation / resident directory / warm cache | 172,188,312 / 9,472,888 / 16,752,768 B |
+| Cold first natural query | 3,007.19 ms |
+| Warm p50 / p95 / max | 647.32 / **1,888.23** / 8,061.21 ms |
+| Rebuild peak WS / private / managed live | 1,030,508,544 / 1,352,286,208 / 1,291,200,528 B |
+| Peak staging/spill / total vault with staging | 2,635,496,576 / 3,321,947,786 B |
+
+A separate 300 s unlocked/locked core-index idle probe is a process proxy only (not the real
+service, owner client, WPF/UI or pipe/IPC). It and bounded at-rest marker checks, the wrapper's
+post-WARM collection defect, complete raw metrics and hashes are recorded in
+`.agents/tmp/s8t5/a13/evidence/README.md` and the [A13 operations runbook](OPERATIONS.md). The 100k
+warm-p95 and staging/disk misses remain binding; service/UI/IPC and owner R37 remain open. No
+feature or full-task acceptance claim is made.
+
+
+
 Tình huống định tính bắt buộc: quay lại project sau thời gian dài, tìm cách sửa lỗi đã gặp, hỏi lý do lịch sử, quyết định đã đổi, tái sử dụng bài học liên dự án đúng quyền, research còn bất định, explicit linking, reminder đúng lúc và purge/restore.
 
 Security/integrity gates CR01: locked/wrong-key/tamper, ciphertext/private index/temp/backup confidentiality, catalog opt-in disclosure, two scoped bearer sessions, concurrent single-use redemption, guessed IDs/owner spoof, request approval, no scope growth, revoke/expiry/lock/restart/cache, path resolution, injection, source scope, declassification và egress. Không còn gate chống OS/shell/process/peer-credential bypass bởi agent cùng quyền owner. UI phải thao tác thật; crypto/API/CLI/MCP phải exercise thực, không chỉ unit tests.
 
 CR01 replacement S1-T2–S1-T9 đã có evidence gate PASS cùng reviewed-snapshot commits/project checkpoint xác nhận (S1-T2 `db8747580093ddb9aa709ac578a2fa1ec045cf7b`, S1-T3 `f118ea1b1832f5325b896ef86b2ed2d155ed3469`, S1-T4 `1ede35e2a908a090aeb43e94621ba7a8f9293c70`, S1-T5 `15c97faa91e699ffad527a1018579238e4d0f526`, S1-T6 `83b92fa65d7f51f7c46fba52df783054fb757d93`, S1-T7 `f89ed6067d649ec8d0a30398b4e23e77cc045ab3`, S1-T8 `db61a08b0d7cd1b8e3b679cc7c0f4a698dc70a9f`, S1-T9 `127ef6ba4dcef3405cdd6f34474ac7da57915cc6`); final differential deep gate [S1-DEEP-20261007-A2](../artifacts/sprint-1/reviews/sprint-1-S1-DEEP-20261007-A2.md) PASS, no actionable findings. Sprint 2/M2 complete: S2-T1–T7 accepted evidence/checkpoints, final differential [S2-DEEP-20261012-A1](../artifacts/sprint-2/reviews/sprint-2-S2-DEEP-20261012-A1.md) PASS, latest reviewed product commit `e4e7c5f5accebbda6f39d6dfbfb349a51fe80442`; owner confirms all S2 changes committed. Sprint 3 In progress (S3-P0 complete; S3-T1 source enrollment/ingestion coordinator delivered, worker evidence pending review). Sprint 4–8 Not started. Old AppContainer baseline PASS và supplemental protected model proof superseded/stopped; xem [Sprint 1](sprint-plans/sprint-1.md) và [Sprint 2](sprint-plans/sprint-2.md).
+
+#### BOUNDED-A14 — current-source spill/query correction and measurement (2026-10-23)
+
+A14 preserves the published encrypted generation at v3 and changes only rebuild-only spill
+scratch plus the authenticated query hot path. Scratch v2 groups sorted full-SHA-256 term
+digests, then stores the group count/first ordinal and positive delta-varint ordinals in bounded
+1,024-pair chunks with an eight-run merge fan-in. Scratch remains separately identified AEAD
+ciphertext under the existing vault-derived key, nonce sequence and offset-bound AAD; no new
+crypto or dependency was introduced. For candidate reads, one gate-owned `AesGcm` context and
+bounded ciphertext/plaintext/AAD buffers are reused, strict token-record validation still covers
+every entry, and exact UTF-8 byte equality remains the membership decision. Borrowed plaintext
+is cleared before the iterator advances. The code does not rely on a digest-only shortcut, cap
+candidates, or change scoring/filtering.
+
+The one-query profile of an existing 100k generation (`S8T5-A14-QUERY-PHASE-01`, no rebuild)
+measured 98,538 candidates. Authenticated token-record reads took 932.785 ms / allocated
+116,601,064 B; exact matching took 928.742 ms / allocated 17,310,928 B. Together those phases
+were 79.5% of profiled query time. The per-candidate plaintext, AAD and `AesGcm` allocations
+were replaced with bounded reuse. This profile diagnosed the hot path; it is not a percentile or
+post-fix timing result.
+
+The current-source focused `s8-t5-index` scenario passed. It exercises collision-safe exact token
+matching, strict malformed input, partial iterator/cancellation/lock cleanup, supported query
+limits, real owner and scoped-agent filter/ranking behavior, and nine popular 100k postings
+through grouped multi-pass spill with every final ordinal checked. No profile hooks or counters
+remain in product code.
+
+Current-source measurements used the preserved synthetic corpus generator and 100 warm-ups plus
+1,100 timed queries at each size:
+
+| Rows | Rebuild / throughput | Cold query | Warm p50 / p95 / max | Generation / directory / cache (B) |
+| ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 1.490 s / 671.3 rows/s | 39.55 ms | 3.61 / 18.50 / 29.42 ms | 1,892,405 / 166,888 / 534,392 |
+| 10,000 | 10.226 s / 977.9 rows/s | 221.59 ms | 8.70 / 60.53 / 79.95 ms | 17,573,899 / 1,012,888 / 2,695,408 |
+| 100,000 | 88.003 s / 1,136.3 rows/s | 1,498.11 ms | 118.10 / 680.55 / 847.30 ms | 172,188,312 / 9,472,888 / 16,752,768 |
+
+The warm p95 values are within the unchanged 250 / 500 / 1,000 ms limits. The 100k mean/max
+candidate matches were 48,844.3 / 99,996; no terms or candidates were capped. Natural / symbol
+expected-hit rates were 0.0218 / 1.0000.
+
+In `S8T5-A14-100K-FINAL-01`, the complete 250 ms vault sampler observed 273,620,804 B peak
+private-index staging/spill and 960,082,329 B combined vault-plus-staging peak, with 0
+missing-file races. The unchanged combined limit is 1,610,612,736 B, so this local disk target
+was measured within bounds. The published index stayed 172,188,312 B and the final vault was
+858,650,109 B. The failed A13 p95 and disk peak remain preserved in the preceding historical
+section.
+
+The first A14 100k parity claim is withdrawn: the alleged baseline run used current A14
+Core/Application DLLs and a Connections DLL matching neither A12 nor current A14, despite
+producing the same TSV hash as the current arm. Those retained files are invalid parity evidence.
+
+The corrected isolated baseline used product DLLs hash-verified before execution against the A12
+authoritative README (Core `c4031af4e77efa633cbffd502cb6677ae5b07abf4e3e67031d0da44daca2c91f`,
+Application `eef97d906bb7440dbcc45fca5af337da1b0787a418770af21a40b69603a7ce4f`, Connections
+`82de5472fcbf6d89f4eda4ee7edbfaa85e4ccd5a59f27788af6952c07529cc85`). It opened the existing
+copied A14 v3 generation without rebuilding the product or rerunning the current arm. The
+corrected A12 baseline and retained current A14 outputs each contain a cold page and all 1,100
+timed pages from the frozen 100k method (after 100 warm-ups); each TSV has 1,102 lines and
+SHA-256 `9ea9376c081b6494efd6a9d25df9901ca0cd31e34b2863b7ce5cbcff0f413481`. `fc /b` returned 0
+with no differences. The fixture query hash is
+`9781860aecd43d616c814c9078c78682731fb5dcec3ed41b2cf9b2403fc17292`; the generation index
+hash is `966c35c204a349d732229d75af244c504490e3c6b26f283218bb0c4458e95fa2`. The result digest
+covers totals and all returned hit fields, scores, order, revisions, reasons and metadata, not
+query text/body. It covers the 1,100-query frozen sample, not all 200,000 generated rows.
+
+The copied vault's only pre-run byte difference from its source was encrypted `scope-grants.enc`;
+after the baseline open its ciphertext hash changed again. This owner query gets its 100k scope
+from `operation.ListResources()` and does not use agent grants, so raw grant-byte parity is not
+claimed. The query runner emitted its result marker and complete TSV with empty stderr, but the
+PowerShell wrapper failed to capture the child exit code and returned 1 after output emission;
+no exit-0 claim is made. See `.agents/tmp/s8t5/a14/evidence/README.md` for component hashes,
+the exact grant values, run logs and the invalid earlier artifacts.
+
+**Adverse memory evidence remains open.** The same process seeded, rebuilt and queried before
+the 300 s core-proxy idle phases. Unlocked / locked working-set averages were 401,365,047 /
+406,963,128 B, above the frozen 256 MiB service-idle line; private-byte averages were
+740,235,928 / 746,482,871 B. The same process had already reported 1,268,473,144 B managed
+and 1,002,147,840 B working set after seeding and before rebuild. No forced GC or attribution
+instrumentation was used. Retained fixture, query/rebuild-phase and product contributions cannot
+be separated, so attribution is unknown. This is adverse proxy evidence requiring review, not a
+service pass or a waiver; the real service/UI/IPC path was not run.
+
+#### S8T5-RAM-PROVENANCE-A15 — fresh-child owner-query diagnosis (2026-10-23)
+
+Two sequential fresh children used the existing synthetic A14 100k vault. R1 opened the existing v3 index only, made no query, and exited 0; a fresh owner handler correctly refused `owner.library.search` with `index_not_materialized`. After that supported limitation was established, Main authorized one R2 child to invoke the real in-process `owner.index.rebuild` API and run cold + 100 warm-up / 1,100 timed owner searches, followed by 300 s unlocked and 300 s locked idle. R2 rebuilt 100,000 rows with current canonical digest and schema 3, then ran the complete frozen method.
+
+The R2 child wrapper captured its actual `WaitForExit`/`ExitCode` as **11**, not 0. The in-child checker incorrectly required each broad natural query's expected item to appear in the top-10 page; this caused 538 natural-target absence flags. An offline compare of 1,101 cold/timed rows against the current A14 TSV found zero differences in shared query inputs/ID hashes, phase/index, symbol, total, hit count, or A14 hash reference; no equality between the old core `OwnerLibraryPage` hash and new service-wire hash is claimed. The exit 11 and incomplete marker are preserved, not relabeled as success.
+
+Working-set averages/peaks were 286,283,625 / 307,220,480 B during cold/warm/timed queries, 289,931,762 / 290,004,992 B in unlocked idle, and 288,975,235 / 290,709,504 B in locked idle, all adverse to the frozen 268,435,456 B line. After lock the index directory and cache were zero but working set remained elevated. Managed/GC/private/index counters are recorded separately. A bounded snapshot retains at most 512 sampled rows; the owner handler creates per-request full-scope temporary structures; the index directory and cache were 9,472,888 B and 16,752,768 B unlocked. With forced GC disallowed, the remaining heap residency cannot be classified as rooted product data versus uncollected garbage/CLR residency. This is adverse in-process proxy evidence, not service-memory acceptance or proof of a service failure, and does not justify a speculative product change or target relaxation.
+
+R1/R2 used the SDK-pinned A15 harness (10.0.402, roll-forward disabled) on runtime 10.0.13 with R11-matching product DLLs. The 1 GiB free-memory guard stayed above 4,633,284,608 B; there was no host mutation or app closure. The existing A14 full-hash list remains historical for the pre-rebuild derived-index bytes. Raw logs, offline comparison, build/SDK evidence and the bounded artifact manifest are in `.agents/tmp/s8t5/a15/evidence/README.md`; the handoff is `artifacts/sprint-8/handoffs/S8T5-RAM-PROVENANCE-A15.md`. Real service, WPF/owner UI, pipe/IPC, R37 proof, independent review and Main-owned plan/checkpoint gates remain external. No full S8-T5 or security PASS is claimed.
+
+
+#### S8T5-HANDLER-RESUME-A17 — owner request-local snapshot (2026-10-23)
+
+The owner search continues to refuse a locked vault and any engine generation whose canonical digest differs from the unlocked epoch’s materialized digest. For each accepted request it builds one ordinal-sorted filtered owner scope, obtains one live canonical `ListResources()` snapshot, and checks that exact ID/revision snapshot with the existing digest before using it. The same verified snapshot is passed into the owner-only search path; served-hit freshness uses binary search over that strict canonical ordering instead of constructing another full-vault revision dictionary. The snapshot and scope are request-local only; there is no cross-request cache, weakened freshness check, or changed zone/collection/currentness/time/archive/revision/ranking/tie rule.
+
+The focused final smoke passed the expanded owner-library cases, but it does not close performance acceptance. The existing synthetic 100k actual-handler protocol completed all 1,100 timed calls with p95 2,810.977 ms against the frozen 1,000 ms limit; the normal owner rebuild took 1,645,385.959 ms against the 20-minute limit. The 3,600.21 s runner timeout occurred during unlocked idle sample 92/300; locked idle and actual child exit were not captured. This is adverse in-process evidence, not service/UI/IPC acceptance. Raw evidence and binary/source binding are in `.agents/tmp/s8t5/a17/evidence/README.md`; details and remaining gaps are in [task history](../artifacts/sprint-8/task-5.md) §23 and the [A17 handoff](../artifacts/sprint-8/handoffs/S8T5-HANDLER-RESUME-A17.md).
+
+#### S8T5-GOLD-BOUNDED-A18 — canonical owner scope and measured limits (2026-10-23)
+
+For an owner library request, the service now treats the strictly ordered canonical resource/revision/zone snapshot it already fetches for the generation check as the owner scope: the snapshot must equal the materialized generation digest and the live canonical digest before any search, zone/collection filters are applied to it, and the same snapshot supplies served-hit revision checks. The previous path decrypted and re-projected every materialized index row (~100k at the measured size) on each request; that duplicate read is gone. The superseded-relation scan is evaluated only for `current` queries, because it cannot affect `all`/`history`. Lock refusal, exact revision reads, currentness/history/as-of, archived policy, recall, zone projection, ranking and tie order are unchanged, and no cross-request cache was introduced.
+
+Two Gold runs were spent. The first used a bounded 8-envelope rebuild batch and was stopped by the mandatory 1 GiB host free-memory guard during the rebuild; the batch was withdrawn (the host decline is recorded as a correlation, not proven causation, because no per-process attribution exists). The second used the serial rebuild and completed the full 100k protocol with actual exit 12: handler p95 **1,668.026 ms** (p50 183.937 ms) against the unchanged 1,000 ms target — improved from A15 2,167.332 and A17 2,810.977 but still a miss — average allocation 29,286,018 B, rebuild 1,396,956.547 ms against 20 minutes (miss), combined vault+staging disk 1,132,272,603 B (within 1.5 GiB), unlocked/locked idle working set 207,084,032 / 204,846,357 B and idle CPU 0.0709 % / 0.0729 % (both within). The comparator reported 0 common-field mismatches over 1,101 rows. This is in-process proxy evidence, not service/UI/IPC or owner R37 acceptance; 1k/10k handler p95, UI p95 and provider cost remain unmeasured.
+
+#### OWNER-ACCEPTANCE-CUTOVER-A20 — S8-T5 sign-off basis after the owner decision (2026-10-23)
+
+The owner replaced the frozen latency and rebuild figures **as T5 sign-off gates** after reviewing
+A18/R13 and the A19/R14 lifecycle proof. The replacement is recorded as the requirements change
+"Owner-approved S8-T5 acceptance cutover — 2026-10-23" ([requirements](REQUIREMENTS.md)) and
+[D086](../.agents/memory/decisions.md). Recall p95 at 1,000/10,000/100,000 records (250/500/1,000 ms)
+and the 20-minute 100,000-record rebuild remain the Sprint 1 envelope and the gates the A11–A18 runs
+were measured against, and every recorded measurement and miss (A11, A13, A14, A15, A17, A18; R11,
+R13, R14) stays a historical fact — no PASS is created for them. They no longer decide T5, and the
+outstanding mandatory 1k/10k actual-handler reruns are not a T5 condition.
+
+T5's quantitative basis is the observed A18 run 2 practical baseline: 100,000 rows in process,
+handler p50/p95 183.937 / 1,668.026 ms, rebuild 1,396,956.547 ms (23 min 16.957 s), comparator 1,101
+rows with 0 common-field mismatches. That is a historical observation of that snapshot, not a numeric
+ceiling for future builds and not a service/UI/IPC measurement. T5's behavioural basis is A19: an
+authenticated generation whose canonical digest and row count match the live canonical set is reused
+across lock/unlock and restart without rewriting the encrypted file, and a missing, stale, tampered,
+truncated or wrong-key generation fails closed (`index_not_materialized`, `search_index_stale`,
+`index_unavailable`) with the explicit owner rebuild as the only recovery; the current format has no
+per-record delta.
+
+Unchanged: the bounded resident directory/cache caps and builder bounds, encryption at rest through
+the existing vault AEAD and vault-derived key with no new crypto and no plaintext scratch, scope /
+revision / currentness / provenance / ranking correctness, lock clearing key, cache and resident
+reads, and the prohibition on host/ACL/permission/system mutation. The A18 CPU, disk and idle-RAM
+results remain historical observations within the limits they were measured against; no budget is
+expanded. Not waived: real service/WPF/owner UI/IPC evidence, the S8-T6 security/recovery replay, the
+S8-T7 owner walkthrough with the R37 qualitative judgement, independent review and any checkpoint.
 
 ## 15. Tham chiếu và giới hạn bằng chứng
 

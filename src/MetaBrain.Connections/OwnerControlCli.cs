@@ -4073,7 +4073,7 @@ internal static class OwnerControlCli
     /// </summary>
     private static async Task<int> AgentSearchAsync(CommandOptions options)
     {
-        options.RequireOnly("--agent-pipe", "--session-file", "--query", "--offset", "--limit", "--kind", "--current", "--as-of", "--include-archived");
+        options.RequireOnly("--agent-pipe", "--session-file", "--query", "--offset", "--limit", "--kind", "--current", "--level", "--as-of", "--include-archived");
         var agentPipe = PipeName(options, "--agent-pipe");
         var sessionPath = options.Required("--session-file");
         var query = options.Required("--query");
@@ -4102,6 +4102,14 @@ internal static class OwnerControlCli
 
         var kind = options.Optional("--kind");
         if (kind is not null && (kind.Length == 0 || kind.Length > 32 || kind.Any(char.IsControl)))
+        {
+            return Usage();
+        }
+        var level = options.Optional("--level");
+        if (level is not null &&
+            (!Enum.TryParse<AbstractionLevel>(level, ignoreCase: true, out var parsedLevel) ||
+             parsedLevel == AbstractionLevel.Unknown ||
+             !Enum.IsDefined(parsedLevel)))
         {
             return Usage();
         }
@@ -4146,6 +4154,7 @@ internal static class OwnerControlCli
                 SearchOffset: offset,
                 SearchLimit: limit,
                 SearchKind: kind,
+                SearchLevel: level,
                 SearchCurrent: current,
                 SearchAsOfUtc: asOfUtc,
                 IncludeArchived: IsTrueFlag(options, "--include-archived"))).ConfigureAwait(false);

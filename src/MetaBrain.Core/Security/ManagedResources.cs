@@ -88,6 +88,10 @@ public interface IManagedResourceReader
 /// </summary>
 public interface IManagedResourceStore : IManagedResourceReader
 {
+    /// <summary>
+    /// Returns the immutable canonical resource snapshot in strictly ascending
+    /// ordinal resource-ID order.
+    /// </summary>
     IReadOnlyList<ScopeResourceRevision> ListResources();
     bool TryGetZone(string resourceId, out string? zoneId);
     long WriteContent(string resourceId, string zoneId, byte[] content);

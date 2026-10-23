@@ -1,14 +1,19 @@
 using System.Security.Cryptography;
+using System.Text;
+using MetaBrain.Core.Index;
 using MetaBrain.Core.Security;
 
 namespace MetaBrain.Connections;
 
-internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
+internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateIndexKeyProvider
 {
+    private static readonly byte[] IndexKeyInfo = Encoding.UTF8.GetBytes("MetaBrain|private-index|v1");
+
     private readonly object _stateGate = new();
     private readonly object _contentGate = new();
     private readonly EncryptedVaultStore _store;
     private byte[]? _dataKey;
+    private byte[]? _indexKey;
     private VaultManifest? _manifest;
     private int _activeOperations;
     private bool _locking;
@@ -57,6 +62,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
 
             var material = _store.Create(passphrase, Array.Empty<VaultResourceSeed>());
             _dataKey = material.DataKey;
+            _indexKey = DeriveIndexKey(_dataKey);
             _manifest = material.Manifest;
             recoveryCode = material.RecoveryCode;
             ResetRefreshSignalLocked();
@@ -86,6 +92,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
             }
 
             _dataKey = key;
+            _indexKey = DeriveIndexKey(_dataKey);
             _manifest = manifest;
             try
             {
@@ -738,12 +745,51 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable
         }
     }
 
+    /// <summary>
+    /// S8-T5: the key the private index is encrypted with. It is derived
+    /// from the vault's own data key with a fixed label, so there is no
+    /// separately stored key, no key file and no autonomous unlock: the key
+    /// exists only inside an unlocked epoch and is cleared with it.
+    /// <para>
+    /// The bytes belong to the lifecycle. A caller may read them for the
+    /// operation it is running and must not keep or modify them.
+    /// </para>
+    /// </summary>
+    byte[]? IPrivateIndexKeyProvider.PrivateIndexKey
+    {
+        get
+        {
+            lock (_stateGate)
+            {
+                return _indexKey;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Derives the private index key from the vault data key. The derivation
+    /// is a standard HKDF over the vault's own key material with a fixed
+    /// label, so the index key is bound to this vault and to this purpose and
+    /// is never the data key itself.
+    /// </summary>
+    private static byte[] DeriveIndexKey(byte[] dataKey) =>
+        HKDF.DeriveKey(HashAlgorithmName.SHA256, dataKey, 32, salt: null, info: IndexKeyInfo);
+
     private void ClearUnlockedState()
     {
         if (_dataKey is not null)
         {
             CryptographicOperations.ZeroMemory(_dataKey);
             _dataKey = null;
+        }
+
+        if (_indexKey is not null)
+        {
+            // S8-T5: the private index key leaves the process with the
+            // unlocked epoch. A locked vault has no key for the index, so no
+            // private index byte can be read.
+            CryptographicOperations.ZeroMemory(_indexKey);
+            _indexKey = null;
         }
 
         _manifest = null;

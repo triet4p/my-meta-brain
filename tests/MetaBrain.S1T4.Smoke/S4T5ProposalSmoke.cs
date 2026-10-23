@@ -139,8 +139,9 @@ internal static partial class OwnerServiceSmoke
 
             var rebuild = await RunOwnerCommandAsync(connectionsExecutable,
                 "owner", "index-rebuild", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
-            Require(rebuild.ExitCode == 0 && rebuild.StandardOutput.Contains("INDEX rebuilt schema=2", StringComparison.Ordinal),
-                "The S4-T5 private index rebuild did not materialize schema=2 (exit=" + rebuild.ExitCode + "; stderr=" + rebuild.StandardError.Trim() + ").");
+            Require(rebuild.ExitCode == 0 && rebuild.StandardOutput.Contains("INDEX rebuilt rows=", StringComparison.Ordinal) &&
+                    !rebuild.StandardOutput.Contains("rows=0", StringComparison.Ordinal),
+                "The S4-T5 private index rebuild did not publish a materialized generation (exit=" + rebuild.ExitCode + "; stderr=" + rebuild.StandardError.Trim() + ").");
 
             // Owner-approved proposal authorization: the operation plus the
             // separate concrete inbox destination. A read-only grant carries
@@ -496,7 +497,8 @@ internal static partial class OwnerServiceSmoke
                 "A proposal mutated or published the subject item (stdout=" + finalSubject.StandardOutput.Trim() + ").");
             var finalRebuild = await RunOwnerCommandAsync(connectionsExecutable,
                 "owner", "index-rebuild", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
-            Require(finalRebuild.ExitCode == 0 && finalRebuild.StandardOutput.Contains("INDEX rebuilt schema=2", StringComparison.Ordinal) &&
+            Require(finalRebuild.ExitCode == 0 && finalRebuild.StandardOutput.Contains("INDEX rebuilt rows=", StringComparison.Ordinal) &&
+                    !finalRebuild.StandardOutput.Contains("rows=0", StringComparison.Ordinal) &&
                     finalRebuild.StandardOutput.Contains("kind=proposal", StringComparison.Ordinal) &&
                     finalRebuild.StandardOutput.Contains($"INDEX ROW id={createId}", StringComparison.Ordinal),
                 "The rebuild did not materialize the pending proposal records (exit=" + finalRebuild.ExitCode + "; stdout=" + finalRebuild.StandardOutput.Trim() + ").");

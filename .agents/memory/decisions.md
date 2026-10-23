@@ -677,3 +677,425 @@ in the audit trail and the code in the diagnostics, with the service's own sente
 explanation. A refused act is never reported as an unavailable transport, so a real refusal and a
 lost service stay distinguishable. The client stays the only place that knows how a reply is
 shaped: the service, the CLI and the console all keep their own contracts.
+
+## [2026-10-21] D071 — One descriptor snapshot and one engine transaction per index rebuild
+
+**Decision:** A private-index materialization reads the canonical descriptor list **once** and
+reuses that snapshot for the whole pass, and it writes the whole generation in **one engine
+transaction** through one prepared statement per document. The lifecycle state of an item is
+joined from the same snapshot, so a rebuild never asks the vault for its resource list again and
+never attempts a read for a lifecycle record the vault does not hold.
+
+**Alternatives considered:** Keep one read per item (rejected: the measured rebuild paid an
+O(n) descriptor scan per item, so a 10,000-record vault was quadratic before the postings were
+even written); keep one INSERT per token posting outside a transaction (rejected: a statement
+allocation and a commit per token dominated the rebuild of a large vault); batch the reads only
+(rejected: D044's bounded concurrent batch already does that, and it does not touch the
+descriptor scan or the per-token commit); snapshot the descriptor list to a temp file (rejected:
+a temp file of a private index is a plaintext-index path the CR01 boundary does not allow).
+
+**Reason:** S8-T5 measured the rebuild on the real service and the real encrypted vault: at
+1,120 records the pre-fix rebuild took 8.140 s (137.6 records/s) and the recall p95 was 576.7 ms
+against a frozen target of 250 ms at 1,000 records. The descriptor scan and the per-token commit
+are the two costs that grow with the vault, and both are internal to the engine, so both can
+change without touching the encryption, the provenance, the scope checks or the revision gates.
+
+**Consequences:** A rebuild is O(n) in descriptors and O(postings) in one transaction instead of
+O(n^2) descriptor scans plus one commit per posting. The engine gains one scope type
+(`IPrivateIndexWriteScope`) that a caller must commit or roll back: an abandoned scope leaves no
+partial generation. The engine still holds no key, writes no file and no temp, and is still
+discarded at lock, restart and crash. A future agent must not "optimize" the rebuild by
+snapshotting descriptors to disk.
+
+## [2026-10-21] D072 — Bind the caller's scope inside the index engine, not as one SQL parameter per scope ID
+
+**Decision:** The engine binds the caller's approved scope IDs into **its own in-memory scope
+table** and filters the token rows with an `EXISTS` join against that table. An unchanged scope
+is not rebound. The scope IDs are never returned to the caller and never leave the engine.
+
+**Alternatives considered:** Keep one SQL parameter per scope ID (rejected: the owner library
+scope is one row per memory item, so a 100,000-record vault asks the engine for more bound
+parameters than the engine can bind, and the owner search would fail with an engine error
+instead of an answer); filter the scope in the caller after the engine returned the token rows
+(rejected: that returns out-of-scope token rows to the caller, which is exactly what the
+SQL-side scope binding exists to prevent); split the scope into chunks of parameters and union
+the chunks (rejected: the work grows with the number of chunks and the scope list is rebuilt on
+every query); keep a second persistent index of the scope (rejected: a second truth store with
+its own key and crash surface).
+
+**Reason:** The scope binding is a security boundary of the recall path (R06, R23): a token row
+of an out-of-scope resource must never be scored or decrypted. Binding it in a table keeps that
+boundary inside the engine, at any scope size, without a parameter limit, and the cached binding
+keeps a repeated query over the same scope at one set comparison.
+
+**Consequences:** The engine owns one more in-memory table that holds resource IDs only (never
+text, never a body) and is dropped with the engine. The scope filter still runs inside SQL
+before any token row is returned, so the security property is unchanged; only the way the scope
+reaches the engine changed. An agent that changes the scope between two queries pays one
+rebinding, which is bounded by the scope it was granted.
+
+## [2026-10-21] D073 — Resolve the live revision set and the superseding relations once per query
+
+**Decision:** A scoped or owner search resolves the **live canonical revisions** and the
+**superseding relations** once per query and answers every candidate from that resolution. The
+staleness rule, the currentness rule and the supersede rule are unchanged.
+
+**Alternatives considered:** Keep the per-candidate live-revision lookup (rejected: the measured
+recall path asked the vault for its whole resource list once per served hit, so the p95 grew
+with the vault); precompute the superseding set once per vault epoch and cache it (rejected: a
+relation can be written between two queries, and a stale supersede set would answer a currentness
+question with an old fact); index the relations in the private index (rejected: relations are not
+searchable content, and a second index of relations would be a second truth store).
+
+**Reason:** The per-candidate walks were the measured recall bottleneck: the p95 of the owner
+library search was 576.7 ms at 1,120 records against a frozen target of 250 ms, and both walks
+grew with the vault while the answer they produce did not depend on the candidate. The served
+body is still read at its exact frozen revision, so a body that moved after the set was taken
+still fails closed on the read.
+
+**Consequences:** A query pays one walk of the canonical set and one pass over the relations
+instead of one walk per candidate. The live set a query sees is the set at the start of that
+query, not a set re-read per hit; a revision that moves during the query is caught by the
+revision-gated read of the body, not by the staleness flag.
+
+## [2026-10-21] D074 — Keep the lexical recall pipeline; no embedding or reranker, and no manifest format change
+
+**Decision:** S8-T5 keeps the lexical recall pipeline (diacritic folding, symbol and camelCase
+splitting, the light stemmer, the stopword list and the general-vocabulary expansion rings) and
+adds **no** embedding model, vector index or reranker. It also keeps the encrypted manifest as
+one file that is rewritten atomically on every canonical write, and records the measured cost of
+that write instead of changing the vault format.
+
+**Alternatives considered:** Add a local embedding model and a vector index for the paraphrase
+and cross-language gaps the measurement shows (rejected: no measured need justifies it yet — the
+owner-permitted sample returned the expected document for the exact-symbol and the date queries
+without it, and D-OPEN-4 keeps embeddings evidence-gated; an embedding model would also add a
+model dependency, a new persisted derived store and a new consent surface that this task has no
+authorization for); add a reranker on top of the lexical ranking (rejected: the same reason, and
+a reranker without a scored owner corpus would be tuned against a synthetic fixture, which R37
+forbids); change the manifest into an append-only descriptor journal with lazy compaction
+(rejected **for this task**: it changes the vault format and the crash-recovery, backup and
+migration contracts that S8-T2 and S8-T3 own, and the measured per-write cost is dominated by
+the durable flush of a single-file commit, not by the descriptor count at the measured sizes).
+
+**Reason:** The assignment allows an embedding or reranker only where a measured need and the
+owner's consent justify it. The measurement shows the recall path fails the frozen latency
+target for **volume** reasons (a descriptor scan and a commit per token), not for relevance
+reasons, and the owner-permitted corpus evidence is program-observed only: whether the returned
+answers are the answers the owner would judge correct is an owner action this task cannot
+perform. Adding a model now would tune a system whose relevance gap has not been judged.
+
+**Consequences:** The recall quality of the product is still bounded by the lexical pipeline, and
+the six-document owner sample is a purposive sample, not the owner's corpus. The next step for
+relevance is an owner-supplied, owner-judged query set (R37), not a model. The manifest's
+per-write cost stays as a measured number in the S8-T5 artifact; changing the vault format for
+it is a separate, format-owning decision that must come with the migration and backup contract.
+
+## [2026-10-22] D075 — One copy of every search posting: an integer document id and a token dictionary inside the existing in-memory engine
+
+**Decision:** The protected private index moves to schema 3 and keeps **one** copy of every search
+posting instead of three. The postings table is keyed by the integer `doc_id` and the integer
+`token_id`; the token text lives once in the engine's own token dictionary
+(`private_index_terms`), and the document identity (resource ID and revision) lives once in the
+temporal row whose `doc_id` the postings point at. The engine stays the same disposable in-process
+SQLite database: no file, journal, WAL, temporary sort file or page cache is ever created, the
+index is still derived data that is dropped at lock, restart and crash, and the frozen
+256 MiB idle-RAM target is not relaxed by this decision.
+
+**Alternatives considered:** Keep the text-keyed postings and drop the redundant `PRIMARY KEY`
+index (rejected: the explicit token index cannot be dropped, because the candidate prefilter
+scans it, so at best two of the three copies go and the measured ceiling of the correction is
+about 30 % of a 1.73 GiB problem); keep the text-keyed postings and accept the measured footprint
+(rejected: 98 % of the index memory is the three copies of the posting key, and the owner asked
+for the compact integer representation before any persistent redesign); write the postings as
+per-token and per-document varint blobs (measured at 3.46 bytes per posting against the chosen
+21 bytes, so it is the only layout that could fit the marginal 100k budget, but rejected **for
+this change**: it needs a bespoke codec, it makes the per-token posting list quadratic to build
+without a transient staging structure, it moves the scope filter out of SQL, and it would have to
+reproduce the engine's own text order for the served token list; the measured numbers are kept in
+the S8-T5 worker evidence as the bounded next decision); move the index to an encrypted file on
+disk (rejected: the strongest property of the current design is that **no** derived index bytes
+exist at rest, a plaintext index on disk does not satisfy the private policy, and an encrypted
+persistent index is a separate, format-owning decision that this task does not authorize).
+
+**Reason:** The FOOTPRINT-A4 measurement attributed 98 % of the index's resident bytes to the
+postings and showed that the key triple (resource ID, revision, token) was stored three times per
+posting: once in the row payload, once in the primary-key index and once in the explicit token
+index. The compact representation removes the repeated long keys without touching a single recall
+rule: the token equality, the collation, the term weights, the scope filter, the tie order, the
+revision pinning and the provenance all stay exactly as they were, and the two representations
+were measured side by side on the identical corpus, vault and query set, where the served answers
+were byte-identical.
+
+**Consequences:** The index engine's own page bytes fall from 17,506,304 B to 3,960,832 B (4.42x)
+at 1,000 records and from 173,809,664 B to 39,809,024 B (4.37x) at 10,000 records, its resident
+SQLite memory falls by 4.35x and 4.36x, the 10,000-record rebuild falls from 24.9 s to 16.7 s, and
+the recall latency does not regress (p95 420.1 ms against 422.3 ms, both under the frozen 500 ms
+line) — with the same posting rows, the same distinct tokens and the same hits, scores, order and
+token sets, compared result by result over 128 scenarios per size. The private index has
+**no persisted artifact**: a vault written by an older build rebuilds its index from canonical,
+and the engine's schema 2 to 3 step moves a live schema-2 engine's rows instead of orphaning
+them. The owner-visible index schema version moves from 2 to 3, so the permanent smoke scenarios
+now assert the consumer-visible behaviour (the rebuild publishes a materialized generation, the
+generation is not stale, the canonical set did not move) rather than the implementation's schema
+number. The frozen 256 MiB idle-RAM target at 100,000 records is **not** met by this change: the
+index is **measured** at 422,518,784 B (403.0 MiB) at 100,000 records, about 5.8x the ≈70 MiB the
+target leaves for it after the ≈186 MiB non-index service baseline, so the projected service
+idle working set is ≈589 MiB against the 256 MiB line. The 100,000-record cold rebuild lines
+**are** met (144.7 s against 20 minutes; 690.9 records/s against 100), and the 100,000-record
+recall p95 is not met (6,706.6 ms against 1,000 ms) for a reason that is not the index: the owner
+library reads the body of every matching candidate. The 100,000-record envelope on the real
+service is still unmeasured, and closing the remaining gap needs the bounded next decision
+recorded in the S8-T5 worker evidence, not a relaxed target.
+
+**[Corrected 2026-10-22 by COMPACT-FIX-A7 — see D076.]** The last sentence of this decision is
+wrong and is corrected by D076: the 200 timed queries ran without a level filter and read **no**
+candidate body, so the 100,000-record latency miss is the cost of materializing the candidates,
+not the cost of reading their bodies. The 100,000-record run also used 20 warm-ups and 200 timed
+queries instead of the frozen 100 and 1,000, and 24 of its 28 result scenarios finished, so it is
+a measurement but not a protocol-compliant envelope measurement. The measured shrink, the rebuild
+throughput and the frozen targets are unchanged.
+
+## [2026-10-22] D076 — The engine's own SQL and its own database own the scope filter and the document identity
+
+**Decision:** Two rules of the private index engine, both of which COMPACT-A6 stated but did not
+implement:
+
+1. **The scope filter runs inside the engine's SQL.** The engine binds the caller's approved scope
+   IDs into its own in-memory scope table, and the candidate query **joins** that table, so the
+   scope is applied before any candidate row leaves the engine. This is what D072 decided; the
+   COMPACT-A6 implementation returned every resource that carried the term and filtered the
+   out-of-scope ones in the caller, so out-of-scope resource identifiers crossed the engine's
+   boundary on every large-scope query.
+2. **The engine's own database assigns the document identity.** The document id is the temporal
+   row's rowid, so it is always a free id above the rows the database already holds — including
+   the rows a live schema-2 migration carried in. The engine keeps no counter of its own.
+
+**Alternatives considered:** Keep the caller-side scope filter (rejected: it is the exact
+behaviour D072 rejected — the engine's boundary is where the scope belongs, and the filtered
+identifiers are still identifiers of resources the caller may not see); initialize the engine's
+counter from the migrated maximum instead of using the database's own id (rejected: a counter is a
+second copy of a fact the database already holds and can fall behind any row the engine did not
+write — a migrated row, a rolled-back write, a future migration step — while the rowid cannot);
+allocate the document id in the managed layer (rejected: same reason, one level further from the
+data).
+
+**Reason:** Both defects came from the same shape: a fact the engine's own database already holds
+was duplicated in the engine's managed state or moved out of the engine's SQL. The scope table was
+written but never read; the identity counter was written but never reconciled with the rows that
+the migration had brought in. The independent review of COMPACT-A6 (R6-F1, R6-F2) found both,
+and the second one is observable as a failed write: indexing a document into an upgraded engine
+raised `UNIQUE constraint failed: private_index_temporal.doc_id`.
+
+**Consequences:** The candidate query of a scope of any size applies the scope inside the engine,
+and the answers are unchanged (the same documents, revisions, scores, order and provenance, proven
+by a byte-identical result dump against the schema-2 engine on the identical corpus, vault and
+query set). An upgraded engine indexes a new document, replaces a document at the same identity
+and adds a revision like a freshly opened one. The permanent in-process regression
+(`MetaBrain.S1T4.Smoke.exe s8-t5-index`) now asserts both: the scope boundary of a scope bound
+inside the engine, and the whole migrate → insert → replace → requery → rebuild sequence over
+the migrated identities and revisions. The frozen 256 MiB idle-RAM line and the frozen
+100,000-record recall latency line are **still not met**; the measured index at 100,000 records
+remains 403.0 MiB, and the latency miss is the candidate materialization (48,686 candidates per
+query on average, 122 batches of 400, 21.0 GB allocated over the 200 timed queries), not a body
+read. The 100,000-record measurement used 20 warm-ups and 200 timed queries instead of the frozen
+100 and 1,000 and finished 24 of 28 result scenarios, so it is a measurement and not a
+protocol-compliant envelope measurement; the compliant one is still outstanding.
+
+## [2026-10-22] D077 — The private index is a persistent, encrypted-at-rest generation with a byte-bounded cache, and the recall path streams its candidates
+
+**Decision:** The private index is no longer an in-process database that holds the whole corpus in
+memory. It is a **persistent generation file** under the vault root whose every record is
+individually sealed with the vault's own AEAD under a key derived from the vault data key, and the
+recall path **streams** the candidates of a query in bounded batches and keeps only the page it is
+going to serve. Concretely:
+
+1. **Format.** A generation is a sequence of sealed records (directory, document row, document
+   tokens, posting list, token bucket, materialized row). Each record is AES-GCM sealed — the same
+   primitive and the same envelope discipline the vault's canonical files use — with a key derived
+   from the vault data key by HKDF-SHA256 under a fixed label, so the index key is bound to this
+   vault and to this purpose and is never the data key itself. The record's own file offset, its
+   record kind, the format version and the **generation identity** are bound into the associated
+   data, so a record cannot be moved, reordered, replaced or replayed from another generation
+   without the tag failing. The generation identity is derived from the canonical digest of the
+   set the generation was built from, so a generation can only be read as the generation of the
+   canonical set it was built from. The nonce of every record is a random per-generation prefix
+   followed by a per-record counter, so a (key, nonce) pair is never reused inside or across
+   generations.
+2. **Bounded residency.** The engine keeps one **directory** (identity, revision and file offset
+   of every indexed document) and one **cache of decrypted records** whose size is capped in bytes
+   and evicted least-recently-used. The postings are never all resident: a query reads the posting
+   list of the terms it asked for, merges them, and scores the candidates in batches. The directory
+   is the one structure that grows with the vault, and it is bounded by a measured byte budget: a
+   generation whose directory would not fit is refused instead of being loaded.
+3. **Publishing.** A rebuild writes a staged generation and publishes it with one atomic replace.
+   An abandoned rebuild publishes nothing and its staged file is reaped. A generation that cannot
+   be authenticated (tampered, truncated, or written by a newer build) fails closed: the owner
+   rebuilds it explicitly, and the canonical records are never touched.
+4. **Query contract.** The engine applies the caller's approved scope itself, so an out-of-scope
+   identifier never leaves it. Every eligible candidate is visited and scored; the working set is
+   the batch and the served page, not the candidate count. The ranking order, the tie order, the
+   token equality and collation, the scope, revision, date, currentness and provenance gates are
+   unchanged.
+
+**Alternatives considered:**
+
+- **Keep the in-memory SQLite engine and shrink it further** (rejected: the measured floor is
+  403.0 MiB of resident pages at 100,000 records, 1.57x the whole idle-RAM budget on its own, and
+  no in-memory layout removes the fact that the whole corpus is resident).
+- **A plaintext SQLite file, encrypted as a whole when the file is closed** (rejected: the file,
+  its WAL, its rollback journal and its temporary sort files are plaintext while the service runs,
+  and the page cache holds plaintext the whole time; this is exactly the leak the owner-approved
+  direction forbids).
+- **Encrypt the SQLite database with a SQLCipher-style codec** (rejected: it is a new dependency
+  and a new crypto construction, neither of which the owner approved, and it would still leave
+  plaintext in the process's memory).
+- **A bespoke varint/blob posting codec on top of SQLite** (rejected as the *whole* answer: it
+  shrinks the postings but leaves the whole generation resident, which is the actual bound that
+  failed).
+- **A per-term posting list with a random bucket table** (chosen): the query term is routed to one
+  bucket by a public hash of its text, so a term lookup reads one bucket and one posting list
+  instead of a resident dictionary of the whole vocabulary. The token text itself never leaves the
+  sealed file.
+
+**Reason:** The measured failure was not the index's *size on disk* but its **residency**: at
+100,000 records the index held 403.0 MiB of pages in the process, and every query materialized
+every matched candidate (48,686 candidates per query on average, 21.0 GB allocated over 200 timed
+queries). Only two changes close that: the derived data must leave the resident set, and the
+candidate set must be scored without being materialized. The owner approved exactly that direction
+(bounded-memory indexing and search with an encrypted persistent private index and a bounded
+evicting cache), and the format reuses the vault's existing AEAD, key envelope discipline and
+atomic-write pattern instead of inventing a crypto construction.
+
+**Consequences:** The private index is now a **file** in the vault root, so the "no plaintext
+index, temp, journal, WAL or spill file" rule is satisfied by construction rather than by keeping
+everything in memory. The index is excluded from backups (it is a rebuildable derivative, and a
+restored vault rebuilds it from canonical). The engine holds no key of its own: it borrows the
+index key from the vault lifecycle for the operation it is running, and the key, the cache and
+every private read leave the process with the unlocked epoch. The frozen 256 MiB idle-RAM line and
+the frozen 100,000-record recall latency line are **not relaxed** by this decision: they are
+measured again against the unchanged targets. The permanent regression
+(`MetaBrain.S1T4.Smoke.exe s8-t5-index`) now asserts the observable properties of the new engine:
+the scope boundary, the exact token set and its order, the revision pinning, that no plaintext
+private byte is on disk, that a tampered or truncated generation fails closed, that the decrypted
+cache stays inside its byte budget, that a locked vault cannot read the index, and that an
+abandoned rebuild publishes nothing.
+
+## [2026-10-22] D078 — Keep every supported private-index term in a byte-bounded encrypted multi-pass build
+
+**Decision:** Build the v3 private index with a bounded token arena and dynamic multi-pass external merge over individually AEAD-sealed posting and directory scratch; batch query terms in groups of 64 without truncating the supported normalized 256-character query, and keep the raw request guard at the existing 2 Mi-character transport limit.
+
+**Alternatives considered:** Materialize all postings or the full sort in memory; cap document terms or query terms; write plaintext sort files; add a package or new crypto format; allow arbitrary query normalization after removing the old term cap.
+
+**Reason:** S8-T5 requires bounded process memory without losing canonical terms, candidates or ranking, and the vault already supplies the approved AEAD, derived key and authenticated record patterns. Canonical memory field validators bound document code units to 200,900; the current .NET Form-D path was exhaustively checked across BMP code units at no more than nine UTF-8 bytes per source unit, with stem expansion within the token-count bound. A 64-term pass is only a bounded lookup batch, not a result limit.
+
+**Consequences:** The token record bound is source-derived (2,410,804 bytes), the previous silent 2,048-term/512-byte token rejection is removed, and malformed record lengths and nonce exhaustion fail before reuse/allocation. Cross-generation nonce separation remains probabilistic because the 64-bit prefix is random; no absolute uniqueness claim is made. The fixed per-bucket vocabulary ceiling still fails a rebuild closed rather than silently dropping terms, so it is not a global-scale proof; 100k remains open.
+
+## [2026-10-22] D079 — Use digest identities for bounded private-index posting keys
+
+**Decision:** Use the full 32-byte SHA-256 digest of a token's UTF-8 bytes as its external posting/spill identity and its 64-character hexadecimal spelling as the bucket-page key; keep exact token text only in the authenticated per-document token record and verify candidate membership against that exact text before scoring.
+
+**Alternatives considered:** Carry full token text in the posting arena, encrypted spill chunks, and bucket pages; store long term text in additional encrypted chunks referenced from the bucket; reject canonical long tokens or truncate their keys.
+
+**Reason:** Canonical validators admit tokens up to the source-derived 1,808,100-byte per-token bound, which cannot fit the existing 1 MiB spill-chunk or 256 KiB bucket-page limits. A 32-byte digest keeps the posting/scratch representation fixed-size without rejecting valid terms or adding a second encrypted term store. The digest is only a candidate selector: exact token text remains authenticated in the document record and decides membership, so a SHA-256 collision can widen candidates but cannot itself establish a match.
+
+**Consequences:** Format v3 changes bucket-key semantics; prior format generations must fail closed and be rebuilt. Full token text remains available for search verification and served snippets, while external merge memory and ciphertext chunks stay byte-bounded. This relies on SHA-256 collision resistance for practical key identity and does not claim mathematical collision impossibility.
+
+## [2026-10-22] D080 — Reconcile canonical snapshots with the existing streaming digest
+
+**Decision:** Stream the existing canonical digest encoding and release the rebuild pass's descriptor snapshot before fetching the live reconciliation snapshot, comparing the same SHA-256 identity already bound into the generation.
+
+**Alternatives considered:** Keep both 100,000-row descriptor snapshots alive for element-by-element comparison; add a new manifest streaming/comparison API; change the digest encoding or identifier framing.
+
+**Reason:** The rebuild needs one immutable, sorted canonical snapshot to materialize rows and resolve lifecycle state, but an exact second `ListResources()` result overlapped that whole-vault list. The existing v1 digest already encodes each ordinal ID/revision pair as `|id@revision`, and the canonical identifier grammar permits only ASCII alphanumeric characters plus `.`, `_`, and `-`; the separators cannot occur in an ID. Streaming that exact byte sequence avoids an additional whole-vault list without changing generation bytes, ordering, revisions, or the existing SHA-256 identity contract.
+
+**Consequences:** A rebuild retains at most one live canonical descriptor snapshot at a time; its final reconciliation and generation/status identity use the existing digest. This retains the established SHA-256 collision-resistance assumption and adds no API, encoding version, dependency, or cryptographic construction.
+
+## [2026-10-23] D081 — Binary-search exact UTF-8 query spans before verifying token digests
+
+**Decision:** Sort query-token beacons by exact UTF-8 order and binary-search candidate token bytes, checking the SHA-256 identity only after byte-exact equality.
+
+**Alternatives considered:** Hash every authenticated token payload entry before digest lookup; decode and allocate every token string for direct set lookup; compare each payload token linearly against every query term.
+
+**Reason:** The complete A12 matcher run measured a 1,898.32 ms p95 at 10,000 rows against the frozen 500 ms target, and static tracing showed one SHA-256 computation per token in every candidate record. Exact UTF-8 byte search avoids hashing non-matching document terms and avoids allocating their strings, while digest confirmation and exact equality still prevent a posting digest collision from creating a match. The final fixed-method run measured 186.48 ms p95 with the same 100 warm-ups and 1,100 timed queries.
+
+**Consequences:** Query beacons are ordered by the same UTF-8 semantics as persisted token sets; every authenticated entry is still strictly validated, duplicate token occurrences and result ordering remain unchanged, and only exact matches allocate result strings. Posting identities, index format, query limits and ranking do not change. The forced digest-collision smoke remains part of the focused regression.
+
+## [2026-10-23] D082 — Preserve exact matching while reducing measured v3 query and spill cost
+
+**Decision:** Keep the published private-index generation at v3 and canonical records as the only
+truth. For rebuild-only encrypted posting scratch, group sorted entries by their full SHA-256 term
+digest and encode one digest with the group count, first ordinal and positive delta-varint
+ordinals. Keep chunk size, fan-in and merge memory bounded. For a query, reuse a gate-owned
+AES-GCM context and bounded ciphertext/plaintext/AAD buffers, strictly validate each authenticated
+token record, compare the exact token bytes with query UTF-8 bytes, and clear the borrowed
+plaintext buffer before the iterator advances. Do not rehash a token after its bytes already match
+the query bytes. This supersedes D081's post-byte-equality digest check for the current matcher.
+
+**Alternatives considered:** Keep per-pair spill records and reclaim only retired merge files;
+decode all plaintext tokens into strings or materialize the entire vault in memory; use a
+digest-only membership shortcut; change the published generation or canonical record format; add
+a package or cryptographic primitive.
+
+**Reason:** The exclusive A14 profile of the existing 100k generation measured 98,538 candidate
+records: authenticated token-record reads consumed 932.785 ms and allocated 116,601,064 B, while
+exact matching consumed 928.742 ms and allocated 17,310,928 B; together these were 79.5% of the
+profiled query time. The read path also created a fresh plaintext array, AAD array and
+`AesGcm` instance per candidate. Separately, the rebuild counters showed 811,784,808 B of base
+spill, 1,611,923,456 B of merged spill and a 2,635,496,576 B private-index peak. The grouped
+scratch representation reduces repeated per-pair digest storage while retaining bounded
+multi-pass merging. Exact byte equality remains the membership decision, so a SHA-256 collision
+cannot create a false match; strict count/length/UTF-8/empty/trailing checks still apply to every
+stored token.
+
+**Consequences:** Scratch chunk version 2 is rebuild-only and encrypted with the existing AEAD,
+key derivation, per-file identity, nonce counter and offset-bound AAD; it is not a published index
+format migration. Query buffers and cryptographic context are bounded to one active reader under
+the store gate and are zeroed/disposed on completion, cancellation, lock or commit. Ranking,
+scope, candidate completeness, token equality/order and published v3 bytes remain unchanged. The
+focused current-source `s8-t5-index` smoke passed; measured post-fix scale and full external
+service/UI/IPC and owner-R37 gates remain external. The 300 s same-process core proxy averaged
+401,365,047 B / 406,963,128 B working set unlocked / locked, above 256 MiB. Because the process
+also seeded, rebuilt and queried without forced GC, fixture/query versus product attribution is
+unknown; this is adverse evidence requiring review, not service acceptance or a waiver.
+
+
+## [2026-10-23] D083 — Reuse a validated canonical request snapshot for owner search
+
+**Decision:** For one unlocked `owner.library.search` request, materialize its filtered owner scope once and pass the same strictly ID-ordered canonical ID/revision snapshot that passed the existing generation-digest check into served-hit revision checks; never persist the snapshot across requests.
+
+**Alternatives considered:** Keep the handler’s second full live-revision map and another sorted scope copy; cache canonical resources between requests; weaken digest, revision, zone, policy or lock checks.
+
+**Reason:** A16’s diagnostic whole-handler profile measured 584.849 ms / 88,555,232 B for per-request scope construction, 74.780 ms / 6,801,480 B for the digest guard, and 9,842,288 B for the extra live-revision map in `SearchOwner`. The expensive scope map and sort were request-local duplicates, not required index state. Reusing only the current request’s exact canonical snapshot avoids those duplicates without changing the digest encoding, retaining a stale cross-request cache, or relaxing any candidate or served-revision rule.
+
+**Consequences:** The snapshot and filtered scope die with the request. The store generation must still match the materialized digest; the canonical snapshot must still pass the same strict ID/revision digest; and zone/collection filtering, lock refusal, currentness/time/recall policies, tie ordering and ranking remain binding. A17's actual 100k owner-handler p95 was 2,810.977 ms (above the unchanged 1,000 ms limit), and its normal rebuild took 1,645,385.959 ms (above 20 minutes); request-local reuse did not close either target. This is not service acceptance, and no further optimization is decided here.
+
+## [2026-10-23] D084 — Take the owner search scope from the validated canonical snapshot
+
+**Decision:** In the owner library handler, use the same strictly ordered canonical `ListResources()` ID/revision/zone snapshot that already passes the generation/materialized/live digest checks as the owner search scope (applying zone/collection filters to it), instead of decrypting and re-projecting every materialized index row per request. Resolve the superseded-target relation set only for `current` queries. Keep the serial one-envelope rebuild read after the batched variant was withdrawn.
+
+**Alternatives considered:** Keep the per-request `StreamResourceRows()` scope build; cache a vault-sized owner scope between requests; weaken the generation/materialized/live digest, revision, zone, policy or lock checks; keep the bounded 8-envelope rebuild batch without a completed run or attribution.
+
+**Reason:** A17's actual 100k handler allocated 113,731,085 B per call and measured p95 2,810.977 ms, while A14's direct-core run — whose owner scope was built once outside the timed loop — measured 680.55 ms p95 and 67,755,008 B p95 allocation. The canonical snapshot is already materialized for the required digest check, so deriving the scope from it removes a second full decrypt of ~100k index rows without adding a cache. A18 run 2 measured handler p95 1,668.026 ms / p50 183.937 ms, average allocation 29,286,018 B, idle working set 207,084,032 B unlocked and 204,846,357 B locked, and idle CPU 0.0709 % / 0.0729 %. The handler improved and the idle RAM/CPU and combined disk limits are met; the 1,000 ms p95 and the 20-minute rebuild limits are still missed.
+
+**Consequences:** The canonical snapshot is the authority for owner scope; zone/collection filters, lock refusal, generation/materialized/live digest equality, exact revisions, currentness/history/as-of, archive/recall, tie order and served-page checks remain binding, and a moved generation is still refused before any search. No cross-request cache and no resident vault-sized scope were added. The eight-envelope rebuild batch was tried and withdrawn after its only run was stopped by the mandatory 1 GiB host free-memory guard; no per-process attribution exists, so this is recorded as a correlation. The serial pass is the measured configuration and the rebuild limit remains a reported miss. `StreamResourceRows()` currently has no caller but is retained until an authorized change can be re-measured.
+
+## [2026-10-23] D085 — Load the authenticated generation instead of rebuilding on every unlock/restart
+
+**Decision:** On the first owner search, scoped search or `owner index-status` of an unlocked epoch, when no snapshot is materialized, open the published encrypted generation, authenticate its sealed header/directory with the borrowed vault key, and load it only when its authenticated canonical digest and row count equal the live canonical resource/revision set. Share that one readiness policy across owner, scoped and status paths, serialize it with the epoch reset, and publish the snapshot only after the whole load succeeds. Do not add a record-level add/revise/delete delta to the current format.
+
+**Alternatives considered:** Force `owner.index.rebuild` in every new unlocked epoch (the state before this change); let search answer from the reopened engine without comparing canonical state; add a per-record delta/overlay or a new merge format; auto-unlock or auto-rebuild.
+
+**Reason:** Lock and unlock call `ResetPrivateIndex`, and only `HandleIndexRebuild` set `_privateIndexMaterialized`, so an unchanged persisted generation was unreachable after every lock/unlock and restart even though `EncryptedPrivateIndexStore.Open` already authenticates it and the generation names its canonical digest. A18's 100k rebuild measured 1,396,956.547 ms, and the owner considers the ~1.6 s search latency practical while repeated multi-minute rebuilds are not. The current generation is one immutable sealed file whose directory, token buckets and postings describe the whole vault, and `WriteScope` only appends rows and merges whole-vault postings at commit; it has no per-row update or delete surface, so a delta would still rewrite the whole file and require a new authenticated merge format.
+
+**Consequences:** An unchanged generation becomes ready again with a read-only, in-place load and the encrypted file stays byte-identical; a missing generation keeps `index_not_materialized`, a stale one keeps `search_index_stale`, an unauthenticated/wrong-key one reports `index_unavailable`, and the explicit `owner.index.rebuild` stays the only way to publish a changed canonical set. The load and the epoch reset share one lock, so a lock, purge or failed load cannot publish a partially loaded ready state; `Reset` still clears the key, cache and resident directory. Persisted-load latency was not measured as a performance result; the functional scenarios are in `s8-t5-index` and `s8-t5-lifecycle`.
+
+## [2026-10-23] D086 — Accept the observed A18 performance and A19 reuse as the T5 sign-off basis
+
+**Decision:** Replace the hard recall-latency and rebuild-duration thresholds (recall p95 250/500/1,000 ms at 1,000/10,000/100,000 records and a 100,000-record cold rebuild inside 20 minutes) and the outstanding mandatory 1k/10k actual-handler benchmark reruns as S8-T5 sign-off gates. S8-T5 sign-off now uses the observed A18 run 2 practical baseline plus the A19 authenticated-generation reuse and fail-closed behaviour. The old thresholds remain the Sprint 1 envelope record and every prior miss stays recorded.
+
+**Alternatives considered:** Keep spending Gold measurement runs against the unchanged thresholds (the owner cap of 2/2 is already spent and no further run is authorized); relax the thresholds by editing the target text (rejected — that erases the misses instead of recording an owner decision); replace the numeric targets with a newly invented numeric ceiling (rejected — no measurement supports one); drop T5's performance and lifecycle acceptance entirely (rejected — the reuse/fail-closed behaviour and the bounded/encrypted invariants remain binding).
+
+**Reason:** The owner reviewed the A18/R13 and A19/R14 evidence and judged about 1.6 s at 100,000 records practical, with recurring multi-minute rebuilds after each unlock/restart the real problem. A18 run 2 measured handler p50/p95 183.937 / 1,668.026 ms, rebuild 1,396,956.547 ms, idle working set 207,084,032 B unlocked / 204,846,357 B locked, idle CPU 0.0709 % / 0.0729 % and 1,132,272,603 B combined vault plus staging, with 0 common-field mismatches over 1,101 comparator rows. A19 then removed the recurring rebuild by loading the authenticated canonical-matching generation and proved missing/stale/tamper/wrong-key refusals with explicit rebuild recovery. Keeping the old figures as gates would demand measurements the owner has declined to fund and would not improve the daily-use path.
+
+**Consequences:** S8-T5 is no longer blocked by the 100k p95 miss, the rebuild miss or the unmeasured 1k/10k handler percentiles. The Sprint 1 envelope numbers, the A11–A18 measurements and the R11/R13/R14 FAIL reports remain unchanged historical records; no PASS is claimed for them and no new numeric ceiling or version-independent performance proof is asserted. The bounded directory/cache and builder caps, the encrypted-at-rest index/spill with vault-derived keys and no new crypto, scope/revision/currentness/provenance/ranking correctness, lock behaviour and the ban on host/ACL/permission/system mutation still bind. Real service/WPF/owner UI/IPC evidence, the S8-T6 security/recovery replay, the S8-T7 owner walkthrough (R37), independent review and any checkpoint are not waived; the owner's qualitative judgement of recall usefulness stays open until the owner records it.

@@ -740,14 +740,14 @@ internal sealed class S3T1CoordinatorHarness : IDisposable
     private readonly string _root;
     private readonly EncryptedVaultStore _store;
     private readonly SourceNormalizerRegistry _normalizers;
-    private readonly SqlitePrivateIndexStore _index;
+    private readonly EncryptedPrivateIndexStore _index;
     private bool _disposed;
 
     private S3T1CoordinatorHarness(
         string root,
         EncryptedVaultStore store,
         SourceNormalizerRegistry normalizers,
-        SqlitePrivateIndexStore index,
+        EncryptedPrivateIndexStore index,
         VaultLifecycle lifecycle,
         ServiceRequestHandler handler)
     {
@@ -796,7 +796,7 @@ internal sealed class S3T1CoordinatorHarness : IDisposable
 
             RequireHarness(lifecycle.Unlock(SyntheticPassphrase, useRecoveryCode: false),
                 "The synthetic harness vault did not unlock.");
-            var index = new SqlitePrivateIndexStore();
+            var index = new EncryptedPrivateIndexStore(Path.Combine(serviceDirectory, "vault"), lifecycle);
             return new S3T1CoordinatorHarness(
                 root, store, normalizers, index, lifecycle, BuildHandler(lifecycle, normalizers, index));
         }

@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -27,6 +28,7 @@ public sealed class PrivateIndexAuthority
 {
     private const int MaximumRebuildAttempts = 3;
     private const string DigestDomain = "MetaBrain|private-index|v1";
+    private static readonly byte[] DigestDomainBytes = Encoding.UTF8.GetBytes(DigestDomain);
 
     /// <summary>
     /// Materializes one full index generation from canonical. The caller owns
@@ -46,13 +48,47 @@ public sealed class PrivateIndexAuthority
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(reader);
-        store.Open();
+        try
+        {
+            store.Open();
+        }
+        catch (Exception ex) when (ex is InvalidDataException or CryptographicException)
+        {
+            // S8-T5: the published generation cannot be read (a tampered or
+            // truncated file, or a key that no longer matches it). The
+            // generation is a rebuildable derivative of the canonical
+            // records: this rebuild replaces it, and the canonical records
+            // themselves are never touched.
+        }
+
         for (var attempt = 1; ; attempt++)
         {
             var listed = reader.ListResources();
+            // S8-T5: one descriptor snapshot for the whole pass. The rebuild
+            // used to ask the store for the resource list again for every
+            // memory item, so a rebuild of an n-record vault scanned the
+            // descriptor list n times. The manifest snapshot is the canonical
+            // bounded source; lifecycle lookup uses binary search over its
+            // resource ordering instead of building a second vault-sized map.
+            var descriptors = listed;
             store.Clear();
-            const int ReadBatchSize = 128;
-            const int ReadBatchDegree = 8;
+            var canonicalDigest = Digest(listed);
+            // S8-T5: the 100k rebuild reads one envelope at a time. A bounded
+            // eight-envelope batch was tried once and withdrawn: the guard
+            // aborted that run during the rebuild before it published, and
+            // host free memory fell while it ran. No per-process attribution
+            // was captured, so the batch is correlated with the abort, not
+            // proven to cause it. The serial pass is the configuration that
+            // completed under the same guard; its duration stays a reported
+            // limit.
+            const int ReadBatchSize = 1;
+            const int ReadBatchDegree = 1;
+            // S8-T5: the whole materialization lands in one engine scope, so
+            // the postings of a large vault are written once instead of once
+            // per token. An abandoned scope is rolled back and never observed
+            // as a generation.
+            var scope = store.BeginBulkWrite(canonicalDigest);
+            var committed = false;
             try
             {
                 for (var start = 0; start < listed.Count; start += ReadBatchSize)
@@ -67,37 +103,29 @@ public sealed class PrivateIndexAuthority
                     var contents = reader.ReadBatch(batch, ReadBatchDegree, cancellationToken);
                     try
                     {
-                        var searchPlans = new List<(ScopeResourceRevision Resource, StoredMemoryEnvelope Envelope)>();
                         for (var j = 0; j < batch.Count; j++)
                         {
                             var content = contents[j];
                             try
                             {
-                                var row = Classify(listed[start + j], content);
+                                var resource = listed[start + j];
+                                var row = Classify(resource, content);
                                 store.Insert(row);
-                                // S4-T2: only live memory items become search
-                                // documents; every plan below re-validates the
-                                // decoded identity against its own descriptor.
+                                // Keep the write working set independent of the
+                                // vault size: each row is followed immediately
+                                // by its searchable document, so the store
+                                // needs no vault-wide memory-item set.
                                 if (row.RecordKind == PrivateIndexRecordKind.MemoryItem &&
                                     MemoryItemTryRead(content, out var memory) && memory is not null &&
-                                    string.Equals(memory.Id, listed[start + j].ResourceId, StringComparison.Ordinal))
+                                    string.Equals(memory.Id, resource.ResourceId, StringComparison.Ordinal))
                                 {
-                                    searchPlans.Add((listed[start + j], memory));
+                                    store.InsertSearchDocument(BuildSearchDocument(resource, memory, reader, descriptors));
                                 }
                             }
                             finally
                             {
                                 CryptographicOperations.ZeroMemory(content);
                             }
-                        }
-
-                        // Lifecycle join for publication/currentness: one live
-                        // record per subject when present, read at its live
-                        // revision after the batch rows are stored.
-                        foreach (var plan in searchPlans)
-                        {
-                            cancellationToken.ThrowIfCancellationRequested();
-                            store.InsertSearchDocument(BuildSearchDocument(plan.Resource, plan.Envelope, reader));
                         }
                     }
                     finally
@@ -111,6 +139,67 @@ public sealed class PrivateIndexAuthority
                         }
                     }
                 }
+
+                // Release the first manifest snapshot before asking for the
+                // live one. Its canonical SHA-256 identity is already the
+                // generation identity, so the reconcile compares the same
+                // exact digest without retaining two vault-wide descriptor
+                // arrays at once.
+                descriptors = Array.Empty<ScopeResourceRevision>();
+                listed = Array.Empty<ScopeResourceRevision>();
+                var relistedAfter = reader.ListResources();
+                var liveDigest = Digest(relistedAfter);
+                relistedAfter = Array.Empty<ScopeResourceRevision>();
+                if (!string.Equals(canonicalDigest, liveDigest, StringComparison.Ordinal))
+                {
+                    if (attempt >= MaximumRebuildAttempts)
+                    {
+                        scope.Rollback();
+                        committed = true;
+                        store.Clear();
+                        return new PrivateIndexOutcome(true, null);
+                    }
+
+                    scope.Rollback();
+                    committed = true;
+                    continue;
+                }
+
+                // S8-T5: the materialized generation is not read back into
+                // memory. The snapshot carries the true row count and a
+                // bounded sample of the rows, so a large vault cannot turn one
+                // generation into an unbounded collection.
+                // The commit is deliberately non-cancellable once entered:
+                // cancellation before it rolls back; cancellation during the
+                // atomic publish can only observe the whole generation.
+                cancellationToken.ThrowIfCancellationRequested();
+                scope.Commit();
+                committed = true;
+
+                // The published generation must be the generation this pass
+                // built, not a different generation substituted during the
+                // atomic publish.
+                if (!string.Equals(store.CanonicalDigest, liveDigest, StringComparison.Ordinal))
+                {
+                    // The generation the engine holds is not the generation of
+                    // the live canonical set: the pass is discarded and
+                    // retried, and a set that keeps moving publishes nothing.
+                    store.Clear();
+                    if (attempt >= MaximumRebuildAttempts)
+                    {
+                        return new PrivateIndexOutcome(true, null);
+                    }
+
+                    continue;
+                }
+
+                var rowCount = store.RowCount;
+                var sample = store.SelectSample(PrivateIndexFormat.MaximumSnapshotRows);
+                return new PrivateIndexOutcome(false, new PrivateIndexSnapshot(
+                    store.SchemaVersion,
+                    liveDigest,
+                    rowCount,
+                    sample));
             }
             catch (OperationCanceledException)
             {
@@ -119,13 +208,29 @@ public sealed class PrivateIndexAuthority
                 // cancelled pass can never be observed as a generation, and the
                 // exception propagates; the lock's own drain still waits for
                 // this operation to dispose before the key is cleared.
+                if (!committed)
+                {
+                    scope.Rollback();
+                    committed = true;
+                }
+
                 store.Clear();
                 throw;
             }
             catch (ManagedResourceUnavailableException)
             {
+                if (!committed)
+                {
+                    scope.Rollback();
+                    committed = true;
+                }
+
+                descriptors = Array.Empty<ScopeResourceRevision>();
+                listed = Array.Empty<ScopeResourceRevision>();
                 var relisted = reader.ListResources();
-                if (!SameResourceSet(listed, relisted))
+                var liveDigest = Digest(relisted);
+                relisted = Array.Empty<ScopeResourceRevision>();
+                if (!string.Equals(canonicalDigest, liveDigest, StringComparison.Ordinal))
                 {
                     if (attempt >= MaximumRebuildAttempts)
                     {
@@ -141,25 +246,108 @@ public sealed class PrivateIndexAuthority
                 store.Clear();
                 throw;
             }
-
-            var relistedAfter = reader.ListResources();
-            if (!SameResourceSet(listed, relistedAfter))
+            finally
             {
-                if (attempt >= MaximumRebuildAttempts)
+                if (!committed)
                 {
-                    store.Clear();
-                    return new PrivateIndexOutcome(true, null);
+                    scope.Rollback();
                 }
 
-                continue;
+                scope.Dispose();
             }
+        }
+    }
 
-            var rows = store.SelectAll();
-            return new PrivateIndexOutcome(false, new PrivateIndexSnapshot(
+    /// <summary>
+    /// Loads the published generation instead of rebuilding it. The engine
+    /// authenticates the sealed header and directory with the borrowed vault
+    /// key, and the generation is usable only when its authenticated canonical
+    /// digest (and row count) equals the live canonical resource/revision set
+    /// the caller passed. A generation that is missing, stale or unreadable is
+    /// dropped from resident state and reported, never materialized into a
+    /// snapshot: the caller refuses the read and the owner's explicit rebuild
+    /// remains the only way to publish a new generation.
+    /// <para>
+    /// This is the restart/unlock readiness path. It writes nothing: no
+    /// generation is staged, published or rewritten, and a read-only reopen
+    /// leaves the encrypted file byte-identical. Only authenticated metadata is
+    /// used; a revision, kind, state or offset is read through the sealed
+    /// records that carry it, so a tampered generation fails authentication
+    /// instead of being trusted.
+    /// </para>
+    /// <para>
+    /// S8-T5 delta decision: the generation is one immutable sealed file whose
+    /// directory, token buckets and postings describe the whole vault, and the
+    /// write scope only appends rows and merges whole-vault postings at commit.
+    /// There is no per-row update or delete surface, so reconciling a single
+    /// added/revised/deleted record would still require reading the published
+    /// generation and rewriting the whole file — the same cost class as the
+    /// rebuild, with a new merge format to keep authenticated. Record deltas are
+    /// therefore not supported on the current format; a missing or stale
+    /// generation goes through the existing explicit owner rebuild.
+    /// </para>
+    /// </summary>
+    public PrivateIndexLoadOutcome Load(IPrivateIndexStore store, IReadOnlyList<ScopeResourceRevision> liveResources)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(liveResources);
+        var liveDigest = Digest(liveResources);
+        try
+        {
+            store.Open();
+        }
+        catch (Exception ex) when (ex is InvalidDataException or CryptographicException or IOException or UnauthorizedAccessException)
+        {
+            // The generation on disk cannot be authenticated as a generation
+            // of this engine and key. It stays on disk (a derivative the owner
+            // can replace) but nothing of it becomes resident.
+            DiscardUnusableGeneration(store);
+            return new PrivateIndexLoadOutcome(PrivateIndexLoadStatus.Unreadable, null);
+        }
+
+        if (!store.HasOpenGeneration)
+        {
+            // No published generation at all: an empty engine, not a failure.
+            // The caller decides whether an empty canonical set makes that
+            // truthful or whether the owner must rebuild.
+            return new PrivateIndexLoadOutcome(PrivateIndexLoadStatus.Missing, null);
+        }
+
+        if (store.RowCount != liveResources.Count ||
+            !string.Equals(store.CanonicalDigest, liveDigest, StringComparison.Ordinal))
+        {
+            // The authenticated generation describes another canonical set
+            // (or an inconsistent row count): it cannot answer for this one.
+            DiscardUnusableGeneration(store);
+            return new PrivateIndexLoadOutcome(PrivateIndexLoadStatus.Stale, null);
+        }
+
+        try
+        {
+            var snapshot = new PrivateIndexSnapshot(
                 store.SchemaVersion,
-                Digest(relistedAfter),
-                rows.Length,
-                rows));
+                liveDigest,
+                store.RowCount,
+                store.SelectSample(PrivateIndexFormat.MaximumSnapshotRows));
+            return new PrivateIndexLoadOutcome(PrivateIndexLoadStatus.Loaded, snapshot);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or CryptographicException or IOException or UnauthorizedAccessException)
+        {
+            DiscardUnusableGeneration(store);
+            return new PrivateIndexLoadOutcome(PrivateIndexLoadStatus.Unreadable, null);
+        }
+    }
+
+    private static void DiscardUnusableGeneration(IPrivateIndexStore store)
+    {
+        try
+        {
+            // Drops the resident generation and its decrypted cache without
+            // touching the published file.
+            store.Clear();
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or ObjectDisposedException)
+        {
         }
     }
 
@@ -171,7 +359,13 @@ public sealed class PrivateIndexAuthority
     public string Evaluate(IManagedResourceStore reader)
     {
         ArgumentNullException.ThrowIfNull(reader);
-        return Digest(reader.ListResources());
+        return EvaluateSnapshot(reader.ListResources());
+    }
+
+    internal string EvaluateSnapshot(IReadOnlyList<ScopeResourceRevision> resources)
+    {
+        ArgumentNullException.ThrowIfNull(resources);
+        return Digest(resources);
     }
 
     private static PrivateIndexRow Classify(ScopeResourceRevision resource, byte[] content)
@@ -347,17 +541,22 @@ public sealed class PrivateIndexAuthority
     /// is the search handler's decision, never the index's.
     /// </summary>
     private static SearchIndexDocument BuildSearchDocument(
-        ScopeResourceRevision resource, StoredMemoryEnvelope memory, IManagedResourceStore reader)
+        ScopeResourceRevision resource,
+        StoredMemoryEnvelope memory,
+        IManagedResourceStore reader,
+        IReadOnlyList<ScopeResourceRevision> descriptors)
     {
         var tokens = SearchText.TokenizeDocument(
             memory.Title, memory.Body, memory.Applicability?.Project, memory.Applicability?.Environment, memory.Applicability?.Version);
         var publication = "proposal";
         try
         {
-            var lifecycleId = "lc-" + memory.Id;
-            var live = reader.ListResources().FirstOrDefault(candidate =>
-                string.Equals(candidate.ResourceId, lifecycleId, StringComparison.Ordinal));
-            if (live is not null)
+            // S8-T5: the lifecycle record of this subject is looked up in the
+            // pass's own descriptor snapshot. The old path asked the store for
+            // the whole resource list per memory item and then attempted a
+            // read for a lifecycle record that most items do not have.
+            var lifecycleId = DomainIdentifiers.LifecycleIdFor(memory.Id);
+            if (TryFindDescriptor(descriptors, lifecycleId, out var live))
             {
                 var raw = reader.ReadContent(lifecycleId, live.Revision);
                 try
@@ -388,13 +587,43 @@ public sealed class PrivateIndexAuthority
             resource.Revision,
             StateName(memory.Kind),
             title.Length <= MaximumTitleChars ? title : title[..MaximumTitleChars],
-            tokens.Take(PrivateIndexSchema.MaximumSearchTokens).OrderBy(token => token, StringComparer.Ordinal).ToArray(),
+            tokens.OrderBy(token => token, StringComparer.Ordinal).ToArray(),
             memory.OccurredAtUtc,
             memory.RecordedAtUtc,
             publication,
             memory.Applicability?.Project ?? string.Empty,
             memory.Applicability?.Environment ?? string.Empty,
             memory.Applicability?.Version ?? string.Empty);
+    }
+    private static bool TryFindDescriptor(
+        IReadOnlyList<ScopeResourceRevision> descriptors,
+        string resourceId,
+        out ScopeResourceRevision descriptor)
+    {
+        var low = 0;
+        var high = descriptors.Count - 1;
+        while (low <= high)
+        {
+            var middle = low + ((high - low) / 2);
+            var comparison = string.CompareOrdinal(descriptors[middle].ResourceId, resourceId);
+            if (comparison == 0)
+            {
+                descriptor = descriptors[middle];
+                return true;
+            }
+
+            if (comparison < 0)
+            {
+                low = middle + 1;
+            }
+            else
+            {
+                high = middle - 1;
+            }
+        }
+
+        descriptor = null!;
+        return false;
     }
 
 
@@ -489,7 +718,7 @@ public sealed class PrivateIndexAuthority
             .Select(id => id!)
             .Distinct(StringComparer.Ordinal)
             .OrderBy(id => id, StringComparer.Ordinal)
-            .Take(PrivateIndexSchema.MaximumLinkedIds)
+            .Take(PrivateIndexFormat.MaximumLinkedIds)
             .ToArray();
         return distinct;
     }
@@ -502,33 +731,72 @@ public sealed class PrivateIndexAuthority
 
     private static string Digest(IReadOnlyList<ScopeResourceRevision> resources)
     {
-        var builder = new StringBuilder(DigestDomain);
-        foreach (var resource in resources.OrderBy(entry => entry.ResourceId, StringComparer.Ordinal))
+        ArgumentNullException.ThrowIfNull(resources);
+        if (resources.Count > PrivateIndexFormat.MaximumIndexedRows)
         {
-            builder.Append('|').Append(resource.ResourceId).Append('@').Append(resource.Revision.ToString(CultureInfo.InvariantCulture));
+            throw new InvalidDataException("The canonical resource snapshot exceeds the private-index row bound.");
         }
 
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString()))).ToLower(CultureInfo.InvariantCulture);
-    }
-
-    private static bool SameResourceSet(IReadOnlyList<ScopeResourceRevision> left, IReadOnlyList<ScopeResourceRevision> right)
-    {
-        if (left.Count != right.Count)
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        hash.AppendData(DigestDomainBytes);
+        Span<byte> identifierBytes = stackalloc byte[PrivateIndexFormat.MaximumIdentifierBytes];
+        Span<byte> revisionBytes = stackalloc byte[20];
+        Span<char> revisionChars = stackalloc char[20];
+        Span<byte> separator = stackalloc byte[1];
+        var previousResourceId = string.Empty;
+        try
         {
-            return false;
-        }
-
-        for (var index = 0; index < left.Count; index++)
-        {
-            if (!string.Equals(left[index].ResourceId, right[index].ResourceId, StringComparison.Ordinal) ||
-                left[index].Revision != right[index].Revision)
+            for (var index = 0; index < resources.Count; index++)
             {
-                return false;
+                var resource = resources[index];
+                if (string.IsNullOrEmpty(resource.ResourceId) ||
+                    Encoding.UTF8.GetByteCount(resource.ResourceId) > identifierBytes.Length ||
+                    (index > 0 && string.CompareOrdinal(previousResourceId, resource.ResourceId) >= 0))
+                {
+                    throw new InvalidDataException("The canonical resource snapshot is not in strict resource-ID order.");
+                }
+
+                separator[0] = (byte)'|';
+                hash.AppendData(separator);
+                var identifierLength = Encoding.UTF8.GetBytes(resource.ResourceId.AsSpan(), identifierBytes);
+                hash.AppendData(identifierBytes[..identifierLength]);
+                separator[0] = (byte)'@';
+                hash.AppendData(separator);
+                if (!resource.Revision.TryFormat(revisionChars, out var revisionCharCount, provider: CultureInfo.InvariantCulture))
+                {
+                    throw new InvalidDataException("A canonical resource revision could not be formatted.");
+                }
+
+                var revisionByteCount = Encoding.UTF8.GetBytes(revisionChars[..revisionCharCount], revisionBytes);
+                hash.AppendData(revisionBytes[..revisionByteCount]);
+                previousResourceId = resource.ResourceId;
+            }
+
+            Span<byte> digest = stackalloc byte[SHA256.HashSizeInBytes];
+            try
+            {
+                var digestLength = hash.GetHashAndReset(digest);
+                if (digestLength != digest.Length)
+                {
+                    throw new CryptographicException("The canonical digest length changed.");
+                }
+
+                return Convert.ToHexString(digest).ToLower(CultureInfo.InvariantCulture);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(digest);
             }
         }
-
-        return true;
+        finally
+        {
+            CryptographicOperations.ZeroMemory(identifierBytes);
+            CryptographicOperations.ZeroMemory(revisionBytes);
+            CryptographicOperations.ZeroMemory(MemoryMarshal.AsBytes(revisionChars));
+            CryptographicOperations.ZeroMemory(separator);
+        }
     }
+
 }
 
 /// <summary>
@@ -537,3 +805,24 @@ public sealed class PrivateIndexAuthority
 /// generation that cannot be proven to describe canonical is never published.
 /// </summary>
 public sealed record PrivateIndexOutcome(bool CanonicalMoved, PrivateIndexSnapshot? Snapshot);
+
+/// <summary>
+/// Disposition of one authenticated load of the published generation.
+/// </summary>
+public enum PrivateIndexLoadStatus
+{
+    /// <summary>The generation authenticated and describes the live canonical set.</summary>
+    Loaded,
+    /// <summary>No publication exists, so there is nothing to load.</summary>
+    Missing,
+    /// <summary>A publication exists but describes another canonical set.</summary>
+    Stale,
+    /// <summary>A publication exists but cannot be authenticated or decoded.</summary>
+    Unreadable
+}
+
+/// <summary>
+/// Result of loading the published generation without rebuilding it. A
+/// snapshot is present only for <see cref="PrivateIndexLoadStatus.Loaded"/>.
+/// </summary>
+public sealed record PrivateIndexLoadOutcome(PrivateIndexLoadStatus Status, PrivateIndexSnapshot? Snapshot);

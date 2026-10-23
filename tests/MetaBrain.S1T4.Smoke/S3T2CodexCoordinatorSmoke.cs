@@ -23,13 +23,13 @@ internal sealed class S3T2CodexCoordinatorHarness : IDisposable
     private const string SyntheticPassphrase = "s3t2-synthetic-vault-passphrase";
     private readonly string _root;
     private readonly EncryptedVaultStore _store;
-    private readonly SqlitePrivateIndexStore _index;
+    private readonly EncryptedPrivateIndexStore _index;
     private bool _disposed;
 
     private S3T2CodexCoordinatorHarness(
         string root,
         EncryptedVaultStore store,
-        SqlitePrivateIndexStore index,
+        EncryptedPrivateIndexStore index,
         VaultLifecycle lifecycle,
         ServiceRequestHandler handler)
     {
@@ -75,7 +75,7 @@ internal sealed class S3T2CodexCoordinatorHarness : IDisposable
 
             RequireHarness(lifecycle.Unlock(SyntheticPassphrase, useRecoveryCode: false),
                 "The synthetic harness vault did not unlock.");
-            var index = new SqlitePrivateIndexStore();
+            var index = new EncryptedPrivateIndexStore(Path.Combine(serviceDirectory, "vault"), lifecycle);
             return new S3T2CodexCoordinatorHarness(
                 root, store, index, lifecycle, BuildHandler(lifecycle, index));
         }

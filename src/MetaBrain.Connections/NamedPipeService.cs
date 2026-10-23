@@ -31,7 +31,7 @@ internal sealed class NamedPipeService
     private readonly ServiceSettings _settings;
     private readonly ServiceRequestHandler _handler;
     private readonly VaultLifecycle _vault;
-    private readonly SqlitePrivateIndexStore _privateIndex;
+    private readonly EncryptedPrivateIndexStore _privateIndex;
     private readonly SourceRefreshBackgroundService _backgroundRefresh;
     private readonly SynthesisScheduleBackgroundService _scheduleLoop;
     private readonly IntentionScheduleBackgroundService _intentionScheduleLoop;
@@ -46,7 +46,7 @@ internal sealed class NamedPipeService
         var store = new EncryptedVaultStore(settings.VaultDirectoryPath);
         _vault = new VaultLifecycle(store);
         var authority = new GrantAuthority(new InMemoryGrantStore());
-        _privateIndex = new SqlitePrivateIndexStore();
+        _privateIndex = new EncryptedPrivateIndexStore(settings.VaultDirectoryPath, _vault);
         // S8-T4 the safe operational log: a sanitized trace of what the
         // service did, in the service data root and never in the repository.
         _operationalLog = new SafeOperationalLog(settings.DataRootPath);

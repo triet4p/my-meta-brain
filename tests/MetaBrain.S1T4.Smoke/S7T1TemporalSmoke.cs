@@ -137,8 +137,9 @@
 
             var rebuild = await RunOwnerCommandAsync(connectionsExecutable,
                 "owner", "index-rebuild", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
-            Require(rebuild.ExitCode == 0 && rebuild.StandardOutput.Contains("INDEX rebuilt schema=2", StringComparison.Ordinal),
-                "The S7-T1 private index rebuild did not materialize schema=2.");
+            Require(rebuild.ExitCode == 0 && rebuild.StandardOutput.Contains("INDEX rebuilt rows=", StringComparison.Ordinal) &&
+                    !rebuild.StandardOutput.Contains("rows=0", StringComparison.Ordinal),
+                "The S7-T1 private index rebuild did not publish a materialized generation.");
 
             // Owner grant over the six corpus items for both search and read. The
             // imported old envelope stays outside the scoped grant on purpose: it
@@ -252,8 +253,9 @@
             Console.WriteLine("PASS retained revision read serves the exact older bytes; live serves the newer revision");
             var rebuildAfterRetain = await RunOwnerCommandAsync(connectionsExecutable,
                 "owner", "index-rebuild", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
-            Require(rebuildAfterRetain.ExitCode == 0 && rebuildAfterRetain.StandardOutput.Contains("INDEX rebuilt schema=2", StringComparison.Ordinal),
-                "The S7-T1 private index rebuild after the retained revision did not materialize schema=2.");
+            Require(rebuildAfterRetain.ExitCode == 0 && rebuildAfterRetain.StandardOutput.Contains("INDEX rebuilt rows=", StringComparison.Ordinal) &&
+                    !rebuildAfterRetain.StandardOutput.Contains("rows=0", StringComparison.Ordinal),
+                "The S7-T1 private index rebuild after the retained revision did not publish a materialized generation.");
             // Owner UI leg: the real WPF OwnerConsoleWindow on an STA thread, with
             // the changed LibraryAsOfInput/history/retained controls and code-behind.
             // It searches (history as-of now), opens the new decision from the
