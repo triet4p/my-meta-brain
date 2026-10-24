@@ -100,6 +100,31 @@ The stop is a *request*, not a kill: the installer asks the host to stop, waits 
 exit and confirms the exit. The host identifies itself with its pid **and** its start time, so a
 recycled pid is never mistaken for the running host.
 
+### 3.1 The shared instance lifecycle (S9-T2)
+
+Every frontend — the packaged CLI, the owner console and the agent bridge — resolves the same
+instance (one data root, one settings file, one pair of pipe endpoints) and starts or connects
+the same locked host through one shared implementation. The installer service commands above
+delegate to that same lifecycle, so no frontend keeps a second start/stop/status path.
+
+```text
+MetaBrain.Connections.exe lifecycle start --data-root <dir>     # create (clean root only) or select, then start the shared locked host
+MetaBrain.Connections.exe lifecycle status --data-root <dir>    # health from the real owner channel; exits non-zero when unreachable
+MetaBrain.Connections.exe lifecycle connect --data-root <dir>   # prove the shared host is reachable without starting it (T3–T5 share this gate)
+MetaBrain.Connections.exe lifecycle stop --data-root <dir>      # explicit drain, lock and exit; the only act that ends the shared host
+MetaBrain.Connections.exe lifecycle restart --data-root <dir>   # stop and start again: fresh locked host, no surviving session
+```
+
+Each verb also accepts `--config <service-settings.json>` instead of `--data-root <dir>`. A clean
+root needs no hand-written settings file: `start` creates it with fresh endpoints. An existing
+root is kept byte-identical — pipe endpoints an owner already configured in a client never move,
+and no vault, snapshot, backup or recovery material is touched. Concurrent starts serialize on
+the instance, so two launches never produce two writers; an endpoint answered by a different live
+host is refused as `endpoint_occupied` instead of aliased. Every failure is truthful with the next
+action (`version_mismatch`, `host_exited`, `host_unresponsive`, `start_timeout`, `stop_failed`,
+`invalid_settings`, `instance_not_initialized`, `transport_unavailable`). Closing a frontend never
+stops the shared host, and no frontend stops another frontend's host implicitly.
+
 ## 4. The locked start and the owner unlock
 
 Every start of the host begins **locked**. The key lives only in the unlocked process memory, so:

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using MetaBrain.Connections;
 
 namespace MetaBrain.Installer;
@@ -19,95 +18,29 @@ internal enum ServiceStopOutcome
 }
 
 /// <summary>
-/// The lifecycle of the installed application service. The host is an ordinary
-/// per-user process: it needs no administrator rights, it keeps no key in
-/// memory between runs, and every start begins locked. A stop is a clean
-/// shutdown through the owner's own stop request, so the host drains and
-/// locks the vault before it exits; the stop waits for the process to be
-/// gone, and it only ever acts on the process it started, never on an
-/// unrelated process that happens to reuse the pid.
+/// The lifecycle of the installed application service, fronted by one shared
+/// instance lifecycle. The host is an ordinary per-user process: it needs no
+/// administrator rights, it keeps no key in memory between runs, and every
+/// start begins locked. Start, stop, restart and status resolve the installed
+/// instance and delegate to the same lifecycle every frontend uses, so
+/// concurrent starts can never produce two writers and no frontend keeps a
+/// second control path. A stop is a clean shutdown through the owner's own
+/// stop request, so the host drains and locks the vault before it exits; the
+/// stop waits for the process to be gone, and it only ever acts on the
+/// process it started, never on an unrelated process that reuses the pid.
 /// </summary>
 internal static class ServiceHost
 {
-    private static readonly TimeSpan ReadyTimeout = TimeSpan.FromSeconds(60);
-    private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(250);
-
-    internal static async Task<ServiceStartOutcome> StartAsync(InstallLayout layout)
+    internal static Task<ServiceStartOutcome> StartAsync(InstallLayout layout)
     {
-        if (!File.Exists(layout.ServiceExecutable))
-        {
-            throw new FileNotFoundException("The installed service host is missing.", layout.ServiceExecutable);
-        }
-
-        var controlPipe = ReadControlPipe(layout);
-        if (await IsReachableAsync(controlPipe).ConfigureAwait(false))
-        {
-            return ServiceStartOutcome.AlreadyRunning;
-        }
-
-        Directory.CreateDirectory(layout.RuntimeDirectory);
-        var start = new ProcessStartInfo(layout.ServiceExecutable)
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        start.ArgumentList.Add("serve-console");
-        start.ArgumentList.Add("--config");
-        start.ArgumentList.Add(layout.SettingsPath);
-        start.ArgumentList.Add("--background");
-        using var process = Process.Start(start)
-            ?? throw new InvalidOperationException("The installed service host did not start.");
-
-        var deadline = DateTime.UtcNow + ReadyTimeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            if (await IsReachableAsync(controlPipe).ConfigureAwait(false))
-            {
-                return ServiceStartOutcome.Started;
-            }
-
-            if (process.HasExited)
-            {
-                throw new InvalidOperationException(
-                    "The installed service host exited before it became reachable (exit code " +
-                    process.ExitCode + ").");
-            }
-
-            await Task.Delay(PollInterval).ConfigureAwait(false);
-        }
-
-        throw new TimeoutException("The installed service host did not become reachable in time.");
+        var handle = InstanceLifecycle.ResolveFromSettingsPath(layout.SettingsPath);
+        return StartSharedAsync(handle, layout.ServiceExecutable);
     }
 
-    internal static async Task<ServiceStopOutcome> StopAsync(InstallLayout layout)
+    internal static Task<ServiceStopOutcome> StopAsync(InstallLayout layout)
     {
-        var controlPipe = ReadControlPipe(layout);
-        var identity = ServiceRuntime.ReadIdentity(layout.RuntimeDirectory);
-        var reachable = await IsReachableAsync(controlPipe).ConfigureAwait(false);
-        if (!reachable && identity is null)
-        {
-            return ServiceStopOutcome.AlreadyStopped;
-        }
-
-        ServiceRuntime.RequestStop(layout.RuntimeDirectory);
-        var deadline = DateTime.UtcNow + StopTimeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            if (!IsRunning(identity) && !await IsReachableAsync(controlPipe).ConfigureAwait(false))
-            {
-                return ServiceStopOutcome.Stopped;
-            }
-
-            await Task.Delay(PollInterval).ConfigureAwait(false);
-        }
-
-        // The host did not honour the stop request in time. Terminating it is
-        // the last resort an uninstall needs; the vault key only ever lived in
-        // that process, so the next start is locked either way. A forced stop
-        // is reported as such: it is not the clean shutdown the owner asked
-        // for.
-        return Terminate(identity) ? ServiceStopOutcome.Forced : ServiceStopOutcome.Failed;
+        var handle = InstanceLifecycle.ResolveFromSettingsPath(layout.SettingsPath);
+        return StopSharedAsync(handle);
     }
 
     /// <summary>
@@ -115,59 +48,8 @@ internal static class ServiceHost
     /// The pid is checked against the start time the host recorded, so a
     /// recycled pid is never mistaken for the host.
     /// </summary>
-    internal static bool IsRunning(ServiceProcessIdentity? identity)
-    {
-        if (identity is null)
-        {
-            return false;
-        }
-
-        try
-        {
-            using var process = Process.GetProcessById(identity.ProcessId);
-            if (process.HasExited)
-            {
-                return false;
-            }
-
-            return identity.StartedUtcTicks == 0 ||
-                process.StartTime.ToUniversalTime().Ticks == identity.StartedUtcTicks;
-        }
-        catch (ArgumentException)
-        {
-            // The process is gone.
-            return false;
-        }
-        catch (InvalidOperationException)
-        {
-            return false;
-        }
-    }
-
-    private static bool Terminate(ServiceProcessIdentity? identity)
-    {
-        if (identity is null || !IsRunning(identity))
-        {
-            return false;
-        }
-
-        try
-        {
-            using var process = Process.GetProcessById(identity.ProcessId);
-            process.Kill(entireProcessTree: true);
-            process.WaitForExit(5000);
-            return process.HasExited;
-        }
-        catch (ArgumentException)
-        {
-            // The process is already gone.
-            return true;
-        }
-        catch (InvalidOperationException)
-        {
-            return false;
-        }
-    }
+    internal static bool IsRunning(ServiceProcessIdentity? identity) =>
+        ServiceRuntime.IsProcessRunning(identity);
 
     internal static async Task<bool> IsReachableAsync(string controlPipe)
     {
@@ -184,11 +66,53 @@ internal static class ServiceHost
         {
             return false;
         }
+        catch (InstanceLifecycleException)
+        {
+            return false;
+        }
     }
 
     internal static string ReadControlPipe(InstallLayout layout)
     {
         var settings = ServiceSettingsLoader.Load(layout.SettingsPath);
         return settings.ControlPipe;
+    }
+
+    private static async Task<ServiceStartOutcome> StartSharedAsync(InstanceHandle handle, string hostExecutable)
+    {
+        try
+        {
+            var outcome = await InstanceLifecycle.EnsureStartedAsync(handle, hostExecutable, CancellationToken.None).ConfigureAwait(false);
+            return outcome == InstanceStartOutcome.Started ? ServiceStartOutcome.Started : ServiceStartOutcome.AlreadyRunning;
+        }
+        catch (InstanceLifecycleException ex) when (string.Equals(ex.Code, "host_unresponsive", StringComparison.Ordinal) ||
+            string.Equals(ex.Code, "host_exited", StringComparison.Ordinal) ||
+            string.Equals(ex.Code, "start_timeout", StringComparison.Ordinal) ||
+            string.Equals(ex.Code, "host_missing", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(ex.Message, ex);
+        }
+        catch (InstanceLifecycleException ex) when (string.Equals(ex.Code, "version_mismatch", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(ex.Message, ex);
+        }
+    }
+
+    private static async Task<ServiceStopOutcome> StopSharedAsync(InstanceHandle handle)
+    {
+        try
+        {
+            var outcome = await InstanceLifecycle.StopAsync(handle, CancellationToken.None).ConfigureAwait(false);
+            return outcome switch
+            {
+                InstanceStopOutcome.Stopped => ServiceStopOutcome.Stopped,
+                InstanceStopOutcome.Forced => ServiceStopOutcome.Forced,
+                _ => ServiceStopOutcome.AlreadyStopped,
+            };
+        }
+        catch (InstanceLifecycleException ex) when (string.Equals(ex.Code, "stop_failed", StringComparison.Ordinal))
+        {
+            return ServiceStopOutcome.Failed;
+        }
     }
 }

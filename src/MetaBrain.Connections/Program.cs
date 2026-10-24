@@ -34,6 +34,8 @@ internal static class Program
             {
                 "serve-console" => await RunConsoleServiceAsync(Options.Parse(args, 1), CancellationToken.None).ConfigureAwait(false),
                 "serve-service" => RunWindowsService(Options.Parse(args, 1)),
+                // S9-T2 the one shared resolve/create/select/start/connect lifecycle every frontend uses.
+                "lifecycle" => await InstanceLifecycleCli.RunAsync(args[1..]).ConfigureAwait(false),
                 "owner" => await OwnerControlCli.RunAsync(args[1..]).ConfigureAwait(false),
                 "agent-mcp" => await McpAgentBridge.RunAsync(args[1..]).ConfigureAwait(false),
                 _ => Usage()

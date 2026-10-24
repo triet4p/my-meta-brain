@@ -80,6 +80,40 @@ internal static class ServiceRuntime
             identity.StartedUtcTicks.ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
+    /// <summary>
+    /// Reports whether the host that wrote the identity record is still that
+    /// same process. The pid is checked against the start time the host
+    /// recorded, so a recycled pid is never mistaken for the running host.
+    /// </summary>
+    internal static bool IsProcessRunning(ServiceProcessIdentity? identity)
+    {
+        if (identity is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(identity.ProcessId);
+            if (process.HasExited)
+            {
+                return false;
+            }
+
+            return identity.StartedUtcTicks == 0 ||
+                process.StartTime.ToUniversalTime().Ticks == identity.StartedUtcTicks;
+        }
+        catch (ArgumentException)
+        {
+            // The process is gone.
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
     internal static void RemovePid(string runtimeDirectory)
     {
         var path = ResolvePidPath(runtimeDirectory);
