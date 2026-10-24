@@ -20,11 +20,31 @@ internal static class OwnerControlCli
             return Usage();
         }
 
+        // S9-T3 contextual help: `owner --help` lists the workflow groups and
+        // `owner <verb> --help` shows the exact inputs of one command. Help is
+        // local text only: it starts nothing, unlocks nothing and mints no
+        // authority.
+        if ((args.Length == 1 && IsHelp(args[0])) || (args.Length >= 2 && IsHelp(args[1])))
+        {
+            var verb = args.Length >= 2 && !IsHelp(args[0]) ? args[0] : null;
+            return CommandHelp(verb);
+        }
+
         try
         {
             var options = CommandOptions.Parse(args[1..]);
             return args[0] switch
             {
+                "help" => CommandHelp(options.Optional("--command")),
+                "library" => await LibrarySearchAsync(options).ConfigureAwait(false),
+                "proposal-publish" => await ProposalPublishAsync(options).ConfigureAwait(false),
+                "proposal-reject" => await ProposalRejectAsync(options).ConfigureAwait(false),
+                "intentions" => await IntentionListAsync(options).ConfigureAwait(false),
+                "intention-trigger-set" => await IntentionTriggerSetAsync(options, clear: false).ConfigureAwait(false),
+                "intention-trigger-clear" => await IntentionTriggerSetAsync(options, clear: true).ConfigureAwait(false),
+                "intention-context-set" => await IntentionContextSetAsync(options, disable: false).ConfigureAwait(false),
+                "intention-context-disable" => await IntentionContextSetAsync(options, disable: true).ConfigureAwait(false),
+                "intention-schedule-run" => await IntentionScheduleRunAsync(options).ConfigureAwait(false),
                 "status" => await StatusAsync(options).ConfigureAwait(false),
                 "read" => await ReadAsync(options).ConfigureAwait(false),
                 "agent-read" => await AgentReadAsync(options).ConfigureAwait(false),
@@ -536,19 +556,31 @@ internal static class OwnerControlCli
             CryptographicOperations.ZeroMemory(content);
         }
     }
+    // S9-T3 friendly capture: --body/--title/... build the exact draft the
+    // memory service reads, so the owner never assembles raw JSON. The exact
+    // draft file (--input-file) stays available as the advanced path for
+    // owner-owned data. UTC instants require an explicit offset; citations
+    // pin id@revision with an optional :start-end span; unknown stays unknown
+    // and is never fabricated into a verified value.
     private static async Task<int> MemoryCreateAsync(CommandOptions options)
     {
-        options.RequireOnly("--control-pipe", "--resource-id", "--zone-id", "--input-file");
+        options.RequireOnly("--control-pipe", "--resource-id", "--zone-id", "--input-file",
+            "--body", "--kind", "--author", "--method", "--evidence", "--level", "--title",
+            "--occurred-utc", "--project", "--environment", "--version", "--cite");
         var controlPipe = ControlPipe(options);
         var resourceId = options.Required("--resource-id");
         var zoneId = options.Required("--zone-id");
-        var inputPath = options.Required("--input-file");
         if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId) || !ServiceSettingsLoader.IsSafeIdentifier(zoneId))
         {
             return Usage();
         }
 
-        var content = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        var content = await ReadMemoryDraftAsync(options).ConfigureAwait(false);
+        if (content is null)
+        {
+            return Usage();
+        }
+
         try
         {
             if (content.Length is <= 0 or > 1024 * 1024)
@@ -579,11 +611,12 @@ internal static class OwnerControlCli
 
     private static async Task<int> MemoryReviseAsync(CommandOptions options)
     {
-        options.RequireOnly("--control-pipe", "--resource-id", "--zone-id", "--expected-revision", "--input-file");
+        options.RequireOnly("--control-pipe", "--resource-id", "--zone-id", "--expected-revision", "--input-file",
+            "--body", "--kind", "--author", "--method", "--evidence", "--level", "--title",
+            "--occurred-utc", "--project", "--environment", "--version", "--cite");
         var controlPipe = ControlPipe(options);
         var resourceId = options.Required("--resource-id");
         var zoneId = options.Required("--zone-id");
-        var inputPath = options.Required("--input-file");
         if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId) || !ServiceSettingsLoader.IsSafeIdentifier(zoneId))
         {
             return Usage();
@@ -595,7 +628,12 @@ internal static class OwnerControlCli
             return Usage();
         }
 
-        var content = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        var content = await ReadMemoryDraftAsync(options).ConfigureAwait(false);
+        if (content is null)
+        {
+            return Usage();
+        }
+
         try
         {
             if (content.Length is <= 0 or > 1024 * 1024)
@@ -712,17 +750,22 @@ internal static class OwnerControlCli
     /// </summary>
     private static async Task<int> FeedbackCreateAsync(CommandOptions options)
     {
-        options.RequireOnly("--control-pipe", "--resource-id", "--zone-id", "--input-file");
+        options.RequireOnly("--control-pipe", "--resource-id", "--zone-id", "--input-file",
+            "--target", "--kind", "--note", "--method");
         var controlPipe = ControlPipe(options);
         var resourceId = options.Required("--resource-id");
         var zoneId = options.Required("--zone-id");
-        var inputPath = options.Required("--input-file");
         if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId) || !ServiceSettingsLoader.IsSafeIdentifier(zoneId))
         {
             return Usage();
         }
 
-        var content = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        var content = await ReadFeedbackDraftAsync(options).ConfigureAwait(false);
+        if (content is null)
+        {
+            return Usage();
+        }
+
         try
         {
             if (content.Length is <= 0 or > 1024 * 1024)
@@ -1250,17 +1293,22 @@ internal static class OwnerControlCli
 
     private static async Task<int> SourceCreateAsync(CommandOptions options)
     {
-        options.RequireOnly("--control-pipe", "--resource-id", "--zone-id", "--input-file");
+        options.RequireOnly("--control-pipe", "--resource-id", "--zone-id", "--input-file",
+            "--title", "--locator", "--version", "--availability", "--author", "--method", "--text");
         var controlPipe = ControlPipe(options);
         var resourceId = options.Required("--resource-id");
         var zoneId = options.Required("--zone-id");
-        var inputPath = options.Required("--input-file");
         if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId) || !ServiceSettingsLoader.IsSafeIdentifier(zoneId))
         {
             return Usage();
         }
 
-        var content = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        var content = await ReadSourceDraftAsync(options).ConfigureAwait(false);
+        if (content is null)
+        {
+            return Usage();
+        }
+
         try
         {
             if (content.Length is <= 0 or > 1024 * 1024)
@@ -1291,11 +1339,11 @@ internal static class OwnerControlCli
 
     private static async Task<int> SourceReviseAsync(CommandOptions options)
     {
-        options.RequireOnly("--control-pipe", "--resource-id", "--zone-id", "--expected-revision", "--input-file");
+        options.RequireOnly("--control-pipe", "--resource-id", "--zone-id", "--expected-revision", "--input-file",
+            "--title", "--locator", "--version", "--availability", "--author", "--method", "--text");
         var controlPipe = ControlPipe(options);
         var resourceId = options.Required("--resource-id");
         var zoneId = options.Required("--zone-id");
-        var inputPath = options.Required("--input-file");
         if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId) || !ServiceSettingsLoader.IsSafeIdentifier(zoneId))
         {
             return Usage();
@@ -1307,7 +1355,12 @@ internal static class OwnerControlCli
             return Usage();
         }
 
-        var content = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        var content = await ReadSourceDraftAsync(options).ConfigureAwait(false);
+        if (content is null)
+        {
+            return Usage();
+        }
+
         try
         {
             if (content.Length is <= 0 or > 1024 * 1024)
@@ -1402,11 +1455,10 @@ internal static class OwnerControlCli
     private static async Task<int> ResearchCaptureAsync(CommandOptions options)
     {
         options.RequireOnly("--control-pipe", "--resource-id", "--zone-id", "--input-file",
-            "--title", "--source-url", "--source-author", "--source-date");
+            "--title", "--source-url", "--source-author", "--source-date", "--text");
         var controlPipe = ControlPipe(options);
         var resourceId = options.Required("--resource-id");
         var zoneId = options.Required("--zone-id");
-        var inputPath = options.Required("--input-file");
         if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId) || !ServiceSettingsLoader.IsSafeIdentifier(zoneId))
         {
             return Usage();
@@ -1425,7 +1477,12 @@ internal static class OwnerControlCli
             capturedAt = parsedDate;
         }
 
-        var text = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        var text = await ReadResearchTextAsync(options).ConfigureAwait(false);
+        if (text is null)
+        {
+            return Usage();
+        }
+
         try
         {
             if (text.Length is <= 0 or > 1024 * 1024)
@@ -1455,6 +1512,47 @@ internal static class OwnerControlCli
         finally
         {
             CryptographicOperations.ZeroMemory(text);
+        }
+    }
+
+    private static async Task<byte[]?> ReadResearchTextAsync(CommandOptions options)
+    {
+        var inputPath = options.Optional("--input-file");
+        var inline = options.Optional("--text");
+        if (inputPath is not null && inline is not null)
+        {
+            return null;
+        }
+
+        if (inline is not null)
+        {
+            if (inline.Length == 0 || inline.Length > 1024 * 1024)
+            {
+                return null;
+            }
+
+            try
+            {
+                return new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetBytes(inline);
+            }
+            catch (EncoderFallbackException)
+            {
+                return null;
+            }
+        }
+
+        if (inputPath is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        }
+        catch (IOException)
+        {
+            return null;
         }
     }
 
@@ -2160,17 +2258,22 @@ internal static class OwnerControlCli
 
     private static async Task<int> RelationCreateAsync(CommandOptions options)
     {
-        options.RequireOnly("--control-pipe", "--resource-id", "--zone-id", "--input-file");
+        options.RequireOnly("--control-pipe", "--resource-id", "--zone-id", "--input-file",
+            "--kind", "--state", "--from", "--to", "--reason", "--state-reason", "--method");
         var controlPipe = ControlPipe(options);
         var resourceId = options.Required("--resource-id");
         var zoneId = options.Required("--zone-id");
-        var inputPath = options.Required("--input-file");
         if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId) || !ServiceSettingsLoader.IsSafeIdentifier(zoneId))
         {
             return Usage();
         }
 
-        var content = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        var content = await ReadRelationDraftAsync(options).ConfigureAwait(false);
+        if (content is null)
+        {
+            return Usage();
+        }
+
         try
         {
             if (content.Length is <= 0 or > 1024 * 1024)
@@ -2201,7 +2304,7 @@ internal static class OwnerControlCli
 
     private static async Task<int> RelationTransitionAsync(CommandOptions options, string transitionCommand)
     {
-        options.RequireOnly("--control-pipe", "--resource-id", "--expected-revision", "--input-file");
+        options.RequireOnly("--control-pipe", "--resource-id", "--expected-revision", "--input-file", "--reason");
         var controlPipe = ControlPipe(options);
         var resourceId = options.Required("--resource-id");
         if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId))
@@ -2215,16 +2318,15 @@ internal static class OwnerControlCli
             return Usage();
         }
 
-        var inputPath = options.Optional("--input-file");
-        byte[]? content = inputPath is null ? null : await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        var content = await ReadRelationTransitionAsync(options, transitionCommand).ConfigureAwait(false);
+        if (content is { Length: <= 0 or > 1024 * 1024 })
+        {
+            Console.Error.WriteLine("ERROR invalid_relation_size");
+            return 4;
+        }
+
         try
         {
-            if (content is { Length: <= 0 or > 1024 * 1024 })
-            {
-                Console.Error.WriteLine("ERROR invalid_relation_size");
-                return 4;
-            }
-
             var result = await InvokeOwnerAsync(controlPipe,
                 new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, transitionCommand,
                     ResourceId: resourceId,
@@ -2425,16 +2527,20 @@ internal static class OwnerControlCli
     /// </summary>
     private static async Task<int> LifecycleCreateAsync(CommandOptions options)
     {
-        options.RequireOnly("--control-pipe", "--resource-id", "--input-file");
+        options.RequireOnly("--control-pipe", "--resource-id", "--input-file", "--reason", "--method");
         var controlPipe = ControlPipe(options);
         var subjectId = options.Required("--resource-id");
-        var inputPath = options.Required("--input-file");
         if (!ServiceSettingsLoader.IsSafeIdentifier(subjectId))
         {
             return Usage();
         }
 
-        var content = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        var content = await ReadLifecycleDraftAsync(options).ConfigureAwait(false);
+        if (content is null)
+        {
+            return Usage();
+        }
+
         try
         {
             if (content.Length is <= 0 or > 1024 * 1024)
@@ -2535,7 +2641,7 @@ internal static class OwnerControlCli
 
     private static async Task<int> LifecycleTransitionAsync(CommandOptions options, string transitionOperation)
     {
-        options.RequireOnly("--control-pipe", "--resource-id", "--expected-revision", "--input-file");
+        options.RequireOnly("--control-pipe", "--resource-id", "--expected-revision", "--input-file", "--reason", "--replacement");
         var controlPipe = ControlPipe(options);
         var subjectId = options.Required("--resource-id");
         if (!ServiceSettingsLoader.IsSafeIdentifier(subjectId))
@@ -2549,16 +2655,15 @@ internal static class OwnerControlCli
             return Usage();
         }
 
-        var inputPath = options.Optional("--input-file");
-        byte[]? content = inputPath is null ? null : await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        var content = await ReadLifecycleTransitionAsync(options, transitionOperation).ConfigureAwait(false);
+        if (content is { Length: <= 0 or > 1024 * 1024 })
+        {
+            Console.Error.WriteLine("ERROR invalid_lifecycle_size");
+            return 4;
+        }
+
         try
         {
-            if (content is { Length: <= 0 or > 1024 * 1024 })
-            {
-                Console.Error.WriteLine("ERROR invalid_lifecycle_size");
-                return 4;
-            }
-
             var result = await InvokeOwnerAsync(controlPipe,
                 new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, transitionOperation,
                     ResourceId: subjectId,
@@ -3966,6 +4071,498 @@ internal static class OwnerControlCli
         finally
         {
             Array.Clear(buffer);
+        }
+    }
+
+    // S9-T3 friendly draft builders. Each builds the exact JSON the shared
+    // domain codec reads, from owner-typed scalar options. Friendly fields
+    // and the exact file form are mutually exclusive (both or neither is a
+    // usage error); the service remains the only validator and its refusal
+    // is printed verbatim with the owner next action.
+    private static async Task<byte[]?> ReadMemoryDraftAsync(CommandOptions options)
+    {
+        var inputPath = options.Optional("--input-file");
+        var hasFriendly = options.Optional("--body") is not null || options.Optional("--kind") is not null ||
+            options.Optional("--author") is not null || options.Optional("--method") is not null ||
+            options.Optional("--evidence") is not null || options.Optional("--level") is not null ||
+            options.Optional("--title") is not null || options.Optional("--occurred-utc") is not null ||
+            options.Optional("--project") is not null || options.Optional("--environment") is not null ||
+            options.Optional("--version") is not null || options.Optional("--cite") is not null;
+        if (inputPath is not null && hasFriendly)
+        {
+            return null;
+        }
+
+        if (inputPath is not null)
+        {
+            try
+            {
+                return await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+                return null;
+            }
+        }
+
+        var body = options.Optional("--body");
+        if (body is null)
+        {
+            return null;
+        }
+
+        return BuildMemoryDraftBytes(
+            options.Optional("--kind"), options.Optional("--author"), options.Optional("--method"),
+            options.Optional("--evidence"), options.Optional("--level"), options.Optional("--title"),
+            body, options.Optional("--occurred-utc"), options.Optional("--project"),
+            options.Optional("--environment"), options.Optional("--version"), options.Optional("--cite"));
+    }
+
+    private static byte[]? BuildMemoryDraftBytes(
+        string? kind, string? author, string? method, string? evidence, string? level,
+        string? title, string body, string? occurredUtc, string? project, string? environment,
+        string? version, string? cite)
+    {
+        DateTimeOffset? occurred = null;
+        if (occurredUtc is not null)
+        {
+            if (!DateTimeOffset.TryParse(occurredUtc, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed) ||
+                parsed.Offset != TimeSpan.Zero)
+            {
+                return null;
+            }
+
+            occurred = parsed;
+        }
+
+        var sources = ParseCiteList(cite);
+        if (sources is null && cite is not null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                kind = kind ?? "claim",
+                author = author ?? "user",
+                creationMethod = method ?? "directWrite",
+                evidence = evidence ?? "unverified",
+                level = level ?? "l1",
+                title = title,
+                body = body,
+                sources = sources ?? Array.Empty<object>(),
+                occurredAtUtc = occurred,
+                recordedAtUtc = DateTimeOffset.UtcNow,
+                applicability = project is null && environment is null && version is null
+                    ? null
+                    : new { project = project, environment = environment, version = version }
+            });
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private static object[]? ParseCiteList(string? cite)
+    {
+        if (cite is null)
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(cite))
+        {
+            return null;
+        }
+
+        var entries = cite.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (entries.Length == 0 || entries.Length > 32)
+        {
+            return null;
+        }
+
+        var list = new List<object>(entries.Length);
+        foreach (var entry in entries)
+        {
+            var at = entry.IndexOf('@');
+            if (at <= 0 || at == entry.Length - 1)
+            {
+                return null;
+            }
+
+            var id = entry[..at];
+            var rest = entry[(at + 1)..];
+            long? revision = null;
+            long? start = null;
+            long? end = null;
+            var colon = rest.IndexOf(':');
+            var revText = colon < 0 ? rest : rest[..colon];
+            if (!long.TryParse(revText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var rev) || rev < 1)
+            {
+                return null;
+            }
+
+            revision = rev;
+            if (colon >= 0)
+            {
+                var span = rest[(colon + 1)..];
+                var dash = span.IndexOf('-');
+                if (dash <= 0 || dash == span.Length - 1)
+                {
+                    return null;
+                }
+
+                if (!long.TryParse(span[..dash], NumberStyles.Integer, CultureInfo.InvariantCulture, out var s) ||
+                    !long.TryParse(span[(dash + 1)..], NumberStyles.Integer, CultureInfo.InvariantCulture, out var e))
+                {
+                    return null;
+                }
+
+                start = s;
+                end = e;
+            }
+
+            if (!ServiceSettingsLoader.IsSafeIdentifier(id))
+            {
+                return null;
+            }
+
+            list.Add(new
+            {
+                sourceId = id,
+                locator = (string?)null,
+                availability = "unknown",
+                sourceRevision = revision,
+                span = start is null || end is null ? null : new { start = start, end = end }
+            });
+        }
+
+        return list.ToArray();
+    }
+
+    private static async Task<byte[]?> ReadFeedbackDraftAsync(CommandOptions options)
+    {
+        var inputPath = options.Optional("--input-file");
+        var hasFriendly = options.Optional("--target") is not null || options.Optional("--kind") is not null ||
+            options.Optional("--note") is not null || options.Optional("--method") is not null;
+        if (inputPath is not null && hasFriendly)
+        {
+            return null;
+        }
+
+        if (inputPath is not null)
+        {
+            try
+            {
+                return await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+                return null;
+            }
+        }
+
+        var target = options.Optional("--target");
+        var kind = options.Optional("--kind");
+        if (target is null || kind is null)
+        {
+            return null;
+        }
+
+        string targetId = target;
+        long targetRevision = 0;
+        var at = target.IndexOf('@');
+        if (at <= 0 || at == target.Length - 1 ||
+            !long.TryParse(target[(at + 1)..], NumberStyles.Integer, CultureInfo.InvariantCulture, out targetRevision) ||
+            targetRevision < 1)
+        {
+            return null;
+        }
+
+        targetId = target[..at];
+        if (!ServiceSettingsLoader.IsSafeIdentifier(targetId))
+        {
+            return null;
+        }
+
+        try
+        {
+            return System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                targetResourceId = targetId,
+                targetRevision = targetRevision,
+                kind = kind,
+                note = options.Optional("--note"),
+                creationMethod = options.Optional("--method") ?? "directWrite"
+            });
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private static async Task<byte[]?> ReadSourceDraftAsync(CommandOptions options)
+    {
+        var inputPath = options.Optional("--input-file");
+        var hasFriendly = options.Optional("--title") is not null || options.Optional("--locator") is not null ||
+            options.Optional("--version") is not null || options.Optional("--availability") is not null ||
+            options.Optional("--author") is not null || options.Optional("--method") is not null ||
+            options.Optional("--text") is not null;
+        if (inputPath is not null && hasFriendly)
+        {
+            return null;
+        }
+
+        if (inputPath is not null)
+        {
+            try
+            {
+                return await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+                return null;
+            }
+        }
+
+        try
+        {
+            return System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                title = options.Optional("--title"),
+                locator = options.Optional("--locator"),
+                version = options.Optional("--version"),
+                availability = options.Optional("--availability") ?? "unknown",
+                creationMethod = options.Optional("--method") ?? "directWrite",
+                capturedAtUtc = (DateTimeOffset?)null,
+                recordedAtUtc = DateTimeOffset.UtcNow,
+                author = options.Optional("--author"),
+                text = options.Optional("--text")
+            });
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private static async Task<byte[]?> ReadRelationDraftAsync(CommandOptions options)
+    {
+        var inputPath = options.Optional("--input-file");
+        var hasFriendly = options.Optional("--kind") is not null || options.Optional("--state") is not null ||
+            options.Optional("--from") is not null || options.Optional("--to") is not null ||
+            options.Optional("--reason") is not null || options.Optional("--state-reason") is not null ||
+            options.Optional("--method") is not null;
+        if (inputPath is not null && hasFriendly)
+        {
+            return null;
+        }
+
+        if (inputPath is not null)
+        {
+            try
+            {
+                return await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+                return null;
+            }
+        }
+
+        var kind = options.Optional("--kind");
+        var from = options.Optional("--from");
+        var to = options.Optional("--to");
+        var reason = options.Optional("--reason");
+        if (kind is null || from is null || to is null || reason is null)
+        {
+            return null;
+        }
+
+        var fromEndpoint = ParseRelationEndpoint(from);
+        var toEndpoint = ParseRelationEndpoint(to);
+        if (fromEndpoint is null || toEndpoint is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                kind = kind,
+                state = options.Optional("--state") ?? "proposed",
+                from = fromEndpoint,
+                to = toEndpoint,
+                creationMethod = options.Optional("--method") ?? "directWrite",
+                reason = reason,
+                stateReason = options.Optional("--state-reason"),
+                occurredAtUtc = (DateTimeOffset?)null,
+                recordedAtUtc = DateTimeOffset.UtcNow,
+                requestEvidence = (string?)null
+            });
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private static object? ParseRelationEndpoint(string text)
+    {
+        var value = text.StartsWith("source:", StringComparison.OrdinalIgnoreCase) ? text["source:".Length..] : text;
+        var endpointKind = text.StartsWith("source:", StringComparison.OrdinalIgnoreCase) ? "registeredSource" : "memoryItem";
+        var at = value.IndexOf('@');
+        if (at <= 0 || at == value.Length - 1)
+        {
+            return null;
+        }
+
+        var id = value[..at];
+        if (!ServiceSettingsLoader.IsSafeIdentifier(id) ||
+            !long.TryParse(value[(at + 1)..], NumberStyles.Integer, CultureInfo.InvariantCulture, out var revision) ||
+            revision < 1)
+        {
+            return null;
+        }
+
+        return new { resourceId = id, endpointKind = endpointKind, revision = revision, span = (object?)null };
+    }
+
+    private static async Task<byte[]?> ReadRelationTransitionAsync(CommandOptions options, string transitionCommand)
+    {
+        var inputPath = options.Optional("--input-file");
+        var reason = options.Optional("--reason");
+        var isRelink = string.Equals(transitionCommand, ServiceRequestHandler.RelationRelinkOperation, StringComparison.Ordinal);
+        var isAccept = string.Equals(transitionCommand, ServiceRequestHandler.RelationAcceptOperation, StringComparison.Ordinal);
+        if (inputPath is not null && reason is not null)
+        {
+            return null;
+        }
+
+        if (inputPath is not null)
+        {
+            try
+            {
+                return await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+                return null;
+            }
+        }
+
+        if (isRelink || isAccept)
+        {
+            return reason is null ? null : null;
+        }
+
+        if (reason is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new { stateReason = reason, requestEvidence = (string?)null });
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private static async Task<byte[]?> ReadLifecycleDraftAsync(CommandOptions options)
+    {
+        var inputPath = options.Optional("--input-file");
+        var hasFriendly = options.Optional("--reason") is not null || options.Optional("--method") is not null;
+        if (inputPath is not null && hasFriendly)
+        {
+            return null;
+        }
+
+        if (inputPath is not null)
+        {
+            try
+            {
+                return await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+                return null;
+            }
+        }
+
+        try
+        {
+            return System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                creationMethod = options.Optional("--method") ?? "directWrite",
+                reason = options.Optional("--reason"),
+                occurred = (object?)null,
+                recorded = (object?)null,
+                validFrom = (object?)null,
+                validUntil = (object?)null,
+                reviewAfter = (object?)null
+            });
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private static async Task<byte[]?> ReadLifecycleTransitionAsync(CommandOptions options, string transitionOperation)
+    {
+        var inputPath = options.Optional("--input-file");
+        var reason = options.Optional("--reason");
+        var replacement = options.Optional("--replacement");
+        if (inputPath is not null && (reason is not null || replacement is not null))
+        {
+            return null;
+        }
+
+        if (inputPath is not null)
+        {
+            try
+            {
+                return await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+                return null;
+            }
+        }
+
+        if (reason is null && replacement is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                rationale = reason,
+                replacementResourceId = replacement,
+                occurred = (object?)null,
+                recorded = (object?)null,
+                validFrom = (object?)null,
+                validUntil = (object?)null,
+                reviewAfter = (object?)null,
+                intentionDueAt = (object?)null,
+                clearIntentionDueAt = false,
+                contextTrigger = (object?)null,
+                disableContextTrigger = false
+            });
+        }
+        catch (ArgumentException)
+        {
+            return null;
         }
     }
 
@@ -5622,16 +6219,473 @@ internal static class OwnerControlCli
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Owner commands: owner {status|read|write --expected-revision|memory-create|memory-revise --expected-revision|memory-import --expected-revision|memory-read|source-create|source-revise --expected-revision|source-read|agent-search --query [--offset --limit --kind --current]|source-enroll --source-id --zone-id --format --format-version --input-file|source-relocate --source-id --source-generation --input-file|source-revoke --source-id|source-status --source-id|source-ingest --source-id|source-pause --source-id|source-resume --source-id|source-refresh-optin --source-id|source-refresh-optout --source-id|source-list|source-refresh|source-snapshot-list --source-id|source-snapshot-preserve --source-id --source-revision --retain-until-utc|source-snapshot-read --snapshot-id --snapshot-revision --output-file|source-snapshot-retain --snapshot-id --expected-revision --retain-until-utc|source-snapshot-purge --snapshot-id --expected-revision|research-capture --resource-id --zone-id --input-file [--title --source-url --source-author --source-date]|research-read --resource-id [--resource-revision --output-file]|relation-create|relation-accept --expected-revision|relation-reject --expected-revision|relation-unlink --expected-revision|relation-relink --expected-revision|relation-read|relation-list|lifecycle-create|lifecycle-read|lifecycle-retained-read --resource-revision|lifecycle-publish --expected-revision|lifecycle-reject --expected-revision|lifecycle-withdraw --expected-revision|lifecycle-repropose --expected-revision|lifecycle-question-resolve --expected-revision|lifecycle-question-reopen --expected-revision|lifecycle-intention-complete --expected-revision|lifecycle-intention-cancel --expected-revision|lifecycle-intention-supersede --expected-revision|lifecycle-intention-notify --expected-revision|lifecycle-intention-acknowledge --expected-revision|lifecycle-validity-set --expected-revision|lifecycle-retain --expected-revision|proposal-read --resource-id [--resource-revision]|proposal-list|provision|unlock|recover|lock|grant|grants|collection-set|collections|catalog-preview|catalog-publish|catalog-list|catalog-withdraw|requests|request-preview|request-approve|request-reject|session|sessions|revoke-session|redeem|authorize|agent-read} with pipe flags (agent-read streams the approved body on stdout, no output file); agent commands: owner {agent-catalog-list|catalog-query|request|request-status|redeem|session|authorize|agent-read|agent-collection-view|agent-search|agent-brief|agent-feedback|agent-feedback-read|agent-propose|agent-relation-resolve|agent-relation-list|agent-relation-create|agent-relation-supersede|agent-relation-unlink|agent-relation-restore}; lifecycle --resource-id is the subject item ID; relation/lifecycle transitions need --expected-revision and an optional --input-file draft; agent-propose --session-file --input-file carries one proposal draft JSON (kind create/revise, idempotencyKey, inbox destinationResourceId/destinationRevision, revise subjectResourceId/subjectRevision, proposed item draft) and never publishes; agent-relation-create/supersede --session-file --input-file carries typed endpoints/revisions, kind, reason and requestEvidence; agent-relation-unlink/restore --session-file --resource-id --resource-revision --input-file carries stateReason/requestEvidence; restore returns only to proposed; source-enroll and source-relocate --input-file are JSON objects holding the private locator ({\"locator\": \"C:/exact/path\"}), never a command argument; source-snapshot-read requires an explicit --output-file export");
-        Console.Error.WriteLine("Agent brief: owner agent-brief --agent-pipe --session-file [--query] [--budget-chars 200..8000] [--context-project explicit-label] [--context-task explicit-label] [--include-archived]; contextual intentions are returned only from the frozen memory.context grant.");
-        Console.Error.WriteLine("Recall policy: owner recall-apply --resource-id --act {demote|pin|archive|restore} [--reason text] | owner recall-read --resource-id; the act changes only how an item is offered, never its content, evidence, revision or any scope.");
-        Console.Error.WriteLine("Owner purge: owner purge-preview --resource-id --resource-revision --reason text | owner purge-confirm --purge-id --resource-id --resource-revision --target-zone --target-kind --impacted id|rev|kind|reason,... --live-generation N [--catalog-ids ...] --reason text (type PURGE) | owner purge-resume --purge-id; deletes exactly the previewed canonical copies and withdraws the mapped catalog.");
-        Console.Error.WriteLine("Review queue: owner review-list | owner review-record --resource-id --reason text; the queue reports due review-after, a source that moved past the cited revision, a missing source and an unavailable source, and the act records only that the owner looked.");
-        Console.Error.WriteLine("Owner backup: owner backup --control-pipe --output-file <file> | owner restore --control-pipe --backup-file <file> --target-directory <dir> | owner restore-with-recovery-code --control-pipe --backup-file <file> --target-directory <dir>; the backup is encrypted, the restore needs the passphrase or the recovery key, the target must be a directory that does not exist yet, and a wrong key or a damaged backup writes nothing.");
-        Console.Error.WriteLine("Owner export: owner export --control-pipe --resource-ids id,id --output-file <file> [--include-relations true] [--include-lifecycle-states true]; the export is plaintext, holds exactly the selected records, withholds a citation to a source outside the selection, and is a copy the vault cannot revoke afterwards.");
-        Console.Error.WriteLine("Owner vault format: owner upgrade --control-pipe | owner upgrade-with-recovery-code --control-pipe | owner rollback --control-pipe [--discard true] | owner rollback-with-recovery-code --control-pipe [--discard true]; the act runs only while the vault is locked, leaves it locked, keeps an encrypted rollback point of the files it rewrote, and a wrong or missing credential writes nothing.");
-        Console.Error.WriteLine("Owner operations: owner health --control-pipe | owner audit --control-pipe [--limit N] | owner diagnostics --control-pipe [--limit N] | owner retention --control-pipe --retention-days N --max-records N [--purge-log true]; the reads need the unlocked vault, they show the actor, the action, the outcome, the recorded cost and the real error code, and they never show a body, a title, a credential or a token.");
+        // S9-T3 the legacy single-line usage stays a stable fallback; the
+        // contextual help above (`owner --help` / `owner <verb> --help`) is
+        // the product surface. Usage-only paths exit 2 and change nothing.
+        Console.Error.WriteLine("Owner: `owner --help` lists every workflow group; `owner <verb> --help` shows the exact inputs of one command.");
+        Console.Error.WriteLine("Groups: vault | capture | library | review | sharing | sources | planning | models. Every owner command needs --control-pipe <pipe>; agent-scoped reads use --agent-pipe plus --session-file instead.");
         return 2;
+    }
+
+    // S9-T3 owner library search over the owner's own unlocked vault. Every
+    // filter is applied by the service; the CLI sends the filter and renders
+    // the answered page (snippet-level hits; full bodies stay on get-by-ID
+    // reads). A stale/missing generation fails closed with the service's own
+    // code and the index-rebuild next action.
+    private static async Task<int> LibrarySearchAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--query", "--zone-id", "--collection-id", "--kind", "--level", "--current", "--from-utc", "--to-utc", "--as-of", "--offset", "--limit", "--include-archived");
+        var controlPipe = ControlPipe(options);
+        var query = options.Optional("--query");
+        if (query is not null && (query.Length > 256 || query.Any(char.IsControl)))
+        {
+            return Usage();
+        }
+
+        var zoneId = options.Optional("--zone-id");
+        var collectionId = options.Optional("--collection-id");
+        if ((zoneId is not null && !ServiceSettingsLoader.IsSafeIdentifier(zoneId)) ||
+            (collectionId is not null && !ServiceSettingsLoader.IsSafeIdentifier(collectionId)))
+        {
+            return Usage();
+        }
+
+        var kind = options.Optional("--kind");
+        if (kind is not null && (kind.Length == 0 || kind.Length > 32 || kind.Any(char.IsControl)))
+        {
+            return Usage();
+        }
+
+        var level = options.Optional("--level");
+        if (level is not null && (level.Length == 0 || level.Length > 32 || level.Any(char.IsControl)))
+        {
+            return Usage();
+        }
+
+        var current = options.Optional("--current");
+        if (current is not null && !string.Equals(current, "current", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(current, "history", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(current, "all", StringComparison.OrdinalIgnoreCase))
+        {
+            return Usage();
+        }
+
+        DateTimeOffset? fromUtc = null;
+        if (options.Optional("--from-utc") is { } fromText)
+        {
+            if (!DateTimeOffset.TryParse(fromText, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed) ||
+                parsed.Offset != TimeSpan.Zero)
+            {
+                return Usage();
+            }
+
+            fromUtc = parsed;
+        }
+
+        DateTimeOffset? toUtc = null;
+        if (options.Optional("--to-utc") is { } toText)
+        {
+            if (!DateTimeOffset.TryParse(toText, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed) ||
+                parsed.Offset != TimeSpan.Zero)
+            {
+                return Usage();
+            }
+
+            toUtc = parsed;
+        }
+
+        DateTimeOffset? asOfUtc = null;
+        if (options.Optional("--as-of") is { } asOfText)
+        {
+            if (!DateTimeOffset.TryParse(asOfText, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed) ||
+                parsed.Offset != TimeSpan.Zero)
+            {
+                return Usage();
+            }
+
+            asOfUtc = parsed;
+        }
+
+        var offset = 0;
+        if (options.Optional("--offset") is { } offsetText)
+        {
+            if (!int.TryParse(offsetText, NumberStyles.Integer, CultureInfo.InvariantCulture, out offset) || offset < 0 || offset > 10000)
+            {
+                return Usage();
+            }
+        }
+
+        var limit = 10;
+        if (options.Optional("--limit") is { } limitText)
+        {
+            if (!int.TryParse(limitText, NumberStyles.Integer, CultureInfo.InvariantCulture, out limit) || limit < 1 || limit > 50)
+            {
+                return Usage();
+            }
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerLibrarySearchOperation,
+                ZoneId: zoneId, CollectionId: collectionId, Query: query,
+                SearchOffset: offset, SearchLimit: limit, SearchKind: kind, SearchLevel: level,
+                SearchCurrent: current, SearchFromUtc: fromUtc, SearchToUtc: toUtc, SearchAsOfUtc: asOfUtc,
+                IncludeArchived: IsTrueFlag(options, "--include-archived"))).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "library_page") ||
+            !result.Reply.TryGetProperty("library", out var page) || page.ValueKind != JsonValueKind.Object)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintLibraryPage(page);
+        return 0;
+    }
+
+    private static void PrintLibraryPage(JsonElement page)
+    {
+        Console.WriteLine($"LIBRARY query={JsonValueText(page, "query")} total={JsonValueText(page, "total")} offset={JsonValueText(page, "offset")} limit={JsonValueText(page, "limit")} hasMore={JsonFlagText(page, "hasMore")}");
+        Console.WriteLine($"LIBRARY scope zone={OptionalText(page, "zoneId")} collection={OptionalText(page, "collectionId")} kind={OptionalText(page, "kind")} level={OptionalText(page, "level")} current={JsonValueText(page, "current")}");
+        if (!page.TryGetProperty("hits", out var hits) || hits.ValueKind != JsonValueKind.Array)
+        {
+            Console.WriteLine("LIBRARY no_match");
+            return;
+        }
+
+        foreach (var hit in hits.EnumerateArray())
+        {
+            Console.WriteLine(
+                $"HIT id={JsonValueText(hit, "id")} revision={JsonValueText(hit, "revision")} zone={JsonValueText(hit, "zoneId")} kind={JsonValueText(hit, "kind")} level={JsonValueText(hit, "level")} " +
+                $"score={JsonValueText(hit, "score")} publication={JsonValueText(hit, "publication")} recall={JsonValueText(hit, "recallState")}");
+            Console.WriteLine($"title={OptionalText(hit, "title")}");
+            Console.WriteLine($"snippet={JsonValueText(hit, "snippet")}");
+            var rankingReason = JsonValueText(hit, "rankingReason");
+            if (!string.IsNullOrEmpty(rankingReason))
+            {
+                Console.WriteLine($"reason={rankingReason}");
+            }
+
+            Console.WriteLine($"time occurred={JsonValueText(hit, "occurredAtUtc")} recorded={JsonValueText(hit, "recordedAtUtc")}");
+        }
+
+        if (hits.GetArrayLength() == 0)
+        {
+            Console.WriteLine("LIBRARY no_match");
+        }
+    }
+
+    // S9-T3 owner proposal publish/reject over the existing proposal-review
+    // operations. Publish carries the reviewed draft (friendly fields or an
+    // owner-owned exact JSON file); the service verifies the attribution is
+    // the proposal's own and the revision is the reviewed one. Reject carries
+    // only the rationale; the proposal content becomes the rejected review
+    // item and a revise subject is never touched.
+    private static async Task<int> ProposalPublishAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--resource-revision", "--input-file",
+            "--body", "--kind", "--author", "--method", "--evidence", "--level", "--title",
+            "--occurred-utc", "--project", "--environment", "--version", "--cite");
+        var controlPipe = ControlPipe(options);
+        var proposalId = options.Required("--resource-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(proposalId))
+        {
+            return Usage();
+        }
+
+        if (!long.TryParse(options.Required("--resource-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var proposalRevision) ||
+            proposalRevision < 1)
+        {
+            return Usage();
+        }
+
+        var draft = await BuildReviewedProposalDraftAsync(options).ConfigureAwait(false);
+        if (draft is null)
+        {
+            return Usage();
+        }
+
+        try
+        {
+            var result = await InvokeOwnerAsync(controlPipe,
+                new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerProposalPublishOperation,
+                    ResourceId: proposalId, ResourceRevision: proposalRevision,
+                    ContentBase64: Convert.ToBase64String(draft))).ConfigureAwait(false);
+            if (!result.Success || !HasStatus(result.Reply, "proposal_published") ||
+                !result.Reply.TryGetProperty("proposalReview", out var review) || review.ValueKind != JsonValueKind.Object)
+            {
+                WriteServiceError(result);
+                return 4;
+            }
+
+            Console.WriteLine($"PROPOSAL published id={JsonValueText(review, "proposalId")} revision={JsonValueText(review, "proposalRevision")} kind={JsonValueText(review, "kind")} item={JsonValueText(review, "itemId")} itemRevision={JsonValueText(review, "itemRevision")} publication={JsonValueText(review, "publication")} lifecycle={JsonValueText(review, "lifecycleRevision")} applied={JsonFlagText(review, "decisionApplied")}");
+            if (result.Reply.TryGetProperty("memoryItem", out var item) && item.ValueKind == JsonValueKind.Object)
+            {
+                PrintMemoryItemElement(item);
+            }
+
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(draft);
+        }
+    }
+
+    private static async Task<int> ProposalRejectAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--resource-revision", "--reason");
+        var controlPipe = ControlPipe(options);
+        var proposalId = options.Required("--resource-id");
+        var reason = options.Required("--reason");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(proposalId) || reason.Length is 0 or > 2000 || reason.Any(char.IsControl))
+        {
+            return Usage();
+        }
+
+        if (!long.TryParse(options.Required("--resource-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var proposalRevision) ||
+            proposalRevision < 1)
+        {
+            return Usage();
+        }
+
+        var draft = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new { rationale = reason, replacementResourceId = (string?)null });
+        try
+        {
+            var result = await InvokeOwnerAsync(controlPipe,
+                new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerProposalRejectOperation,
+                    ResourceId: proposalId, ResourceRevision: proposalRevision,
+                    ContentBase64: Convert.ToBase64String(draft))).ConfigureAwait(false);
+            if (!result.Success || !HasStatus(result.Reply, "proposal_rejected") ||
+                !result.Reply.TryGetProperty("proposalReview", out var review) || review.ValueKind != JsonValueKind.Object)
+            {
+                WriteServiceError(result);
+                return 4;
+            }
+
+            Console.WriteLine($"PROPOSAL rejected id={JsonValueText(review, "proposalId")} revision={JsonValueText(review, "proposalRevision")} item={JsonValueText(review, "itemId")} itemRevision={JsonValueText(review, "itemRevision")} publication={JsonValueText(review, "publication")} lifecycle={JsonValueText(review, "lifecycleRevision")} applied={JsonFlagText(review, "decisionApplied")}");
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(draft);
+        }
+    }
+
+    private static async Task<byte[]?> BuildReviewedProposalDraftAsync(CommandOptions options)
+    {
+        var inputPath = options.Optional("--input-file");
+        var body = options.Optional("--body");
+        if (inputPath is not null && body is not null)
+        {
+            return null;
+        }
+
+        if (inputPath is not null)
+        {
+            try
+            {
+                var content = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+                return content.Length is <= 0 or > 1024 * 1024 ? null : content;
+            }
+            catch (IOException)
+            {
+                return null;
+            }
+        }
+
+        if (body is null)
+        {
+            return null;
+        }
+
+        return BuildMemoryDraftBytes(
+            options.Optional("--kind"), options.Optional("--author"), options.Optional("--method"),
+            options.Optional("--evidence"), options.Optional("--level"), options.Optional("--title"),
+            body, options.Optional("--occurred-utc"), options.Optional("--project"),
+            options.Optional("--environment"), options.Optional("--version"), options.Optional("--cite"));
+    }
+
+    // S9-T3 owner intention schedule reads and trigger acts. The list is the
+    // service's own projection (due/notified/acknowledged, context triggers).
+    // Trigger sets carry the owner's exact instant/labels; a stale lifecycle
+    // revision fails closed instead of overwriting a newer owner act.
+    private static async Task<int> IntentionListAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerIntentionScheduleListOperation)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "intentions_listed") ||
+            !result.Reply.TryGetProperty("intentionSchedule", out var schedule) || schedule.ValueKind != JsonValueKind.Object ||
+            !schedule.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine($"INTENTIONS count={items.GetArrayLength()}");
+        foreach (var item in items.EnumerateArray())
+        {
+            Console.WriteLine(
+                $"INTENTION id={JsonValueText(item, "resourceId")} zone={JsonValueText(item, "zoneId")} lifecycle={JsonValueText(item, "lifecycleRevision")} state={JsonValueText(item, "state")} " +
+                $"due={OptionalText(item, "dueAt")} isDue={JsonFlagText(item, "isDue")} notified={JsonFlagText(item, "notified")} notifiedUtc={OptionalText(item, "notifiedAtUtc")} " +
+                $"acknowledged={JsonFlagText(item, "acknowledged")} acknowledgedUtc={OptionalText(item, "acknowledgedAtUtc")} " +
+                $"project={OptionalText(item, "contextProject")} task={OptionalText(item, "contextTask")} contextEnabled={JsonFlagText(item, "contextTriggerEnabled")}");
+            Console.WriteLine($"title={OptionalText(item, "title")}");
+            Console.WriteLine($"preview={JsonValueText(item, "bodyPreview")}");
+        }
+
+        return 0;
+    }
+
+    private static async Task<int> IntentionTriggerSetAsync(CommandOptions options, bool clear)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--due-at", "--expected-lifecycle-revision");
+        var controlPipe = ControlPipe(options);
+        var resourceId = options.Required("--resource-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId))
+        {
+            return Usage();
+        }
+
+        string? dueAt = null;
+        if (!clear)
+        {
+            dueAt = options.Required("--due-at");
+            if (string.IsNullOrWhiteSpace(dueAt) || dueAt.Length > 64)
+            {
+                return Usage();
+            }
+        }
+        else if (options.Optional("--due-at") is not null)
+        {
+            return Usage();
+        }
+
+        long? expectedRevision = null;
+        if (options.Optional("--expected-lifecycle-revision") is { } revisionText)
+        {
+            if (!long.TryParse(revisionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) || parsed < 1)
+            {
+                return Usage();
+            }
+
+            expectedRevision = parsed;
+        }
+
+        var draft = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            dueAt = (string?)dueAt,
+            cancel = clear,
+            expectedLifecycleRevision = expectedRevision
+        });
+        try
+        {
+            var result = await InvokeOwnerAsync(controlPipe,
+                new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.OwnerIntentionTriggerSetOperation,
+                    ResourceId: resourceId, ContentBase64: Convert.ToBase64String(draft))).ConfigureAwait(false);
+            var expected = clear ? "intention_trigger_cleared" : "intention_trigger_set";
+            if (!result.Success || !HasStatus(result.Reply, expected))
+            {
+                WriteServiceError(result);
+                return 4;
+            }
+
+            var revision = result.Reply.TryGetProperty("resourceRevision", out var value) ? value.GetInt64() : 0;
+            Console.WriteLine(clear
+                ? $"INTENTION trigger cleared id={resourceId} lifecycle={revision}"
+                : $"INTENTION trigger set id={resourceId} due={dueAt} lifecycle={revision}");
+            PrintLifecycle(result.Reply);
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(draft);
+        }
+    }
+
+    private static async Task<int> IntentionContextSetAsync(CommandOptions options, bool disable)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--project", "--task", "--expected-lifecycle-revision");
+        var controlPipe = ControlPipe(options);
+        var resourceId = options.Required("--resource-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId))
+        {
+            return Usage();
+        }
+
+        var project = options.Optional("--project");
+        var task = options.Optional("--task");
+        if (disable ? (project is not null || task is not null) : (project is null && task is null))
+        {
+            return Usage();
+        }
+
+        if ((project is { Length: 0 or > 128 }) || (task is { Length: 0 or > 128 }) ||
+            (project is not null && project.Any(char.IsControl)) || (task is not null && task.Any(char.IsControl)))
+        {
+            return Usage();
+        }
+
+        long? expectedRevision = null;
+        if (options.Optional("--expected-lifecycle-revision") is { } revisionText)
+        {
+            if (!long.TryParse(revisionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) || parsed < 1)
+            {
+                return Usage();
+            }
+
+            expectedRevision = parsed;
+        }
+
+        var draft = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            project = (string?)project,
+            task = (string?)task,
+            disable,
+            expectedLifecycleRevision = expectedRevision
+        });
+        try
+        {
+            var result = await InvokeOwnerAsync(controlPipe,
+                new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.OwnerIntentionContextTriggerSetOperation,
+                    ResourceId: resourceId, ContentBase64: Convert.ToBase64String(draft))).ConfigureAwait(false);
+            var expected = disable ? "intention_context_trigger_disabled" : "intention_context_trigger_enabled";
+            if (!result.Success || !HasStatus(result.Reply, expected))
+            {
+                WriteServiceError(result);
+                return 4;
+            }
+
+            var revision = result.Reply.TryGetProperty("resourceRevision", out var value) ? value.GetInt64() : 0;
+            Console.WriteLine(disable
+                ? $"INTENTION context disabled id={resourceId} lifecycle={revision}"
+                : $"INTENTION context set id={resourceId} project={project ?? "none"} task={task ?? "none"} lifecycle={revision}");
+            PrintLifecycle(result.Reply);
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(draft);
+        }
+    }
+
+    private static async Task<int> IntentionScheduleRunAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerIntentionScheduleRunOperation)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "intention_schedule_pass") ||
+            !result.Reply.TryGetProperty("intentionSchedulePass", out var pass) || pass.ValueKind != JsonValueKind.Object)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine($"INTENTION pass notifications={JsonValueText(pass, "notificationsRecorded")}");
+        return 0;
     }
 
     /// <summary>
@@ -6289,6 +7343,172 @@ internal static class OwnerControlCli
         }
         return null;
     }
+    // S9-T3 contextual CLI help. `owner --help` names every workflow group;
+    // `owner <verb> --help` names the exact options of one command. Help is
+    // local text: it starts no host, unlocks nothing and mints no authority.
+    private static bool IsHelp(string value) =>
+        string.Equals(value, "--help", StringComparison.Ordinal) ||
+        string.Equals(value, "-h", StringComparison.Ordinal) ||
+        string.Equals(value, "help", StringComparison.OrdinalIgnoreCase);
+
+    private static int CommandHelp(string? verb)
+    {
+        var known = verb is not null && CommandHelpText(verb) is not null;
+        if (verb is not null && !known)
+        {
+            Console.Error.WriteLine($"ERROR unknown_command: {verb}");
+            Console.Error.WriteLine("HINT run `owner --help` for the command list or `owner help --command <verb>` for one command.");
+            return 2;
+        }
+
+        if (verb is null)
+        {
+            Console.Error.WriteLine("Owner commands (run `owner <verb> --help` for one command; `owner help --command <verb>` is the same):");
+            Console.Error.WriteLine("  vault: status|provision|unlock|recover|lock|upgrade|upgrade-with-recovery-code|rollback|rollback-with-recovery-code|health|audit|diagnostics|retention|backup|restore|restore-with-recovery-code|export");
+            Console.Error.WriteLine("  capture: memory-create|memory-revise|memory-import|memory-read|read|write|source-create|source-revise|source-read|research-capture|research-read|feedback-create|feedback-read");
+            Console.Error.WriteLine("  library: library|memory-read|source-read|research-read|relation-read|lifecycle-read|lifecycle-retained-read|recall-read|review-list|review-record|index-status|index-rebuild");
+            Console.Error.WriteLine("  review: proposal-list|proposal-read|proposal-publish|proposal-reject|lifecycle-publish|lifecycle-reject|lifecycle-withdraw|lifecycle-repropose|lifecycle-question-resolve|lifecycle-question-reopen|relation-list|relation-read|relation-create|relation-accept|relation-reject|relation-unlink|relation-relink|declassify-preview|declassify-publish|declassify-proposal-publish");
+            Console.Error.WriteLine("  sharing: catalog-preview|catalog-publish|catalog-list|catalog-withdraw|collections|collection-set|grants|grant|requests|request-preview|request-approve|request-reject|sessions|session|revoke-session|redeem (+ agent-mcp transport)");
+            Console.Error.WriteLine("  sources: collections|source-list|source-status|source-enroll|source-relocate|source-revoke|source-ingest|source-pause|source-resume|source-refresh-optin|source-refresh-optout|source-refresh|source-mapping-submit|source-mapping-resolve|source-snapshot-list|source-snapshot-preserve|source-snapshot-read|source-snapshot-retain|source-snapshot-purge");
+            Console.Error.WriteLine("  planning: lifecycle-create|lifecycle-validity-set|lifecycle-retain|lifecycle-intention-complete|lifecycle-intention-cancel|lifecycle-intention-supersede|lifecycle-intention-notify|lifecycle-intention-acknowledge|intentions|intention-trigger-set|intention-trigger-clear|intention-context-set|intention-context-disable|intention-schedule-run|recall-apply|purge-preview|purge-confirm|purge-resume");
+            Console.Error.WriteLine("  models: provider-config|provider-status|job-create|job-start|job-cancel|job-status|job-list|job-ledger|schedule-set|schedule-disable|schedule-status|schedule-run");
+            Console.Error.WriteLine("Every owner command needs --control-pipe <pipe>; agent-scoped reads use --agent-pipe plus --session-file instead. Credentials are interactive prompts only, never options. Destructive or authority-minting acts print a frozen preview and require a typed confirmation.");
+            return 2;
+        }
+
+        Console.Error.WriteLine(CommandHelpText(verb!));
+        return 2;
+    }
+    private static string? CommandHelpText(string verb) => verb switch
+    {
+        "status" => "owner status --control-pipe <pipe>: vault state of the running shared host (locked/unlocked/uninitialized), plus format/rollback state. Read-only.",
+        "provision" => "owner provision --control-pipe <pipe>: first-time vault setup. Prompts twice for the new passphrase (min 12 chars); prints the recovery key once — store it outside the vault.",
+        "unlock" => "owner unlock --control-pipe <pipe>: prompts for the vault passphrase and unlocks this host (process memory only). Wrong key fails closed.",
+        "recover" => "owner recover --control-pipe <pipe>: unlocks with the recovery key instead of the passphrase (same lock boundary).",
+        "lock" => "owner lock --control-pipe <pipe>: drains in-flight private work, clears sessions/tokens/index keys and locks the vault.",
+        "library" => "owner library --control-pipe <pipe> [--query text] [--zone-id Z] [--collection-id C] [--kind claim|observation|question|hypothesis|decision|lesson|procedure|synthesis|preference|intention] [--level l0|l1|l2|l3Plus] [--current all|current|history] [--from-utc ISO] [--to-utc ISO] [--as-of ISO] [--offset N] [--limit N] [--include-archived true]: ranked owner search page with snippets; full bodies stay on get-by-ID reads. Needs unlocked vault + materialized index (run index-rebuild when asked).",
+        "memory-create" => "owner memory-create --control-pipe <pipe> --resource-id <id> --zone-id <zone> (--body text [--kind K --author user|assistant|tool|external --method directWrite|verbatimExtract|paraphrase|synthesis --evidence unverified|reportedSource|userConfirmed|experimentalObservation --level l0|l1|l2|l3Plus --title T --occurred-utc ISO --project P --environment E --version V --cite id@rev[:start-end],...] | --input-file <draft.json>): capture one memory item. Friendly options build the draft; the file form carries the exact draft JSON (advanced, owner-owned).",
+        "memory-revise" => "owner memory-revise --control-pipe <pipe> --resource-id <id> --zone-id <zone> --expected-revision <live> (--body ... same as memory-create ... | --input-file <draft.json>): revision-gated rewrite. A stale --expected-revision fails closed; nothing is overwritten.",
+        "memory-import" => "owner memory-import --control-pipe <pipe> --resource-id <id> --zone-id <zone> --expected-revision <live-or-0> --input-file <envelope.json>: explicit stored-envelope import (owner-owned file); ID/zone must match and the revision gate still applies.",
+        "memory-read" => "owner memory-read --control-pipe <pipe> --resource-id <id> [--resource-revision N]: exact stored item with evidence/citations/current-history detail.",
+        "read" => "owner read --control-pipe <pipe> --resource-id <id> [--output-file <new-file>]: raw canonical bytes (stdout, or create-only file).",
+        "write" => "owner write --control-pipe <pipe> --resource-id <id> --zone-id <zone> --expected-revision <live> --input-file <bytes>: raw canonical write (advanced; prefer memory-create/memory-revise).",
+        "source-create" => "owner source-create --control-pipe <pipe> --resource-id <id> --zone-id <zone> (--title T --locator L --version V --availability available|unavailable|unknown [--author role] [--method M]... | --input-file <draft.json>): register source metadata.",
+        "source-revise" => "owner source-revise --control-pipe <pipe> --resource-id <id> --zone-id <zone> --expected-revision <live> (same inputs as source-create): revision-gated metadata edit.",
+        "source-read" => "owner source-read --control-pipe <pipe> --resource-id <id> [--resource-revision N]: registered source metadata.",
+        "research-capture" => "owner research-capture --control-pipe <pipe> --resource-id <id> --zone-id <zone> (--text text [--title T --source-url U --source-author A --source-date ISO] | --input-file <utf8.txt>): persist verbatim text encrypted before any structuring. Never fetches the URL.",
+        "research-read" => "owner research-read --control-pipe <pipe> --resource-id <id> [--resource-revision N] [--output-file <new-file>]: exact captured text.",
+        "feedback-create" => "owner feedback-create --control-pipe <pipe> --resource-id <fb-id> --zone-id <zone> --target <item-or-source-id@rev> --kind useful|wrong|stale [--note text] [--method M] | --input-file <draft.json>: append-only verdict on a seen target; never edits the target.",
+        "feedback-read" => "owner feedback-read --control-pipe <pipe> --resource-id <fb-id> [--resource-revision N]: stored feedback record.",
+        "proposal-list" => "owner proposal-list --control-pipe <pipe>: pending proposal inbox (ID/revision/zone only).",
+        "proposal-read" => "owner proposal-read --control-pipe <pipe> --resource-id <prop-id> [--resource-revision N]: pending proposal with proposed content and citation review.",
+        "proposal-publish" => "owner proposal-publish --control-pipe <pipe> --resource-id <prop-id> --resource-revision <rev> (--body ... same attribution as proposal-read plus --title/--project/--environment/--version/--cite ... | --input-file <reviewed-draft.json>): publish the reviewed content. Attribution must equal the proposal; a stale revision fails closed. Prints the written item + publication state.",
+        "proposal-reject" => "owner proposal-reject --control-pipe <pipe> --resource-id <prop-id> --resource-revision <rev> --reason text: reject with rationale; the proposal content is recorded as the rejected review item, the revise subject is untouched.",
+        "relation-create" => "owner relation-create --control-pipe <pipe> --resource-id <rel-id> --zone-id <zone> --kind relatedTo|derivedFrom|supports|contradicts|supersedes|appliesTo|addresses [--state proposed|accepted] --from <id@rev>|source:<id@rev> --to ... --reason text [--state-reason text] [--method M] | --input-file <draft.json>: explicit typed link with provenance. Evidence links pin revisions.",
+        "relation-accept" => "owner relation-accept --control-pipe <pipe> --resource-id <rel-id> --expected-revision <live>: accept a proposed link (state only).",
+        "relation-reject" => "owner relation-reject --control-pipe <pipe> --resource-id <rel-id> --expected-revision <live> --reason text: reject with rationale (use --input-file for the exact transition JSON instead).",
+        "relation-unlink" => "owner relation-unlink --control-pipe <pipe> --resource-id <rel-id> --expected-revision <live> --reason text: retract with rationale.",
+        "relation-relink" => "owner relation-relink --control-pipe <pipe> --resource-id <rel-id> --expected-revision <live>: undo a removal back to proposed (no rationale).",
+        "relation-read" => "owner relation-read --control-pipe <pipe> --resource-id <rel-id> [--resource-revision N]: one link with provenance and review state.",
+        "relation-list" => "owner relation-list --control-pipe <pipe>: every relation with live revision, provenance and review state.",
+        "lifecycle-create" => "owner lifecycle-create --control-pipe <pipe> --resource-id <subject> [--reason text --method M] | --input-file <draft.json>: create the subject lifecycle record (proposal state).",
+        "lifecycle-read" => "owner lifecycle-read --control-pipe <pipe> --resource-id <subject> [--resource-revision N]: states, history and retained revisions.",
+        "lifecycle-retained-read" => "owner lifecycle-retained-read --control-pipe <pipe> --resource-id <subject> --resource-revision <rev>: archived historical revision.",
+        "lifecycle-publish" => "owner lifecycle-publish --control-pipe <pipe> --resource-id <subject> --expected-revision <live> [--reason text]: record a publication decision.",
+        "lifecycle-reject" => "owner lifecycle-reject --control-pipe <pipe> --resource-id <subject> --expected-revision <live> [--reason text]: record a rejection.",
+        "lifecycle-withdraw" => "owner lifecycle-withdraw --control-pipe <pipe> --resource-id <subject> --expected-revision <live> --reason text: undo a publish (same record changes state; no second copy).",
+        "lifecycle-repropose" => "owner lifecycle-repropose --control-pipe <pipe> --resource-id <subject> --expected-revision <live> --reason text: undo a rejection back to proposal.",
+        "lifecycle-question-resolve" => "owner lifecycle-question-resolve --control-pipe <pipe> --resource-id <question> --expected-revision <live> [--reason text]: resolve an open question (addresses only; an answer never auto-resolves).",
+        "lifecycle-question-reopen" => "owner lifecycle-question-reopen --control-pipe <pipe> --resource-id <question> --expected-revision <live> [--reason text]: reopen a resolved question.",
+        "lifecycle-intention-complete" => "owner lifecycle-intention-complete --control-pipe <pipe> --resource-id <intention> --expected-revision <live> [--reason text]: mark done (acknowledged != completed).",
+        "lifecycle-intention-cancel" => "owner lifecycle-intention-cancel --control-pipe <pipe> --resource-id <intention> --expected-revision <live> [--reason text]: cancel.",
+        "lifecycle-intention-supersede" => "owner lifecycle-intention-supersede --control-pipe <pipe> --resource-id <intention> --expected-revision <live> [--reason text --replacement <id>]: supersede toward a replacement.",
+        "lifecycle-intention-notify" => "owner lifecycle-intention-notify --control-pipe <pipe> --resource-id <intention> --expected-revision <live> [--reason text]: record a due notification.",
+        "lifecycle-intention-acknowledge" => "owner lifecycle-intention-acknowledge --control-pipe <pipe> --resource-id <intention> --expected-revision <live> [--reason text]: acknowledge without completing.",
+        "lifecycle-validity-set" => "owner lifecycle-validity-set --control-pipe <pipe> --resource-id <subject> --expected-revision <live> [--reason text]: set validity window (use --input-file for exact stamps).",
+        "lifecycle-retain" => "owner lifecycle-retain --control-pipe <pipe> --resource-id <subject> --expected-revision <live> [--reason text]: retain the revision into the archive.",
+        "intentions" => "owner intentions --control-pipe <pipe>: scheduled intentions (due/notified/acknowledged, context triggers) as the service reported them.",
+        "intention-trigger-set" => "owner intention-trigger-set --control-pipe <pipe> --resource-id <intention> --due-at <ISO-with-offset> [--expected-lifecycle-revision N]: one-time due instant (exact instant, never a guessed local time).",
+        "intention-trigger-clear" => "owner intention-trigger-clear --control-pipe <pipe> --resource-id <intention> [--expected-lifecycle-revision N]: clear the due instant.",
+        "intention-context-set" => "owner intention-context-set --control-pipe <pipe> --resource-id <intention> (--project P [--task T] | --task T) [--expected-lifecycle-revision N]: explicit project/task trigger matched only by an explicit brief context.",
+        "intention-context-disable" => "owner intention-context-disable --control-pipe <pipe> --resource-id <intention> [--expected-lifecycle-revision N]: disable the context trigger.",
+        "intention-schedule-run" => "owner intention-schedule-run --control-pipe <pipe>: evaluate due triggers once (records at most the due notifications).",
+        "catalog-preview" => "owner catalog-preview --control-pipe <pipe> --catalog-id <cid> --label text --description text --resource-id <id>: what publication would store (mutates nothing). Only this exact label/description becomes public.",
+        "catalog-publish" => "owner catalog-publish --control-pipe <pipe> --catalog-id <cid> --label text --description text --resource-id <id>: publish after typed PUBLISH. The private mapping stays encrypted.",
+        "catalog-list" => "owner catalog-list --control-pipe <pipe>: published catalog entries.",
+        "catalog-withdraw" => "owner catalog-withdraw --control-pipe <pipe> --catalog-id <cid>: withdraw (already delivered copies cannot be recalled).",
+        "collections" => "owner collections --control-pipe <pipe>: owner selection metadata (organization only, never authority).",
+        "collection-set" => "owner collection-set --control-pipe <pipe> --collection-id <cid> --resource-ids <id,...>: save exact membership after typed SET.",
+        "grants" => "owner grants --control-pipe <pipe>: issued scope grants (frozen IDs/revisions/operations/expiry).",
+        "grant" => "owner grant --control-pipe <pipe> (--zone-id Z | --collection-id C | --resource-ids id,...) [--operations ...] [--destination-resource-ids ...] --expires-at-utc <UTC-ISO> [--provider P --model M --max-cost-usd N] --handoff-file <new-file>: frozen scope preview, then typed ISSUE mints the one-time token into the encrypted handoff.",
+        "requests" => "owner requests --control-pipe <pipe>: pending agent access requests.",
+        "request-preview" => "owner request-preview --control-pipe <pipe> --request-id <rid>: exact body/revisions/raw-source scope/provider-context the owner would approve (attached console only; redirected output is refused so bodies are never piped to disk). Narrowing happens on request-approve, which only shrinks the previewed scope.",
+        "request-approve" => "owner request-approve --control-pipe <pipe> --request-id <rid> --preview-id <pid> [--resource-ids ... --operations ... --destination-resource-ids ...] --expires-at-utc <UTC-ISO> [--provider P --model M --max-cost-usd N] --handoff-file <new-file>: mint only the narrowed exact scope after typed APPROVE (narrowing only shrinks the previewed scope; anything wider fails closed).",
+        "request-reject" => "owner request-reject --control-pipe <pipe> --request-id <rid>: decline after typed REJECT; the request stays pending until then.",
+        "sessions" => "owner sessions --control-pipe <pipe>: live agent sessions (ID/grant/generation/epoch/expiry).",
+        "session" => "owner session --agent-pipe <pipe> --session-file <file>: inspect one redeemed session (allow/deny decision helper is `authorize`).",
+        "revoke-session" => "owner revoke-session --control-pipe <pipe> --session-id <32-hex>: revoke one live session; further calls fail closed (cached plaintext is not recalled).",
+        "redeem" => "owner redeem --agent-pipe <pipe> --handoff-file <file> --session-file <new-file>: redeem the one-time handoff into a short session (atomic; replayed/expired/revoked/locked fails closed).",
+        "index-status" => "owner index-status --control-pipe <pipe>: materialized generation fingerprint/rows/staleness. Read-only.",
+        "index-rebuild" => "owner index-rebuild --control-pipe <pipe>: explicit full rebuild from canonical (interrupted rebuild publishes nothing).",
+        "recall-apply" => "owner recall-apply --control-pipe <pipe> --resource-id <id> --act demote|pin|archive|restore [--reason text]: how the item is offered; never its content/evidence/revision/scope.",
+        "recall-read" => "owner recall-read --control-pipe <pipe> --resource-id <id>: the recall decision and act history.",
+        "purge-preview" => "owner purge-preview --control-pipe <pipe> --resource-id <id> --resource-revision <rev> --reason text: exact impacted canonical set a confirm would delete (a reason is required for the ledger).",
+        "purge-confirm" => "owner purge-confirm --control-pipe <pipe> --purge-id <N-hex> --resource-id <id> --resource-revision <rev> --target-zone <zone> --target-kind <kind> --impacted <id|rev|kind|reason,...> --live-generation N [--catalog-ids ...] --reason text: rebind the exact previewed set after typed PURGE. Retained backups keep ciphertext until their own retention.",
+        "purge-resume" => "owner purge-resume --control-pipe <pipe> --purge-id <N-hex>: resume a confirmed-but-incomplete purge.",
+        "review-list" => "owner review-list --control-pipe <pipe>: items needing attention (due review-after, moved/missing/unavailable sources). Read-only.",
+        "review-record" => "owner review-record --control-pipe <pipe> --resource-id <id> --reason text: record that the owner looked (content/evidence/citations/states unchanged).",
+        "provider-config" => "owner provider-config --control-pipe <pipe> --provider <p> --model <m> [--base-url <url>|auto] [--api-key-stdin true | --from-env true]: save egress settings. The key is a secure prompt by default (never an option value); --from-env reads OPENAI_API_KEY from .env in cwd (developer path, still never logged).",
+        "provider-status" => "owner provider-status --control-pipe <pipe>: configured provider/model/endpoint + frozen caps. Never the key.",
+        "job-create" => "owner job-create --control-pipe <pipe> --zone-id <zone> --destination-id <id> --destination-revision <rev> --provider <p> --model <m> [--max-cost-usd N] [--profile name] (--source-id <id> --source-revision <rev> | --input-file <selection.json>): bounded job with immutable scope snapshot (inputs pinned to revisions). The file form is the explicit selection draft (advanced, owner-owned).",
+        "job-start" => "owner job-start --control-pipe <pipe> --job-id <id>: run to completed/failed/cancelled (exit 5 unless completed). No provider call without consent/budget.",
+        "job-cancel" => "owner job-cancel --control-pipe <pipe> --job-id <id>: cancel a queued job (releases its reservation; sends nothing).",
+        "job-status" => "owner job-status --control-pipe <pipe> --job-id <id>: real state, recorded scope, usage/failure.",
+        "job-list" => "owner job-list --control-pipe <pipe>: recorded jobs.",
+        "job-ledger" => "owner job-ledger --control-pipe <pipe>: spend ledger (historical reservation + rolling spend + entries).",
+        "schedule-set" => "owner schedule-set --control-pipe <pipe> --interval-minutes N --zone-id <zone> --destination-id <id> --destination-revision <rev> --provider <p> --model <m> --input-file <selection.json>: enable the synthesis schedule from the explicit selection draft.",
+        "schedule-disable" => "owner schedule-disable --control-pipe <pipe>: disable, keeping the configuration.",
+        "schedule-status" => "owner schedule-status --control-pipe <pipe>: stored schedule or `SCHEDULE none`.",
+        "schedule-run" => "owner schedule-run --control-pipe <pipe>: evaluate once (at most one bounded job when enabled and due).",
+        "health" => "owner health --control-pipe <pipe>: vault/index/provider/spend/log health (unlocked only; never bodies/titles/credentials/tokens).",
+        "audit" => "owner audit --control-pipe <pipe> [--limit N]: who acted, on what, how it ended, cost and error code (unlocked only).",
+        "diagnostics" => "owner diagnostics --control-pipe <pipe> [--limit N]: recorded failures with the owner-facing next action (unlocked only).",
+        "retention" => "owner retention --control-pipe <pipe> --retention-days N --max-records N [--purge-log true]: apply one retention choice (unlocked only).",
+        "backup" => "owner backup --control-pipe <pipe> --output-file <new-file>: one encrypted snapshot (never the data key/credential/token/session/readable content).",
+        "restore" => "owner restore --control-pipe <pipe> --backup-file <file> --target-directory <not-yet-existing-dir>: clean restore with the passphrase (secure prompt). Wrong key/tamper writes nothing. Restored vault carries no live authority; the index needs index-rebuild.",
+        "restore-with-recovery-code" => "owner restore-with-recovery-code --control-pipe <pipe> --backup-file <file> --target-directory <not-yet-existing-dir>: same restore with the recovery key.",
+        "export" => "owner export --control-pipe <pipe> --resource-ids <id,...> --output-file <new-file> [--include-relations true] [--include-lifecycle-states true]: explicit readable plaintext copy of exactly the selected records (create-only; cannot be revoked afterwards). Citations outside the scope are withheld whole.",
+        "upgrade" => "owner upgrade --control-pipe <pipe>: raise old content schemas while locked (secure passphrase prompt; keeps an encrypted rollback point; leaves the vault locked).",
+        "upgrade-with-recovery-code" => "owner upgrade-with-recovery-code --control-pipe <pipe>: same upgrade with the recovery key.",
+        "rollback" => "owner rollback --control-pipe <pipe> [--discard true]: restore (or discard) the encrypted rollback point while locked.",
+        "rollback-with-recovery-code" => "owner rollback-with-recovery-code --control-pipe <pipe> [--discard true]: same rollback with the recovery key.",
+        "migrate" => "owner migrate --config <legacy-settings.json>: one-time legacy plaintext cutover (service must be stopped; secure passphrase prompts; applies no access rule and takes no ownership). Not part of the daily path.",
+        "help" => "owner help [--command <verb>] | owner <verb> --help: this help. Local text only; starts/connects/unlocks nothing.",
+        "agent-search" => "owner agent-search --agent-pipe <pipe> --session-file <file> --query text [--offset N --limit N --kind K --current current|history --level L --as-of ISO --include-archived true]: scoped search inside the frozen session scope only (scope total, never vault counts).",
+        "agent-brief" => "owner agent-brief --agent-pipe <pipe> --session-file <file> [--query text --budget-chars 200..8000 --context-project label --context-task label --include-archived true]: scoped brief projection under the caller's budget; never system instructions.",
+        "agent-read" => "owner agent-read --agent-pipe <pipe> --session-file <file> --operation resource.read|source.read --resource-id <id> --resource-revision <rev>: scoped read at the exact approved revision (base64-framed on stdout).",
+        "agent-memory-read" => "owner agent-memory-read --agent-pipe <pipe> --session-file <file> --resource-id <id> --resource-revision <rev>: scoped item detail (memory.read grant only; a source-only grant denies here).",
+        "agent-source-read" => "owner agent-source-read --agent-pipe <pipe> --session-file <file> --resource-id <id> --resource-revision <rev>: scoped source expansion (explicit source.read grant only).",
+        "agent-source-snapshot-read" => "owner agent-source-snapshot-read --agent-pipe <pipe> --session-file <file> --snapshot-id <snap> --snapshot-revision <rev>: scoped snapshot expansion (explicit snapshot grant only).",
+        "agent-collection-view" => "owner agent-collection-view --agent-pipe <pipe> --session-file <file>: permission-filtered collection view of the frozen scope (approved IDs/revisions only).",
+        "agent-feedback" => "owner agent-feedback --agent-pipe <pipe> --session-file <file> --input-file <draft.json>: agent verdict inside the grant (ID minted server-side).",
+        "agent-feedback-read" => "owner agent-feedback-read --agent-pipe <pipe> --session-file <file> --resource-id <fb> --resource-revision <rev>: scoped feedback read.",
+        "agent-propose" => "owner agent-propose --agent-pipe <pipe> --session-file <file> --input-file <proposal-draft.json>: create a pending proposal inside the grant (propose only; never publishes).",
+        "agent-relation-resolve" => "owner agent-relation-resolve --agent-pipe <pipe> --session-file <file> --input-file <resolve.json>: resolve titles/IDs inside the granted revisions; ambiguous endpoints ask instead of mutating.",
+        "agent-relation-list" => "owner agent-relation-list --agent-pipe <pipe> --session-file <file>: scoped relation projection of the frozen scope.",
+        "agent-relation-create" => "owner agent-relation-create --agent-pipe <pipe> --session-file <file> --input-file <draft.json>: agent link (always proposed; acceptance is an owner act).",
+        "agent-relation-supersede" => "owner agent-relation-supersede --agent-pipe <pipe> --session-file <file> --input-file <draft.json>: agent supersedes link (always proposed).",
+        "agent-relation-unlink" => "owner agent-relation-unlink --agent-pipe <pipe> --session-file <file> --resource-id <rel> --resource-revision <rev> --input-file <transition.json>: agent unlink (explicit reversible act; never owner confirmation).",
+        "agent-relation-restore" => "owner agent-relation-restore --agent-pipe <pipe> --session-file <file> --resource-id <rel> --resource-revision <rev> --input-file <transition.json>: agent undo back to proposed.",
+        "request" => "owner request --agent-pipe <pipe> --catalog-ids <cid,...> --purpose text --operations ... [--agent-id A --agent-context C --provider P --model M --disclosure-context D]: file an agent access request (IDs/purpose only; authorization stays owner-side).",
+        "request-status" => "owner request-status --agent-pipe <pipe> --request-id <rid>: status of one access request.",
+        "catalog-query" => "owner catalog-query --agent-pipe <pipe> --query text: public catalog discovery (IDs/labels/descriptions the owner published; never bodies).",
+        "agent-catalog-list" => "owner agent-catalog-list --agent-pipe <pipe>: list the published agent catalog.",
+        "authorize" => "owner authorize --agent-pipe <pipe> --session-file <file> --operation <op> [--resource-id <id> --resource-revision N --destination-resource-id <id> --destination-revision N --provider P --model M --estimated-cost-usd N --input-tokens N --output-tokens N]: allow/deny decision for one scoped operation (no content).",
+        _ => null,
+    };
+
+
 
     private sealed class CommandOptions
     {

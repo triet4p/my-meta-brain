@@ -125,6 +125,42 @@ action (`version_mismatch`, `host_exited`, `host_unresponsive`, `start_timeout`,
 `invalid_settings`, `instance_not_initialized`, `transport_unavailable`). Closing a frontend never
 stops the shared host, and no frontend stops another frontend's host implicitly.
 
+### 3.2 The owner CLI (S9-T3)
+
+The packaged CLI is `MetaBrain.Connections.exe`: `lifecycle` verbs (§3.1) for setup, `owner`
+verbs for every owner workflow, `agent-mcp` for the agent transport. It runs in any terminal
+(PowerShell, cmd, or another console); running a CLI command is normal use, not glue. What the
+CLI never requires: hand-written settings or internal JSON, PowerShell helper scripts, the owner
+console, or direct vault writes. The exact draft file (`--input-file`) stays as the advanced path
+for owner-owned data only.
+
+```text
+MetaBrain.Connections.exe                                    # grouped entrypoint help (setup | vault | capture | library | review | sharing | sources | planning | models)
+MetaBrain.Connections.exe owner --help                       # every workflow group
+MetaBrain.Connections.exe owner <verb> --help                # exact inputs of one command (`owner help --command <verb>` is the same)
+```
+
+Capture commands accept friendly scalar options that build the exact draft the service reads, so
+no workflow needs hand-assembled JSON: `--body`/`--title`/`--kind`/`--author`/`--method`/
+`--evidence`/`--level`/`--cite id@rev[:start-end]` for memory items, `--text` for research notes,
+`--target id@rev`/`--kind`/`--note` for feedback, `--kind`/`--from id@rev`/`--to id@rev`/`--reason`
+for relations, `--reason`/`--replacement` for lifecycle acts, `--due-at`/`--project`/`--task` for
+intention triggers. Previously console-only operations are CLI verbs with the same semantics:
+`owner library` (ranked search with zone/collection/kind/level/currentness/time/paging filters),
+`owner proposal-publish` / `proposal-reject` (attribution and revision gates), `owner intentions`
+and the `intention-trigger-*` / `intention-context-*` / `intention-schedule-run` acts.
+
+Credentials travel only through secure interactive prompts — the vault passphrase, the recovery
+key and the provider key are never option values, environment values, config entries, log lines
+or model context. Destructive or authority-minting acts print a frozen preview and require a
+typed confirmation (`ISSUE`, `SET`, `PUBLISH`, `APPROVE`, `REJECT`, `PURGE`). Request bodies are
+shown only on an attached owner console: `owner request-preview` refuses redirected output
+(`preview_redirect_denied`), and the bound `owner request-approve` runs there with the preview
+the console showed. Exit codes are truthful: `0` done, `2` usage (nothing changed), `3`
+refused/locked/unavailable/denied, `4` invalid input or unwritable output, `5` a job that ended
+without completing, `1` transport or unexpected failure.
+
+
 ## 4. The locked start and the owner unlock
 
 Every start of the host begins **locked**. The key lives only in the unlocked process memory, so:
