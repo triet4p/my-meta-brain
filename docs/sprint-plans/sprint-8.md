@@ -6,7 +6,7 @@ Owner cài, vận hành, nâng cấp, khôi phục và dùng Meta Brain hằng n
 
 ## Status and Dependencies
 
-- Status: In progress — S8-T1, S8-T1A, S8-T2, S8-T3 and S8-T4 complete with assigned gates; latest accepted commit `7c55b497650d672405577abfe1fe613e2b6c9d8c`. S8-T5–T7 pending; CR01 gates and S1 targets unchanged.
+- Status: Complete — S8-T1–T7 and S8-T1A have accepted evidence/checkpoints; owner explicitly accepted T7 and disclosed limits. Latest checkpoint `9ce136bc4c8394b7b8af1230c2f00a448b3a6cc8`; [final differential PASS](../../artifacts/sprint-8/reviews/S8-DEEP-A1.md), no actionable findings. D086 practical T5 acceptance applies; CR01 boundaries unchanged. No push.
 - [Global plan](../PLAN.md), [specification](../META-BRAIN.md), [requirements](../REQUIREMENTS.md).
 - Requirements chính: R34, R35, R36, R37, R38, R39, R40. Release phải có evidence cho toàn bộ R01–R40.
 - Đây là production-readiness work, không thay cho security/integrity checks đã bắt buộc từ các sprint trước.
@@ -117,11 +117,12 @@ Workflow: full route; mỗi task cần independent evidence PASS và Bronze-only
     - Outcome: [R4 evidence/package PASS](../../artifacts/sprint-8/reviews/S8-T6-R4.md), no actionable findings; [C1 exact-snapshot checkpoint success](../../artifacts/sprint-8/checkpoints/S8-T6-C1.md), commit `8dc2dba50e1f9ec022c31afd688572dd8fe8bcc9`. Corrected authorize/revoke dispatch and self-contained package provenance accepted; unchanged installer/crypto/recovery/index and restart-invalidation evidence reused without duplicate owner tests. Missing format record explains `format=unknown`, not crypto failure. Provider/model-level and strict race-overlap observations remain explicit nonblocking limits in R4. No push; stopped after T6.
     - Owner stop boundary: finish T6's assigned evidence gate and exact-snapshot checkpoint, then stop. Do not launch T7 or sprint-wide deep review without a new owner instruction.
 
-- [~] **S8-T7 — Owner daily-use acceptance và release handoff.** Requirements: R01, R30, R31, R35, R37, R40.
+- [x] **S8-T7 — Owner daily-use acceptance và release handoff.** Requirements: R01, R30, R31, R35, R37, R40.
     - Scope: acceptance walkthrough và handoff trên release đã kiểm chứng; không tạo thêm feature không được yêu cầu.
     - Acceptance: owner install/unlock → encrypted capture/recall/decision/link/research/synthesis → catalog publication → agent request/narrow approval/token → read/revoke/lock → intentions/archive/purge → encrypted backup/recovery/restore và explicit export. “Vì sao nhớ?”/“Ai thấy?” đúng; user biết lost-key và same-owner/copies limits; actual approval không serious findings/requirements gaps.
     - Evidence: record owner feedback/approval thực, requirement-to-artifact map R01–R40, known non-blocking limitations, docs/changelog/version và operational runbook đúng release. Không giả owner approval; nếu chờ user thì task blocked, không release complete.
     - Workflow: owner-selected Silver, full route → independent evidence review → fresh Bronze exact-snapshot checkpoint; end-of-sprint differential deep review follows accepted task gates/checkpoints. No worker commit or push. Owner resumes T7 after the T6 stop boundary. Reuse accepted unchanged T1–T6 evidence; check only changed behavior or concrete material gaps, and reserve owner interaction for missing human judgement/approval. Do not repeat accepted walkthroughs or require new evidence bundles merely because this is T7.
+    - Outcome: owner explicitly accepted current evidence and disclosed limits without repeating T1–T6 checks; [acceptance record](../../artifacts/sprint-8/state/S8T7-owner-acceptance-main.md), [R01–R40 map](../../artifacts/sprint-8/task-7.md), [R1 evidence PASS](../../artifacts/sprint-8/reviews/S8-T7-R1.md), [C1 checkpoint success](../../artifacts/sprint-8/checkpoints/S8-T7-C1.md), commit `9ce136bc4c8394b7b8af1230c2f00a448b3a6cc8`. [Sprint differential PASS](../../artifacts/sprint-8/reviews/S8-DEEP-A1.md), no actionable findings; nonblocking observation and provider/race/native-dialog/same-owner/copied-data limits remain disclosed. Runbook pending-approval wording describes the pre-gate snapshot; this final status and linked acceptance supersede it. No new runtime tests or product version invented; no push.
 
 ## Sprint Acceptance Gate
 

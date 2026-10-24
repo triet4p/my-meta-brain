@@ -1,6 +1,6 @@
 # Meta Brain — Đặc tả sản phẩm và kiến trúc
 
-- Trạng thái hiện hành: xem [PLAN](PLAN.md) và [Sprint 8](sprint-plans/sprint-8.md). S8-T1–T6 và T1A đã có evidence/checkpoint được chấp nhận; owner đã chấp nhận T7 trên evidence hiện có cùng các giới hạn đã công bố. T7 đang chờ independent evidence review, exact-snapshot checkpoint và differential review cuối sprint; chưa tuyên bố Sprint 8/release complete. CR01 threat model và giới hạn same-owner/copies giữ nguyên; historical evidence không thay gate hiện hành.
+- Trạng thái hiện hành: [Sprint 8 complete](sprint-plans/sprint-8.md), toàn bộ milestone trong [PLAN](PLAN.md) đã hoàn tất với assigned gates. Owner chấp nhận T7 và các giới hạn đã công bố; [T7 evidence PASS](../artifacts/sprint-8/reviews/S8-T7-R1.md), [checkpoint](../artifacts/sprint-8/checkpoints/S8-T7-C1.md) `9ce136bc4c8394b7b8af1230c2f00a448b3a6cc8`, [final differential PASS](../artifacts/sprint-8/reviews/S8-DEEP-A1.md), không actionable findings. CR01 threat model và giới hạn same-owner/copies giữ nguyên; không tuyên bố mọi provider/model attack đã được kiểm thử. Không push.
 - Chủ sở hữu: người dùng duy nhất của sản phẩm; các AI agent là client được ủy quyền.
 - Lộ trình: [PLAN](PLAN.md). Hợp đồng nghiệm thu: [REQUIREMENTS](REQUIREMENTS.md). Quy tắc thực hiện: [AGENTS](../AGENTS.md).
 
