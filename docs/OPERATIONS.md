@@ -521,9 +521,16 @@ generation fails closed and the explicit owner rebuild is the recovery.
 
 No other budget moves: the bounded directory/cache caps, the encrypted-at-rest index and spill, and
 the recorded CPU, disk and idle-RAM results stay as measured — the A18 values remain historical
-observations, not an expanded budget. Nothing here waives the real service/WPF/owner UI/IPC evidence,
-the S8-T6 security/recovery replay, the S8-T7 owner walkthrough (R37), independent review or any
-checkpoint.
+observations, not an expanded budget.
+
+Owner qualitative feedback for T5 is recorded in
+[A22](../artifacts/sprint-8/handoffs/S8T5-OWNER-EVIDENCE-A22.md) and accepted by
+[R17](../artifacts/sprint-8/reviews/S8-T5-R17.md) / [C2](../artifacts/sprint-8/checkpoints/S8-T5-C2.md).
+Do not repeat that walkthrough for T7. The S8-T6 security/recovery gate is accepted by
+[R4](../artifacts/sprint-8/reviews/S8-T6-R4.md) / [C1](../artifacts/sprint-8/checkpoints/S8-T6-C1.md),
+with its nonblocking limits listed in §11. The distinct S8-T7 owner release decision remains
+pending; see the [T7 task record](../artifacts/sprint-8/task-7.md). Neither T5 feedback nor this
+runbook implies T7 approval or release completion.
 
 The measurement is a permanent scenario of the repository's smoke suite. It drives the real
 service executable, the real owner control pipe, the real encrypted vault on disk, the real
@@ -1172,107 +1179,33 @@ in-process run requires a fresh, measured safe-headroom margin above its predecl
 the frozen 100-warm-up / at-least-1,000-timed method. It must not close unrelated applications to
 create headroom.
 
-The frozen 100,000-record method does not authorize execution of the prohibited service/UI/IPC
-path. Current A14 in-process evidence is above; this historical A3 host sample grants no permission
-to change host state. The R37 walkthrough below remains pending, not an approval.
+The A3 host sample and its run restrictions remain historical evidence only. The T5 owner
+walkthrough has since been recorded and accepted under the current D086 contract; do not rerun
+it solely for T7. The accepted evidence and separate T7 human gate are summarized below.
 
 
-#### R37 owner walkthrough — pending, not an approval
+#### Owner evidence reuse and S8-T7 status
 
-The program run below supplies the real service's observed answers; only the owner can decide
-whether each answer is useful. It does not gather or imply an owner decision. Keep the existing
-six-file selection fixed; do not add files, sessions, profiles or provider data.
+**Accepted S8-T5 owner evidence (not a release approval).** On 2026-10-23, the owner reported
+using the accepted A19 build with the real service, owner pipe, encrypted vault/index and WPF
+console against synthetic records. The owner reported Q1–Q7 all useful with no unexpected
+refusal; lock/unlock kept the same page without rebuild, a post-index write refused stale reads
+until explicit rebuild, restart reused the authenticated generation without rebuilding, and the
+digest stayed stable when canonical state did not change. The UI rendered Vietnamese correctly
+(the CLI showed question marks). Details and evidence-attribution limits are in
+[A22](../artifacts/sprint-8/handoffs/S8T5-OWNER-EVIDENCE-A22.md); this evidence was accepted for
+T5 by [R17](../artifacts/sprint-8/reviews/S8-T5-R17.md) and checkpointed by
+[C2](../artifacts/sprint-8/checkpoints/S8-T5-C2.md). These are owner-reported T5 observations,
+not a full T7 release approval or a general claim for every workflow.
 
-Run this in Windows PowerShell from the assigned repository. The environment variables and all
-build/test output stay inside the worktree; the smoke creates an encrypted synthetic vault under
-`runtime/s8-t5`, reads only the six paths listed below, and prints labels/scores rather than source
-excerpts:
-
-
-The SDK 10.0.402 first-use incident remains unresolved at host level. Before each SDK child, use
-the already-existing repository-local A11 CLI home and verify its sentinel with file tools; never
-create/reset that home or rely on `DOTNET_SKIP_FIRST_TIME_EXPERIENCE` (unsupported since SDK 3.0).
-If the sentinel is missing, stop before invoking the SDK. Set all four process-local safety flags
-below for every SDK child; these prevent known future side effects but do not establish what the
-earlier certificate banner changed.
-
-```powershell
-$repo = 'F:\ai-ml\my-meta-brain'
-Set-Location -LiteralPath $repo
-$env:DOTNET_CLI_HOME = Join-Path $repo '.agents\tmp\s8t5\a11\home'
-$env:NUGET_PACKAGES = Join-Path $repo '.agents\tmp\s8t5\nuget'
-$env:TEMP = Join-Path $repo '.agents\tmp\s8t5\a11\temp'
-$env:TMP = $env:TEMP
-$env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'
-$env:DOTNET_ADD_GLOBAL_TOOLS_TO_PATH = 'false'
-$env:DOTNET_SKIP_WORKLOAD_INTEGRITY_CHECK = 'true'
-$env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
-$sentinel = Join-Path $env:DOTNET_CLI_HOME '.dotnet\10.0.402.dotnetFirstUseSentinel'
-if (-not (Test-Path -LiteralPath $sentinel -PathType Leaf)) {
-    throw 'The pre-existing SDK 10.0.402 first-use sentinel is missing; do not invoke the SDK.'
-}
-$out = Join-Path $repo '.agents\tmp\s8t5\a12\r37-out'
-New-Item -ItemType Directory -Force -Path @(
-    $env:NUGET_PACKAGES, $env:TEMP, $out
-) | Out-Null
-dotnet build tests/MetaBrain.S1T4.Smoke/MetaBrain.S1T4.Smoke.csproj -c Release --no-restore -o $out
-if ($LASTEXITCODE -ne 0) { throw "S8-T5 build failed: $LASTEXITCODE" }
-& (Join-Path $out 'MetaBrain.S1T4.Smoke.exe') 's8-t5-relevance' `
-    (Join-Path $out 'MetaBrain.Connections.exe')
-if ($LASTEXITCODE -ne 0) { throw "S8-T5 relevance run failed: $LASTEXITCODE" }
-```
-
-The fixed selection is the S1-T1 sample relative to `F:\ai-ml`:
-
-| Label | Selected path |
-| --- | --- |
-| `decision-log` | `my-meta-brain/.agents/memory/decisions.md` |
-| `requirements-registry` | `my-meta-brain/docs/REQUIREMENTS.md` |
-| `databricks-plan` | `ecommerce-agent-databricks/docs/PLAN.md` |
-| `databricks-persistence-contract` | `ecommerce-agent-databricks/docs/contracts/conversation-persistence.md` |
-| `databricks-orchestrator-source` | `ecommerce-agent-databricks/agent_core/orchestrator.py` |
-| `bridge-research-kickoff` | `bridge-research/docs/bridge-research-kickoff.md` |
-
-For each `MEASURE owner_query` row, compare the observed top-three labels/scores with the
-scenario's expected document and inspect only the selected source(s) needed to judge the answer.
-The program's expected outputs are not a relevance label:
-
-| # | Prompt / category | Scenario's expected document |
-| --- | --- | --- |
-| 1 | `quyet dinh giu manifest lam nguon su that duy nhat cua vault` — Vietnamese decision/rationale | `decision-log` |
-| 2 | `keep the manifest as the single source of truth of the vault` — English decision/rationale | `decision-log` |
-| 3 | `ghi chu nghien cuu khoi dong du an va ket qua da trien khai` — Vietnamese paraphrase | `bridge-research-kickoff` |
-| 4 | `research note kickoff and what was actually implemented` — English paraphrase | `bridge-research-kickoff` |
-| 5 | `MAX_REQUEST_INPUT_CHARACTERS` — exact symbol | `databricks-orchestrator-source` |
-| 6 | `MAX_AGENT_GRAPH_STEPS` — exact symbol | `databricks-orchestrator-source` |
-| 7 | `2026-01-17 kickoff` — date/time | `bridge-research-kickoff` |
-| 8 | `2026-09-28` — date/time | `decision-log` |
-
-R37 also requires a walk-through of prior errors, decisions, research, explicit links, synthesis and
-intentions. The eight scripted prompts cover decision history, bilingual paraphrase, symbols and
-dates; they do not exercise an error-recall query or create relation, synthesis or intention
-records. The owner must record each remaining category below as either represented by a prompt
-within this same six-file sample or `not represented by the fixed sample`. A category marked
-`not represented` remains open; do not widen the sample or infer acceptance from the scripted
-results.
-
-| R37 category | Owner input |
-| --- | --- |
-| Prior error and correction | Prompt, expected selected document, observed answer, and whether the recalled correction is useful |
-| Decision and rationale | Accept/correct the wording and expected record for prompts 1–2 |
-| Research and uncertainty | Prompt, expected selected document, and whether uncertainty is preserved rather than stated as implemented |
-| Explicit link | Prompt and expected linked records, or `not represented by the fixed sample` |
-| Synthesis | Prompt and expected source set, or `not represented by the fixed sample` |
-| Intention/reminder | Prompt and expected action/time context, or `not represented by the fixed sample` |
-
-Record the owner's judgement for every prompt, including the source(s) expected, whether the
-citation/provenance and temporal or staleness context are adequate, confidence (1–5), and rationale
-or a corrected query. Use `correct`, `partial`, `incorrect`, or `missing` for the answer label;
-note any relevant result the program returned outside the expected set. Also record whether the
-owner accepts the prompt set, the overall R37 decision (`accept`, `reject`, or `needs more
-evidence`), and the owner's date. Leave these fields blank until the owner supplies them. The
-separate `s8-t5-ui` run measures the real WPF surface on synthetic data; it is not a substitute
-for this owner judgement.
+**Remaining T7 human decision.** Reuse accepted T1/T1A/T2–T6 evidence; do not repeat installation,
+backup/restore/export, client sharing, token/scope, lock/restart or prior qualitative checks for
+this task. S8-T2 explicitly records that native file dialogs and an independent owner walkthrough
+were not observed. The owner need only judge whether the existing evidence suffices, confirm
+awareness of the documented lost-key and same-owner/copy limits, and identify any serious
+remaining usability or approval concern (including whether the T2 observation gap is material).
+See the [active plan](sprint-plans/sprint-8.md) and [T7 task record](../artifacts/sprint-8/task-7.md).
+No T7 approval or release completion is asserted here.
 
 ## 10. Verifying the installed lifecycle
 
@@ -1313,10 +1246,22 @@ removes the fixture when the run ends.
   rollback point is a ciphertext copy of the rewritten files, restores only files unchanged since
   the upgrade, and is consumed by the first rollback. The upgrade does not re-key the vault, so old
   backups keep restoring with the credential they were taken with.
-- The operations view (§9.1) is a local view of this installation. This build has **no telemetry,
-  no auto-update and no cloud reporting**: nothing about the vault, the owner or the machine is
-  sent anywhere, and the product opens no outbound connection. The cost the audit trail shows is
-  the spend the service already charged against the owner's own provider configuration.
+- The operations view (§9.1) is local. This build has **no telemetry, no auto-update and no cloud
+  reporting**. Separately, an owner-started model job or an explicitly enabled provider-backed
+  schedule can make an outbound request to the owner-configured provider; this is provider egress,
+  not telemetry. Selected inputs may be disclosed to that provider, and content already sent
+  cannot be recalled. S8-T6 did not exercise actual provider egress or model-level injection without
+  separate owner consent; approval-preview non-disclosure was verified, not the model/provider
+  boundary.
+- S8-T6 passed independent evidence review and exact-snapshot checkpoint
+  ([R4](../artifacts/sprint-8/reviews/S8-T6-R4.md),
+  [C1](../artifacts/sprint-8/checkpoints/S8-T6-C1.md)). Nonblocking limits are actual provider
+  egress/model-level injection not exercised and strict simultaneous redemption overlap not
+  attested (one consumption across two clients was observed); owner aggregate runtime reports were
+  accepted without redundant raw bundles.
+- S8-T7 release-level owner approval remains pending. The accepted T5-specific qualitative
+  judgement is not a substitute for the separate release decision; see the
+  [T7 task record](../artifacts/sprint-8/task-7.md).
 - The audit trail and the diagnostics are private to the owner channel. An agent never receives
   them, and there is no operation that enumerates stored credentials: the health view says
   whether a provider configuration exists, never what it holds.
