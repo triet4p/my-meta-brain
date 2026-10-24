@@ -63,7 +63,7 @@ internal static partial class OwnerServiceSmoke
                     connectionsExecutable, "ISSUE" + Environment.NewLine, arguments.ToArray()).ConfigureAwait(false);
                 Require(result.ExitCode == 0,
                     "The owner CLI did not approve a synthetic lifecycle scope grant: " + result.StandardError.Trim());
-                VerifyOwnerHandoffAcl(handoff);
+                VerifyOwnerHandoffProtection(handoff);
                 return new T5Grant(ParseIssuedGrantId(result.StandardOutput), handoff);
             }
 
@@ -77,7 +77,7 @@ internal static partial class OwnerServiceSmoke
                 Require(result.ExitCode == 0 && result.StandardOutput.Contains("SESSION issued", StringComparison.Ordinal),
                     "A fresh owner-approved grant did not redeem over the real agent pipe (exit=" +
                     result.ExitCode + "; stderr=" + result.StandardError.Trim() + ").");
-                VerifyOwnerHandoffAcl(sessionFile);
+                VerifyOwnerHandoffProtection(sessionFile);
                 return new T5Session(ParseSessionId(result.StandardOutput), sessionFile);
             }
 

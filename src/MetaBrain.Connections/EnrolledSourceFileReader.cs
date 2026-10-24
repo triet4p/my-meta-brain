@@ -1,4 +1,3 @@
-using System.Security.Principal;
 using MetaBrain.Core.Domain;
 using MetaBrain.Core.Security;
 
@@ -9,9 +8,9 @@ namespace MetaBrain.Connections;
 /// safe-open discipline as the S1 managed-resource reader — grammatically
 /// bound to the exact enrolled path, handle-bound final-path revalidation,
 /// reparse refusal, and a write-deny share mode held for the read's lifetime
-/// — with two deliberate differences:
+/// — with one deliberate difference:
 /// <list type="bullet">
-/// <item><description>No restricted-ACL requirement: an enrolled fixture keeps whatever ACL its runtime gave it. The S1 reader's protected-ACL gate belongs to its grant-bounded managed roots; a real .codex/.omp session file is a normal owner file, and requiring a rewritten ACL would force exactly the source mutation this stage must never make.</description></item>
+/// <item><description>Ordinary permissions: an enrolled fixture keeps whatever permissions its runtime gave it. There is no permission prerequisite: a real .codex/.omp session file is a normal owner file, and requiring a rewritten permission would force exactly the source mutation this stage must never make.</description></item>
 /// <item><description>Whole-snapshot instability detection: a length change between the open and the completed read (a concurrent append or truncation) refuses the snapshot, because a torn tail must never be frozen into a checkpoint.</description></item>
 /// </list>
 /// The reader never lists a directory and never derives a path from cwd or a
@@ -59,8 +58,8 @@ internal sealed class EnrolledSourceFileReader : ISourceSnapshotReader
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
                                    System.Security.SecurityException or ArgumentException or NotSupportedException)
         {
-            // A writer holding the file (typical for a live session), an ACL
-            // denial, or an unstable handle is unreadable, not missing.
+            // A writer holding the file (typical for a live session), a denied
+            // read, or an unstable handle is unreadable, not missing.
             return new SourceSnapshotResult(SourceSnapshotStatus.Unreadable);
         }
 

@@ -348,13 +348,13 @@ internal static partial class OwnerServiceSmoke
         // service refuses a search grant that also carries the context
         // operation, because a search scope must never widen into another
         // projection's rights. The brief therefore needs its own grant.
-        VerifyOwnerHandoffAcl(handoff);
+        VerifyOwnerHandoffProtection(handoff);
         var redeem = await RunOwnerCommandAsync(executable,
             "owner", "redeem", "--agent-pipe", fixture.AgentPipe,
             "--handoff-file", handoff, "--session-file", sessionFile).ConfigureAwait(false);
         Require(redeem.ExitCode == 0 && redeem.StandardOutput.Contains("SESSION issued", StringComparison.Ordinal),
             "The S7-T4 scoped grant could not be redeemed (" + redeem.StandardError.Trim() + ").");
-        VerifyOwnerHandoffAcl(sessionFile);
+        VerifyOwnerHandoffProtection(sessionFile);
         return new S4T4Session(ParseSessionId(redeem.StandardOutput), sessionFile);
     }
 

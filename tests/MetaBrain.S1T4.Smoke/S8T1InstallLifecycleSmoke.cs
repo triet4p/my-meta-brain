@@ -1,12 +1,11 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.IO.Pipes;
-using System.Security.AccessControl;
+using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using MetaBrain.Connections;
-
 namespace MetaBrain.S1T4.Smoke;
 
 /// <summary>
@@ -189,11 +188,14 @@ internal static class S8T1InstallLifecycleSmoke
                 "The installed agent pipe did not accept the redeemed session.");
             Console.WriteLine("PASS grant, redeem and a live agent session over the installed agent pipe");
 
-            // The product must not change the permissions of the owner's own
+            // The product must not change the meaning of the owner's own
             // paths: it creates them with the ordinary permissions of the
-            // account and it never applies an access rule or takes ownership
-            // of a path. The rules of every path this run created are
-            // captured here and compared again after the uninstall.
+            // account and it never applies a permission change or takes
+            // ownership of a path. A fingerprint of every path this run
+            // created is captured here and compared again after stop, restart
+            // and uninstall: the same expected files must still exist with the
+            // same bytes, which fails if the lifecycle deleted, replaced, or
+            // truncated one of them.
             var watchedPaths = new List<string>
             {
                 Path.Combine(dataRoot, "service-settings.json"),
@@ -218,7 +220,7 @@ internal static class S8T1InstallLifecycleSmoke
                 watchedPaths.AddRange(Directory.GetFiles(directory));
             }
 
-            var accessRulesBefore = CaptureAccessRules(watchedPaths);
+            var pathsBefore = CaptureProductPaths(watchedPaths);
 
             var stop = await RunCommandAsync(installedInstaller, new[] { "stop" },
                 standardInput: null, marker: "service=stopped", timeout: CommandTimeout).ConfigureAwait(false);
@@ -267,11 +269,11 @@ internal static class S8T1InstallLifecycleSmoke
                 "The uninstall left the application files behind.");
             Console.WriteLine("PASS uninstall removes the application and preserves the vault, the settings and the recovery material");
 
-            var accessRulesAfter = CaptureAccessRules(watchedPaths);
-            Require(accessRulesBefore == accessRulesAfter,
-                "The installed lifecycle changed the access rules of the owner's own paths: " +
-                FirstDifference(accessRulesBefore, accessRulesAfter));
-            Console.WriteLine("PASS the lifecycle left the access rules of the owner's own paths unchanged");
+            var pathsAfter = CaptureProductPaths(watchedPaths);
+            Require(pathsBefore == pathsAfter,
+                "The installed lifecycle changed one of the owner's own paths: " +
+                FirstDifference(pathsBefore, pathsAfter));
+            Console.WriteLine("PASS the lifecycle left the owner's own paths unchanged");
 
             var afterUninstall = await RunCommandAsync(installedInstaller, new[] { "status" },
                 standardInput: null, marker: null, timeout: CommandTimeout).ConfigureAwait(false);
@@ -522,62 +524,54 @@ internal static class S8T1InstallLifecycleSmoke
     }
 
     /// <summary>
-    /// The access rules of the given paths as one canonical text, so two
-    /// moments of the run can be compared with each other.
+    /// A fingerprint of the given product paths: each path's existence and
+    /// its exact bytes (a directory contributes its sorted child names, so an
+    /// added or removed file is caught too). The read never changes a path:
+    /// a denied read is recorded as unreadable, and a missing path as
+    /// missing. This proves the lifecycle never replaced, deleted, or
+    /// truncated one of the owner's own paths; ordinary permissions are
+    /// neither inspected nor changed.
     /// </summary>
-    private static string CaptureAccessRules(IEnumerable<string> paths)
+    private static string CaptureProductPaths(IEnumerable<string> paths)
     {
         var builder = new StringBuilder();
         foreach (var path in paths)
         {
-            builder.Append(path).Append(" -> ").Append(DescribeAccessRules(path)).Append('\n');
+            builder.Append(path).Append(" -> ").Append(DescribeProductPath(path)).Append('\n');
         }
 
         return builder.ToString();
     }
 
     /// <summary>
-    /// The observed access rules of a path: its owner, whether the rules are
-    /// protected from inheritance, and the rules themselves. The read is
-    /// read-only: the run observes the permissions, it never changes them.
+    /// The observed state of one product path: existence plus exact content.
     /// </summary>
-    private static string DescribeAccessRules(string path)
+    private static string DescribeProductPath(string path)
     {
         try
         {
-            FileSystemSecurity security;
             if (Directory.Exists(path))
             {
-                security = FileSystemAclExtensions.GetAccessControl(
-                    new DirectoryInfo(path), AccessControlSections.Access | AccessControlSections.Owner);
-            }
-            else if (File.Exists(path))
-            {
-                security = FileSystemAclExtensions.GetAccessControl(
-                    new FileInfo(path), AccessControlSections.Access | AccessControlSections.Owner);
-            }
-            else
-            {
-                return "missing";
+                var children = Directory.GetFileSystemEntries(path)
+                    .Select(Path.GetFileName)
+                    .OrderBy(name => name, StringComparer.Ordinal);
+                return "directory children=[" + string.Join(", ", children) + "]";
             }
 
-            var owner = security.GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier;
-            var rules = new List<string>();
-            foreach (AuthorizationRule rule in security.GetAccessRules(
-                         includeExplicit: true, includeInherited: true, targetType: typeof(SecurityIdentifier)))
+            if (File.Exists(path))
             {
-                if (rule is FileSystemAccessRule accessRule)
+                var bytes = File.ReadAllBytes(path);
+                try
                 {
-                    rules.Add(accessRule.AccessControlType + ":" +
-                              ((SecurityIdentifier)accessRule.IdentityReference).Value + ":" +
-                              accessRule.FileSystemRights);
+                    return "file sha256=" + Convert.ToHexString(SHA256.HashData(bytes));
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(bytes);
                 }
             }
 
-            rules.Sort(StringComparer.Ordinal);
-            return "owner=" + (owner?.Value ?? "unknown") +
-                   " protected=" + security.AreAccessRulesProtected +
-                   " rules=[" + string.Join(", ", rules) + "]";
+            return "missing";
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

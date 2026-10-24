@@ -394,13 +394,13 @@ internal static partial class OwnerServiceSmoke
             "--handoff-file", handoff).ConfigureAwait(false);
         Require(grant.ExitCode == 0,
             $"The owner could not issue the synthetic S4-T2 grant {name} (exit={grant.ExitCode}; stdout={grant.StandardOutput.Trim()}; stderr={grant.StandardError.Trim()}).");
-        VerifyOwnerHandoffAcl(handoff);
+        VerifyOwnerHandoffProtection(handoff);
         var redeem = await RunOwnerCommandAsync(executable,
             "owner", "redeem", "--agent-pipe", fixture.AgentPipe,
             "--handoff-file", handoff, "--session-file", sessionFile).ConfigureAwait(false);
         Require(redeem.ExitCode == 0 && redeem.StandardOutput.Contains("SESSION issued", StringComparison.Ordinal),
             $"Redemption failed for the synthetic S4-T2 grant {name} (exit={redeem.ExitCode}; stderr={redeem.StandardError.Trim()}).");
-        VerifyOwnerHandoffAcl(sessionFile);
+        VerifyOwnerHandoffProtection(sessionFile);
         return new S4T2Session(ParseSessionId(redeem.StandardOutput), sessionFile);
     }
 

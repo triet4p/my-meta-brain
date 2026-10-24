@@ -132,7 +132,7 @@ internal static partial class OwnerServiceSmoke
             Require(approveB.ExitCode == 0 && approveB.StandardOutput.Contains("REQUEST approved", StringComparison.Ordinal) &&
                     !approveB.StandardOutput.Contains("mb1_", StringComparison.Ordinal) && File.Exists(handoffB),
                 "The owner could not narrow-approve the second bridge request.");
-            VerifyOwnerHandoffAcl(handoffB);
+            VerifyOwnerHandoffProtection(handoffB);
 
             var rejectA = await RunOwnerCommandWithInputAsync(connectionsExecutable, "REJECT" + Environment.NewLine,
                 "owner", "request-reject", "--control-pipe", fixture.ControlPipe,
@@ -148,7 +148,7 @@ internal static partial class OwnerServiceSmoke
                     !redeemOut.Contains("mb1_", StringComparison.Ordinal) &&
                     !redeemOut.Contains("mbs1_", StringComparison.Ordinal) && File.Exists(sessionB),
                 "The bridge redeem did not issue a session from the DPAPI handoff path.");
-            VerifyOwnerHandoffAcl(sessionB);
+            VerifyOwnerHandoffProtection(sessionB);
             var sessionIdB = ParseBridgeSessionId(redeemOut);
 
             var inspectOut = await RunBridgeToolAsync(connectionsExecutable, fixture.AgentPipe,

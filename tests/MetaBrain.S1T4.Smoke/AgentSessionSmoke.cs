@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.IO.Pipes;
-using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
@@ -80,7 +79,7 @@ internal static partial class OwnerServiceSmoke
             var token = ReadProtectedHandoffToken(handoff);
             issuedGrants.Add(new IssuedSmokeGrant(grantId, handoff, token));
             Require(IsOpaqueScopeToken(token), "The owner CLI did not write a valid opaque token to the protected handoff.");
-            VerifyOwnerHandoffAcl(handoff);
+            VerifyOwnerHandoffProtection(handoff);
             return issuedGrants[^1];
         }
 
@@ -361,7 +360,7 @@ internal static partial class OwnerServiceSmoke
                 "--handoff-file", grantA.HandoffPath, "--session-file", sessionAPath).ConfigureAwait(false);
             Require(redeemA.ExitCode == 0 && File.Exists(sessionAPath),
                 "The actual owner CLI did not redeem the migrated handoff into a protected session file.");
-            VerifyOwnerHandoffAcl(sessionAPath);
+            VerifyOwnerHandoffProtection(sessionAPath);
             var sessionHandoffBytes = await File.ReadAllBytesAsync(sessionAPath).ConfigureAwait(false);
             try
             {
@@ -900,16 +899,16 @@ internal static partial class OwnerServiceSmoke
 
     private static void ReplaceSyntheticFileAtomically(string path, byte[] encryptedContents)
     {
+        // Ordinary atomic replacement: write the synthetic encrypted bytes
+        // with the ordinary permissions of the owner account, then move the
+        // temporary file over the target. No permission is inspected or
+        // changed: the privacy of the state comes from its authenticated
+        // encryption, and the product never applies a custom permission.
         var temporary = Path.Combine(Path.GetDirectoryName(path)!, ".scope-fixture-" + Guid.NewGuid().ToString("N") + ".tmp");
         try
         {
-            var security = FileSystemAclExtensions.GetAccessControl(new FileInfo(path), AccessControlSections.Access | AccessControlSections.Owner);
-            security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
             using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
             {
-                FileSystemAclExtensions.SetAccessControl(new FileInfo(temporary), security);
-                Require(FileSystemAclExtensions.GetAccessControl(new FileInfo(temporary), AccessControlSections.Access).AreAccessRulesProtected,
-                    "The synthetic encrypted-state replacement did not retain a protected ACL.");
                 stream.Write(encryptedContents);
                 stream.Flush(flushToDisk: true);
             }

@@ -291,7 +291,7 @@ internal static partial class OwnerServiceSmoke
             Require(approved.ExitCode == 0 && approved.StandardOutput.Contains("REQUEST approved id=" + requestId, StringComparison.Ordinal) &&
                     !approved.StandardOutput.Contains("mb1_", StringComparison.Ordinal) && File.Exists(handoff),
                 "The owner could not narrow-approve the S4-T7 request (exit=" + approved.ExitCode + "; stderr=" + approved.StandardError.Trim() + ").");
-            VerifyOwnerHandoffAcl(handoff);
+            VerifyOwnerHandoffProtection(handoff);
 
             var sessionFile = Path.Combine(fixture.OutputDirectory, "s4t7-main.session-handoff");
             var redeemOut = await RunBridgeToolAsync(connectionsExecutable, fixture.AgentPipe,
@@ -300,7 +300,7 @@ internal static partial class OwnerServiceSmoke
                     !redeemOut.Contains("mb1_", StringComparison.Ordinal) && !redeemOut.Contains("mbs1_", StringComparison.Ordinal) &&
                     File.Exists(sessionFile),
                 "The bridge did not redeem the owner-approved DPAPI handoff (result=" + redeemOut.Trim() + ").");
-            VerifyOwnerHandoffAcl(sessionFile);
+            VerifyOwnerHandoffProtection(sessionFile);
             var mainSessionId = ParseSessionId(redeemOut);
             var main = new S4T7Session(mainSessionId, sessionFile);
 
@@ -881,7 +881,7 @@ internal static partial class OwnerServiceSmoke
             {
                 if (File.Exists(protectedPath))
                 {
-                    VerifyOwnerHandoffAcl(protectedPath);
+                    VerifyOwnerHandoffProtection(protectedPath);
                 }
             }
 
@@ -1075,7 +1075,7 @@ internal static partial class OwnerServiceSmoke
                             "--handoff-file", handoff).ConfigureAwait(false);
                         Require(approve.ExitCode == 0 && approve.StandardOutput.Contains("REQUEST approved id=" + requestId, StringComparison.Ordinal),
                             "The owner could not narrow-approve the official-client request (exit=" + approve.ExitCode + "; stderr=" + approve.StandardError.Trim() + ").");
-                        VerifyOwnerHandoffAcl(handoff);
+                        VerifyOwnerHandoffProtection(handoff);
                         await File.WriteAllTextAsync(resultPath,
                             "request=" + requestId + Environment.NewLine +
                             "handoff=" + handoff.Replace(Path.DirectorySeparatorChar, '/') + Environment.NewLine +
@@ -1192,13 +1192,13 @@ internal static partial class OwnerServiceSmoke
         var grant = await RunOwnerCommandWithInputAsync(executable, "ISSUE" + Environment.NewLine, args.ToArray()).ConfigureAwait(false);
         Require(grant.ExitCode == 0,
             $"The owner could not issue the synthetic S4-T7 grant {name} (exit={grant.ExitCode}; stdout={grant.StandardOutput.Trim()}; stderr={grant.StandardError.Trim()}).");
-        VerifyOwnerHandoffAcl(handoff);
+        VerifyOwnerHandoffProtection(handoff);
         var redeem = await RunOwnerCommandAsync(executable,
             "owner", "redeem", "--agent-pipe", fixture.AgentPipe,
             "--handoff-file", handoff, "--session-file", sessionFile).ConfigureAwait(false);
         Require(redeem.ExitCode == 0 && redeem.StandardOutput.Contains("SESSION issued", StringComparison.Ordinal),
             $"Redemption failed for the synthetic S4-T7 grant {name} (exit={redeem.ExitCode}; stderr={redeem.StandardError.Trim()}).");
-        VerifyOwnerHandoffAcl(sessionFile);
+        VerifyOwnerHandoffProtection(sessionFile);
         return new S4T7Session(ParseSessionId(redeem.StandardOutput), sessionFile);
     }
 

@@ -227,9 +227,9 @@ internal static class LegacyVaultMigration
     /// <summary>
     /// Writes the current settings file atomically with the ordinary
     /// permissions of the owner account. The cutover deliberately applies no
-    /// access rule and takes no ownership: the owner's data is protected by the
-    /// key and the encrypted envelopes, not by rewriting the permissions of a
-    /// path.
+    /// permission change and takes no ownership: the owner's data is protected
+    /// by the key and the encrypted envelopes, not by rewriting the
+    /// permissions of a path.
     /// </summary>
     private static void WriteEncryptedSettings(string settingsPath, string ownerSid, string controlPipe)
     {

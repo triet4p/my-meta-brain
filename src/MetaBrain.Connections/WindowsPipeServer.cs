@@ -1,10 +1,18 @@
 using System.ComponentModel;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
-using System.Security.Principal;
 using Microsoft.Win32.SafeHandles;
 
 namespace MetaBrain.Connections;
+
+/// <summary>
+/// The local-only named-pipe listener. The pipe is created with the default
+/// security descriptor of the service process (the ordinary permissions of the
+/// owner account): the product never builds a custom ACL/SDDL and never
+/// changes the permissions or owner of a path. Remote clients are rejected by
+/// the pipe itself, and whether a connected client may act as owner is decided
+/// by the impersonated client check in the service, not by pipe permissions.
+/// </summary>
 
 internal static class WindowsPipeServer
 {
@@ -16,14 +24,6 @@ internal static class WindowsPipeServer
     private const uint BufferSize = 4096;
     private static readonly IntPtr InvalidHandleValue = new(-1);
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct SecurityAttributes
-    {
-        public int Length;
-        public IntPtr SecurityDescriptor;
-        public int InheritHandle;
-    }
-
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "CreateNamedPipeW")]
     private static extern IntPtr CreateNamedPipe(
         string name,
@@ -33,74 +33,41 @@ internal static class WindowsPipeServer
         uint outputBufferSize,
         uint inputBufferSize,
         uint defaultTimeout,
-        ref SecurityAttributes securityAttributes);
-
-    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "ConvertStringSecurityDescriptorToSecurityDescriptorW")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool ConvertSddlToSecurityDescriptor(string sddl, uint revision, out IntPtr descriptor, out uint descriptorSize);
-
-    [DllImport("kernel32.dll")]
-    private static extern IntPtr LocalFree(IntPtr memory);
+        IntPtr securityAttributes);
 
     public static NamedPipeServerStream Create(ServiceSettings settings, bool firstInstance) =>
-        Create(settings, settings.ControlPipe, firstInstance);
+        Create(settings.ControlPipe, firstInstance);
 
     public static NamedPipeServerStream CreateAgent(ServiceSettings settings, bool firstInstance) =>
-        Create(settings, settings.AgentPipe, firstInstance);
+        Create(settings.AgentPipe, firstInstance);
 
-    private static NamedPipeServerStream Create(ServiceSettings settings, string pipeName, bool firstInstance)
+    private static NamedPipeServerStream Create(string pipeName, bool firstInstance)
     {
-        using var identity = WindowsIdentity.GetCurrent();
-        var serviceSid = identity.User?.Value ?? throw new InvalidDataException("The service process has no user SID.");
-        var sddl = BuildOwnerPipeSddl(settings, serviceSid);
-        if (!ConvertSddlToSecurityDescriptor(sddl, 1, out var descriptor, out _))
+        var openMode = PipeAccessDuplex | FileFlagOverlapped;
+        if (firstInstance)
         {
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot secure the owner named-pipe endpoint.");
+            openMode |= FileFlagFirstPipeInstance;
         }
 
-        try
+        // A null security descriptor keeps the process default: the pipe is
+        // owned by the service account with ordinary permissions and no custom
+        // access rules. Local-only delivery still comes from the
+        // reject-remote-clients pipe mode, not from an ACL.
+        var handle = CreateNamedPipe(
+            $"\\\\.\\pipe\\{pipeName}",
+            openMode,
+            PipeRejectRemoteClients,
+            PipeUnlimitedInstances,
+            BufferSize,
+            BufferSize,
+            0,
+            IntPtr.Zero);
+        if (handle == InvalidHandleValue || handle == IntPtr.Zero)
         {
-            var attributes = new SecurityAttributes
-            {
-                Length = Marshal.SizeOf<SecurityAttributes>(),
-                SecurityDescriptor = descriptor,
-                InheritHandle = 0
-            };
-            var openMode = PipeAccessDuplex | FileFlagOverlapped;
-            if (firstInstance)
-            {
-                openMode |= FileFlagFirstPipeInstance;
-            }
-
-            var handle = CreateNamedPipe(
-                $"\\\\.\\pipe\\{pipeName}",
-                openMode,
-                PipeRejectRemoteClients,
-                PipeUnlimitedInstances,
-                BufferSize,
-                BufferSize,
-                0,
-                ref attributes);
-            if (handle == InvalidHandleValue || handle == IntPtr.Zero)
-            {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot claim the owner named-pipe endpoint.");
-            }
-
-            return new NamedPipeServerStream(PipeDirection.InOut, isAsync: true, isConnected: false, new SafePipeHandle(handle, ownsHandle: true));
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot claim the owner named-pipe endpoint.");
         }
-        finally
-        {
-            LocalFree(descriptor);
-        }
+
+        return new NamedPipeServerStream(PipeDirection.InOut, isAsync: true, isConnected: false, new SafePipeHandle(handle, ownsHandle: true));
     }
 
-    private static string BuildOwnerPipeSddl(ServiceSettings settings, string serviceSid)
-    {
-        var allowedSids = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            new SecurityIdentifier(settings.OwnerSid).Value,
-            new SecurityIdentifier(serviceSid).Value
-        };
-        return "D:P" + string.Concat(allowedSids.Select(sid => $"(A;;GA;;;{sid})"));
-    }
 }

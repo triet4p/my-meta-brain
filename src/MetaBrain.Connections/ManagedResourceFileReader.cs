@@ -71,14 +71,12 @@ internal sealed class ManagedResourceFileReader : IManagedResourceReader
         return ReadSnapshot(resourceId, expectedRevision);
     }
 
-    /// <summary>
     /// Atomically opens the ID-mapped file and snapshots its validated bytes
-    /// through the already-open handle. All validation (containment, reparse,
-    /// ACL) is bound to the open handle's final NT path, not to a re-queried
+    /// through the already-open handle. All validation (containment, reparse)
+    /// is bound to the open handle's final NT path, not to a re-queried
     /// path, so a swap between open and check cannot redirect the read. The
     /// handle is opened with a share mode that denies write/delete opens for
     /// the lifetime of the read.
-    /// </summary>
     internal byte[] ReadSnapshot(string resourceId, long? expectedRevision = null)
     {
         string fileName;

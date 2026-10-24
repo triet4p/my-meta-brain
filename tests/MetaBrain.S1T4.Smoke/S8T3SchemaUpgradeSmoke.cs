@@ -527,9 +527,7 @@ internal static partial class OwnerServiceSmoke
             var plainA = Path.Combine(resourceRoot, "legacy-a.txt");
             var plainB = Path.Combine(resourceRoot, "legacy-b.txt");
             var plainPolicy = Path.Combine(root, "grant-policy.json");
-            var settingsAcl = ReadS8T3Acl(settingsPath);
-            var rootAcl = ReadS8T3Acl(root);
-            var resourceAcl = ReadS8T3Acl(resourceRoot);
+            var resourceFingerprint = ReadS8T3ContentFingerprint(resourceRoot);
 
             var migrated = LegacyVaultMigration.Migrate(settingsPath, passphrase);
             Require(!migrated.Resumed && migrated.ResourceCount == 2 && migrated.LegacyPolicyPreserved &&
@@ -538,10 +536,8 @@ internal static partial class OwnerServiceSmoke
                 migrated.ResourceCount.ToString(CultureInfo.InvariantCulture) + ").");
             Require(!File.Exists(plainA) && !File.Exists(plainB) && !File.Exists(plainPolicy),
                 "The S8-T3 legacy cutover left a migrated plaintext copy behind.");
-            Require(string.Equals(settingsAcl, ReadS8T3Acl(settingsPath), StringComparison.Ordinal) &&
-                    string.Equals(rootAcl, ReadS8T3Acl(root), StringComparison.Ordinal) &&
-                    string.Equals(resourceAcl, ReadS8T3Acl(resourceRoot), StringComparison.Ordinal),
-                "The S8-T3 legacy cutover changed a permission or an owner.");
+            Require(string.Equals(resourceFingerprint, ReadS8T3ContentFingerprint(resourceRoot), StringComparison.Ordinal),
+                "The S8-T3 legacy cutover left the inherited resource directory changed.");
             Require(ReadS8T3SchemaVersion(settingsPath) == 3,
                 "The S8-T3 legacy cutover did not write the current settings schema.");
 
@@ -691,20 +687,35 @@ internal static partial class OwnerServiceSmoke
     }
 
     /// <summary>
-    /// A read-only security-descriptor fingerprint (access rules and owner).
-    /// The smoke never writes one; it only proves a cutover left both the same.
+    /// A read-only content fingerprint (existence plus exact bytes, with a
+    /// directory contributing its sorted child names). The smoke never writes
+    /// a permission; it only proves a cutover left every migrated path
+    /// byte-identical. Ordinary permissions are neither inspected nor changed.
     /// </summary>
-    private static string ReadS8T3Acl(string path)
+    private static string ReadS8T3ContentFingerprint(string path)
     {
-        System.Security.AccessControl.FileSystemSecurity security = Directory.Exists(path)
-            ? System.IO.FileSystemAclExtensions.GetAccessControl(
-                new DirectoryInfo(path),
-                System.Security.AccessControl.AccessControlSections.Access | System.Security.AccessControl.AccessControlSections.Owner)
-            : System.IO.FileSystemAclExtensions.GetAccessControl(
-                new FileInfo(path),
-                System.Security.AccessControl.AccessControlSections.Access | System.Security.AccessControl.AccessControlSections.Owner);
-        return security.GetSecurityDescriptorSddlForm(
-            System.Security.AccessControl.AccessControlSections.Access | System.Security.AccessControl.AccessControlSections.Owner);
+        if (Directory.Exists(path))
+        {
+            var children = Directory.GetFileSystemEntries(path)
+                .Select(Path.GetFileName)
+                .OrderBy(name => name, StringComparer.Ordinal);
+            return "directory children=[" + string.Join(", ", children) + "]";
+        }
+
+        if (File.Exists(path))
+        {
+            var bytes = File.ReadAllBytes(path);
+            try
+            {
+                return "file sha256=" + Convert.ToHexString(SHA256.HashData(bytes));
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(bytes);
+            }
+        }
+
+        return "missing";
     }
 
     private static void TryDeleteS8T3(string root)

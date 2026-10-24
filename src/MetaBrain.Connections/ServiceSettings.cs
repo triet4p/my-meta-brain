@@ -1,5 +1,4 @@
 using System.Security.Cryptography;
-using System.Security.Principal;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -42,7 +41,7 @@ internal static partial class ServiceSettingsLoader
     public static ServiceSettings Load(string path)
     {
         var fullPath = Path.GetFullPath(path);
-        var (settings, ownerSid, directory) = ReadAndValidate(fullPath);
+        var (settings, _, directory) = ReadAndValidate(fullPath);
         if (settings.SchemaVersion == ServiceSettings.LegacySchemaVersion)
         {
             throw new InvalidDataException("Legacy plaintext settings require the explicit owner migration command before service startup.");
@@ -66,7 +65,7 @@ internal static partial class ServiceSettingsLoader
             throw new InvalidDataException("Unsupported or invalid encrypted-vault settings schema.");
         }
 
-        ValidateOwner(settings, ownerSid);
+        RequireConfiguredOwner(settings);
         ValidatePipeName(settings.ControlPipe);
         ValidatePipeName(settings.AgentPipe);
         if (string.Equals(settings.ControlPipe, settings.AgentPipe, StringComparison.OrdinalIgnoreCase))
@@ -88,13 +87,13 @@ internal static partial class ServiceSettingsLoader
 
     public static ServiceSettings LoadLegacyForMigration(string path)
     {
-        var (settings, ownerSid, directory) = ReadAndValidate(path);
+        var (settings, _, directory) = ReadAndValidate(path);
         if (settings.SchemaVersion != ServiceSettings.LegacySchemaVersion)
         {
             throw new InvalidDataException("Only the legacy settings format can be migrated.");
         }
 
-        ValidateLegacy(settings, ownerSid);
+        ValidateLegacy(settings);
         return settings with
         {
             LegacyPolicyStorePath = Path.Combine(directory.FullName, "grant-policy.json"),
@@ -104,6 +103,14 @@ internal static partial class ServiceSettingsLoader
 
     public static bool IsSafeIdentifier(string? value) => value is not null && SafeIdentifier.IsMatch(value);
 
+    /// <summary>
+    /// The settings file carries the owner SID the installer recorded, and the
+    /// service binds that value to the current process owner (see
+    /// <see cref="NamedPipeService"/>). The product never reads a filesystem
+    /// owner and never changes a permission or an owner: the settings file is
+    /// an ordinary file, and its authority comes from the authenticated
+    /// service process and the encrypted vault, not from access rights.
+    /// </summary>
     private static (ServiceSettings Settings, string OwnerSid, DirectoryInfo Directory) ReadAndValidate(string path)
     {
         if (!OperatingSystem.IsWindows())
@@ -123,18 +130,14 @@ internal static partial class ServiceSettingsLoader
         var privateSettings = PrivateFile.Read(fullPath, MaximumSettingsBytes);
         var settings = JsonSerializer.Deserialize<ServiceSettings>(privateSettings.Text, JsonOptions)
             ?? throw new InvalidDataException("Invalid service settings.");
+        if (string.IsNullOrWhiteSpace(settings.OwnerSid))
+        {
+            throw new InvalidDataException("The service settings have no owner.");
+        }
+
         return (settings, privateSettings.OwnerSid, directory);
     }
 
-    private static void ValidateOwner(ServiceSettings settings, string fileOwnerSid)
-    {
-        if (string.IsNullOrWhiteSpace(settings.OwnerSid) ||
-            !string.Equals(new SecurityIdentifier(settings.OwnerSid).Value,
-                new SecurityIdentifier(fileOwnerSid).Value, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidDataException("The configured owner SID must match the settings file owner.");
-        }
-    }
     private static void WriteCurrentSettingsAtomically(string settingsPath, ServiceSettings settings)
     {
         var file = new FileInfo(settingsPath);
@@ -169,9 +172,17 @@ internal static partial class ServiceSettingsLoader
         }
     }
 
-    private static void ValidateLegacy(ServiceSettings settings, string fileOwnerSid)
+    private static void RequireConfiguredOwner(ServiceSettings settings)
     {
-        ValidateOwner(settings, fileOwnerSid);
+        if (string.IsNullOrWhiteSpace(settings.OwnerSid))
+        {
+            throw new InvalidDataException("The service settings have no owner.");
+        }
+    }
+
+    private static void ValidateLegacy(ServiceSettings settings)
+    {
+        RequireConfiguredOwner(settings);
         ValidatePipeName(settings.ControlPipe);
         var resources = settings.ManagedResources ?? Array.Empty<ManagedResourceBinding>();
         var resourceIds = new HashSet<string>(StringComparer.Ordinal);
@@ -185,7 +196,6 @@ internal static partial class ServiceSettingsLoader
             }
         }
     }
-
 
     private static bool IsPlainFileName(string? fileName) =>
         !string.IsNullOrEmpty(fileName) && fileName!.Length <= 128 &&

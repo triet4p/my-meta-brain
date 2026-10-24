@@ -137,7 +137,7 @@ internal static partial class OwnerServiceSmoke
                 Require(result.ExitCode == 0, "The owner could not approve the narrowed request scope: " + result.StandardError.Trim());
                 Require(!result.StandardOutput.Contains("mb1_", StringComparison.Ordinal),
                     "The owner approval exposed a raw bearer on its output stream.");
-                VerifyOwnerHandoffAcl(handoff);
+                VerifyOwnerHandoffProtection(handoff);
                 const string prefix = "grant=";
                 var start = result.StandardOutput.IndexOf(prefix, StringComparison.Ordinal);
                 Require(start >= 0, "The owner approval did not report its grant identifier.");
@@ -156,7 +156,7 @@ internal static partial class OwnerServiceSmoke
                 Require(result.ExitCode == 0 && result.StandardOutput.Contains("SESSION issued", StringComparison.Ordinal),
                     "An owner-approved request grant did not redeem over the real agent pipe: " + result.StandardError.Trim());
                 knownBearers.Add(ReadSessionBearer(sessionFile));
-                VerifyOwnerHandoffAcl(sessionFile);
+                VerifyOwnerHandoffProtection(sessionFile);
                 return (ParseSessionId(result.StandardOutput), sessionFile);
             }
 

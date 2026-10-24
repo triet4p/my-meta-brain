@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.IO.Pipes;
 using System.Security.Cryptography;
-using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using MetaBrain.Application;
@@ -769,8 +768,6 @@ internal sealed class S3T1CoordinatorHarness : IDisposable
 
     public static S3T1CoordinatorHarness Create()
     {
-        var ownerSid = WindowsIdentity.GetCurrent().User
-            ?? throw new InvalidOperationException("The current Windows token has no user SID.");
         var root = Path.Combine(Path.GetTempPath(), "MetaBrain-S3-T1-" + Guid.NewGuid().ToString("N"));
         if (Directory.Exists(root) || File.Exists(root))
         {
@@ -780,11 +777,10 @@ internal sealed class S3T1CoordinatorHarness : IDisposable
         Directory.CreateDirectory(root);
         try
         {
-            SmokeFixture.SetRestrictedDirectoryAcl(root, ownerSid);
+            SmokeFixture.EnsureFixtureDirectory(root);
             var serviceDirectory = Path.Combine(root, "service");
             Directory.CreateDirectory(serviceDirectory);
-            SmokeFixture.SetRestrictedDirectoryAcl(serviceDirectory, ownerSid);
-
+            SmokeFixture.EnsureFixtureDirectory(serviceDirectory);
             var normalizers = new SourceNormalizerRegistry();
             normalizers.Register(new SyntheticLineNormalizer());
             var store = new EncryptedVaultStore(Path.Combine(serviceDirectory, "vault"));

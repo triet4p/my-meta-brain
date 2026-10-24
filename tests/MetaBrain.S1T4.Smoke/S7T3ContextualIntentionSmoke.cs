@@ -320,13 +320,13 @@ internal static partial class OwnerServiceSmoke
         Require(grant.ExitCode == 0 &&
                 grant.StandardOutput.Contains("resource=" + S7T3AlphaId + " zone=s7t2-private-zone revision=1", StringComparison.Ordinal),
             "The collection-derived Alpha grant did not freeze the initial intention ID/revision.");
-        VerifyOwnerHandoffAcl(handoff);
+        VerifyOwnerHandoffProtection(handoff);
         var redeem = await RunOwnerCommandAsync(executable,
             "owner", "redeem", "--agent-pipe", fixture.AgentPipe,
             "--handoff-file", handoff, "--session-file", sessionFile).ConfigureAwait(false);
         Require(redeem.ExitCode == 0 && redeem.StandardOutput.Contains("SESSION issued", StringComparison.Ordinal),
             "The collection-derived Alpha grant could not be redeemed.");
-        VerifyOwnerHandoffAcl(sessionFile);
+        VerifyOwnerHandoffProtection(sessionFile);
         return new S4T4Session(ParseSessionId(redeem.StandardOutput), sessionFile);
     }
 

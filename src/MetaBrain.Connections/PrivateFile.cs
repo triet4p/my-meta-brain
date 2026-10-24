@@ -1,6 +1,3 @@
-using System.Security.AccessControl;
-using System.Security.Principal;
-
 namespace MetaBrain.Connections;
 
 internal sealed record PrivateFileContent(string Text, string OwnerSid);
@@ -9,16 +6,15 @@ internal sealed record PrivateFileContent(string Text, string OwnerSid);
 /// The reader for the files that hold the owner's private data. The privacy
 /// of that data comes from the key the owner controls and from the
 /// authenticated envelope around it, not from the permissions of the file
-/// system: a private file is read as a regular file outside a reparse point
-/// and the owner of the file is reported, so the caller can bind the data to
-/// the owner it belongs to. The reader never changes the permissions of a
-/// path and never takes ownership of one.
+/// system: a private file is read as a regular file outside a reparse point,
+/// and the reader binds it to the owner the current process runs as. The
+/// reader never inspects, changes, or takes ownership of a path's permissions.
 /// </summary>
 internal static class PrivateFile
 {
     public static PrivateFileContent Read(string path, long maximumLength)
     {
-        var ownerSid = ReadOwnerSid(path);
+        AssertRegularFile(path);
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         if (stream.Length <= 0 || stream.Length > maximumLength)
         {
@@ -26,7 +22,19 @@ internal static class PrivateFile
         }
 
         using var reader = new StreamReader(stream, new System.Text.UTF8Encoding(false, true));
-        return new PrivateFileContent(reader.ReadToEnd(), ownerSid);
+        return new PrivateFileContent(reader.ReadToEnd(), CurrentProcessOwnerSid());
+    }
+
+    /// <summary>
+    /// The owner the product runs as. It is read from the current process
+    /// token, never from the permissions of a path: the privacy of the data
+    /// comes from the key the owner controls, and the product never changes
+    /// the permissions or owner of a path.
+    /// </summary>
+    private static string CurrentProcessOwnerSid()
+    {
+        using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+        return identity.User?.Value ?? throw new InvalidDataException("The current process has no owner.");
     }
 
     /// <summary>
@@ -49,20 +57,6 @@ internal static class PrivateFile
         var bytes = new byte[stream.Length];
         stream.ReadExactly(bytes);
         return bytes;
-    }
-
-    /// <summary>
-    /// The owner of the private file. It is read, never changed: the product
-    /// binds the data to the owner the file belongs to, and it does not take
-    /// ownership of a path it did not create.
-    /// </summary>
-    private static string ReadOwnerSid(string path)
-    {
-        AssertRegularFile(path);
-        var security = FileSystemAclExtensions.GetAccessControl(
-            new FileInfo(path), AccessControlSections.Owner);
-        return (security.GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier)?.Value
-            ?? throw new InvalidDataException("The private file has no owner.");
     }
 
     /// <summary>

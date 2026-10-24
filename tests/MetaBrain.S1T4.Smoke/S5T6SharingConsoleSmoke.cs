@@ -231,7 +231,7 @@ internal static partial class OwnerServiceSmoke
                     approvedMessage.Contains(session.LastGrantId, StringComparison.Ordinal) &&
                     !approvedMessage.Contains("mb1_", StringComparison.Ordinal),
                 "The console approval did not report the grant with its handoff path and no bearer (" + session.AccessDecisionMessage + ").");
-            VerifyOwnerHandoffAcl(handoffPath);
+            VerifyOwnerHandoffProtection(handoffPath);
             knownBearers.Add(ReadProtectedHandoffTokenString(handoffPath));
             Console.WriteLine("PASS the owner approves the fresh preview and the bearer lands only in the DPAPI-protected local handoff");
 
@@ -261,7 +261,7 @@ internal static partial class OwnerServiceSmoke
                 "--handoff-file", handoffPath, "--session-file", sessionFile).ConfigureAwait(false);
             Require(redeemed.ExitCode == 0 && redeemed.StandardOutput.Contains("SESSION issued", StringComparison.Ordinal),
                 "The connector could not redeem the console handoff (exit=" + redeemed.ExitCode + "; stderr=" + redeemed.StandardError.Trim() + ").");
-            VerifyOwnerHandoffAcl(sessionFile);
+            VerifyOwnerHandoffProtection(sessionFile);
             var readBack = await RunBridgeToolAsync(connectionsExecutable, fixture.AgentPipe,
                 "metabrain_scoped_read", new
                 {

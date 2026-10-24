@@ -26,12 +26,16 @@ On the daily path — `install`, `start`, `stop`, `restart`, `status`/`health`, 
 `uninstall`, the owner unlock and the agent session — the product **does not change the
 permissions of a path**: it creates the data root, the settings file, the vault directory and its
 envelopes, the runtime directory and its log with the ordinary permissions of the owner account,
-and it never takes ownership of a path. The privacy of the owner's data comes from the key the
-owner controls, the authenticated encryption around every persisted record, the lock of the vault
-and the owner-approved catalog, token and scoped-session APIs — not from the access rights of the
-file system. The owner channel and the agent pipe are the two endpoints, and each of them accepts
-the owner account only; a pipe receives that descriptor when the endpoint is created, which is not
-a change to the permissions of an existing path.
+and it never takes ownership of a path. No custom ACL, DACL, SDDL, filesystem-owner gate, or
+permission/ownership mutation exists on any product or verification path. The privacy of the
+owner's data comes from the key the owner controls, the authenticated encryption around every
+persisted record, the lock of the vault and the owner-approved catalog, token and scoped-session
+APIs — not from the access rights of the file system. The owner channel and the agent pipe are two
+local-only endpoints that each accept the owner account only; a pipe is created with the default
+security descriptor of the service process and rejects remote clients by its pipe mode, which is
+not a change to the permissions of an existing path. Whether a connected client may act as owner
+is decided by the authenticated impersonated-client check in the service, not by pipe or
+filesystem permissions.
 
 **The inherited legacy cutover, outside the daily path.** The legacy migration command
 (`MetaBrain.Connections.exe owner migrate --config <legacy-settings.json>`) creates the encrypted
@@ -852,9 +856,10 @@ that a **locked** vault cannot open or read the index at all, and that an **aban
 publishes nothing and leaves the published generation answering.
 
 **What this measurement is not.** It is an in-process measurement of the index and of the recall
-path. It is **not** the 100,000-record envelope on the real service (the service path applies an
-explicit DACL to its transient named pipes, which the current safety instruction prohibits), and it
-is **not** the owner's R37 qualitative judgement. Both remain open.
+path. It is **not** the 100,000-record envelope on the real service and it
+is **not** the owner's R37 qualitative judgement. Both remain open. (S9-T1: the
+service path no longer applies any custom pipe descriptor; pipes run local-only
+with the process default and the authenticated client check.)
 
 #### Historical BOUNDED-A11 — first current-source in-process measurement (2026-10-22)
 
@@ -1166,12 +1171,15 @@ Main sample of 5,212,968 KiB (about 4.97 GiB). A3 compared its latest sample wit
 approximately 4 GiB free-memory planning estimate and the withdrawn 3.3–3.5 GiB size projection.
 Those historical samples and estimates do not establish current headroom or authorize a current
 100k run. A3 did not start its 100k envelope or WPF scenarios.
-
-The independent A3 safety observation was static: its real service path creates named pipes with
-explicit DACLs, so launching that service/UI path is prohibited by the current safety instruction.
-Do not remove or weaken the DACL. The real service/UI/IPC envelope remains an external gate; this
-record is not permission to run it. A3's exact evidence remains in `artifacts/sprint-8/task-5.md`
-§12 and its handoff.
+The independent A3 safety observation was static and is superseded by S9-T1:
+at the time, the real service path created named pipes with explicit DACLs, so
+launching that service/UI path was prohibited by the then-current safety
+instruction. The product no longer builds a custom pipe descriptor — pipes run
+local-only with the process default and the authenticated client check — and
+this task's service/transport verification ran against that current path.
+The real service/UI/IPC envelope beyond what this task exercised remains an
+external gate; this record is not permission beyond the S9-T1 scope. A3's exact
+historical evidence remains in `artifacts/sprint-8/task-5.md` §12 and its handoff.
 
 No current total-headroom measurement was obtained for this A12 resume, and the host-inspection
 restriction remains in force. Therefore A12 did not run 100k. Any future owner-authorized 100k
@@ -1218,12 +1226,11 @@ dotnet run --project tests/MetaBrain.S1T4.Smoke/MetaBrain.S1T4.Smoke.csproj -- s
 It installs into a fixture inside the repository, starts the host, proves it is locked, provisions
 and unlocks the vault, stores and reads an owner record, issues a grant, redeems it, uses a live
 agent session, stops, restarts (locked again, session gone), uninstalls and proves the vault
-survived. It also reads the access rules of the paths it watches — the settings file, the vault
-directory, the `vault\resources` directory and the files inside it, the runtime log, the grant
-handoff and the session handoff — once before the uninstall and once after it, and the run fails
-if they differ. That comparison is a read-only observation of those paths across the stop,
-restart and uninstall phase; it is not a comparison against a pre-creation baseline, so an
-access rule that the product applied while creating a path would not be caught by it. The fixture
+survived. It also fingerprints the product paths it watches — the settings file, the vault
+directory and the files inside it, the runtime log, the grant handoff and the session
+handoff: each path must still exist with the same bytes after the stop, restart and
+uninstall phase, so the run fails if the lifecycle deleted, replaced, or truncated one of
+them. Ordinary permissions are neither inspected nor changed by the product or the run. The fixture
 root has to live inside the repository: the smoke refuses a fixture outside it, and it
 removes the fixture when the run ends.
 

@@ -82,13 +82,13 @@ internal static partial class OwnerServiceSmoke
         var grant = await RunOwnerCommandWithInputAsync(executable, "ISSUE" + Environment.NewLine, arguments.ToArray()).ConfigureAwait(false);
         Require(grant.ExitCode == 0,
             $"The owner could not issue the synthetic S2-T6 grant {name} (exit={grant.ExitCode}; stdout={grant.StandardOutput.Trim()}; stderr={grant.StandardError.Trim()}).");
-        VerifyOwnerHandoffAcl(handoff);
+        VerifyOwnerHandoffProtection(handoff);
         var redeem = await RunOwnerCommandAsync(executable,
             "owner", "redeem", "--agent-pipe", fixture.AgentPipe,
             "--handoff-file", handoff, "--session-file", sessionFile).ConfigureAwait(false);
         Require(redeem.ExitCode == 0 && redeem.StandardOutput.Contains("SESSION issued", StringComparison.Ordinal),
             $"Redemption failed for the synthetic S2-T6 grant {name} (exit={redeem.ExitCode}; stderr={redeem.StandardError.Trim()}).");
-        VerifyOwnerHandoffAcl(sessionFile);
+        VerifyOwnerHandoffProtection(sessionFile);
         return new S2T4Session(ParseSessionId(redeem.StandardOutput), sessionFile);
     }
 

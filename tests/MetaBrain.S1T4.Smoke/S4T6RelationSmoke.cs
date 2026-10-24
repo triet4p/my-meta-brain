@@ -534,7 +534,7 @@ internal static partial class OwnerServiceSmoke
                          noSupersedeSession.SessionFile
                      })
             {
-                VerifyOwnerHandoffAcl(sessionFile);
+                VerifyOwnerHandoffProtection(sessionFile);
             }
 
             foreach (var path in Directory.GetFiles(fixture.VaultResourcesPath, "*", SearchOption.AllDirectories))
@@ -678,8 +678,8 @@ internal static partial class OwnerServiceSmoke
                 new[] { S4T6UniqueResearch }).ConfigureAwait(false);
             var crossZoneSession = await IssueS4T6GrantAsync(connectionsExecutable, fixture, "s4t6-client-cross-zone-deny",
                 "memory.read,source.read,link.create", new[] { S4T6Idea }, new[] { S4T6UniqueResearch }).ConfigureAwait(false);
-            VerifyOwnerHandoffAcl(fullSession.SessionFile);
-            VerifyOwnerHandoffAcl(crossZoneSession.SessionFile);
+            VerifyOwnerHandoffProtection(fullSession.SessionFile);
+            VerifyOwnerHandoffProtection(crossZoneSession.SessionFile);
 
             var fixtureInfo = new
             {
@@ -781,13 +781,13 @@ internal static partial class OwnerServiceSmoke
         var grant = await RunOwnerCommandWithInputAsync(executable, "ISSUE" + Environment.NewLine, args.ToArray()).ConfigureAwait(false);
         Require(grant.ExitCode == 0,
             $"The owner could not issue the synthetic S4-T6 grant {name} (exit={grant.ExitCode}; stdout={grant.StandardOutput.Trim()}; stderr={grant.StandardError.Trim()}).");
-        VerifyOwnerHandoffAcl(handoff);
+        VerifyOwnerHandoffProtection(handoff);
         var redeem = await RunOwnerCommandAsync(executable,
             "owner", "redeem", "--agent-pipe", fixture.AgentPipe,
             "--handoff-file", handoff, "--session-file", sessionFile).ConfigureAwait(false);
         Require(redeem.ExitCode == 0 && redeem.StandardOutput.Contains("SESSION issued", StringComparison.Ordinal),
             $"Redemption failed for the synthetic S4-T6 grant {name} (exit={redeem.ExitCode}; stderr={redeem.StandardError.Trim()}).");
-        VerifyOwnerHandoffAcl(sessionFile);
+        VerifyOwnerHandoffProtection(sessionFile);
         return new S4T6Session(ParseSessionId(redeem.StandardOutput), sessionFile);
     }
 

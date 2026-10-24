@@ -4,7 +4,6 @@ using System.IO;
 using System.IO.Pipes;
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
-using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
@@ -259,7 +258,7 @@ internal static partial class OwnerServiceSmoke
             Require(IsOpaqueScopeToken(tokenA!) && !ContainsBytes(Encoding.UTF8.GetBytes(grantA.StandardOutput), tokenA!) &&
                     !ContainsBytes(Encoding.UTF8.GetBytes(grantA.StandardError), tokenA!),
                 "The owner CLI exposed the first raw token in its output or error stream.");
-            VerifyOwnerHandoffAcl(handoffA);
+            VerifyOwnerHandoffProtection(handoffA);
 
             await WriteFixtureResourceAsync(connectionsExecutable, fixture, SmokeFixture.ResourceA,
                 "synthetic resource A revision two", expectedRevision: 2, writeRevision: 1).ConfigureAwait(false);
@@ -342,7 +341,7 @@ internal static partial class OwnerServiceSmoke
                     !ContainsBytes(Encoding.UTF8.GetBytes(grantB.StandardOutput), tokenB!) &&
                     !ContainsBytes(Encoding.UTF8.GetBytes(grantB.StandardError), tokenB!),
                 "The second owner scope did not receive a distinct redacted bearer and grant.");
-            VerifyOwnerHandoffAcl(handoffB);
+            VerifyOwnerHandoffProtection(handoffB);
             var collectionAfterIssue = await RunOwnerCommandWithInputAsync(connectionsExecutable, "SET\n",
                 "owner", "collection-set", "--control-pipe", fixture.ControlPipe,
                 "--collection-id", SmokeFixture.CollectionId,
@@ -603,27 +602,14 @@ internal static partial class OwnerServiceSmoke
     private static bool ContainsBytes(ReadOnlySpan<byte> source, ReadOnlySpan<byte> value) =>
         source.IndexOf(value) >= 0;
 
-    private static void VerifyOwnerHandoffAcl(string path)
+    private static void VerifyOwnerHandoffProtection(string path)
     {
-        var security = FileSystemAclExtensions.GetAccessControl(new FileInfo(path),
-            AccessControlSections.Access | AccessControlSections.Owner);
-        var currentSid = WindowsIdentity.GetCurrent().User
-            ?? throw new InvalidOperationException("The handoff verifier has no owner SID.");
-        var fileOwner = security.GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier;
-        Require(security.AreAccessRulesProtected && fileOwner is not null && fileOwner.Equals(currentSid),
-            "The owner handoff file did not have a protected ACL owned by the current Windows user.");
-
-        var trusted = new HashSet<string>(StringComparer.Ordinal)
-        {
-            currentSid.Value,
-            "S-1-5-18",
-            "S-1-5-32-544"
-        };
-        var rules = security.GetAccessRules(includeExplicit: true, includeInherited: true, targetType: typeof(SecurityIdentifier));
-        Require(rules.Cast<AuthorizationRule>().OfType<FileSystemAccessRule>()
-                .Where(rule => rule.AccessControlType == AccessControlType.Allow)
-                .All(rule => trusted.Contains(((SecurityIdentifier)rule.IdentityReference).Value)),
-            "The owner handoff file ACL granted access outside owner, SYSTEM, or Administrators.");
+        // The handoff file must be a DPAPI-protected bearer, never a
+        // plaintext token: the bearer lives only in the encrypted handoff,
+        // and no raw token may appear on output streams, in logs, or in the
+        // handoff bytes. Ordinary file permissions are neither inspected nor
+        // changed: the privacy of the data comes from DPAPI, the vault key,
+        // and the lock, not from access rules.
         var stored = File.ReadAllBytes(path);
         try
         {
@@ -1205,7 +1191,6 @@ internal static partial class OwnerServiceSmoke
 
 internal sealed class SmokeFixture : IDisposable
 {
-    private static readonly SecurityIdentifier SystemSid = new("S-1-5-18");
     private bool _disposed;
 
     private SmokeFixture(string root, string settingsPath, string controlPipe, string agentPipe, string outputDirectory,
@@ -1272,7 +1257,7 @@ internal sealed class SmokeFixture : IDisposable
 
     private static SmokeFixture Create(bool legacySettings, string? rootPath)
     {
-        var ownerSid = WindowsIdentity.GetCurrent().User
+        var ownerSid = WindowsIdentity.GetCurrent().User?.Value
             ?? throw new InvalidOperationException("The current Windows token has no user SID.");
         var root = rootPath is null
             ? Path.Combine(Path.GetTempPath(), "MetaBrain-S1-T2-Vault-" + Guid.NewGuid().ToString("N"))
@@ -1285,16 +1270,12 @@ internal sealed class SmokeFixture : IDisposable
         Directory.CreateDirectory(root);
         try
         {
-            SetRestrictedDirectoryAcl(root, ownerSid, setOwner: rootPath is null);
             var serviceDirectory = Path.Combine(root, "service");
             var resourceRoot = Path.Combine(serviceDirectory, "resources");
             var outputDirectory = Path.Combine(root, "output");
             Directory.CreateDirectory(serviceDirectory);
             Directory.CreateDirectory(resourceRoot);
             Directory.CreateDirectory(outputDirectory);
-            SetRestrictedDirectoryAcl(serviceDirectory, ownerSid, setOwner: rootPath is null);
-            SetRestrictedDirectoryAcl(resourceRoot, ownerSid, setOwner: rootPath is null);
-            SetRestrictedDirectoryAcl(outputDirectory, ownerSid, setOwner: rootPath is null);
 
             var expectedContentA = legacySettings
                 ? Encoding.UTF8.GetBytes("synthetic private fixture body A; metadata=" + MetadataMarker)
@@ -1304,12 +1285,8 @@ internal sealed class SmokeFixture : IDisposable
                 : Array.Empty<byte>();
             if (legacySettings)
             {
-                var pathA = Path.Combine(resourceRoot, FileA);
-                var pathB = Path.Combine(resourceRoot, FileB);
-                File.WriteAllBytes(pathA, expectedContentA);
-                File.WriteAllBytes(pathB, expectedContentB);
-                SetRestrictedFileAcl(pathA, ownerSid, setOwner: rootPath is null);
-                SetRestrictedFileAcl(pathB, ownerSid, setOwner: rootPath is null);
+                File.WriteAllBytes(Path.Combine(resourceRoot, FileA), expectedContentA);
+                File.WriteAllBytes(Path.Combine(resourceRoot, FileB), expectedContentB);
             }
 
             var controlPipe = "MetaBrainS1T2Vault-" + Guid.NewGuid().ToString("N");
@@ -1319,7 +1296,7 @@ internal sealed class SmokeFixture : IDisposable
                 ? JsonSerializer.Serialize(new
                 {
                     schemaVersion = 1,
-                    ownerSid = ownerSid.Value,
+                    ownerSid,
                     controlPipe,
                     managedResources = new[]
                     {
@@ -1327,9 +1304,8 @@ internal sealed class SmokeFixture : IDisposable
                         new { resourceId = ResourceB, zoneId = Zone, fileName = FileB }
                     }
                 })
-                : JsonSerializer.Serialize(new { schemaVersion = 3, ownerSid = ownerSid.Value, controlPipe, agentPipe });
+                : JsonSerializer.Serialize(new { schemaVersion = 3, ownerSid, controlPipe, agentPipe });
             File.WriteAllText(settingsPath, settings, new UTF8Encoding(false));
-            SetRestrictedFileAcl(settingsPath, ownerSid, setOwner: rootPath is null);
 
             return new SmokeFixture(root, settingsPath, controlPipe, agentPipe, outputDirectory, expectedContentA, expectedContentB);
         }
@@ -1351,68 +1327,22 @@ internal sealed class SmokeFixture : IDisposable
         DeleteOwnedRoot(Root);
     }
 
-    internal static void SetRestrictedDirectoryAcl(string path, SecurityIdentifier ownerSid, bool setOwner = true)
+    internal static void EnsureFixtureDirectory(string path)
     {
-        var directory = new DirectoryInfo(path);
-        if (!setOwner)
-        {
-            RequireFixtureOwner(directory, ownerSid);
-        }
-
-        var security = new DirectorySecurity();
-        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-        if (setOwner)
-        {
-            security.SetOwner(ownerSid);
-        }
-        var inheritance = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
-        security.AddAccessRule(new FileSystemAccessRule(ownerSid, FileSystemRights.FullControl, inheritance,
-            PropagationFlags.None, AccessControlType.Allow));
-        security.AddAccessRule(new FileSystemAccessRule(SystemSid, FileSystemRights.FullControl, inheritance,
-            PropagationFlags.None, AccessControlType.Allow));
-        security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier("S-1-5-32-544"), FileSystemRights.FullControl,
-            inheritance, PropagationFlags.None, AccessControlType.Allow));
-        System.IO.FileSystemAclExtensions.SetAccessControl(directory, security);
+        // Ordinary fixture setup: create the directory with the ordinary
+        // permissions of the owner account. The product never applies a
+        // custom permission and never takes ownership, and neither does the
+        // fixture: the privacy of synthetic data comes from the vault key
+        // and the ciphertext around it.
+        Directory.CreateDirectory(path);
     }
 
-    internal static void SetRestrictedFileAcl(string path, SecurityIdentifier ownerSid, bool setOwner = true)
+    internal static void EnsureFixtureFile(string path, byte[] content)
     {
-        var file = new FileInfo(path);
-        if (!setOwner)
-        {
-            RequireFixtureOwner(file, ownerSid);
-        }
-
-        var security = new FileSecurity();
-        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-        if (setOwner)
-        {
-            security.SetOwner(ownerSid);
-        }
-        security.AddAccessRule(new FileSystemAccessRule(ownerSid, FileSystemRights.FullControl, AccessControlType.Allow));
-        security.AddAccessRule(new FileSystemAccessRule(SystemSid, FileSystemRights.FullControl, AccessControlType.Allow));
-        security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier("S-1-5-32-544"), FileSystemRights.FullControl, AccessControlType.Allow));
-        System.IO.FileSystemAclExtensions.SetAccessControl(file, security);
-    }
-
-    private static void RequireFixtureOwner(DirectoryInfo directory, SecurityIdentifier expectedOwner)
-    {
-        var owner = System.IO.FileSystemAclExtensions.GetAccessControl(directory)
-            .GetOwner(typeof(SecurityIdentifier));
-        if (owner is not SecurityIdentifier actualOwner || !expectedOwner.Equals(actualOwner))
-        {
-            throw new UnauthorizedAccessException("A repository-local fixture directory is not owned by the current user.");
-        }
-    }
-
-    private static void RequireFixtureOwner(FileInfo file, SecurityIdentifier expectedOwner)
-    {
-        var owner = System.IO.FileSystemAclExtensions.GetAccessControl(file)
-            .GetOwner(typeof(SecurityIdentifier));
-        if (owner is not SecurityIdentifier actualOwner || !expectedOwner.Equals(actualOwner))
-        {
-            throw new UnauthorizedAccessException("A repository-local fixture file is not owned by the current user.");
-        }
+        // Ordinary fixture setup: write the synthetic bytes with the ordinary
+        // permissions of the owner account. No permission is inspected,
+        // applied, or changed here.
+        File.WriteAllBytes(path, content);
     }
 
     private static void DeleteOwnedRoot(string root)
