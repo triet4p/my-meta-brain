@@ -103,6 +103,7 @@ All notable changes to Meta Brain are documented here.
 
 ### Fixed
 
+- Fixed `metabrain_authorize` returning CLI usage instead of a scoped allow/deny decision for valid session, operation and resource arguments (S8-T6). The owner CLI now dispatches the command to its existing authorization handler without changing the policy boundary or exposing content.
 - Fixed the private index rebuild stamping the live canonical digest onto another generation's rows (S8-T5). The rebuild published its snapshot with the digest of the live canonical set while the row count and the row sample came from whatever generation the engine had loaded, so a generation that was substituted between the publish and the read could be reported as a current generation. The rebuild now checks that the generation the engine holds is the generation of the live canonical set and discards the pass if it is not, and the owner index status applies the same check, so a substituted generation is reported as stale instead of being served as current. The answers, the ranking and the filters are unchanged.
 
 

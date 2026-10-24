@@ -62,7 +62,8 @@ internal static class Program
                 string.Equals(args[0], "s8-t2", StringComparison.Ordinal) ||
                 string.Equals(args[0], "s8-t2-ui", StringComparison.Ordinal) ||
                 string.Equals(args[0], "s8-t4", StringComparison.Ordinal) ||
-                string.Equals(args[0], "s8-t4-ui", StringComparison.Ordinal))
+                string.Equals(args[0], "s8-t4-ui", StringComparison.Ordinal) ||
+                string.Equals(args[0], "s8-t6-authorize-dispatch", StringComparison.Ordinal))
             ? args[0]
                 : args.Length == 5 &&
                   string.Equals(args[0], "s8-t5", StringComparison.Ordinal)
@@ -119,6 +120,7 @@ internal static class Program
             Console.Error.WriteLine("S8-T3 console invocation: MetaBrain.S1T4.Smoke.exe s8-t3-ui <MetaBrain.Connections.exe> <old-format-artifact-root>");
             Console.Error.WriteLine("S8-T5 in-process index invocation: MetaBrain.S1T4.Smoke.exe s8-t5-index");
             Console.Error.WriteLine("S8-T5 lifecycle invocation: MetaBrain.S1T4.Smoke.exe s8-t5-lifecycle build|reopen <fixture-root>");
+            Console.Error.WriteLine("S8-T6 authorization dispatch invocation: MetaBrain.S1T4.Smoke.exe s8-t6-authorize-dispatch <MetaBrain.Connections.exe>");
             return 2;
         }
 
@@ -367,6 +369,9 @@ internal static class Program
                     break;
                 case "s8-t5-lifecycle":
                     await OwnerServiceSmoke.RunS8T5LifecyclePhaseAsync(args[1], Path.GetFullPath(args[2])).ConfigureAwait(false);
+                    break;
+                case "s8-t6-authorize-dispatch":
+                    await OwnerServiceSmoke.RunS8T6AuthorizeDispatchAsync(fullPath).ConfigureAwait(false);
                     break;
                 default:
                     await OwnerServiceSmoke.RunAsync(fullPath).ConfigureAwait(false);

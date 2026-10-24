@@ -137,6 +137,7 @@ internal static class OwnerControlCli
                 "redeem" => await RedeemAsync(options).ConfigureAwait(false),
                 "sessions" => await ListSessionsAsync(options).ConfigureAwait(false),
                 "revoke-session" => await RevokeSessionAsync(options).ConfigureAwait(false),
+                "authorize" => await AuthorizeAsync(options).ConfigureAwait(false),
                 "index-status" => await IndexStatusAsync(options).ConfigureAwait(false),
                 "index-rebuild" => await IndexRebuildAsync(options).ConfigureAwait(false),
                 "recall-apply" => await RecallApplyAsync(options).ConfigureAwait(false),

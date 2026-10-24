@@ -698,3 +698,18 @@ the assignment can fail before the sentinel check or any child starts.
 **Fix / workaround:** Add an authority-level `Load` that opens and authenticates the published generation and returns a snapshot only when its authenticated canonical digest and row count match the live canonical set, then resolve it lazily from owner search, scoped search and index status under one epoch-serialized policy. Fail closed on missing/stale/unreadable and keep the explicit rebuild as the only way to publish a changed set.
 
 **Watch out for:** Do not treat "the file exists" as "the generation is current": compare the authenticated digest to the live canonical set and drop resident state on mismatch. Also do not assume the file format supports record deltas — a whole-generation sealed file with whole-vault postings still requires a full rewrite per change. Test the load path at the handler boundary, including a second process, and assert the encrypted file hash is unchanged by the read.
+
+## [2026-10-24] A listed CLI command can still be missing from dispatch
+
+**Symptom:** Real MCP `metabrain_authorize` calls returned `isError: true` with the complete owner CLI usage text instead of an authorization decision.
+**Root cause:** `AuthorizeAsync` existed and `Usage()` listed `authorize`, but `OwnerControlCli.RunAsync` omitted it from the command switch, so the command fell through to usage before argument/session processing.
+**Fix / workaround:** Dispatch `authorize` to the existing handler; keep the shared `agent.access.authorize` policy and path-only DPAPI session-file flow unchanged. Exercise the actual MCP-to-CLI process path, and retain allow/deny assertions at the real service boundary.
+**Watch out for:** A handler and help entry do not prove CLI dispatch is wired. Check the command switch and run an end-to-end consumer regression rather than testing copied arguments or response echoes.
+
+
+## [2026-10-24] An existing CLI command can fall through when a neighboring switch arm is added
+
+**Symptom:** After `authorize` was added to the owner command switch, existing `revoke-session` callers returned usage even though the handler and help text remained.
+**Root cause:** The switch edit replaced the `revoke-session` arm instead of adding a separate `authorize` arm.
+**Fix / workaround:** Keep both dispatch arms and exercise the real `revoke-session` CLI path with a valid session ID and a random nonexistent control-pipe name; the handler's `transport_unavailable` refusal is distinguishable from the default usage result without creating a pipe server.
+**Watch out for:** Review adjacent switch arms when adding a command. An invalid-argument probe can be nondiscriminating when both the handler and default branch return usage; prefer an observable command-specific boundary that does not execute the service operation.
