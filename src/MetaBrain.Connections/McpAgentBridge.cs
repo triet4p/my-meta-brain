@@ -20,9 +20,11 @@ namespace MetaBrain.Connections;
 internal static class McpAgentBridge
 {
     private static readonly JsonSerializerOptions InputOptions = new() { PropertyNameCaseInsensitive = true };
+    private static string? _ownerExecutable;
+
     private static readonly JsonSerializerOptions OutputOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    internal static async Task<int> RunAsync(string[] args)
+    internal static async Task<int> RunAsync(string[] args, string? ownerExecutable = null)
     {
         var options = BridgeOptions.Parse(args);
         var agentPipe = options.Required("--agent-pipe");
@@ -31,6 +33,14 @@ internal static class McpAgentBridge
             Console.Error.WriteLine("MCP bridge: the agent pipe name is invalid.");
             return 2;
         }
+        if (ownerExecutable is not null && !File.Exists(ownerExecutable))
+        {
+            Console.Error.WriteLine("MCP bridge: the packaged connection client is unavailable.");
+            return 1;
+        }
+
+        _ownerExecutable = ownerExecutable;
+
 
         using var stdin = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false, true), detectEncodingFromByteOrderMarks: false, 4096);
         using var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true };
@@ -52,7 +62,10 @@ internal static class McpAgentBridge
                 response = ErrorEnvelope(null, -32603, "bridge_unavailable");
             }
 
-            await stdout.WriteLineAsync(response).ConfigureAwait(false);
+            if (response.Length != 0)
+            {
+                await stdout.WriteLineAsync(response).ConfigureAwait(false);
+            }
         }
 
         return 0;
@@ -417,6 +430,7 @@ internal static class McpAgentBridge
             return await CallRelationDraftToolAsync(agentPipe, id, name, args).ConfigureAwait(false);
         }
 
+        string? standardInput = null;
         string[] argv = name switch
         {
             "metabrain_catalog_list" => new[] { "owner", "agent-catalog-list", "--agent-pipe", agentPipe },
@@ -457,7 +471,7 @@ internal static class McpAgentBridge
                 "--snapshot-revision", RequiredArg(args, "snapshotRevision"),
             },
             "metabrain_memory_brief" => BuildBriefArgs(agentPipe, args),
-            "metabrain_memory_feedback" => BuildFeedbackArgs(agentPipe, args),
+            "metabrain_memory_feedback" => BuildFeedbackArgs(agentPipe, args, out standardInput),
             "metabrain_feedback_read" => new[]
             {
                 "owner", "agent-feedback-read", "--agent-pipe", agentPipe,
@@ -479,6 +493,10 @@ internal static class McpAgentBridge
             "metabrain_propose" => BuildProposeArgs(agentPipe, args),
             _ => Array.Empty<string>(),
         };
+        if (string.Equals(name, "metabrain_propose", StringComparison.Ordinal))
+        {
+            standardInput = RequiredArg(args, "draft");
+        }
 
         if (argv.Length == 0)
         {
@@ -495,7 +513,12 @@ internal static class McpAgentBridge
             return ScopedReadEnvelope(id, await RunOwnerCommandAsync(argv).ConfigureAwait(false));
         }
 
-        var result = await RunOwnerCommandAsync(argv).ConfigureAwait(false);
+        if (string.Equals(name, "metabrain_source_snapshot_read", StringComparison.Ordinal))
+        {
+            return SnapshotReadEnvelope(id, await RunOwnerCommandAsync(argv).ConfigureAwait(false));
+        }
+
+        var result = await RunOwnerCommandAsync(argv, standardInput).ConfigureAwait(false);
         return ResultEnvelope(id, new JsonObject
         {
             ["content"] = new JsonArray(new JsonObject
@@ -699,44 +722,34 @@ internal static class McpAgentBridge
 
     private static string[] BuildProposeArgs(string agentPipe, JsonObject args)
     {
-        // S4-T5 agent proposal dispatch: the whole proposal draft (kind,
-        // idempotency key, approved inbox destination, revise subject with
-        // its revision precondition, and the proposed item content) rides as
-        // one draft file the existing agent-propose CLI reads, exactly like
-        // the feedback draft. The file lives under the process temp
-        // directory with a random name and never carries bearer material
-        // (the bridge already denied raw bearers above). The CLI owns the
-        // file lifetime; the bridge only passes the path. The service, not
-        // the bridge, authorizes the destination against the frozen scope.
+        // S4-T5 proposal drafts travel over the bridge's private stdin channel;
+        // the MCP process never writes caller-controlled proposal bodies to a
+        // plaintext temporary file. The service still authorizes the exact
+        // destination against the frozen session scope.
         var draftText = RequiredArg(args, "draft");
         if (string.IsNullOrWhiteSpace(draftText) || draftText.Length > 1024 * 1024)
         {
             return new[] { "owner", "agent-propose", "--agent-pipe", agentPipe, "--session-file", RequiredArg(args, "sessionFile"), "--input-file", string.Empty };
         }
 
-        var path = Path.Combine(Path.GetTempPath(), "metabrain-proposal-" + Guid.NewGuid().ToString("N") + ".json");
-        File.WriteAllText(path, draftText);
         return new[]
         {
             "owner", "agent-propose", "--agent-pipe", agentPipe,
             "--session-file", RequiredArg(args, "sessionFile"),
-            "--input-file", path,
+            "--input-file", "-",
         };
     }
 
-    private static string[] BuildFeedbackArgs(string agentPipe, JsonObject args)
+    private static string[] BuildFeedbackArgs(string agentPipe, JsonObject args, out string? standardInput)
     {
-        // S4-T4 agent feedback dispatch: the seen target, verdict, and note
-        // travel as one draft file the existing agent-feedback CLI reads. The
-        // file lives under the process temp directory with a random name and
-        // never carries bearer material (the bridge already denied raw bearers
-        // above). The CLI owns the file lifetime; the bridge only passes the
-        // path, exactly like handoff/session files.
+        // Feedback drafts are sent on private stdin, not written as plaintext
+        // temporary files.
         var kind = RequiredArg(args, "kind");
         var targetId = RequiredArg(args, "targetResourceId");
         var targetRevisionText = RequiredArg(args, "targetRevision");
         if (!long.TryParse(targetRevisionText, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var targetRevision))
         {
+            standardInput = null;
             return new[] { "owner", "agent-feedback", "--agent-pipe", agentPipe, "--session-file", RequiredArg(args, "sessionFile"), "--input-file", string.Empty };
         }
 
@@ -752,15 +765,15 @@ internal static class McpAgentBridge
             draft["note"] = note;
         }
 
-        var path = Path.Combine(Path.GetTempPath(), "metabrain-feedback-" + Guid.NewGuid().ToString("N") + ".json");
-        File.WriteAllText(path, draft.ToJsonString());
+        standardInput = draft.ToJsonString();
         return new[]
         {
             "owner", "agent-feedback", "--agent-pipe", agentPipe,
             "--session-file", RequiredArg(args, "sessionFile"),
-            "--input-file", path,
+            "--input-file", "-",
         };
     }
+
 
     private static string RequiredArg(JsonObject args, string key) =>
         args[key]?.GetValue<string>() ?? string.Empty;
@@ -798,7 +811,8 @@ internal static class McpAgentBridge
 
     private static async Task<BridgeCommandResult> RunOwnerCommandAsync(string[] argv, string? standardInput = null)
     {
-        var executable = Environment.ProcessPath ?? throw new InvalidOperationException("The bridge host executable is unavailable.");
+        var executable = _ownerExecutable ?? Environment.ProcessPath
+            ?? throw new InvalidOperationException("The bridge host executable is unavailable.");
         var start = new System.Diagnostics.ProcessStartInfo(executable)
         {
             UseShellExecute = false,
@@ -894,19 +908,94 @@ internal static class McpAgentBridge
         });
     }
 
+    // Preserved-snapshot expansion returns the registry metadata line plus the same
+    // framed exact bytes as agent-read. The bridge restores the bytes losslessly and
+    // keeps the metadata text so a caller can confirm the exact ID/revision/digest it
+    // received; nothing is written to disk.
+    private static string SnapshotReadEnvelope(JsonNode? id, BridgeCommandResult result)
+    {
+        if (result.ExitCode != 0)
+        {
+            return ResultEnvelope(id, new JsonObject
+            {
+                ["content"] = new JsonArray(new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = Redact(ExtractErrorText(result.Combined)),
+                }),
+                ["isError"] = true,
+            });
+        }
+
+        if (!TryExtractBodyBytes(result.Combined, out var bodyBytes))
+        {
+            return ResultEnvelope(id, new JsonObject
+            {
+                ["content"] = new JsonArray(new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = Redact(result.Combined),
+                }),
+                ["isError"] = true,
+            });
+        }
+
+        var content = new JsonArray();
+        var frameIndex = result.Combined.IndexOf(BodyFrameBegin, StringComparison.Ordinal);
+        var metadata = frameIndex > 0 ? result.Combined[..frameIndex].Trim() : string.Empty;
+        if (metadata.Length > 0)
+        {
+            content.Add(new JsonObject
+            {
+                ["type"] = "text",
+                ["text"] = Redact(metadata),
+            });
+        }
+
+        if (TryDecodeStrictUtf8(bodyBytes, out var bodyText))
+        {
+            content.Add(new JsonObject
+            {
+                ["type"] = "text",
+                ["text"] = Redact(bodyText),
+            });
+        }
+        else
+        {
+            content.Add(new JsonObject
+            {
+                ["type"] = "text",
+                ["text"] = "BINARY-NONUTF8 contentBase64 follows",
+            });
+            content.Add(new JsonObject
+            {
+                ["type"] = "blob",
+                ["data"] = Convert.ToBase64String(bodyBytes),
+                ["mimeType"] = "application/octet-stream",
+            });
+        }
+
+        return ResultEnvelope(id, new JsonObject
+        {
+            ["content"] = content,
+            ["isError"] = false,
+        });
+    }
+
+    private const string BodyFrameBegin = "AGENT-BODY-BEGIN";
+    private const string BodyFrameEnd = "AGENT-BODY-END";
+
     private static bool TryExtractBodyBytes(string combined, out byte[] bytes)
     {
         bytes = Array.Empty<byte>();
-        const string begin = "AGENT-BODY-BEGIN";
-        const string end = "AGENT-BODY-END";
-        var beginIndex = combined.IndexOf(begin, StringComparison.Ordinal);
-        var endIndex = combined.IndexOf(end, StringComparison.Ordinal);
+        var beginIndex = combined.IndexOf(BodyFrameBegin, StringComparison.Ordinal);
+        var endIndex = combined.IndexOf(BodyFrameEnd, StringComparison.Ordinal);
         if (beginIndex < 0 || endIndex <= beginIndex)
         {
             return false;
         }
 
-        var payload = combined[(beginIndex + begin.Length)..endIndex].Trim();
+        var payload = combined[(beginIndex + BodyFrameBegin.Length)..endIndex].Trim();
         try
         {
             bytes = Convert.FromBase64String(payload);
@@ -921,8 +1010,7 @@ internal static class McpAgentBridge
 
     private static string ExtractErrorText(string combined)
     {
-        const string begin = "AGENT-BODY-BEGIN";
-        var beginIndex = combined.IndexOf(begin, StringComparison.Ordinal);
+        var beginIndex = combined.IndexOf(BodyFrameBegin, StringComparison.Ordinal);
         return (beginIndex >= 0 ? combined[..beginIndex] : combined).Trim();
     }
 

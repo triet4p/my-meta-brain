@@ -14,15 +14,18 @@ internal sealed record InstallLayout(
     string InstallRoot,
     string ServiceDirectory,
     string OwnerUiDirectory,
+    string McpDirectory,
     string InstallerDirectory,
     string ServiceExecutable,
     string OwnerUiExecutable,
+    string McpExecutable,
     string SettingsPath,
     string DataRoot)
 {
     internal const string StateFileName = "install-state.json";
     internal const string ServiceDirectoryName = "service";
     internal const string OwnerUiDirectoryName = "owner-ui";
+    internal const string McpDirectoryName = "mcp";
     internal const string InstallerDirectoryName = "installer";
 
     internal string StatePath => Path.Combine(InstallRoot, StateFileName);
@@ -64,9 +67,11 @@ internal sealed record InstallLayout(
             Path.GetFullPath(installRoot).TrimEnd(Path.DirectorySeparatorChar),
             Path.Combine(Path.GetFullPath(installRoot), ServiceDirectoryName),
             Path.Combine(Path.GetFullPath(installRoot), OwnerUiDirectoryName),
+            Path.Combine(Path.GetFullPath(installRoot), McpDirectoryName),
             Path.Combine(Path.GetFullPath(installRoot), InstallerDirectoryName),
             Path.Combine(Path.GetFullPath(installRoot), ServiceDirectoryName, "MetaBrain.Connections.exe"),
             Path.Combine(Path.GetFullPath(installRoot), OwnerUiDirectoryName, "MetaBrain.OwnerUi.exe"),
+            Path.Combine(Path.GetFullPath(installRoot), McpDirectoryName, "MetaBrain.Mcp.exe"),
             Path.Combine(Path.GetFullPath(dataRoot), "service-settings.json"),
             Path.GetFullPath(dataRoot).TrimEnd(Path.DirectorySeparatorChar));
 }

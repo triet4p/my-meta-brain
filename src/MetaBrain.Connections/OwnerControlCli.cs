@@ -505,8 +505,29 @@ internal static class OwnerControlCli
             return 3;
         }
 
+        if (!snapshot.TryGetProperty("contentBase64", out var content) ||
+            content.ValueKind != JsonValueKind.String)
+        {
+            Console.Error.WriteLine("ERROR source_snapshot_unavailable");
+            return 4;
+        }
+
         PrintSourceSnapshot(result.Reply);
-        return 0;
+        var bytes = Convert.FromBase64String(content.GetString() ?? string.Empty);
+        try
+        {
+            // The exact preserved bytes ride the same framed text stdout as agent-read
+            // so scoped agents (and the MCP bridge) restore them losslessly; no
+            // plaintext file is created and denials stay on stderr.
+            Console.WriteLine("AGENT-BODY-BEGIN");
+            Console.WriteLine(Convert.ToBase64String(bytes));
+            Console.WriteLine("AGENT-BODY-END");
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(bytes);
+        }
     }
 
 
@@ -5018,10 +5039,10 @@ internal static class OwnerControlCli
             return 3;
         }
 
-        var content = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        var content = await ReadAgentDraftAsync(inputPath).ConfigureAwait(false);
         try
         {
-            if (content.Length is <= 0 or > 1024 * 1024)
+            if (content is null || content.Length is <= 0 or > 1024 * 1024)
             {
                 Console.Error.WriteLine("ERROR invalid_feedback_size");
                 return 4;
@@ -5045,7 +5066,10 @@ internal static class OwnerControlCli
         }
         finally
         {
-            CryptographicOperations.ZeroMemory(content);
+            if (content is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(content);
+            }
         }
     }
 
@@ -5127,10 +5151,10 @@ internal static class OwnerControlCli
             return 3;
         }
 
-        var content = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        var content = await ReadAgentDraftAsync(inputPath).ConfigureAwait(false);
         try
         {
-            if (content.Length is <= 0 or > 1024 * 1024)
+            if (content is null || content.Length is <= 0 or > 1024 * 1024)
             {
                 Console.Error.WriteLine("ERROR invalid_proposal_size");
                 return 4;
@@ -5154,7 +5178,10 @@ internal static class OwnerControlCli
         }
         finally
         {
-            CryptographicOperations.ZeroMemory(content);
+            if (content is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(content);
+            }
         }
     }
 
@@ -5250,7 +5277,7 @@ internal static class OwnerControlCli
             return 3;
         }
 
-        var draft = await ReadAgentRelationDraftAsync(inputPath).ConfigureAwait(false);
+        var draft = await ReadAgentDraftAsync(inputPath).ConfigureAwait(false);
         try
         {
             if (draft is null || draft.Length is <= 0 or > 1024 * 1024)
@@ -5313,7 +5340,7 @@ internal static class OwnerControlCli
             return 3;
         }
 
-        var draft = await ReadAgentRelationDraftAsync(options.Required("--input-file")).ConfigureAwait(false);
+        var draft = await ReadAgentDraftAsync(options.Required("--input-file")).ConfigureAwait(false);
         try
         {
             if (draft is null || draft.Length is <= 0 or > 1024 * 1024)
@@ -5353,7 +5380,7 @@ internal static class OwnerControlCli
             }
         }
     }
-    private static async Task<byte[]?> ReadAgentRelationDraftAsync(string inputPath)
+    private static async Task<byte[]?> ReadAgentDraftAsync(string inputPath)
     {
         if (!string.Equals(inputPath, "-", StringComparison.Ordinal))
         {

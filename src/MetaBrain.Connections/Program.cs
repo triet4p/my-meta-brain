@@ -16,6 +16,79 @@ using System.Runtime.CompilerServices;
 
 namespace MetaBrain.Connections;
 
+/// <summary>
+/// Product bootstrap for the packaged MCP executable. It selects or creates
+/// the existing instance and starts the shared host locked before exposing
+/// only the existing agent-channel MCP bridge.
+/// </summary>
+public static class McpAgentProduct
+{
+    public static async Task<int> RunAsync(string[] args)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Console.Error.WriteLine("Meta Brain MCP requires Windows named pipes.");
+            return 2;
+        }
+
+        if (args.Length == 1 && args[0] is "--help" or "-h")
+        {
+            Console.Error.WriteLine("MetaBrain.Mcp.exe --data-root <dir> | --config <service-settings.json>");
+            return 0;
+        }
+
+        try
+        {
+            var instance = McpProductOptions.Parse(args);
+            var handle = instance.SettingsPath is { } settingsPath
+                ? InstanceLifecycle.ResolveFromSettingsPath(settingsPath)
+                : InstanceLifecycle.Create(instance.DataRoot!);
+            var installRoot = Directory.GetParent(
+                Path.GetFullPath(AppContext.BaseDirectory).TrimEnd(Path.DirectorySeparatorChar))?.FullName;
+            if (installRoot is null)
+            {
+                Console.Error.WriteLine("MCP startup failed (package_layout).");
+                return 1;
+            }
+
+            var hostExecutable = Path.Combine(installRoot, "service", "MetaBrain.Connections.exe");
+            await InstanceLifecycle.EnsureStartedAsync(handle, hostExecutable, CancellationToken.None).ConfigureAwait(false);
+            Console.Error.WriteLine("Meta Brain MCP connected to the shared locked host.");
+            return await McpAgentBridge.RunAsync(new[] { "--agent-pipe", handle.AgentPipe }, hostExecutable).ConfigureAwait(false);
+        }
+        catch (InstanceLifecycleException ex)
+        {
+            Console.Error.WriteLine("MCP startup failed (" + ex.Code + ").");
+            return 1;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Console.Error.WriteLine("MCP startup failed (" + ex.GetType().Name + ").");
+            return 1;
+        }
+    }
+
+    private sealed record McpProductOptions(string? DataRoot, string? SettingsPath)
+    {
+        public static McpProductOptions Parse(string[] args)
+        {
+            if (args.Length != 2 || args[0] is not ("--data-root" or "--config") ||
+                string.IsNullOrWhiteSpace(args[1]))
+            {
+                throw new ArgumentException("Pass exactly one instance selector.");
+            }
+
+            return args[0] switch
+            {
+                "--data-root" => new McpProductOptions(args[1], null),
+                "--config" => new McpProductOptions(null, args[1]),
+                _ => throw new ArgumentException("Unknown instance selector."),
+            };
+        }
+    }
+}
+
+
 internal static class Program
 {
     private static async Task<int> Main(string[] args)

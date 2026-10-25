@@ -56,7 +56,8 @@ MetaBrain.Installer.exe install --payload <published-payload-dir> --install-root
 ```
 
 - `--payload` — the published application: `service/MetaBrain.Connections.exe`,
-  `owner-ui/MetaBrain.OwnerUi.exe`, `installer/MetaBrain.Installer.exe`.
+  `owner-ui/MetaBrain.OwnerUi.exe`, `mcp/MetaBrain.Mcp.exe`,
+  `installer/MetaBrain.Installer.exe`.
 - `--install-root` — where the application files go.
 - `--data-root` — where the owner's private data goes. It is created with the ordinary permissions
   of the owner account. It must be a **sibling** of the install root, not a directory inside it
@@ -159,6 +160,54 @@ shown only on an attached owner console: `owner request-preview` refuses redirec
 the console showed. Exit codes are truthful: `0` done, `2` usage (nothing changed), `3`
 refused/locked/unavailable/denied, `4` invalid input or unwritable output, `5` a job that ended
 without completing, `1` transport or unexpected failure.
+
+### 3.2.1 MCP client registration (S9-T5)
+
+The packaged MCP entrypoint is `mcp/MetaBrain.Mcp.exe`. It selects or creates the specified
+instance and starts/connects the same shared host in its locked state before serving the
+existing agent-only MCP tools over stdio. It never provisions or unlocks a vault, publishes
+catalog entries, approves/rejects requests, issues tokens or purges data. The owner performs
+those decisions through either the CLI or Owner console; MCP handles the request/status/
+redeem/scoped-agent steps. Closing MCP does not stop the shared host.
+
+Use the installed owner-chosen data root in `<data-root>`. A clean root receives the ordinary
+nonsensitive settings file at first startup; an existing instance keeps its settings and
+endpoints. The host starts locked. The owner must explicitly unlock and approve agent requests
+using either `MetaBrain.Connections.exe owner ...` or `owner-ui/MetaBrain.OwnerUi.exe`; never
+send a key or bearer token to the client.
+
+Register as stdio MCP using the client's supported process-scoped configuration, not `mcp add`,
+`/mcp add`, or persistent user/profile settings. This Codex CLI example uses documented `-c`
+overrides and a separate workspace; do not submit a prompt when only checking MCP connection:
+
+```text
+codex -C <isolated-workspace> -c 'mcp_servers.metabrain.command="C:\\Program Files\\MetaBrain\\mcp\\MetaBrain.Mcp.exe"' -c 'mcp_servers.metabrain.args=["--data-root","C:\\Users\\<owner>\\AppData\\Local\\MetaBrain\\Data"]'
+```
+
+For OMP, create `.omp/mcp.json` in an isolated temporary workspace (not the product repository),
+then launch OMP with that workspace and `--no-session`. Do not use `/mcp add` or a user-level
+configuration path:
+
+```json
+{
+  "mcpServers": {
+    "metabrain": {
+      "type": "stdio",
+      "command": "C:\\Program Files\\MetaBrain\\mcp\\MetaBrain.Mcp.exe",
+      "args": ["--data-root", "C:\\Users\\<owner>\\AppData\\Local\\MetaBrain\\Data"]
+    }
+  }
+}
+```
+
+```text
+omp --cwd <isolated-workspace> --no-session
+```
+
+Both client launches initialize MCP and discover the existing tool catalog without a prepared
+agent request. MCP writes JSON-RPC only to stdout and sanitized startup diagnostics to stderr.
+Only DPAPI-protected handoff/session-file paths cross MCP—never a key, raw bearer token, or
+provider/model context.
 
 ### 3.3 The owner console (S9-T4)
 

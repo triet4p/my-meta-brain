@@ -196,7 +196,8 @@ internal static class InstallCommand
         foreach (var required in new[]
                  {
                      Path.Combine(InstallLayout.ServiceDirectoryName, "MetaBrain.Connections.exe"),
-                     Path.Combine(InstallLayout.OwnerUiDirectoryName, "MetaBrain.OwnerUi.exe")
+                     Path.Combine(InstallLayout.OwnerUiDirectoryName, "MetaBrain.OwnerUi.exe"),
+                     Path.Combine(InstallLayout.McpDirectoryName, "MetaBrain.Mcp.exe")
                  })
         {
             if (!File.Exists(Path.Combine(payload, required)))
@@ -213,6 +214,7 @@ internal static class InstallCommand
                  {
                      InstallLayout.ServiceDirectoryName,
                      InstallLayout.OwnerUiDirectoryName,
+                     InstallLayout.McpDirectoryName,
                      InstallLayout.InstallerDirectoryName
                  })
         {
