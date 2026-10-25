@@ -11,7 +11,7 @@ administrator rights, an AppContainer, a patched agent runtime, or an account of
 
 | Root | Holds | Removed by |
 | --- | --- | --- |
-| **Install root** — e.g. `%LOCALAPPDATA%\MetaBrain\App` | The application files: `service/`, `owner-ui/`, `installer/`, `install-state.json` | `uninstall` |
+| **Install root** — e.g. `%LOCALAPPDATA%\MetaBrain\App` | The application files: `cli/`, `service/`, `owner-ui/`, `mcp/`, `installer/`, and `install-state.json` (which also records the product version) | `uninstall` |
 | **Data root** — e.g. `%LOCALAPPDATA%\MetaBrain\Data` | The owner's private data: `service-settings.json`, `vault/`, the runtime state (`runtime/`), the source snapshots, the backups and the recovery material | **never** by the installer |
 
 The two roots are separate on purpose: an upgrade replaces the application files and leaves the
@@ -38,7 +38,7 @@ is decided by the authenticated impersonated-client check in the service, not by
 filesystem permissions.
 
 **The inherited legacy cutover, outside the daily path.** The legacy migration command
-(`MetaBrain.Connections.exe owner migrate --config <legacy-settings.json>`) creates the encrypted
+(`cli\MetaBrain.Cli.exe owner migrate --config <legacy-settings.json>`) creates the encrypted
 vault from the inherited plaintext settings and resource files, writes the current settings file,
 and only then removes the plaintext copies it migrated. It is not reachable from the daily path —
 the service refuses a legacy settings file with `Legacy plaintext settings require the explicit
@@ -55,9 +55,10 @@ recovery key was shown by the interrupted run and is not shown again.
 MetaBrain.Installer.exe install --payload <published-payload-dir> --install-root <dir> --data-root <dir> [--control-pipe <name>] [--agent-pipe <name>] [--autostart] [--start]
 ```
 
-- `--payload` — the published application: `service/MetaBrain.Connections.exe`,
-  `owner-ui/MetaBrain.OwnerUi.exe`, `mcp/MetaBrain.Mcp.exe`,
-  `installer/MetaBrain.Installer.exe`.
+- `--payload` — the published application: `cli/MetaBrain.Cli.exe`,
+  `service/MetaBrain.Connections.exe`, `owner-ui/MetaBrain.OwnerUi.exe`,
+  `mcp/MetaBrain.Mcp.exe`, `installer/MetaBrain.Installer.exe`. The release
+  bundle's own layout is exactly this payload.
 - `--install-root` — where the application files go.
 - `--data-root` — where the owner's private data goes. It is created with the ordinary permissions
   of the owner account. It must be a **sibling** of the install root, not a directory inside it
@@ -77,6 +78,36 @@ MetaBrain.Installer.exe install --payload <published-payload-dir> --install-root
 An install **never creates the vault**: the first start is locked and uninitialized, and the owner
 creates the vault explicitly (§4). Installing over an existing install root is an upgrade of the
 application files; the data root, the vault and the pipe endpoints are kept.
+
+### 2.1 The release bundle (S9-T6)
+
+The bundle is one self-contained Windows x64 package with a directory per product entrypoint and
+one for the shared runtime, plus the installer that consumes the same layout:
+
+```text
+cli\MetaBrain.Cli.exe               owner CLI (--help, --version, lifecycle, owner commands)
+owner-ui\MetaBrain.OwnerUi.exe      owner console
+mcp\MetaBrain.Mcp.exe               agent MCP server over stdio
+service\MetaBrain.Connections.exe   shared runtime host (started by the shared lifecycle)
+installer\MetaBrain.Installer.exe   per-user install/upgrade/uninstall
+release-manifest.json               product version, runtime identifier, every file's size and SHA-256
+```
+
+The bundle is a `--self-contained true -r win-x64` publish, so the target machine needs no .NET
+SDK, no installed .NET runtime, no repository and no PowerShell: unpack it and run the entrypoints.
+Its product version is the version every entrypoint reports (`--version`; the console shows it in
+its title; the installer records it in `install-state.json`).
+
+A developer builds the bundle from a checkout with
+`powershell.exe -NoProfile -File scripts\release\publish-release-bundle.ps1`. That script is
+developer tooling and never a runtime prerequisite: it writes the stage directory, a zip and the
+zip's SHA-256 under `runtime\release` by default, and changes no host state (no installation, no
+service registration, no autostart entry, no registry value, no environment or profile change and
+no permission change).
+
+An unpacked bundle is the installer's `--payload`, so one bundle installs, upgrades and carries
+every frontend. An entrypoint run from the unpacked directory (before or without an install) uses
+the `service\MetaBrain.Connections.exe` beside it.
 
 ## 3. The daily commands
 
@@ -109,11 +140,11 @@ the same locked host through one shared implementation. The installer service co
 delegate to that same lifecycle, so no frontend keeps a second start/stop/status path.
 
 ```text
-MetaBrain.Connections.exe lifecycle start --data-root <dir>     # create (clean root only) or select, then start the shared locked host
-MetaBrain.Connections.exe lifecycle status --data-root <dir>    # health from the real owner channel; exits non-zero when unreachable
-MetaBrain.Connections.exe lifecycle connect --data-root <dir>   # prove the shared host is reachable without starting it (T3–T5 share this gate)
-MetaBrain.Connections.exe lifecycle stop --data-root <dir>      # explicit drain, lock and exit; the only act that ends the shared host
-MetaBrain.Connections.exe lifecycle restart --data-root <dir>   # stop and start again: fresh locked host, no surviving session
+cli\MetaBrain.Cli.exe lifecycle start --data-root <dir>     # create (clean root only) or select, then start the shared locked host
+cli\MetaBrain.Cli.exe lifecycle status --data-root <dir>    # health from the real owner channel; exits non-zero when unreachable
+cli\MetaBrain.Cli.exe lifecycle connect --data-root <dir>   # prove the shared host is reachable without starting it (T3–T5 share this gate)
+cli\MetaBrain.Cli.exe lifecycle stop --data-root <dir>      # explicit drain, lock and exit; the only act that ends the shared host
+cli\MetaBrain.Cli.exe lifecycle restart --data-root <dir>   # stop and start again: fresh locked host, no surviving session
 ```
 
 Each verb also accepts `--config <service-settings.json>` instead of `--data-root <dir>`. A clean
@@ -128,17 +159,18 @@ stops the shared host, and no frontend stops another frontend's host implicitly.
 
 ### 3.2 The owner CLI (S9-T3)
 
-The packaged CLI is `MetaBrain.Connections.exe`: `lifecycle` verbs (§3.1) for setup, `owner`
-verbs for every owner workflow, `agent-mcp` for the agent transport. It runs in any terminal
-(PowerShell, cmd, or another console); running a CLI command is normal use, not glue. What the
-CLI never requires: hand-written settings or internal JSON, PowerShell helper scripts, the owner
-console, or direct vault writes. The exact draft file (`--input-file`) stays as the advanced path
-for owner-owned data only.
+The packaged CLI is `cli\MetaBrain.Cli.exe`: `--help` prints the product identity and the release
+layout, `--version` prints the product version, `lifecycle` verbs (§3.1) cover setup, and `owner`
+verbs cover every owner workflow. It runs in any terminal (PowerShell, cmd, or another console);
+running a CLI command is normal use, not glue. What the CLI never requires: hand-written settings
+or internal JSON, PowerShell helper scripts, the owner console, or direct vault writes. The exact
+draft file (`--input-file`) stays as the advanced path for owner-owned data only.
 
 ```text
-MetaBrain.Connections.exe                                    # grouped entrypoint help (setup | vault | capture | library | review | sharing | sources | planning | models)
-MetaBrain.Connections.exe owner --help                       # every workflow group
-MetaBrain.Connections.exe owner <verb> --help                # exact inputs of one command (`owner help --command <verb>` is the same)
+cli\MetaBrain.Cli.exe --version                              # the product version every entrypoint reports
+cli\MetaBrain.Cli.exe --help                                 # release layout, usage and exit codes
+cli\MetaBrain.Cli.exe owner --help                           # every workflow group
+cli\MetaBrain.Cli.exe owner <verb> --help                    # exact inputs of one command (`owner help --command <verb>` is the same)
 ```
 
 Capture commands accept friendly scalar options that build the exact draft the service reads, so
@@ -173,8 +205,12 @@ redeem/scoped-agent steps. Closing MCP does not stop the shared host.
 Use the installed owner-chosen data root in `<data-root>`. A clean root receives the ordinary
 nonsensitive settings file at first startup; an existing instance keeps its settings and
 endpoints. The host starts locked. The owner must explicitly unlock and approve agent requests
-using either `MetaBrain.Connections.exe owner ...` or `owner-ui/MetaBrain.OwnerUi.exe`; never
+using either `cli\MetaBrain.Cli.exe owner ...` or `owner-ui\MetaBrain.OwnerUi.exe`; never
 send a key or bearer token to the client.
+
+`MetaBrain.Mcp.exe --version` and `--help` print the identity and the release layout on stderr,
+never on stdout. The MCP process writes JSON-RPC only to stdout and sanitized startup
+diagnostics to stderr.
 
 Register as stdio MCP using the client's supported process-scoped configuration, not `mcp add`,
 `/mcp add`, or persistent user/profile settings. This Codex CLI example uses documented `-c`
@@ -267,9 +303,9 @@ Every start of the host begins **locked**. The key lives only in the unlocked pr
 The owner unlocks explicitly:
 
 ```text
-MetaBrain.Connections.exe owner provision --control-pipe <control-pipe>   # first time only
-MetaBrain.Connections.exe owner unlock   --control-pipe <control-pipe>
-MetaBrain.Connections.exe owner lock     --control-pipe <control-pipe>
+cli\MetaBrain.Cli.exe owner provision --control-pipe <control-pipe>   # first time only
+cli\MetaBrain.Cli.exe owner unlock   --control-pipe <control-pipe>
+cli\MetaBrain.Cli.exe owner lock     --control-pipe <control-pipe>
 ```
 
 `provision` asks for the vault passphrase twice and prints a one-time recovery key; store that key
@@ -283,16 +319,16 @@ them, and no agent can mint, widen or reuse any of them.
 
 ```text
 # 1. One encrypted snapshot of the unlocked vault
-MetaBrain.Connections.exe owner backup --control-pipe <control-pipe> --output-file <backup file>
+cli\MetaBrain.Cli.exe owner backup --control-pipe <control-pipe> --output-file <backup file>
 
 # 2. Restore that snapshot into a clean directory
-MetaBrain.Connections.exe owner restore --control-pipe <control-pipe> \
+cli\MetaBrain.Cli.exe owner restore --control-pipe <control-pipe> \
     --backup-file <backup file> --target-directory <directory that does not exist yet>
-MetaBrain.Connections.exe owner restore-with-recovery-code --control-pipe <control-pipe> \
+cli\MetaBrain.Cli.exe owner restore-with-recovery-code --control-pipe <control-pipe> \
     --backup-file <backup file> --target-directory <directory that does not exist yet>
 
 # 3. Export the records you selected as one readable plaintext file
-MetaBrain.Connections.exe owner export --control-pipe <control-pipe> \
+cli\MetaBrain.Cli.exe owner export --control-pipe <control-pipe> \
     --resource-ids <id>,<id> --output-file <file> \
     [--include-relations true] [--include-lifecycle-states true]
 ```
@@ -369,10 +405,10 @@ A vault written by an older version still opens. Its records keep the content sc
 written with, and the owner raises them to the format this build writes with one owner act:
 
 ```text
-MetaBrain.Connections.exe owner upgrade --control-pipe <control-pipe>
-MetaBrain.Connections.exe owner upgrade-with-recovery-code --control-pipe <control-pipe>
-MetaBrain.Connections.exe owner rollback --control-pipe <control-pipe> [--discard true]
-MetaBrain.Connections.exe owner rollback-with-recovery-code --control-pipe <control-pipe> [--discard true]
+cli\MetaBrain.Cli.exe owner upgrade --control-pipe <control-pipe>
+cli\MetaBrain.Cli.exe owner upgrade-with-recovery-code --control-pipe <control-pipe>
+cli\MetaBrain.Cli.exe owner rollback --control-pipe <control-pipe> [--discard true]
+cli\MetaBrain.Cli.exe owner rollback-with-recovery-code --control-pipe <control-pipe> [--discard true]
 ```
 
 The act runs only while the vault is **locked** — the service is running, the vault is locked and
@@ -450,65 +486,26 @@ re-reads the new format and rollback state.
   request ticks resources and operations from the bound preview (narrowing
   only), picks an expiry duration (UTC instant) and a new local handoff file;
   the bearer is sealed into that file and never shown.
-- **Repo-local synthetic UI review instance** (no install, autostart, service
-  registration, profile or permission change). From the repository root:
-
-    ```powershell
-    powershell.exe -NoProfile -File scripts\owner\start-owner-review.ps1
-    ```
-
-  This script publishes the owner service and the owner console from the
-  repository into `runtime\owner-review\payload` (repository-local toolchain:
-  the CLI home, the package cache and the temp directories all stay inside the
-  repository), writes a synthetic service settings file for the current
-  account, starts the service on `runtime\owner-review\data`, waits for the
-  owner channel and opens the owner console against it. Closing the console
-  stops the synthetic service; stop it independently with the same script and
-  `-Stop`. Add `-ServiceOnly` to start the service without opening the console.
-  The **Backup & export** view of that console is where the owner reviews the
-  encrypted backup, the clean restore and the explicit readable export. This
-  script changes nothing outside the repository: no installation, no service
-  registration, no autostart entry, no registry value, no environment or
-  profile change and no permission change. It runs under the machine's existing
-  PowerShell execution policy: it needs no execution-policy override and never
-  installs a certificate, changes a trust store, runs an update or writes a
-  profile setting. If your policy blocks the script, PowerShell reports that
-  restriction — the launcher does not weaken the policy for you.
-
-  The older launcher of the S8-T1A walkthrough is still there and needs a
-  published payload of its own:
-
-    ```powershell
-    powershell.exe -NoProfile -File runtime\s8-t1a\review\start-owner-ui.ps1
-    ```
-
-  The script writes a private settings file with the current user SID, starts
-  the published service on the review data root, waits for the owner channel,
-  opens the published owner console, and stops the service when that console
-  closes. Its synthetic vault is `runtime\s8-t1a\review\data` (first start is
-  uninitialized: use **Vault & key** to create a review-only passphrase). Stop
-  independently with:
-
-    ```powershell
-    powershell.exe -NoProfile -File runtime\s8-t1a\review\stop-owner-ui.ps1
-    ```
-
-  The stop script writes the service's own `service.stop` request under
-  `runtime\s8-t1a\review\data\runtime` and waits for the host process to exit.
-  Deleting that data root removes only this synthetic review instance.
+- **The packaged console is the launcher**: no install, script, autostart, service registration,
+  profile or permission change is needed. Open `owner-ui\MetaBrain.OwnerUi.exe`, select the
+  data-root folder and start/connect the shared host on the **Owner session** view (§3.3). A
+  throwaway review instance is just another repository-ignored data root selected in the same
+  console. The old scripted review launchers were retired in S9-T6 once this packaged path was
+  accepted; there is no runtime PowerShell prerequisite for opening the console.
 - **Official Codex / OMP clients**: they connect as agents over the **agent pipe**, never over the
   owner pipe. The agent pipe carries only what an owner-approved grant allows, and the agent can
   neither unlock, approve, publish nor purge.
 
-The agent bridge is started by the client, not by the installer:
+The MCP product entrypoint is started by the client, not by the installer:
 
 ```text
-MetaBrain.Connections.exe agent-mcp --agent-pipe <agent-pipe>
+mcp\MetaBrain.Mcp.exe --data-root <data-root>
 ```
 
-The owner issues a scope grant with `owner grant`, the client redeems the one-time handoff with
-`owner redeem`, and the resulting session is what the client uses. The grant is the only authority:
-an agent token, a working directory or a same-account process does not create owner authority.
+The owner approves an agent request and mints the one-time handoff in the CLI or the Owner
+console; the client redeems that handoff once (`metabrain_redeem`) and the resulting session is
+what it uses. The grant is the only authority: an agent token, a working directory or a
+same-account process does not create owner authority.
 
 ## 6. Autostart (explicit opt-in)
 

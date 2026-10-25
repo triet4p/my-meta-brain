@@ -27,6 +27,10 @@ public partial class App : System.Windows.Application
         }
 
         var window = new OwnerConsoleWindow(session, new OwnerInstanceSession());
+        // The console reports the same product version every other entrypoint
+        // reports (CLI, MCP, installer), so the release bundle can be checked
+        // for frontend drift at a glance.
+        window.Title = "Meta Brain — Owner console " + ProductInfo.Version;
         this.MainWindow = window;
         window.Show();
     }

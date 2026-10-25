@@ -84,11 +84,7 @@ internal static class InstanceLifecycleCli
             return Path.GetFullPath(host);
         }
 
-        return Environment.ProcessPath
-            ?? throw new InstanceLifecycleException(
-                "host_missing",
-                "The service host executable cannot be located.",
-                "Pass --host <MetaBrain.Connections.exe> explicitly.");
+        return ProductHost.Resolve();
     }
 
     private static async Task<int> StartAsync(string[] args)
@@ -246,8 +242,9 @@ internal static class InstanceLifecycleCli
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Lifecycle: MetaBrain.Connections.exe lifecycle {start|stop|restart|status|connect} --config <service-settings.json> | --data-root <dir> [--control-pipe <name> --agent-pipe <name>] [--host <MetaBrain.Connections.exe>]");
+        Console.Error.WriteLine("Lifecycle: " + ProductInfo.EntrypointName + " lifecycle {start|stop|restart|status|connect} --config <service-settings.json> | --data-root <dir> [--control-pipe <name> --agent-pipe <name>] [--host <MetaBrain.Connections.exe>]");
         Console.Error.WriteLine("start resolves, creates (clean root only) or selects the instance and starts the shared locked host; a concurrent start never creates a second host.");
+        Console.Error.WriteLine("The shared host is service\\MetaBrain.Connections.exe beside this entrypoint; --host names another one explicitly.");
         Console.Error.WriteLine("stop asks the shared host to drain, lock and exit; restart is a fresh locked host with no surviving session; status reports the real owner channel; connect proves reachability without starting.");
         Console.Error.WriteLine("Only stop ends the shared host; closing a frontend never does.");
         return 2;

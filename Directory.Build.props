@@ -1,0 +1,20 @@
+<Project>
+
+  <!--
+    One product version for every executable and for the release bundle. The
+    CLI, the owner console, the MCP entrypoint, the shared host and the
+    installer all report it (the version command), the installer records it in
+    install-state.json, and the release bundle directory is named after it.
+    One file owns the number so the three products can never drift apart.
+  -->
+  <PropertyGroup>
+    <Product>Meta Brain</Product>
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <!-- The informational version is the product version only: a source
+         revision suffix would make the same built bundle report two values. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+</Project>

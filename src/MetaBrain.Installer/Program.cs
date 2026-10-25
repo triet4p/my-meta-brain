@@ -1,3 +1,5 @@
+using MetaBrain.Connections;
+
 namespace MetaBrain.Installer;
 
 /// <summary>
@@ -16,6 +18,18 @@ internal static class Program
         {
             Console.Error.WriteLine("The Meta Brain installer is Windows-only.");
             return 2;
+        }
+
+        if (args.Length == 1 && args[0] is "--version" or "-v")
+        {
+            Console.WriteLine("MetaBrain.Installer " + ProductInfo.Version);
+            return 0;
+        }
+
+        if (args.Length == 1 && args[0] is "--help" or "-h" or "help")
+        {
+            WriteUsage();
+            return 0;
         }
 
         if (args.Length == 0)
@@ -49,11 +63,20 @@ internal static class Program
 
     private static int Usage()
     {
+        WriteUsage();
+        return 2;
+    }
+
+    private static void WriteUsage()
+    {
+        Console.Error.WriteLine("Meta Brain installer " + ProductInfo.Version + " — per-user install/upgrade/uninstall; always keeps the data root");
         Console.Error.WriteLine("Commands: install --payload <dir> --install-root <dir> --data-root <dir> [--control-pipe <name>] [--agent-pipe <name>] [--autostart] [--start] | start | stop | restart | status | health | autostart {enable|disable|status} | uninstall");
+        Console.Error.WriteLine("Release payload layout: cli/MetaBrain.Cli.exe, owner-ui/MetaBrain.OwnerUi.exe, mcp/MetaBrain.Mcp.exe, service/MetaBrain.Connections.exe, installer/MetaBrain.Installer.exe.");
+        Console.Error.WriteLine("Installed layout: <install root>/{cli,owner-ui,mcp,service,installer} plus install-state.json; the data root holds service-settings.json, vault/, runtime/, source snapshots, backups and recovery material.");
         Console.Error.WriteLine("Every service command (start, stop, restart, status, health) and the autostart command accept --install-root <dir> to address an installation other than the one this installer belongs to.");
         Console.Error.WriteLine("uninstall takes no options and always acts on the installation this installer belongs to; an option a command does not know is refused, never ignored.");
         Console.Error.WriteLine("install lays the application down for the current user, keeps the vault and the rest of the data root, and starts locked; --autostart is an explicit opt-in for a login start; uninstall removes the application and always preserves the data root.");
         Console.Error.WriteLine("The install root and the data root must not overlap: give them sibling directories.");
-        return 2;
+        Console.Error.WriteLine("Credentials and every owner decision stay in the CLI, the owner console or the MCP client; the installer never provisions, unlocks, publishes, approves or purges.");
     }
 }

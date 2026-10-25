@@ -13,6 +13,9 @@ using System.Runtime.CompilerServices;
 // S9-T4: the owner console resolves/selects/starts the shared host through
 // the same InstanceLifecycle every frontend uses, over these internals.
 [assembly: InternalsVisibleTo("MetaBrain.OwnerUi")]
+// S9-T6: the packaged CLI entrypoint is the owner CLI product front over the
+// same lifecycle and owner commands; it keeps no second implementation.
+[assembly: InternalsVisibleTo("MetaBrain.Cli")]
 
 namespace MetaBrain.Connections;
 
@@ -31,9 +34,20 @@ public static class McpAgentProduct
             return 2;
         }
 
+        if (args.Length == 1 && args[0] is "--version" or "-v")
+        {
+            // MCP keeps stdout for JSON-RPC, so an informational render goes to stderr.
+            Console.Error.WriteLine(ProductInfo.EntrypointName + " " + ProductInfo.Version);
+            return 0;
+        }
+
         if (args.Length == 1 && args[0] is "--help" or "-h")
         {
-            Console.Error.WriteLine("MetaBrain.Mcp.exe --data-root <dir> | --config <service-settings.json>");
+            Console.Error.WriteLine("MetaBrain.Mcp.exe " + ProductInfo.Version + " — agent MCP server (stdio) for the shared Meta Brain instance");
+            Console.Error.WriteLine("usage: MetaBrain.Mcp.exe --data-root <dir> | --config <service-settings.json>");
+            Console.Error.WriteLine("Starts or connects the same shared locked host. JSON-RPC stays on stdout; diagnostics go to stderr.");
+            Console.Error.WriteLine("Owner decisions (unlock, approve, revoke, purge) stay in cli\\MetaBrain.Cli.exe or owner-ui\\MetaBrain.OwnerUi.exe.");
+            Console.Error.WriteLine("Release layout: cli/, owner-ui/, mcp/, service/ (shared host), installer/.");
             return 0;
         }
 
@@ -43,15 +57,7 @@ public static class McpAgentProduct
             var handle = instance.SettingsPath is { } settingsPath
                 ? InstanceLifecycle.ResolveFromSettingsPath(settingsPath)
                 : InstanceLifecycle.Create(instance.DataRoot!);
-            var installRoot = Directory.GetParent(
-                Path.GetFullPath(AppContext.BaseDirectory).TrimEnd(Path.DirectorySeparatorChar))?.FullName;
-            if (installRoot is null)
-            {
-                Console.Error.WriteLine("MCP startup failed (package_layout).");
-                return 1;
-            }
-
-            var hostExecutable = Path.Combine(installRoot, "service", "MetaBrain.Connections.exe");
+            var hostExecutable = ProductHost.Resolve();
             await InstanceLifecycle.EnsureStartedAsync(handle, hostExecutable, CancellationToken.None).ConfigureAwait(false);
             Console.Error.WriteLine("Meta Brain MCP connected to the shared locked host.");
             return await McpAgentBridge.RunAsync(new[] { "--agent-pipe", handle.AgentPipe }, hostExecutable).ConfigureAwait(false);
@@ -85,6 +91,80 @@ public static class McpAgentProduct
                 _ => throw new ArgumentException("Unknown instance selector."),
             };
         }
+    }
+}
+
+/// <summary>
+/// Product bootstrap for the packaged owner CLI (<c>cli/MetaBrain.Cli.exe</c>).
+/// It exposes the existing shared lifecycle and owner commands under the
+/// product entrypoint; it adds no operation, reaches no vault file and applies
+/// no policy of its own. The shared host's own service modes stay internal to
+/// <c>service/MetaBrain.Connections.exe</c>.
+/// </summary>
+public static class OwnerCliProduct
+{
+    public static async Task<int> RunAsync(string[] args)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Console.Error.WriteLine("Meta Brain CLI is Windows-only.");
+            return 2;
+        }
+
+        if (args.Length == 1 && args[0] is "--version" or "-v")
+        {
+            Console.WriteLine(ProductInfo.EntrypointName + " " + ProductInfo.Version);
+            return 0;
+        }
+
+        if (args.Length == 1 && args[0] is "--help" or "-h")
+        {
+            Help();
+            return 0;
+        }
+
+        if (args.Length == 0)
+        {
+            Help();
+            return 2;
+        }
+
+        return args[0] switch
+        {
+            "lifecycle" => await InstanceLifecycleCli.RunAsync(args[1..]).ConfigureAwait(false),
+            "owner" => await OwnerControlCli.RunAsync(args[1..]).ConfigureAwait(false),
+            _ => UnknownCommand(args[0])
+        };
+    }
+
+    private static int UnknownCommand(string command)
+    {
+        Console.Error.WriteLine("ERROR unknown_command: " + command + " is not a Meta Brain CLI command.");
+        Console.Error.WriteLine("HINT run `MetaBrain.Cli.exe --help`; setup verbs are `lifecycle <verb>` and owner workflows are `owner <command>`.");
+        return 2;
+    }
+
+    private static void Help()
+    {
+        Console.Error.WriteLine("Meta Brain CLI " + ProductInfo.Version + " — owner terminal product for the shared Meta Brain instance");
+        Console.Error.WriteLine("usage:");
+        Console.Error.WriteLine("  MetaBrain.Cli.exe lifecycle {start|stop|restart|status|connect} --data-root <dir> | --config <service-settings.json>");
+        Console.Error.WriteLine("  MetaBrain.Cli.exe owner <command> --control-pipe <pipe> [options]");
+        Console.Error.WriteLine("  MetaBrain.Cli.exe owner --help            every owner workflow group");
+        Console.Error.WriteLine("  MetaBrain.Cli.exe owner <verb> --help     the exact inputs of one command");
+        Console.Error.WriteLine("release layout (one shared instance, one locked host, one vault):");
+        Console.Error.WriteLine("  cli\\MetaBrain.Cli.exe               this owner CLI");
+        Console.Error.WriteLine("  owner-ui\\MetaBrain.OwnerUi.exe      owner console: same instance, same owner workflows");
+        Console.Error.WriteLine("  mcp\\MetaBrain.Mcp.exe               agent MCP server over stdio: same instance, agent-scoped tools only");
+        Console.Error.WriteLine("  service\\MetaBrain.Connections.exe   shared runtime host: started by lifecycle, never a product entrypoint");
+        Console.Error.WriteLine("  installer\\MetaBrain.Installer.exe   per-user install/upgrade/uninstall; always keeps the data root");
+        Console.Error.WriteLine("A clean --data-root receives only the nonsensitive service-settings.json; an existing root keeps its");
+        Console.Error.WriteLine("settings, endpoints, vault, sources and backups. Starting a frontend never provisions, unlocks, publishes,");
+        Console.Error.WriteLine("approves or purges anything.");
+        Console.Error.WriteLine("Credentials travel only through secure prompts (never argv/env/config/log/model context); destructive or");
+        Console.Error.WriteLine("authority-minting acts print a frozen preview and require a typed confirmation.");
+        Console.Error.WriteLine("exit codes: 0 done, 2 usage (nothing changed), 3 refused/locked/unavailable/denied, 4 invalid input or");
+        Console.Error.WriteLine("unwritable output, 5 a job that ended without completing, 1 transport or unexpected failure.");
     }
 }
 
@@ -181,15 +261,16 @@ internal static class Program
 
     private static int Usage()
     {
-        // S9-T3 the CLI is a product entrypoint: one executable with contextual
-        // help, owner inputs and secure prompts over the shared lifecycle. Every
-        // owner workflow below is served by an existing shared operation; the
-        // help names the command, never raw JSON assembly, PowerShell glue, a
-        // UI switch or a direct vault write. Run `owner <verb> --help` for the
-        // exact inputs of one command.
-        Console.Error.WriteLine("MetaBrain CLI: MetaBrain.Connections.exe lifecycle {start|stop|restart|status|connect} --config <service-settings.json> | --data-root <dir>");
+        // The shared host carries the internal service modes and the same
+        // lifecycle/owner/agent commands the product frontends reach through
+        // this assembly. The packaged CLI entrypoint (cli\MetaBrain.Cli.exe)
+        // and the MCP entrypoint (mcp\MetaBrain.Mcp.exe) never need a hand-made
+        // settings file, a PowerShell helper or a direct vault write; the
+        // grouped owner text below is the command surface they share.
+        Console.Error.WriteLine("MetaBrain shared host " + ProductInfo.Version + ": service\\MetaBrain.Connections.exe serve-console|serve-service --config <service-settings.json> [--background] (started by the shared lifecycle; not a product entrypoint)");
+        Console.Error.WriteLine("  product CLI: cli\\MetaBrain.Cli.exe lifecycle {start|stop|restart|status|connect} --config <service-settings.json> | --data-root <dir>");
         Console.Error.WriteLine("  setup: lifecycle start|status|connect|stop|restart — resolve/create/select the instance and start or connect the shared locked host");
-        Console.Error.WriteLine("MetaBrain CLI: MetaBrain.Connections.exe owner <command> --control-pipe <pipe> [options]  (owner <command> --help shows one command)");
+        Console.Error.WriteLine("MetaBrain CLI: MetaBrain.Cli.exe owner <command> --control-pipe <pipe> [options]  (owner <command> --help shows one command)");
         Console.Error.WriteLine("  vault: owner {status|provision|unlock|recover|lock|upgrade|upgrade-with-recovery-code|rollback|rollback-with-recovery-code|health|audit|diagnostics|retention|backup|restore|restore-with-recovery-code|export} — provision/recovery/unlock/lock, audit/diagnostics/retention, encrypted backup/restore/export and supported upgrade");
         Console.Error.WriteLine("  capture: owner {memory-create|memory-revise|memory-import|memory-read|read|write|source-create|source-revise|source-read|research-capture|research-read|feedback-create|feedback-read} — capture and read-back with --body/--title/--note/--input-file (an advanced owner-owned file may carry the exact draft JSON instead)");
         Console.Error.WriteLine("  library: owner {library|memory-read|source-read|research-read|relation-read|lifecycle-read|lifecycle-retained-read|recall-read|review-list|review-record|index-status|index-rebuild} — filter/detail/evidence/current-history/revise/index recovery");

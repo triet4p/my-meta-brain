@@ -245,48 +245,13 @@ internal sealed partial class OwnerInstanceSession
     }
 
     /// <summary>
-    /// The service host for this console in a supported product layout: the
-    /// installed layout (<c>service/MetaBrain.Connections.exe</c> next to
-    /// <c>owner-ui/MetaBrain.OwnerUi.exe</c>) or the flat layout (both
-    /// executables side by side). Developer runs of the service binary itself
-    /// resolve to the running process. Never a user-typed path.
+    /// The shared host for this console in a supported product layout: the
+    /// release layout (<c>service/MetaBrain.Connections.exe</c> beside
+    /// <c>owner-ui/MetaBrain.OwnerUi.exe</c>, the same one the CLI and MCP
+    /// entrypoints resolve) or the flat developer layout. Never a user-typed
+    /// path.
     /// </summary>
-    private static string ResolveHostExecutable()
-    {
-        var self = Environment.ProcessPath;
-        if (!string.IsNullOrEmpty(self))
-        {
-            var selfDir = Path.GetDirectoryName(Path.GetFullPath(self));
-            if (!string.IsNullOrEmpty(selfDir))
-            {
-                var flat = Path.Combine(selfDir, "MetaBrain.Connections.exe");
-                if (File.Exists(flat))
-                {
-                    return flat;
-                }
-            }
-
-            var installRoot = selfDir is null ? null : Path.GetDirectoryName(selfDir);
-            if (!string.IsNullOrEmpty(installRoot))
-            {
-                var packaged = Path.Combine(installRoot, "service", "MetaBrain.Connections.exe");
-                if (File.Exists(packaged))
-                {
-                    return packaged;
-                }
-            }
-
-            if (string.Equals(Path.GetFileName(self), "MetaBrain.Connections.exe", StringComparison.OrdinalIgnoreCase))
-            {
-                return self;
-            }
-        }
-
-        throw new InstanceLifecycleException(
-            "host_missing",
-            "The service host executable cannot be located.",
-            "Reinstall the application payload so the service host is present, then try again.");
-    }
+    private static string ResolveHostExecutable() => ProductHost.Resolve();
 
     private async Task ProbeAsync()
     {

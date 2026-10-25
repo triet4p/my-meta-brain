@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Reflection;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using MetaBrain.Connections;
@@ -55,7 +54,7 @@ internal static class InstallCommand
             InstallState.CurrentSchemaVersion,
             DateTime.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
             dataRoot,
-            ProductVersion());
+            ProductInfo.Version);
         state.Write(Path.Combine(installRoot, InstallLayout.StateFileName));
 
         var layout = InstallLayout.Create(installRoot, dataRoot);
@@ -75,12 +74,16 @@ internal static class InstallCommand
         }
 
         Console.WriteLine("INSTALLED");
+        Console.WriteLine("product version=" + ProductInfo.Version);
         Console.WriteLine("install root=" + layout.InstallRoot);
         Console.WriteLine("data root=" + layout.DataRoot);
         Console.WriteLine("settings=" + layout.SettingsPath);
         Console.WriteLine("control pipe=" + settings.ControlPipe);
         Console.WriteLine("agent pipe=" + settings.AgentPipe);
-        Console.WriteLine("owner console=" + layout.OwnerUiExecutable + " --control-pipe " + settings.ControlPipe);
+        Console.WriteLine("cli=" + layout.CliExecutable);
+        Console.WriteLine("owner console=" + layout.OwnerUiExecutable);
+        Console.WriteLine("mcp=" + layout.McpExecutable);
+        Console.WriteLine("shared host=" + layout.ServiceExecutable);
         Console.WriteLine("autostart=" + (autostart.TryRead(out var command) ? "enabled" : "disabled"));
         if (command is not null)
         {
@@ -115,11 +118,22 @@ internal static class InstallCommand
             Console.WriteLine("autostart=disabled");
         }
 
+        var statePath = layout.StatePath;
+        var marked = File.Exists(statePath);
+
         DeleteDirectory(layout.ServiceDirectory);
         DeleteDirectory(layout.OwnerUiDirectory);
+        DeleteDirectory(layout.McpDirectory);
+        DeleteDirectory(layout.CliDirectory);
+        // The install-root removal is scheduled before this directory is
+        // cleared: it starts a helper process, and a self-contained payload
+        // keeps its own framework assemblies (including the process APIs the
+        // helper needs) in this directory. Clearing the files first would make
+        // the helper's own dependencies disappear before it is started.
+        ScheduleRemoval(layout.InstallRoot, marked);
         // The running installer executable cannot be deleted by itself, so the
         // rest of the installer directory is cleared now and the install root
-        // is removed by a delayed delete once this process has exited.
+        // is removed by the delayed delete scheduled above.
         foreach (var file in Directory.EnumerateFiles(layout.InstallerDirectory))
         {
             if (!string.Equals(Path.GetFullPath(file), Path.GetFullPath(Environment.ProcessPath ?? string.Empty),
@@ -129,10 +143,7 @@ internal static class InstallCommand
             }
         }
 
-        var statePath = layout.StatePath;
-        var marked = File.Exists(statePath);
         TryDelete(statePath);
-        ScheduleRemoval(layout.InstallRoot, marked);
 
         // The data root holds the vault, the source snapshots, the backups and
         // the recovery material. An uninstall removes the application, never
@@ -197,7 +208,8 @@ internal static class InstallCommand
                  {
                      Path.Combine(InstallLayout.ServiceDirectoryName, "MetaBrain.Connections.exe"),
                      Path.Combine(InstallLayout.OwnerUiDirectoryName, "MetaBrain.OwnerUi.exe"),
-                     Path.Combine(InstallLayout.McpDirectoryName, "MetaBrain.Mcp.exe")
+                     Path.Combine(InstallLayout.McpDirectoryName, "MetaBrain.Mcp.exe"),
+                     Path.Combine(InstallLayout.CliDirectoryName, "MetaBrain.Cli.exe")
                  })
         {
             if (!File.Exists(Path.Combine(payload, required)))
@@ -215,6 +227,7 @@ internal static class InstallCommand
                      InstallLayout.ServiceDirectoryName,
                      InstallLayout.OwnerUiDirectoryName,
                      InstallLayout.McpDirectoryName,
+                     InstallLayout.CliDirectoryName,
                      InstallLayout.InstallerDirectoryName
                  })
         {
@@ -348,10 +361,14 @@ internal static class InstallCommand
         var start = new ProcessStartInfo("cmd.exe")
         {
             UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = true,
+            // The whole command is one cmd /c string. /d skips AutoRun and /s
+            // makes cmd strip only the outer quotes, so the quoted install root
+            // reaches rmdir intact even when the path contains spaces. Building
+            // the same text through ArgumentList would escape the inner quotes
+            // as \" which cmd does not unescape, and rmdir would then fail.
+            Arguments = "/d /s /c \"ping 127.0.0.1 -n 3 > nul & rmdir /s /q \"" + installRoot + "\"\""
         };
-        start.ArgumentList.Add("/c");
-        start.ArgumentList.Add("ping 127.0.0.1 -n 3 > nul & rmdir /s /q \"" + installRoot + "\"");
         try
         {
             Process.Start(start);
@@ -360,11 +377,5 @@ internal static class InstallCommand
         {
             Console.WriteLine("the install root could not be removed automatically: " + installRoot);
         }
-    }
-
-    private static string ProductVersion()
-    {
-        var version = Assembly.GetExecutingAssembly().GetName().Version;
-        return version is null ? "0.0.0" : version.ToString();
     }
 }
