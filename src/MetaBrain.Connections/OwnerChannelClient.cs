@@ -348,6 +348,24 @@ public sealed record OwnerItemReadResult(
     string? ErrorCode,
     OwnerItemDetail? Item);
 
+/// <summary>S9-T4 one stored owner feedback record, exactly as the service served it.</summary>
+public sealed record OwnerFeedbackDetail(
+    string Id,
+    string ZoneId,
+    long Revision,
+    string TargetResourceId,
+    long TargetRevision,
+    string Kind,
+    string? Note,
+    string Executor,
+    string CreationMethod,
+    DateTimeOffset RecordedAtUtc);
+
+public sealed record OwnerFeedbackResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerFeedbackDetail? Feedback);
+
 /// <summary>
 /// One registered source at the exact registry revision the service served.
 /// The locator is the owner's own enrollment locator; it stays inside the
@@ -1414,6 +1432,239 @@ public static partial class OwnerChannelClient
             cancellationToken);
 
     /// <summary>
+    /// S9-T4 writes one memory item through the existing revision-free create
+    /// operation. The draft is the exact JSON the shared domain codec reads;
+    /// the service validates and stores it. A refusal changes nothing.
+    /// </summary>
+    public static async Task<OwnerItemReadResult> CreateMemoryItemAsync(
+        string controlPipe,
+        string resourceId,
+        string zoneId,
+        byte[] draft,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(resourceId);
+        ArgumentNullException.ThrowIfNull(zoneId);
+        ArgumentNullException.ThrowIfNull(draft);
+        try
+        {
+            var reply = await ReadReplyAsync(
+                controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.MemoryCreateOperation,
+                    ResourceId: resourceId,
+                    ZoneId: zoneId,
+                    ContentBase64: Convert.ToBase64String(draft)),
+                "memory_created",
+                cancellationToken).ConfigureAwait(false);
+
+            return new OwnerItemReadResult(reply.Outcome, reply.ErrorCode, ProjectItem(reply));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(draft);
+        }
+    }
+
+    /// <summary>
+    /// S9-T4 revises one memory item through the existing revision-gated
+    /// operation: the caller names the live revision it replaces. A stale
+    /// expected revision fails closed and publishes nothing.
+    /// </summary>
+    public static async Task<OwnerItemReadResult> ReviseMemoryItemAsync(
+        string controlPipe,
+        OwnerItemDetail item,
+        byte[] draft,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        ArgumentNullException.ThrowIfNull(draft);
+        try
+        {
+            var reply = await ReadReplyAsync(
+                controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.MemoryReviseOperation,
+                    ResourceId: item.Id,
+                    ZoneId: item.ZoneId,
+                    ContentBase64: Convert.ToBase64String(draft),
+                    ResourceRevision: item.Revision),
+                "memory_revised",
+                cancellationToken).ConfigureAwait(false);
+
+            return new OwnerItemReadResult(reply.Outcome, reply.ErrorCode, ProjectItem(reply));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(draft);
+        }
+    }
+
+    /// <summary>
+    /// S9-T4 appends one owner verdict on a seen target through the existing
+    /// S4-T4 feedback operation. The draft is the exact JSON the shared codec
+    /// reads; nothing here edits the target, upgrades evidence or rewrites
+    /// beliefs.
+    /// </summary>
+    public static async Task<OwnerFeedbackResult> CreateFeedbackAsync(
+        string controlPipe,
+        string resourceId,
+        string zoneId,
+        byte[] draft,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(resourceId);
+        ArgumentNullException.ThrowIfNull(zoneId);
+        ArgumentNullException.ThrowIfNull(draft);
+        try
+        {
+            var reply = await ReadReplyAsync(
+                controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.FeedbackCreateOperation,
+                    ResourceId: resourceId,
+                    ZoneId: zoneId,
+                    ContentBase64: Convert.ToBase64String(draft)),
+                "feedback_created",
+                cancellationToken).ConfigureAwait(false);
+
+            return new OwnerFeedbackResult(reply.Outcome, reply.ErrorCode, ProjectFeedback(reply));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(draft);
+        }
+    }
+
+    /// <summary>
+    /// S9-T4 reads one stored feedback record at the pinned revision through
+    /// the existing S4-T4 read operation.
+    /// </summary>
+    public static async Task<OwnerFeedbackResult> ReadFeedbackAsync(
+        string controlPipe,
+        string resourceId,
+        long? revision,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(resourceId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.FeedbackReadOperation,
+                ResourceId: resourceId,
+                ResourceRevision: revision),
+            "feedback",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerFeedbackResult(reply.Outcome, reply.ErrorCode, ProjectFeedback(reply));
+    }
+
+    /// <summary>
+    /// S9-T4 purges one explicitly preserved snapshot through the existing
+    /// source-snapshot-purge operation. The snapshot's bytes authorize
+    /// nothing afterwards.
+    /// </summary>
+    public static async Task<OwnerSourceSnapshotResult> PurgeSourceSnapshotAsync(
+        string controlPipe,
+        string snapshotId,
+        long expectedRevision,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(snapshotId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceSnapshotPurgeOperation,
+                ResourceId: snapshotId,
+                ResourceRevision: expectedRevision),
+            "source_snapshot_purged",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerSourceSnapshotResult(reply.Outcome, reply.ErrorCode, ProjectSnapshot(reply));
+    }
+
+    /// <summary>
+    /// S9-T4 creates one subject lifecycle record through the existing
+    /// lifecycle-create operation. The draft is the exact JSON the shared
+    /// codec reads (creation method, reason and stamps).
+    /// </summary>
+    public static async Task<OwnerLifecycleResult> CreateLifecycleAsync(
+        string controlPipe,
+        string subjectId,
+        byte[] draft,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(subjectId);
+        ArgumentNullException.ThrowIfNull(draft);
+        try
+        {
+            var reply = await ReadReplyAsync(
+                controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.LifecycleCreateOperation,
+                    ResourceId: subjectId,
+                    ContentBase64: Convert.ToBase64String(draft)),
+                "lifecycle_created",
+                cancellationToken).ConfigureAwait(false);
+
+            return new OwnerLifecycleResult(reply.Outcome, reply.ErrorCode, ProjectLifecycle(reply));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(draft);
+        }
+    }
+
+    /// <summary>
+    /// S9-T4 runs one lifecycle transition (publish, reject, withdraw,
+    /// re-propose, question resolve/reopen, intention complete/cancel/
+    /// supersede/notify/acknowledge, validity set, retain) through the
+    /// existing shared transition operation. The draft carries the rationale
+    /// and optional replacement; a stale expected revision fails closed.
+    /// </summary>
+    public static async Task<OwnerLifecycleResult> TransitionLifecycleAsync(
+        string controlPipe,
+        string subjectId,
+        long expectedRevision,
+        string operation,
+        string expectedStatus,
+        byte[]? draft,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(subjectId);
+        ArgumentNullException.ThrowIfNull(operation);
+        ArgumentNullException.ThrowIfNull(expectedStatus);
+        try
+        {
+            var reply = await ReadReplyAsync(
+                controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    operation,
+                    ResourceId: subjectId,
+                    ContentBase64: draft is null ? null : Convert.ToBase64String(draft),
+                    ResourceRevision: expectedRevision),
+                expectedStatus,
+                cancellationToken).ConfigureAwait(false);
+
+            return new OwnerLifecycleResult(reply.Outcome, reply.ErrorCode, ProjectLifecycle(reply));
+        }
+        finally
+        {
+            if (draft is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(draft);
+            }
+        }
+    }
+
+    /// <summary>
     /// Searches the owner's own library over the owner control pipe. The
     /// service applies the text, zone, collection, kind, level, time and
     /// currentness filters and ranks the page; this client only classifies the
@@ -2319,9 +2570,6 @@ public static partial class OwnerChannelClient
             reason,
             StateReason: null,
             OccurredAtUtc: null,
-            // The owner path records the link when the act is sent; the shared
-            // validator requires a UTC recorded instant, and only the agent path
-            // stamps one server-side.
             RecordedAtUtc: DateTimeOffset.UtcNow));
         try
         {
@@ -2345,7 +2593,6 @@ public static partial class OwnerChannelClient
     }
 
     /// <summary>
-    /// Accepts a proposed link as the owner's own conclusion. The stored record
     /// keeps the claim that accompanied it; only the state, its executor and its
     /// time change, so confirming an agent's link never rewrites what the agent
     /// reported.
@@ -4851,6 +5098,27 @@ public static partial class OwnerChannelClient
             pins,
             Flag(preview, "pinsCurrent"),
             Strings(preview, "mismatchedResourceIds"));
+    }
+    private static OwnerFeedbackDetail? ProjectFeedback(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            !reply.Payload.TryGetProperty("feedback", out var feedback) ||
+            feedback.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return new OwnerFeedbackDetail(
+            Text(feedback, "id") ?? string.Empty,
+            Text(feedback, "zoneId") ?? string.Empty,
+            Int64(feedback, "revision"),
+            Text(feedback, "targetResourceId") ?? string.Empty,
+            Int64(feedback, "targetRevision"),
+            Text(feedback, "kind") ?? string.Empty,
+            Text(feedback, "note"),
+            Text(feedback, "executor") ?? string.Empty,
+            Text(feedback, "creationMethod") ?? string.Empty,
+            Timestamp(feedback, "recordedAtUtc") ?? DateTimeOffset.MinValue);
     }
 
     private static OwnerReviewDraft ProjectDeclassifyDraft(JsonElement item)

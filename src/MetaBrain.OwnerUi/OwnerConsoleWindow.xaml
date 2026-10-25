@@ -86,6 +86,42 @@
                             <TextBlock Grid.Row="4" Grid.Column="0" Text="Last check" Foreground="#FF6B7280" />
                             <TextBlock Grid.Row="4" Grid.Column="1" x:Name="LastCheckText" TextWrapping="Wrap" />
                         </Grid>
+                        <TextBlock Text="Service instance — the shared host this console serves" FontWeight="SemiBold" Margin="0,20,0,6" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,2" Foreground="#FF6B7280"
+                                   Text="One data-root folder holds one instance: its settings file, its vault and its two pipe endpoints. A clean folder creates the instance with fresh endpoints; an existing folder keeps its settings byte-identical. Starting serves the same locked host every frontend uses — it provisions nothing, unlocks nothing and mints no grant. Closing this console never stops the shared host; only Stop service below ends it." />
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Data-root folder" Foreground="#FF6B7280" VerticalAlignment="Center" />
+                            <TextBox Grid.Column="1" x:Name="InstanceDataRootInput" MinWidth="300"
+                                     AutomationProperties.AutomationId="InstanceDataRootInput" />
+                            <Button Grid.Column="2" x:Name="InstanceBrowseButton" Content="Choose folder…" Padding="14,7" Margin="8,0,0,0"
+                                    AutomationProperties.AutomationId="InstanceBrowseButton" Click="OnInstanceBrowseClicked" />
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="InstanceSelectButton" Content="Use this folder" Padding="14,7" Click="OnInstanceSelectClicked"
+                                    AutomationProperties.AutomationId="InstanceSelectButton" />
+                            <Button x:Name="InstanceStartButton" Content="Start service" Padding="14,7" Margin="8,0,0,0" Click="OnInstanceStartClicked"
+                                    AutomationProperties.AutomationId="InstanceStartButton" />
+                            <Button x:Name="InstanceCheckButton" Content="Check status" Padding="14,7" Margin="8,0,0,0" Click="OnInstanceCheckClicked"
+                                    AutomationProperties.AutomationId="InstanceCheckButton" />
+                            <Button x:Name="InstanceRestartButton" Content="Restart service" Padding="14,7" Margin="8,0,0,0" Click="OnInstanceRestartClicked"
+                                    AutomationProperties.AutomationId="InstanceRestartButton" />
+                            <Button x:Name="InstanceStopButton" Content="Stop service" Padding="14,7" Margin="8,0,0,0" Click="OnInstanceStopClicked"
+                                    AutomationProperties.AutomationId="InstanceStopButton" />
+                            <Button x:Name="InstanceClearButton" Content="Forget folder" Padding="14,7" Margin="8,0,0,0" Click="OnInstanceClearClicked"
+                                    AutomationProperties.AutomationId="InstanceClearButton" />
+                        </StackPanel>
+                        <TextBlock x:Name="InstanceStateText" TextWrapping="Wrap" Margin="0,10,0,0" FontSize="15"
+                                   AutomationProperties.AutomationId="InstanceStateText" />
+                        <TextBlock x:Name="InstanceMessageText" TextWrapping="Wrap" Margin="0,6,0,0" FontWeight="SemiBold"
+                                   AutomationProperties.AutomationId="InstanceMessageText" />
+                        <TextBlock x:Name="InstanceLastCheckText" TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280"
+                                   AutomationProperties.AutomationId="InstanceLastCheckText" />
+
 
                         <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
                             <Button x:Name="ConnectButton" Content="Connect to service" Padding="14,7" Click="OnConnectClicked" />
@@ -308,6 +344,15 @@
                                              AutomationProperties.AutomationId="LibraryTitleInput" KeyDown="OnLibraryTitleKeyDown" />
                                     <Button x:Name="LibraryRenameButton" Content="Save new title" Padding="14,7" Margin="8,0,0,0" Click="OnLibraryRenameClicked" />
                                 </StackPanel>
+                                <TextBlock Text="Body (the editor — saving writes one new revision of this same item)" Margin="0,10,0,2" Foreground="#FF6B7280" />
+                                <TextBox x:Name="LibraryDetailBodyInput" Height="110" AcceptsReturn="True" TextWrapping="Wrap"
+                                         VerticalScrollBarVisibility="Auto" FontFamily="Consolas"
+                                         AutomationProperties.AutomationId="LibraryDetailBodyInput" />
+                                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                    <Button x:Name="LibraryReviseBodyButton" Content="Save edited body" Padding="14,7"
+                                            HorizontalAlignment="Left" Click="OnLibraryReviseBodyClicked"
+                                            AutomationProperties.AutomationId="LibraryReviseBodyButton" />
+                                </StackPanel>
                                 <TextBlock x:Name="LibraryDetailBodyText" TextWrapping="Wrap" Margin="0,10,0,0" />
                                 <TextBlock x:Name="LibraryDetailApplicabilityText" TextWrapping="Wrap" Margin="0,8,0,0" Foreground="#FF6B7280" />
                                 <TextBlock x:Name="LibraryDetailWarningsText" TextWrapping="Wrap" Margin="0,8,0,0" Foreground="#FF9A1C1C" />
@@ -373,6 +418,41 @@
                                     <Button x:Name="LibraryPurgeConfirmButton" Content="Confirm PURGE" Padding="14,7"
                                         Margin="8,0,0,0" HorizontalAlignment="Left" Click="OnLibraryPurgeConfirmClicked" />
                                 </StackPanel>
+                                <TextBlock Text="Owner verdict on this item (append-only; never edits the item)" FontWeight="SemiBold" Margin="0,14,0,0" />
+                                <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
+                                           Text="A verdict says how the open revision behaved in use. It never upgrades evidence and never rewrites the item." />
+                                <Grid Margin="0,8,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="150" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="90" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Verdict ID (you name it)" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                                    <TextBox Grid.Row="0" Grid.Column="1" x:Name="LibraryFeedbackIdInput" Margin="0,0,10,6"
+                                             AutomationProperties.AutomationId="LibraryFeedbackIdInput" />
+                                    <TextBlock Grid.Row="0" Grid.Column="2" Text="Zone" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                                    <ComboBox Grid.Row="0" Grid.Column="3" x:Name="LibraryFeedbackZoneInput" Margin="0,0,0,6"
+                                              IsEditable="True" AutomationProperties.AutomationId="LibraryFeedbackZoneInput" />
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Kind" Foreground="#FF6B7280" />
+                                    <ComboBox Grid.Row="1" Grid.Column="1" x:Name="LibraryFeedbackKindInput" Margin="0,0,10,0"
+                                              AutomationProperties.AutomationId="LibraryFeedbackKindInput" />
+                                    <TextBlock Grid.Row="1" Grid.Column="2" Text="Note" Foreground="#FF6B7280" />
+                                    <TextBox Grid.Row="1" Grid.Column="3" x:Name="LibraryFeedbackNoteInput"
+                                             AutomationProperties.AutomationId="LibraryFeedbackNoteInput" />
+                                </Grid>
+                                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                    <Button x:Name="LibraryFeedbackCreateButton" Content="Record verdict on this revision" Padding="14,7"
+                                            HorizontalAlignment="Left" Click="OnLibraryFeedbackCreateClicked"
+                                            AutomationProperties.AutomationId="LibraryFeedbackCreateButton" />
+                                    <Button x:Name="LibraryFeedbackReadButton" Content="Read verdict" Padding="14,7"
+                                            Margin="8,0,0,0" HorizontalAlignment="Left" Click="OnLibraryFeedbackReadClicked"
+                                            AutomationProperties.AutomationId="LibraryFeedbackReadButton" />
+                                </StackPanel>
                             </StackPanel>
                         </Border>
                         <TextBlock Text="Next steps" FontWeight="SemiBold" Margin="0,20,0,6" />
@@ -401,6 +481,41 @@
                         <TextBlock Text="Inbox" FontSize="19" FontWeight="SemiBold" />
                         <TextBlock TextWrapping="Wrap" Margin="0,8,0,0"
                                    Text="Capture unstructured text into your encrypted vault and review the proposals agents left for you. The service owns the encrypted source write, the proposal inbox, the reviewed item, its publication decision and that decision's history; this console only sends your acts and renders the answers it receives. Neither act needs a provider, a network call or a fetch." />
+
+                        <TextBlock Text="Write a memory item (ID, zone and body are the write; kind and level optional)" FontWeight="SemiBold" Margin="0,18,0,0" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
+                                   Text="A memory item is a structured note with attribution. The body below is the write; the ID and zone name it. Author defaults to you, method to direct write, evidence to unverified, level to l1." />
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="120" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Memory ID (you name it)" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="MemoryResourceInput" Margin="0,0,10,6"
+                                     AutomationProperties.AutomationId="MemoryResourceInput" />
+                            <TextBlock Grid.Row="0" Grid.Column="2" Text="Zone" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <ComboBox Grid.Row="0" Grid.Column="3" x:Name="MemoryZoneInput" Margin="0,0,0,6"
+                                      IsEditable="True" AutomationProperties.AutomationId="MemoryZoneInput" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Title (optional)" Foreground="#FF6B7280" />
+                            <TextBox Grid.Row="1" Grid.Column="1" x:Name="MemoryTitleInput" Margin="0,0,10,0"
+                                     AutomationProperties.AutomationId="MemoryTitleInput" />
+                            <TextBlock Grid.Row="1" Grid.Column="2" Text="Kind" Foreground="#FF6B7280" />
+                            <ComboBox Grid.Row="1" Grid.Column="3" x:Name="MemoryKindInput"
+                                      AutomationProperties.AutomationId="MemoryKindInput" />
+                        </Grid>
+                        <TextBox x:Name="MemoryBodyInput" Height="110" Margin="0,10,0,0" AcceptsReturn="True"
+                                 TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas"
+                                 AutomationProperties.AutomationId="MemoryBodyInput" />
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="MemoryCreateButton" Content="Write memory item" Padding="14,7" Click="OnMemoryCreateClicked"
+                                    AutomationProperties.AutomationId="MemoryCreateButton" />
+                        </StackPanel>
 
                         <TextBlock Text="Capture a note (text and zone are the write; metadata is optional)" FontWeight="SemiBold" Margin="0,18,0,0" />
                         <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
@@ -583,6 +698,74 @@
                             </StackPanel>
                         </Border>
 
+                        <Border x:Name="LifecycleDirectPanel" Margin="0,14,0,0" Padding="14" Background="White"
+                                BorderBrush="#FFD5D8DC" BorderThickness="1" CornerRadius="3">
+                            <StackPanel>
+                                <TextBlock Text="Subject lifecycle — create a record or run its acts directly" FontWeight="SemiBold" FontSize="15" />
+                                <TextBlock TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280"
+                                           Text="A subject is a memory item, a question or an intention. Creating writes its lifecycle record in proposal state; each act names the live revision it replaces. A stale revision fails closed and publishes nothing." />
+                                <Grid Margin="0,10,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="150" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="100" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Subject ID" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                                    <TextBox Grid.Row="0" Grid.Column="1" x:Name="LifecycleSubjectInput" Margin="0,0,10,6"
+                                             AutomationProperties.AutomationId="LifecycleSubjectInput" />
+                                    <TextBlock Grid.Row="0" Grid.Column="2" Text="Revision" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                                    <TextBox Grid.Row="0" Grid.Column="3" x:Name="LifecycleRevisionInput" Margin="0,0,0,6"
+                                             AutomationProperties.AutomationId="LifecycleRevisionInput" />
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Reason" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                                    <TextBox Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="3" x:Name="LifecycleReasonInput" Margin="0,0,0,6"
+                                             AutomationProperties.AutomationId="LifecycleReasonInput" />
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Replacement" Foreground="#FF6B7280" />
+                                    <TextBox Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="3" x:Name="LifecycleReplacementInput"
+                                             AutomationProperties.AutomationId="LifecycleReplacementInput" />
+                                </Grid>
+                                <TextBlock TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280"
+                                           Text="Replacement is only for supersede; reason is recorded in the item's history." />
+                                <TextBlock Text="Validity (SetValidity act only — explicit future or past UTC instants with a Z suffix)" FontWeight="SemiBold" Margin="0,10,0,0" />
+                                <Grid Margin="0,6,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="150" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Valid from (UTC)" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                                    <TextBox Grid.Row="0" Grid.Column="1" x:Name="LifecycleValidFromInput" Margin="0,0,0,6"
+                                             AutomationProperties.AutomationId="LifecycleValidFromInput" />
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Valid until (UTC)" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                                    <TextBox Grid.Row="1" Grid.Column="1" x:Name="LifecycleValidUntilInput" Margin="0,0,0,6"
+                                             AutomationProperties.AutomationId="LifecycleValidUntilInput" />
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Review after (UTC)" Foreground="#FF6B7280" />
+                                    <TextBox Grid.Row="2" Grid.Column="1" x:Name="LifecycleReviewAfterInput"
+                                             AutomationProperties.AutomationId="LifecycleReviewAfterInput" />
+                                </Grid>
+                                <TextBlock TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#FF6B7280"
+                                           Text="Empty means absent. A past review-after makes the service name this item in the review queue on the next read." />
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                    <Button x:Name="LifecycleCreateButton" Content="Create record" Padding="14,7" Click="OnLifecycleCreateClicked"
+                                            AutomationProperties.AutomationId="LifecycleCreateButton" />
+                                    <ComboBox x:Name="LifecycleActInput" Width="170" Margin="8,0,0,0" VerticalContentAlignment="Center"
+                                              AutomationProperties.AutomationId="LifecycleActInput" />
+                                    <Button x:Name="LifecycleRunButton" Content="Run act" Padding="14,7" Margin="8,0,0,0" Click="OnLifecycleRunClicked"
+                                            AutomationProperties.AutomationId="LifecycleRunButton" />
+                                </StackPanel>
+                                <TextBlock x:Name="LifecycleMessageText" TextWrapping="Wrap" Margin="0,10,0,0" FontWeight="SemiBold"
+                                           AutomationProperties.AutomationId="LifecycleMessageText" />
+                            </StackPanel>
+                        </Border>
                         <TextBlock Text="Next steps" FontWeight="SemiBold" Margin="0,20,0,6" />
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,0">
                             <Button x:Name="InboxGoLibraryButton" Content="Find it in Library" Padding="14,7" Click="OnGoLibraryClicked" />
@@ -1201,6 +1384,8 @@
                         <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                             <Button x:Name="SnapshotPreserveButton" Content="Preserve this snapshot" Padding="14,7" Click="OnSnapshotPreserveClicked" />
                             <Button x:Name="SnapshotRetainButton" Content="Extend selected retention" Padding="14,7" Margin="8,0,0,0" Click="OnSnapshotRetainClicked" />
+                            <Button x:Name="SnapshotPurgeButton" Content="Purge selected snapshot" Padding="14,7" Margin="8,0,0,0" Click="OnSnapshotPurgeClicked"
+                                    AutomationProperties.AutomationId="SnapshotPurgeButton" />
                         </StackPanel>
 
                         <TextBlock Text="Scope and limits of this view" FontWeight="SemiBold" Margin="0,20,0,6" />

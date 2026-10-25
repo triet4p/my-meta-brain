@@ -643,6 +643,35 @@ internal sealed partial class OwnerConsoleSession
     }
 
     /// <summary>
+    /// S9-T4 purges one explicitly preserved snapshot through the existing
+    /// source-snapshot-purge operation. The snapshot's bytes authorize
+    /// nothing afterwards. The service rechecks the live revision, so a
+    /// moved snapshot reports its conflict with its remediation.
+    /// </summary>
+    public async Task PurgeSnapshotAsync(OwnerSourceSnapshotDescriptor snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (TryBeginSourcesAct() is not { } epoch)
+        {
+            return;
+        }
+
+        SnapshotMessage = null;
+        var result = await ExecuteSourcesAsync(
+            token => OwnerChannelClient.PurgeSourceSnapshotAsync(ControlPipe, snapshot.Id, snapshot.Revision, token),
+            code => new OwnerSourceSnapshotResult(OwnerCommandOutcome.Unavailable, code, null)).ConfigureAwait(true);
+
+        await ProbeAsync().ConfigureAwait(true);
+        ApplySnapshotAnswer(epoch, "purge snapshot", result);
+        Append(DescribeSourcesActForLog("purge snapshot", result.Outcome, result.ErrorCode));
+        RaiseChanged();
+        if (result.Outcome == OwnerCommandOutcome.Completed && OpenSource is { } open)
+        {
+            await ListSnapshotsAsync(open).ConfigureAwait(true);
+        }
+    }
+
+    /// <summary>
     /// Reports a sources-form value this console refuses to send, so the owner
     /// sees which input is unusable instead of a silently different act.
     /// Never private content or a locator.

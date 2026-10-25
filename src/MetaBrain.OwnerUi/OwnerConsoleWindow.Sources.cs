@@ -639,6 +639,30 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         await _session.RetainSnapshotAsync(open, retainUntilUtc);
     }
 
+    /// <summary>
+    /// S9-T4 purges the selected preserved snapshot through the existing
+    /// source-snapshot-purge operation. The snapshot's bytes authorize
+    /// nothing afterwards. A stale listed revision reports its conflict
+    /// with its remediation instead of purging a pinned copy.
+    /// </summary>
+    private async void OnSnapshotPurgeClicked(object sender, RoutedEventArgs e)
+    {
+        if (SnapshotsList.SelectedItem is not SnapshotRow row)
+        {
+            _session.ReportSnapshotFormProblem(
+                "This console purged nothing: choose the preserved snapshot to purge first. Nothing changed.");
+            return;
+        }
+
+        await _session.OpenSnapshotAsync(row.Descriptor);
+        if (_session.OpenSnapshot is not { } open || !string.Equals(open.Id, row.Descriptor.Id, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        await _session.PurgeSnapshotAsync(row.Descriptor);
+    }
+
     private static bool IsMappingUnknownRow(SourceRow row) =>
         row.Source.Quarantine is not null &&
         string.Equals(row.Source.Quarantine.Reason, "mapping_unknown", StringComparison.Ordinal);
@@ -847,6 +871,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         SnapshotReferenceRegisterButton.IsEnabled = unlocked && !inFlight && selectedSource is not null && !selectedHeld;
         var openSnapshot = SnapshotsList.SelectedItem as SnapshotRow;
         SnapshotRetainButton.IsEnabled = unlocked && !inFlight && openSnapshot is not null;
+        SnapshotPurgeButton.IsEnabled = unlocked && !inFlight && openSnapshot is not null;
         SnapshotsList.IsEnabled = unlocked && !inFlight;
     }
 

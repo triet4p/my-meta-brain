@@ -160,6 +160,53 @@ the console showed. Exit codes are truthful: `0` done, `2` usage (nothing change
 refused/locked/unavailable/denied, `4` invalid input or unwritable output, `5` a job that ended
 without completing, `1` transport or unexpected failure.
 
+### 3.3 The owner console (S9-T4)
+
+The packaged console is `owner-ui/MetaBrain.OwnerUi.exe`. It opens on the **Owner session**
+view with no instance selected: it starts nothing, provisions nothing and unlocks nothing, so
+a fresh start never implies owner consent for a vault operation. The owner picks the
+data-root folder (`Choose folder…` or type the path), chooses **Use this folder** (a clean
+folder creates the instance with fresh endpoints; an existing folder keeps its settings
+byte-identical), then **Start service** serves the same shared locked host every frontend
+uses (§3.1). **Check status** re-reads the real host state; **Restart service** is a fresh
+locked host with no surviving session; **Stop service** is the only act that ends the shared
+host (drain, lock, exit). **Forget folder** clears this console's selection without stopping
+anything. **Connect to service** attaches the owner session to the selected instance's
+control pipe once the host answers; a failed host leaves the session where it was.
+Closing the console ends its own session and clears its own private views — the shared host
+keeps running, so another frontend's host is never killed by closing this window.
+
+Every owner workflow below runs in the console with no script, no CLI and no settings
+hand-edit. Credentials travel only through `PasswordBox` fields into one request each and
+are cleared on lock, disconnect, ended session or refused credential; the once-shown
+recovery key is hidden on demand and cleared with the same boundary, and no cache, log
+or screenshot carries it. Every screen offers explicit next actions on refusal with the
+service's own code and remediation. Keyboard: `Ctrl+F` focuses library search, `Enter`
+runs/opens, `F5` refreshes the active view, `Ctrl+L` locks (warns first when the capture
+editor holds unsaved text).
+
+```text
+owner-ui/MetaBrain.OwnerUi.exe                                  # Owner session: select/start/connect/status/stop/restart; Vault & key: provision/recovery/unlock/lock
+```
+
+Coverage in the console, each over the existing shared operation with identical semantics:
+provision/recovery/unlock/lock with wrong-key fail-closed; zone/collection pickers plus source
+mapping/enroll/ingest/refresh/preservation (explicit locator reads, held mapping review with
+withdraw, pause/resume/opt-in/opt-out, collections from service search, snapshots
+preserve/retain/read/purge); capture with read-back; memory write plus body revise (same item,
+new revision); library filter/detail/evidence/current-history/revise/index recovery (index
+status folded into the generation line, explicit rebuild); proposal review/publish/reject/undo
+with attribution and revision gates; feedback verdicts (append-only, never edits the item);
+relations (create/accept/reject/unlink/relink with pinned endpoints from service answers);
+catalog publish/withdraw; access requests with bound preview, narrowing approve, reject,
+handoff path (DPAPI file, never the token) and sessions/revoke; provider configuration and
+jobs/schedules within consent (config/refusal paths; no real provider call without consent);
+intentions time/context triggers, schedule-run pass, complete/cancel/acknowledge;
+lifecycle create plus publish/reject/withdraw/re-propose/question resolve+reopen/intention
+acts/validity-set/retain on the subject's live revision; review queue with recorded reviews;
+audit/diagnostics/retention; encrypted backup/restore/export and supported upgrade/rollback.
+Install/uninstall preservation stays with the installer: an uninstall removes the
+application and always keeps the data root.
 
 ## 4. The locked start and the owner unlock
 
@@ -329,11 +376,16 @@ re-reads the new format and rollback state.
 
 ## 5. The owner console and the two clients
 
-- **Owner console**: `owner-ui\MetaBrain.OwnerUi.exe --control-pipe <control-pipe>` — the owner's own
-  surface: connect, vault status, vault and key, library, inbox capture and proposal
-  review, relations, sharing (catalog, access requests, sessions), sources
-  (allowlist, mapping review, collections, snapshots), jobs, intentions and
-  review queue. Every screen works from lists the service answered: pick a zone,
+- **Owner console**: `owner-ui\MetaBrain.OwnerUi.exe` — the owner's own surface, opened with no
+  instance selected and no running service required (§3.3): Owner session (select/create the
+  data-root folder, start/connect/status/stop/restart the shared locked host), vault status,
+  vault and key (provision/recovery/unlock/lock), library (search/open/revise/index recovery),
+  inbox (memory write, capture and read-back, proposal review, direct subject-lifecycle acts),
+  relations (picked endpoints, create/accept/reject/unlink/relink), sharing (catalog, access
+  requests with bound preview/narrow/approve/reject, handoff file, sessions/revoke), sources
+  (allowlist, mapping review, collections, snapshots preserve/retain/read/purge), jobs
+  (provider settings, bounded runs, schedules), intentions and review queue, backup & export,
+  operations & audit. Every screen works from lists the service answered: pick a zone,
   resource, operation, expiry duration or file with the on-screen pickers
   instead of typing internal IDs; outcomes carry ✓/✕/⚠ labels, never color
   alone. A zone is a permission boundary, a collection is your own folder

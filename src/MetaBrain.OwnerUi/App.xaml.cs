@@ -4,10 +4,14 @@ using MetaBrain.Connections;
 namespace MetaBrain.OwnerUi;
 
 /// <summary>
-/// Entry point of the owner console. The application opens one owner session
-/// against an already-running service: it starts nothing, provisions nothing
-/// and unlocks nothing, so a fresh start never implies owner consent for a
-/// vault operation.
+/// Entry point of the owner console. The application opens on the Owner
+/// session view with no instance selected: it starts nothing, provisions
+/// nothing and unlocks nothing, so a fresh start never implies owner consent
+/// for a vault operation. The owner picks the data-root folder, starts the
+/// shared locked host, and connects — all as explicit acts on that view.
+/// Closing this console never stops the shared host; only Stop service ends it.
+/// A legacy --control-pipe argument still attaches the owner session to that
+/// pipe for review tooling, but every lifecycle act stays on the new surface.
 /// </summary>
 public partial class App : System.Windows.Application
 {
@@ -16,14 +20,13 @@ public partial class App : System.Windows.Application
         base.OnStartup(e);
 
         var controlPipe = ParseControlPipe(e.Args);
-        if (controlPipe is null)
+        var session = new OwnerConsoleSession(controlPipe ?? "metabrain.owner.not-selected");
+        if (controlPipe is not null)
         {
-            Console.Error.WriteLine("Usage: MetaBrain.OwnerUi --control-pipe <owner-control-pipe>");
-            Shutdown(2);
-            return;
+            _ = session.AttachAsync();
         }
 
-        var window = new OwnerConsoleWindow(new OwnerConsoleSession(controlPipe));
+        var window = new OwnerConsoleWindow(session, new OwnerInstanceSession());
         this.MainWindow = window;
         window.Show();
     }

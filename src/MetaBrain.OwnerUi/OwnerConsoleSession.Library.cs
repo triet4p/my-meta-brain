@@ -246,6 +246,193 @@ internal sealed partial class OwnerConsoleSession
     }
 
     /// <summary>
+    /// S9-T4 writes one memory item through the existing revision-free create
+    /// operation. The owner names the ID, the zone and the body; optionals
+    /// carry the stored attribution the service validates. The draft is the
+    /// exact JSON the shared domain codec reads — the same bytes the CLI
+    /// friendly options build. A refusal changes nothing.
+    /// </summary>
+    public async Task CreateMemoryItemAsync(
+        string resourceId,
+        string zoneId,
+        string body,
+        string? kind = null,
+        string? author = null,
+        string? method = null,
+        string? evidence = null,
+        string? level = null,
+        string? title = null)
+    {
+        if (string.IsNullOrWhiteSpace(resourceId) || string.IsNullOrWhiteSpace(zoneId) ||
+            string.IsNullOrEmpty(body) || TryBeginLibraryAct() is not { } epoch)
+        {
+            return;
+        }
+
+        var draft = OwnerMemoryDrafts.BuildCreate(kind, author, method, evidence, level, title, body);
+        if (draft is null)
+        {
+            LibraryActInFlight = false;
+            LibraryMessage = "This console did not send the write: a field is not one this console can state. Nothing was written.";
+            RaiseChanged();
+            return;
+        }
+
+        OwnerItemReadResult result;
+        try
+        {
+            result = await ExecuteLibraryRequestAsync(
+                LibraryActTimeout,
+                token => OwnerChannelClient.CreateMemoryItemAsync(ControlPipe, resourceId.Trim(), zoneId.Trim(), draft, token),
+                errorCode => new OwnerItemReadResult(OwnerCommandOutcome.Unavailable, errorCode, null)).ConfigureAwait(true);
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(draft);
+        }
+
+        await ProbeAsync().ConfigureAwait(true);
+        ApplyItemAnswer(epoch, result, renamed: false);
+        Append(DescribeLibraryActForLog("create memory", result.Outcome, result.ErrorCode));
+        RaiseChanged();
+    }
+
+    /// <summary>
+    /// S9-T4 saves the open item's edited body through the existing
+    /// revision-gated revise operation: the same item, one new revision, with
+    /// the stored attribution the vault already holds. A stale revision fails
+    /// closed and publishes nothing.
+    /// </summary>
+    public async Task ReviseMemoryBodyAsync(string body)
+    {
+        var item = LibraryItem;
+        if (item is null || string.IsNullOrEmpty(body) || TryBeginLibraryAct() is not { } epoch)
+        {
+            return;
+        }
+
+        var draft = OwnerMemoryDrafts.BuildRevise(item, body);
+        OwnerItemReadResult result;
+        try
+        {
+            result = await ExecuteLibraryRequestAsync(
+                LibraryActTimeout,
+                token => OwnerChannelClient.ReviseMemoryItemAsync(ControlPipe, item, draft, token),
+                errorCode => new OwnerItemReadResult(OwnerCommandOutcome.Unavailable, errorCode, null)).ConfigureAwait(true);
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(draft);
+        }
+
+        await ProbeAsync().ConfigureAwait(true);
+        ApplyItemAnswer(epoch, result, renamed: true);
+        Append(DescribeLibraryActForLog("revise body", result.Outcome, result.ErrorCode));
+        RaiseChanged();
+    }
+
+    /// <summary>
+    /// S9-T4 appends one owner verdict on a seen target through the existing
+    /// S4-T4 feedback operation. Nothing here edits the target, upgrades
+    /// evidence or rewrites beliefs.
+    /// </summary>
+    public async Task CreateFeedbackAsync(
+        string resourceId,
+        string zoneId,
+        string targetResourceId,
+        long targetRevision,
+        string kind,
+        string? note)
+    {
+        if (string.IsNullOrWhiteSpace(resourceId) || string.IsNullOrWhiteSpace(zoneId) ||
+            TryBeginLibraryAct() is not { } epoch)
+        {
+            return;
+        }
+
+        if (!resourceId.Trim().StartsWith("fb-", StringComparison.Ordinal))
+        {
+            LibraryActInFlight = false;
+            LibraryMessage = "This console did not send the verdict: a verdict ID names its own record and always starts with fb- (for example fb-note-1). Nothing was written.";
+            RaiseChanged();
+            return;
+        }
+
+        var draft = OwnerMemoryDrafts.BuildFeedback(targetResourceId.Trim(), targetRevision, kind.Trim(), note);
+        if (draft is null)
+        {
+            LibraryActInFlight = false;
+            LibraryMessage = "This console did not send the verdict: the target, its revision and the kind are all required. Nothing was written.";
+            RaiseChanged();
+            return;
+        }
+
+        OwnerFeedbackResult result;
+        try
+        {
+            result = await ExecuteLibraryRequestAsync(
+                LibraryActTimeout,
+                token => OwnerChannelClient.CreateFeedbackAsync(ControlPipe, resourceId.Trim(), zoneId.Trim(), draft, token),
+                errorCode => new OwnerFeedbackResult(OwnerCommandOutcome.Unavailable, errorCode, null)).ConfigureAwait(true);
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(draft);
+        }
+
+        await ProbeAsync().ConfigureAwait(true);
+        ApplyFeedbackAnswer(epoch, result);
+        Append(DescribeLibraryActForLog("record verdict", result.Outcome, result.ErrorCode));
+        RaiseChanged();
+    }
+
+    /// <summary>
+    /// S9-T4 reads one stored feedback record at the pinned revision through
+    /// the existing S4-T4 read operation. The stored record is the answer.
+    /// </summary>
+    public async Task ReadFeedbackAsync(string resourceId, long? revision)
+    {
+        if (string.IsNullOrWhiteSpace(resourceId) || TryBeginLibraryAct() is not { } epoch)
+        {
+            return;
+        }
+
+        var result = await ExecuteLibraryRequestAsync(
+            LibraryActTimeout,
+            token => OwnerChannelClient.ReadFeedbackAsync(ControlPipe, resourceId.Trim(), revision, token),
+            errorCode => new OwnerFeedbackResult(OwnerCommandOutcome.Unavailable, errorCode, null)).ConfigureAwait(true);
+
+        await ProbeAsync().ConfigureAwait(true);
+        ApplyFeedbackAnswer(epoch, result);
+        Append(DescribeLibraryActForLog("read verdict", result.Outcome, result.ErrorCode));
+        RaiseChanged();
+    }
+
+    internal bool ApplyFeedbackAnswer(long epoch, OwnerFeedbackResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        if (epoch != _privateEpoch)
+        {
+            AppendIgnoredStaleAnswer("verdict");
+            return false;
+        }
+
+        LibraryMessage = result.Outcome == OwnerCommandOutcome.Completed && result.Feedback is not null
+            ? "The service stored the verdict as " + result.Feedback.Id + " revision " +
+                result.Feedback.Revision.ToString(CultureInfo.InvariantCulture) +
+                " on target " + result.Feedback.TargetResourceId + "@" +
+                result.Feedback.TargetRevision.ToString(CultureInfo.InvariantCulture) +
+                " (kind " + result.Feedback.Kind + "). It changes nothing about the target; it only says how that revision behaved in use."
+            : "The service refused the verdict request (code: " + (result.ErrorCode ?? "unknown") + "). Nothing was written or read.";
+        if (result.Outcome != OwnerCommandOutcome.Completed)
+        {
+            ApplyPrivateRefusal(result.Outcome, result.ErrorCode);
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// S7-T4 applies one owner recall act to the open item: the owner demotes,
     /// pins, sets aside or restores it.
     /// <para>

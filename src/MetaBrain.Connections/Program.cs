@@ -10,6 +10,9 @@ using System.Runtime.CompilerServices;
 // over the same owner channel the console uses. It shares these internals
 // instead of re-implementing the settings format or a second status client.
 [assembly: InternalsVisibleTo("MetaBrain.Installer")]
+// S9-T4: the owner console resolves/selects/starts the shared host through
+// the same InstanceLifecycle every frontend uses, over these internals.
+[assembly: InternalsVisibleTo("MetaBrain.OwnerUi")]
 
 namespace MetaBrain.Connections;
 

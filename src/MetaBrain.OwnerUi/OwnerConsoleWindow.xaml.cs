@@ -123,6 +123,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     private const string ClearedRecoveryKeyText = "-- no recovery key is on screen --";
 
     private readonly OwnerConsoleSession _session;
+    private readonly OwnerInstanceSession _instance;
     private readonly DispatcherTimer _timer;
     private long _sensitiveStateVersion;
     private long _libraryFilterVersion;
@@ -155,9 +156,10 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     private OwnerCollectionMapping[]? _renderedCollections;
     private OwnerSourceSnapshotDescriptor[]? _renderedSnapshots;
 
-    internal OwnerConsoleWindow(OwnerConsoleSession session, IOwnerFilePicker? filePicker = null)
+    internal OwnerConsoleWindow(OwnerConsoleSession session, OwnerInstanceSession? instance = null, IOwnerFilePicker? filePicker = null)
     {
         _session = session;
+        _instance = instance ?? new OwnerInstanceSession();
         _filePicker = filePicker ?? new OwnerSystemFilePicker();
         InitializeComponent();
         Navigation.SelectedIndex = 0;
@@ -184,6 +186,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         SyncInboxEditors();
         LibraryResults.MouseDoubleClick += async (_, _) => await OpenSelectedLibraryResultAsync();
         RelationsList.MouseDoubleClick += async (_, _) => await InspectSelectedRelationAsync();
+        _instance.Changed += OnInstanceChanged;
         _session.Changed += OnSessionChanged;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
         _timer.Tick += OnTimerTick;
@@ -198,7 +201,20 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     {
         _timer.Stop();
         _session.Changed -= OnSessionChanged;
+        _instance.Changed -= OnInstanceChanged;
         ActivityList.ItemsSource = null;
+    }
+
+    /// <summary>
+    /// Closing this console ends its own owner session and clears its own
+    /// private views. The shared host keeps running: only an explicit Stop
+    /// service ends it, so another frontend's host is never killed by closing
+    /// this window.
+    /// </summary>
+    protected override void OnClosed(EventArgs e)
+    {
+        _session.Detach();
+        base.OnClosed(e);
     }
 
     /// <summary>
@@ -231,6 +247,10 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         }
 
         LibraryPageSizeInput.SelectedItem = DefaultLibraryPageSize;
+        LibraryFeedbackKindInput.Items.Add("useful");
+        LibraryFeedbackKindInput.Items.Add("wrong");
+        LibraryFeedbackKindInput.Items.Add("stale");
+        LibraryFeedbackKindInput.SelectedItem = "useful";
         SyncLibraryFilterInputs();
     }
 
@@ -257,6 +277,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
 
     private async void OnTimerTick(object? sender, EventArgs e)
     {
+        await _instance.CheckAsync();
         await _session.CheckAsync();
         if (Navigation.SelectedIndex == 9)
         {
@@ -270,6 +291,91 @@ public partial class OwnerConsoleWindow : System.Windows.Window
 
     private void OnDetachClicked(object sender, RoutedEventArgs e) => _session.Detach();
 
+    /// <summary>
+    /// The instance acts of the Owner session view: select the data-root
+    /// folder, start/stop/restart the shared locked host, or re-read its real
+    /// state. Every act runs through the shared instance lifecycle — the same
+    /// implementation every frontend uses — and a completed start re-points the
+    /// owner session below at the instance's control pipe.
+    /// </summary>
+    private async void OnInstanceSelectClicked(object sender, RoutedEventArgs e)
+    {
+        await _instance.SelectAsync(InstanceDataRootInput.Text);
+        await RepointOwnerSessionAsync();
+    }
+
+    private async void OnInstanceStartClicked(object sender, RoutedEventArgs e)
+    {
+        await _instance.StartAsync();
+        await RepointOwnerSessionAsync();
+    }
+
+    private async void OnInstanceCheckClicked(object sender, RoutedEventArgs e)
+    {
+        await _instance.CheckAsync();
+        await RepointOwnerSessionAsync();
+    }
+
+    private async void OnInstanceRestartClicked(object sender, RoutedEventArgs e)
+    {
+        await _instance.RestartAsync();
+        await RepointOwnerSessionAsync();
+    }
+
+    private async void OnInstanceStopClicked(object sender, RoutedEventArgs e) => await _instance.StopAsync();
+
+    private void OnInstanceClearClicked(object sender, RoutedEventArgs e)
+    {
+        _instance.ClearSelection();
+        _session.Detach();
+        InstanceDataRootInput.Text = string.Empty;
+    }
+
+    private void OnInstanceBrowseClicked(object sender, RoutedEventArgs e)
+    {
+        if (_filePicker.PickFolder("Choose the owner data-root folder") is { } folder && folder.Length > 0)
+        {
+            InstanceDataRootInput.Text = folder;
+        }
+    }
+
+    /// <summary>
+    /// Points the owner session at the selected instance's control pipe once
+    /// the shared host answers. A failed or missing host leaves the owner
+    /// session where it was: unknown is never presented as connected.
+    /// </summary>
+    internal async Task RepointOwnerSessionAsync()
+    {
+        var pipe = _instance.ControlPipe;
+        if (string.IsNullOrEmpty(pipe))
+        {
+            return;
+        }
+
+        var reachable = _instance.LastStatus?.Channel.Availability == MetaBrain.Connections.OwnerChannelAvailability.Reachable;
+        if (!reachable)
+        {
+            return;
+        }
+
+        _session.Repoint(pipe);
+        await _session.AttachAsync().ConfigureAwait(true);
+    }
+
+    private void OnInstanceChanged(object? sender, EventArgs e)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            if (!Dispatcher.HasShutdownStarted && !Dispatcher.HasShutdownFinished)
+            {
+                Dispatcher.BeginInvoke(new Action(Render));
+            }
+
+            return;
+        }
+
+        Render();
+    }
     private void OnSecretFieldChanged(object sender, RoutedEventArgs e)
     {
         if (!_clearingInputs)
@@ -351,7 +457,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     {
         var target = index switch
         {
-            0 => (System.Windows.IInputElement?)ConnectButton,
+            0 => (System.Windows.IInputElement?)InstanceDataRootInput,
             2 => (System.Windows.IInputElement?)ProvisionPassphraseInput,
             3 => (System.Windows.IInputElement?)LibraryQueryInput,
             4 => (System.Windows.IInputElement?)CaptureTextInput,
@@ -387,7 +493,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         StateDetail.Text = banner.Detail;
 
         var inFlight = _session.VaultOperationInFlight;
-        ConnectButton.IsEnabled = !attached;
+        ConnectButton.IsEnabled = !attached && !string.IsNullOrEmpty(_instance.ControlPipe);
         CheckButton.IsEnabled = attached && !inFlight;
         DetachButton.IsEnabled = attached && !inFlight;
 
@@ -400,7 +506,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
             " | " + FriendlySummary(attached, status) +
             " | last check: " + LastCheckText_Value();
 
-        if (_libraryFilterVersion != _session.LibraryFilterVersion)
+        RenderInstance();
         {
             // The session dropped the filters with the private state (lock, end
             // of session): the input controls of this window go with them.
@@ -468,6 +574,48 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         RenderReview(attached);
         RenderBackupExport(attached);
         RenderOperations(attached);
+    }
+
+    /// <summary>
+    /// Renders the instance acts of the Owner session view: which folder is
+    /// selected, what the shared host really reports, and which act the owner
+    /// can take next. Nothing here unlocks, provisions or approves.
+    /// </summary>
+    private void RenderInstance()
+    {
+        var selected = _instance.InstanceSelected;
+        var inFlight = _instance.InstanceActInFlight;
+        var status = _instance.LastStatus;
+
+        if (string.IsNullOrEmpty(InstanceDataRootInput.Text) && selected)
+        {
+            InstanceDataRootInput.Text = _instance.DataRoot;
+        }
+
+        InstanceStateText.Text = !selected
+            ? "Instance: no folder selected — choose the data-root folder first."
+            : status is null
+                ? "Instance: " + _instance.DataRoot + " — no host answer yet. Start the service below."
+                : "Instance: " + status.DataRoot +
+                    " — service " + (status.Channel.Availability == OwnerChannelAvailability.Reachable ? "running" : "not reachable") +
+                    ", vault " + OwnerConsoleSession.VaultToken(status.Channel.VaultState) +
+                    ", host process " + (status.HostProcessId?.ToString(CultureInfo.InvariantCulture) ?? "none");
+        RenderOutcome(InstanceMessageText, _instance.InstanceMessage ??
+            (!selected
+                ? "No instance act has been sent in this session. Choose the data-root folder first."
+                : "The shared host is reported above. Start, check, restart or stop it explicitly; closing this console never stops it."));
+        InstanceLastCheckText.Text = "instance last check: " + (_instance.LastCheckLocal is { } last
+            ? last.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) + " local"
+            : "never");
+
+        InstanceSelectButton.IsEnabled = !inFlight;
+        InstanceStartButton.IsEnabled = selected && !inFlight;
+        InstanceCheckButton.IsEnabled = selected && !inFlight;
+        InstanceRestartButton.IsEnabled = selected && !inFlight;
+        InstanceStopButton.IsEnabled = selected && !inFlight;
+        InstanceClearButton.IsEnabled = selected && !inFlight;
+        InstanceBrowseButton.IsEnabled = !inFlight;
+        InstanceDataRootInput.IsEnabled = !inFlight;
     }
 
     private string LastCheckText_Value() => _session.LastCheckLocal is { } last
@@ -931,6 +1079,37 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     private async void OnLibraryRenameClicked(object sender, RoutedEventArgs e) =>
         await _session.RenameLibraryItemAsync(LibraryTitleInput.Text);
 
+    /// <summary>
+    /// S9-T4 saves the open item's edited body through the existing
+    /// revision-gated revise operation: the same item, one new revision.
+    /// </summary>
+    private async void OnLibraryReviseBodyClicked(object sender, RoutedEventArgs e) =>
+        await _session.ReviseMemoryBodyAsync(LibraryDetailBodyInput.Text);
+
+    /// <summary>
+    /// S9-T4 appends one owner verdict on the open item through the existing
+    /// feedback operation, then reads it back. Nothing here edits the item.
+    /// </summary>
+    private async void OnLibraryFeedbackCreateClicked(object sender, RoutedEventArgs e)
+    {
+        if (_session.LibraryItem is not { } item)
+        {
+            _session.ReportLibraryInputProblem(
+                "Recording a verdict needs the open item as the target: open one in Library first. Nothing was sent.");
+            return;
+        }
+
+        await _session.CreateFeedbackAsync(
+            LibraryFeedbackIdInput.Text.Trim(),
+            LibraryFeedbackZoneInput.Text.Trim(),
+            item.Id,
+            item.Revision,
+            LibraryFeedbackKindInput.SelectedItem as string ?? "useful",
+            string.IsNullOrWhiteSpace(LibraryFeedbackNoteInput.Text) ? null : LibraryFeedbackNoteInput.Text);
+    }
+
+    private async void OnLibraryFeedbackReadClicked(object sender, RoutedEventArgs e) =>
+        await _session.ReadFeedbackAsync(LibraryFeedbackIdInput.Text.Trim(), null);
     private async void OnLibraryTitleKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
         if (e.Key != System.Windows.Input.Key.Enter)
@@ -1217,6 +1396,8 @@ public partial class OwnerConsoleWindow : System.Windows.Window
                 ? null
                 : detail.Citations.Select(citation => new LibraryCitationRow(citation)).ToArray();
             LibraryTitleInput.Text = detail?.Title ?? string.Empty;
+            LibraryDetailBodyInput.Text = detail?.Body ?? string.Empty;
+            LibraryDetailBodyText.Text = detail?.Body ?? string.Empty;
         }
 
         LibraryDetailSummaryText.Text = detail is null
@@ -1230,7 +1411,6 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         LibraryDetailTitleText.Text = detail is null
             ? string.Empty
             : "Title as served: " + (detail.Title is { Length: > 0 } servedTitle ? servedTitle : "(none stored)");
-        LibraryDetailBodyText.Text = detail?.Body ?? string.Empty;
         LibraryDetailApplicabilityText.Text = detail is null
             ? string.Empty
             : "occurred=" + Stamp(detail.OccurredAtUtc) + "  recorded=" + Stamp(detail.RecordedAtUtc) +
@@ -1422,8 +1602,20 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         {
             ReviewLevelInput.Items.Add(level);
         }
-    }
 
+        foreach (var act in System.Enum.GetValues<OwnerConsoleSession.LifecycleDirectAct>())
+        {
+            LifecycleActInput.Items.Add(act.ToString());
+        }
+
+        LifecycleActInput.SelectedIndex = 0;
+        foreach (var kind in MemoryKindTokens)
+        {
+            MemoryKindInput.Items.Add(kind);
+        }
+
+        MemoryKindInput.SelectedItem = "claim";
+    }
     /// <summary>
     /// Puts the session's inbox state back into the input controls: the capture
     /// editor, the review editor and the rationale. Used at startup and whenever
@@ -1513,6 +1705,22 @@ public partial class OwnerConsoleWindow : System.Windows.Window
 
         await _session.ReadBackCaptureAsync(sourceId, exact);
     }
+
+    /// <summary>
+    /// S9-T4 writes one memory item through the existing revision-free create
+    /// operation from the owner's typed ID, zone, title, kind and body.
+    /// </summary>
+    private async void OnMemoryCreateClicked(object sender, RoutedEventArgs e) =>
+        await _session.CreateMemoryItemAsync(
+            MemoryResourceInput.Text.Trim(),
+            MemoryZoneInput.Text.Trim(),
+            MemoryBodyInput.Text,
+            MemoryKindInput.SelectedItem as string,
+            author: null,
+            method: null,
+            evidence: null,
+            level: null,
+            string.IsNullOrWhiteSpace(MemoryTitleInput.Text) ? null : MemoryTitleInput.Text.Trim());
     /// <summary>
     /// Fills the read-back from the saved capture of this session: the exact ID
     /// the service stored, with the live revision. No ID to remember.
@@ -1611,6 +1819,95 @@ public partial class OwnerConsoleWindow : System.Windows.Window
 
     private async void OnReviewUndoClicked(object sender, RoutedEventArgs e) =>
         await _session.UndoReviewDecisionAsync(ReviewRationaleInput.Text);
+
+    /// <summary>
+    /// S9-T4 direct lifecycle acts: create one subject record, or run one
+    /// act on the subject at its live revision. The act picker offers the
+    /// service's own transitions; the service fails closed on a stale
+    /// revision or an illegal act.
+    /// </summary>
+    private async void OnLifecycleCreateClicked(object sender, RoutedEventArgs e) =>
+        await _session.CreateDirectLifecycleAsync(LifecycleSubjectInput.Text, LifecycleReasonInput.Text, method: null);
+
+    private async void OnLifecycleRunClicked(object sender, RoutedEventArgs e)
+    {
+        if (!TryReadLifecycleAct(out var act))
+        {
+            return;
+        }
+
+        if (!long.TryParse(LifecycleRevisionInput.Text.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var revision) || revision < 1)
+        {
+            _session.ReportInboxInputProblem("This console sent no lifecycle act: the revision must be the positive live revision the service serves.");
+            return;
+        }
+
+        // Validity instants are explicit UTC only (ISO 8601 with a Z suffix);
+        // empty means absent. Non-SetValidity acts never carry stamps: the
+        // boxes are read only for the act that changes temporal validity.
+        DateTimeOffset? validFrom = null;
+        DateTimeOffset? validUntil = null;
+        DateTimeOffset? reviewAfter = null;
+        if (act == OwnerConsoleSession.LifecycleDirectAct.SetValidity)
+        {
+            if (!TryReadValidityInstant(LifecycleValidFromInput.Text, out validFrom) ||
+                !TryReadValidityInstant(LifecycleValidUntilInput.Text, out validUntil) ||
+                !TryReadValidityInstant(LifecycleReviewAfterInput.Text, out reviewAfter))
+            {
+                return;
+            }
+        }
+
+        await _session.TransitionDirectLifecycleAsync(
+            LifecycleSubjectInput.Text,
+            revision,
+            act,
+            LifecycleReasonInput.Text,
+            LifecycleReplacementInput.Text,
+            validFrom,
+            validUntil,
+            reviewAfter);
+    }
+
+    private bool TryReadValidityInstant(string text, out DateTimeOffset? instant)
+    {
+        instant = null;
+        var trimmed = text.Trim();
+        if (trimmed.Length == 0)
+        {
+            return true;
+        }
+
+        if (!DateTimeOffset.TryParse(trimmed, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var parsed) ||
+            parsed.Offset != TimeSpan.Zero ||
+            (!trimmed.EndsWith("Z", StringComparison.Ordinal) && !trimmed.EndsWith("+00:00", StringComparison.Ordinal)))
+        {
+            _session.ReportInboxInputProblem("This console sent no lifecycle act: the validity must be an explicit UTC instant (ISO 8601 with a Z or +00:00 suffix), or empty for absent. Nothing was sent.");
+            return false;
+        }
+
+        instant = parsed.ToUniversalTime();
+        return true;
+    }
+
+    private bool TryReadLifecycleAct(out OwnerConsoleSession.LifecycleDirectAct act)
+    {
+        act = OwnerConsoleSession.LifecycleDirectAct.Publish;
+        if (LifecycleActInput.SelectedItem is string label)
+        {
+            foreach (OwnerConsoleSession.LifecycleDirectAct candidate in System.Enum.GetValues<OwnerConsoleSession.LifecycleDirectAct>())
+            {
+                if (string.Equals(label, candidate.ToString(), System.StringComparison.Ordinal))
+                {
+                    act = candidate;
+                    return true;
+                }
+            }
+        }
+
+        _session.ReportInboxInputProblem("This console sent no lifecycle act: choose the act from the picker first.");
+        return false;
+    }
 
     /// <summary>
     /// Previews the sanitized publication of the open proposal into the
@@ -1715,6 +2012,7 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     private void RenderInbox(bool attached)
     {
         RefreshCapturePickerOptions();
+        RefreshMemoryZonePickerOptions();
         RefreshDeclassifyPickerOptions();
         var unlocked = attached && _session.ReportedVaultState == OwnerVaultState.Unlocked;
         var inFlight = _session.InboxActInFlight;
@@ -1840,6 +2138,23 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         DeclassifyPreviewButton.IsEnabled = unlocked && !inFlight && proposal is not null;
         DeclassifyConfirmInput.IsEnabled = unlocked && !inFlight && proposal is not null;
         DeclassifyPublishButton.IsEnabled = unlocked && !inFlight && proposal is not null;
+        RenderOutcome(LifecycleMessageText, _session.LifecycleMessage ?? (unlocked
+            ? "No direct lifecycle act has been sent in this session. Creating writes the subject record; each act names the live revision it replaces."
+            : "No private lifecycle act is offered while the service does not report the vault unlocked."));
+
+        MemoryCreateButton.IsEnabled = unlocked && !inFlight;
+        MemoryResourceInput.IsEnabled = unlocked && !inFlight;
+        MemoryZoneInput.IsEnabled = unlocked && !inFlight;
+        MemoryTitleInput.IsEnabled = unlocked && !inFlight;
+        MemoryKindInput.IsEnabled = unlocked && !inFlight;
+        MemoryBodyInput.IsEnabled = unlocked && !inFlight;
+        LifecycleCreateButton.IsEnabled = unlocked && !inFlight;
+        LifecycleActInput.IsEnabled = unlocked && !inFlight;
+        LifecycleRunButton.IsEnabled = unlocked && !inFlight;
+        LifecycleSubjectInput.IsEnabled = unlocked && !inFlight;
+        LifecycleRevisionInput.IsEnabled = unlocked && !inFlight;
+        LifecycleReasonInput.IsEnabled = unlocked && !inFlight;
+        LifecycleReplacementInput.IsEnabled = unlocked && !inFlight;
     }
 
     /// <summary>
@@ -1856,6 +2171,22 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         }
 
         CaptureZoneInput.Text = text;
+    }
+
+    /// <summary>
+    /// Refreshes the memory-zone picker from the zones the service named in
+    /// this session, keeping the owner's typed text.
+    /// </summary>
+    private void RefreshMemoryZonePickerOptions()
+    {
+        var text = MemoryZoneInput.Text;
+        MemoryZoneInput.Items.Clear();
+        foreach (var zone in _session.KnownZones())
+        {
+            MemoryZoneInput.Items.Add(zone);
+        }
+
+        MemoryZoneInput.Text = text;
     }
     /// <summary>
     /// Refreshes the shared-zone picker from the zones the service named in

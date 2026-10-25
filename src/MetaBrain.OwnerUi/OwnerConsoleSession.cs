@@ -52,7 +52,7 @@ internal sealed partial class OwnerConsoleSession
     }
 
     /// <summary>Owner control pipe this session may use; never the agent pipe.</summary>
-    public string ControlPipe { get; }
+    public string ControlPipe { get; private set; }
 
     /// <summary>Windows account this application runs as; transport identity only.</summary>
     public string OwnerAccount { get; }
@@ -107,6 +107,30 @@ internal sealed partial class OwnerConsoleSession
         }
 
         await ProbeAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Points this console at the control pipe of the owner's selected
+    /// instance. The previous owner session ends: the reported state and every
+    /// private view of the old pipe go with it, so nothing of another instance
+    /// stays on screen. Called by the owner's explicit Start/Select act only.
+    /// </summary>
+    public void Repoint(string controlPipe)
+    {
+        if (string.IsNullOrWhiteSpace(controlPipe))
+        {
+            return;
+        }
+
+        if (Attached && string.Equals(ControlPipe, controlPipe, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        Detach();
+        ControlPipe = controlPipe;
+        Append("selected instance pipe=" + controlPipe);
+        RaiseChanged();
     }
 
     /// <summary>

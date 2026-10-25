@@ -322,7 +322,7 @@ internal static partial class OwnerServiceSmoke
             OwnerConsoleWindow? window = null;
             try
             {
-                window = new OwnerConsoleWindow(session, picker);
+                window = new OwnerConsoleWindow(session, filePicker: picker);
                 window.Width = 1280;
                 window.Height = 1000;
                 window.Show();
