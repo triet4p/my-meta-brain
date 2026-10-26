@@ -2,7 +2,7 @@
 
 ## Workflow Maintenance
 
-[Sprint 9 — Workflow Rule Alignment](sprint-plans/sprint-9.md) complete: ten-document evidence, owner-authorized checkpoint `3622d8f6`, and [final differential review](../artifacts/sprint-9/reviews/workflow-final-deep-3.md) PASS. Replacement product Sprint 1, future Sprints 2–8, security requirements, owner consent and budgets unchanged. No push.
+Historical [Sprint 9 workflow maintenance](sprint-plans/sprint-9.md#historical-workflow-maintenance--complete-not-product-delivery) remains complete: ten-document evidence, owner-authorized checkpoint `3622d8f6`, and [final differential review](../artifacts/sprint-9/reviews/workflow-final-deep-3.md) PASS. Owner-requested [Sprint 9 — ACL Cleanup và Three-Product Delivery](sprint-plans/sprint-9.md) is **Complete**: S9-T1–T7 accepted with independent evidence/Bronze checkpoints, owner feedback, and [final differential PASS](../artifacts/sprint-9/product/reviews/S9-DEEP-D1.md); zero actionable findings, no push.
 
 ## Overview
 
@@ -29,7 +29,7 @@ Mỗi chặng có một sprint plan chi tiết. Hoàn thành chặng không đ�
 | [x] M5 — Owner workbench | Unlock/recovery UI, library/review/relations, catalog publication/request approval/token/session console | M4 | [Sprint 5](sprint-plans/sprint-5.md) |
 | [x] M6 — Grounded structuring | Profile code/research/trend, synthesis phân tầng, provider controls và share có owner duyệt | M5 | [Sprint 6](sprint-plans/sprint-6.md) |
 | [x] M7 — Time and lifecycle | Intention, temporal recall, review-after, forgetting, archive và purge đúng lineage | M6 | [Sprint 7](sprint-plans/sprint-7.md) |
-| [ ] M8 — Daily production | Install startup locked, encrypted backup/recovery/restore/export/migration, CR01 security replay và owner acceptance | M7 | [Sprint 8](sprint-plans/sprint-8.md) |
+| [x] M8 — Daily production | Install startup locked, encrypted backup/recovery/restore/export/migration, CR01 security replay và owner acceptance | M7; Sprint 8 accepted | [Sprint 8](sprint-plans/sprint-8.md) |
 
 ## Active Sprints
 
@@ -47,6 +47,9 @@ S1-T9 [behavioral evidence A3](../artifacts/sprint-1/reviews/S1-T9-S1T9-REVIEW-2
 | 6 | Complete — M6 | S6-T1–T7 [x] | [Accepted task evidence/checkpoints](sprint-plans/sprint-6.md), latest `786267a0`; [final differential PASS](../artifacts/sprint-6/reviews/Sprint-6-S6-DEEP-20261018-R1.md), zero actionable findings. Owner semantic ACCEPT only T2 v3; no push. |
 | 7 | Complete — M7 | S7-T1–T6 [x] | Task evidence/checkpoints plus D1 F1 correction `ebaf0ab4`; [final differential D2 PASS](../artifacts/sprint-7/reviews/S7-DEEP-D2.md), zero actionable findings; [gate records](sprint-plans/sprint-7.md#gate-record); no push |
 | 8 | Complete — M8 | S8-T1–T7 [x]; S8-T1A [x] | Owner T7 acceptance; [R1 PASS](../artifacts/sprint-8/reviews/S8-T7-R1.md), [C1 checkpoint](../artifacts/sprint-8/checkpoints/S8-T7-C1.md), commit `9ce136bc`; [final differential PASS](../artifacts/sprint-8/reviews/S8-DEEP-A1.md), no actionable findings; accepted limits retained; no push |
+| 9 | Complete — three-product delivery | S9-T1–T7 [x] | T7 [R1 PASS](../artifacts/sprint-9/product/reviews/S9-T7-R1.md) + [C1 checkpoint](../artifacts/sprint-9/product/checkpoints/S9-T7-C1.md), latest commit `635af2a6`; owner acceptance + [final differential PASS](../artifacts/sprint-9/product/reviews/S9-DEEP-D1.md), zero actionable findings; no push |
+
+Sprint 9 owner scope (2026-10-24): no new domain functionality; remove obsolete ACL/ownership-hardening code and complete independently usable packaged CLI, Owner UI and MCP Server over the same core/application/runtime. CLI and UI each cover owner workflows without PowerShell bootstrap or mandatory frontend switching; MCP covers agent workflows with existing explicit owner unlock/approval prerequisites, not owner authority. Order T1 cleanup → T2 shared lifecycle → T3 CLI → T4 UI → T5 MCP → T6 release bundle → T7 acceptance. [Sprint 9](sprint-plans/sprint-9.md) defines coverage, preserved security boundaries and new records under `artifacts/sprint-9/product/` to avoid historical-record collisions. S9-T1 authorized for implementation with full-route evidence and delegated Bronze checkpoint; worker cannot stage/commit, no push.
 
 S2-T1–T4 accepted checkpoints retained, latest `1bbdea7321127e2d851c67fac3c90d09db81970e`. Owner authorizes S2-T5–T7 sequential delivery then final deep. S2-T5 `S2T5-IMPL-20261009-A1` / planned agent `S2T5LifecycleA1`, Gold lifecycle/temporal/history integration, resolved `opencode-go/muse-spark-1.3-contributor:xhigh`, non-blocking; quota/provider-applied effort unknown. [Sprint 2 gate record](sprint-plans/sprint-2.md#gate-record) retains routing/evidence/checkpoint links and limitations. Both plans' prior Main-only status carryover/current orchestration explicitly owned by S2-T5 for review/checkpoint. No push or Sprint 3; next tasks wait predecessor PASS/checkpoint.
 
