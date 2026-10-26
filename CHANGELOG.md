@@ -5,6 +5,7 @@ All notable changes to Meta Brain are documented here.
 ## [Unreleased]
 
 ### Added
+- Added a Vietnamese static landing page with product selection, quick starts, scenario navigation, security boundaries, release information and a local-only, checksum-verified candidate preview.
 
 - Added a standalone self-contained Windows CLI setup executable for candidate-specific install, upgrade, reinstall and CLI-only removal. It reuses the shared installation/data-root lifecycle, records frontend ownership and candidate identity, refuses unsafe shared-runtime conflicts, preserves owner data, and does not register PATH, profiles, autostart or services.
 - Added a self-contained graphical Windows Owner UI setup executable. Owners can choose application and data locations, install/update or remove only the Owner UI through the shared lifecycle, and optionally open the installed console without a CLI bootstrap.

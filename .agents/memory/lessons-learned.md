@@ -773,3 +773,10 @@ the assignment can fail before the sentinel check or any child starts.
 **Fix / workaround:** Recompute the button's availability from the selected install root whenever that field changes and whenever an operation completes.
 
 **Watch out for:** Exercise setup with a custom install location; default-path UI state does not cover owners using an existing shared installation elsewhere.
+
+## [2026-10-26] PowerShell's default file encoding corrupts a UTF-8 site template
+
+**Symptom:** A local Chromium render showed Vietnamese text as mojibake even though the template declared UTF-8.
+**Root cause:** Windows PowerShell's default `Get-Content` decoding used the active ANSI code page for a UTF-8 source file without a BOM, then re-encoded the already-corrupted string as UTF-8.
+**Fix / workaround:** Read the HTML template with `Get-Content -Encoding UTF8 -Raw` before substituting metadata and writing the generated page.
+**Watch out for:** Static site source written as UTF-8 without a BOM must be explicitly read as UTF-8 by Windows PowerShell; a UTF-8 output encoding alone does not preserve the source text.

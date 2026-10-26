@@ -4,6 +4,20 @@
 
 Meta Brain serves as an owner-controlled second brain designed to preserve evidence, recall context, connect insights, and selectively synthesize knowledge over time. Built local-first for daily engineering and research workflows, Meta Brain interfaces with normal AI coding assistants (such as Codex CLI and Oh My Pi) via the Model Context Protocol (MCP) while maintaining strict cryptographic boundaries.
 
+## Website
+
+The Vietnamese static landing-page source is under [`website/`](website/). Build its reviewed
+local candidate preview with:
+
+```powershell
+powershell.exe -NoProfile -File scripts/site/build.ps1
+python -m http.server --bind 127.0.0.1 --directory dist/site 8000
+```
+
+Open `http://127.0.0.1:8000/`. The ignored `dist/site/` output includes the exact candidate
+assets only after its manifest sizes and SHA-256 hashes are verified. This is a local preview,
+not a public release or deployment; no public download or hosting destination is enabled here.
+
 ---
 
 ## Overview
