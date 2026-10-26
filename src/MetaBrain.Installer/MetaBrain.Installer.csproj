@@ -16,10 +16,22 @@
          status client. -->
     <ProjectReference Include="..\MetaBrain.Connections\MetaBrain.Connections.csproj" />
   </ItemGroup>
+  <ItemGroup Condition="'$(CliSetupPayloadPath)' != ''">
+    <EmbeddedResource Include="$(CliSetupPayloadPath)" LogicalName="MetaBrain.Installer.CliPayload.zip" />
+  </ItemGroup>
   <ItemGroup>
     <!-- The repository's permanent regression suite drives the installed
          lifecycle end to end. It is a friend assembly only; nothing here is a
          product surface. -->
     <InternalsVisibleTo Include="MetaBrain.S1T4.Smoke" />
+  </ItemGroup>
+  <PropertyGroup Condition="'$(CliSetupPayloadPath)' != ''">
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(CliSetupCandidateIdentity)' != ''">
+    <AssemblyMetadata Include="CliSetupCandidateIdentity" Value="$(CliSetupCandidateIdentity)" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CliSetupPayloadSha256)' != ''">
+    <AssemblyMetadata Include="CliSetupPayloadSha256" Value="$(CliSetupPayloadSha256)" />
   </ItemGroup>
 </Project>

@@ -12,6 +12,16 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $repo = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+$toolchain = Join-Path $repo 'runtime\dotnet-home'
+$env:DOTNET_CLI_HOME = $toolchain
+$env:NUGET_PACKAGES = Join-Path $toolchain '.nuget\packages'
+$env:HOME = $toolchain
+$env:DOTNET_BUNDLE_EXTRACT_BASE_DIR = Join-Path $toolchain 'bundle-extract'
+$env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'
+$env:DOTNET_ADD_GLOBAL_TOOLS_TO_PATH = 'false'
+$env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
+$env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
+$env:DOTNET_NOLOGO = '1'
 $props = [xml](Get-Content -LiteralPath (Join-Path $repo 'Directory.Build.props'))
 $version = @($props.Project.PropertyGroup | ForEach-Object { $_.Version } | Where-Object { $_ }) | Select-Object -First 1
 if (-not $version) { throw 'Product version is missing from Directory.Build.props.' }
@@ -26,19 +36,71 @@ function Verify-Candidate([string] $Root) {
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw ('Candidate asset missing: ' + $asset.name) }
         $item = Get-Item -LiteralPath $path
         if ($item.Length -ne $asset.bytes -or (Hash-File $path) -ne $asset.sha256) { throw ('Candidate asset integrity mismatch: ' + $asset.name) }
-        $zip = [System.IO.Compression.ZipFile]::OpenRead($path)
-        try {
-            $actual = @($zip.Entries | Where-Object { -not [string]::IsNullOrEmpty($_.Name) } | ForEach-Object { $_.FullName.Replace('\','/') } | Sort-Object -Unique)
-            $expected = @($asset.files | ForEach-Object { $_.path } | Sort-Object -Unique)
-            if (($actual -join "`n") -cne ($expected -join "`n")) { throw ('Candidate file set mismatch: ' + $asset.name) }
-            foreach ($file in $asset.files) {
-                $entry = $zip.Entries | Where-Object { $_.FullName.Replace('\','/') -ceq $file.path } | Select-Object -First 1
-                if ($null -eq $entry -or $entry.Length -ne $file.bytes) { throw ('Candidate member mismatch: ' + $file.path) }
-                $stream = $entry.Open()
-                try { $sha = [Security.Cryptography.SHA256]::Create(); try { $digest = -join ($sha.ComputeHash($stream) | ForEach-Object { $_.ToString('x2') }) } finally { $sha.Dispose() } } finally { $stream.Dispose() }
-                if ($digest -ne $file.sha256) { throw ('Candidate member hash mismatch: ' + $file.path) }
+        if ($asset.product -eq 'CLI') {
+            $files = @($asset.files)
+            if ($files.Count -ne 1 -or $files[0].path -cne $asset.name -or
+                $files[0].bytes -ne $asset.bytes -or $files[0].sha256 -cne $asset.sha256) {
+                throw ('CLI setup file manifest mismatch: ' + $asset.name)
             }
-        } finally { $zip.Dispose() }
+            if ($asset.payload.bytes -le 0 -or $asset.payload.sha256 -notmatch '^[0-9a-f]{64}$') {
+                throw ('CLI setup payload provenance is incomplete: ' + $asset.name)
+            }
+            $bundleCacheRoot = Join-Path $repo 'runtime\.net'
+            $bundleCacheRootExisted = Test-Path -LiteralPath $bundleCacheRoot
+            New-Item -ItemType Directory -Path $bundleCacheRoot -Force | Out-Null
+            $verificationBundleRoot = Join-Path $bundleCacheRoot $manifest.candidateId
+            if (Test-Path -LiteralPath $verificationBundleRoot) { throw 'A previous setup verification extraction remains; inspect it before retrying.' }
+            New-Item -ItemType Directory -Path $verificationBundleRoot | Out-Null
+            $previousBundleRoot = $env:DOTNET_BUNDLE_EXTRACT_BASE_DIR
+            try {
+                $env:DOTNET_BUNDLE_EXTRACT_BASE_DIR = $verificationBundleRoot
+                $inspectionText = (& $path --verify-payload) -join "`n"
+                $inspectionExitCode = $LASTEXITCODE
+            } finally {
+                if ($null -eq $previousBundleRoot) {
+                    Remove-Item Env:\DOTNET_BUNDLE_EXTRACT_BASE_DIR -ErrorAction SilentlyContinue
+                } else {
+                    $env:DOTNET_BUNDLE_EXTRACT_BASE_DIR = $previousBundleRoot
+                }
+                if (Test-Path -LiteralPath $verificationBundleRoot) {
+                    Remove-Item -LiteralPath $verificationBundleRoot -Recurse -Force
+                }
+                if (-not $bundleCacheRootExisted -and
+                    (Get-ChildItem -LiteralPath $bundleCacheRoot -Force | Measure-Object).Count -eq 0) {
+                    Remove-Item -LiteralPath $bundleCacheRoot -Force
+                }
+            }
+            if ($inspectionExitCode -ne 0) { throw ('CLI setup payload inspection failed: ' + $asset.name) }
+            $inspection = $inspectionText | ConvertFrom-Json
+            if ($inspection.bytes -ne $asset.payload.bytes -or $inspection.sha256 -cne $asset.payload.sha256) {
+                throw ('CLI setup embedded payload hash mismatch: ' + $asset.name)
+            }
+            $actualFiles = @($inspection.files | Sort-Object -Property path)
+            $expectedFiles = @($asset.payload.files | Sort-Object -Property path)
+            if ($actualFiles.Count -ne $expectedFiles.Count) { throw ('CLI setup embedded payload file count mismatch: ' + $asset.name) }
+            for ($index = 0; $index -lt $actualFiles.Count; $index++) {
+                if ($actualFiles[$index].path -cne $expectedFiles[$index].path -or
+                    $actualFiles[$index].bytes -ne $expectedFiles[$index].bytes -or
+                    $actualFiles[$index].sha256 -cne $expectedFiles[$index].sha256) {
+                    throw ('CLI setup embedded payload member mismatch: ' + $actualFiles[$index].path)
+                }
+            }
+        }
+        else {
+            $zip = [System.IO.Compression.ZipFile]::OpenRead($path)
+            try {
+                $actual = @($zip.Entries | Where-Object { -not [string]::IsNullOrEmpty($_.Name) } | ForEach-Object { $_.FullName.Replace('\','/') } | Sort-Object -Unique)
+                $expected = @($asset.files | ForEach-Object { $_.path } | Sort-Object -Unique)
+                if (($actual -join "`n") -cne ($expected -join "`n")) { throw ('Candidate file set mismatch: ' + $asset.name) }
+                foreach ($file in $asset.files) {
+                    $entry = $zip.Entries | Where-Object { $_.FullName.Replace('\','/') -ceq $file.path } | Select-Object -First 1
+                    if ($null -eq $entry -or $entry.Length -ne $file.bytes) { throw ('Candidate member mismatch: ' + $file.path) }
+                    $stream = $entry.Open()
+                    try { $sha = [Security.Cryptography.SHA256]::Create(); try { $digest = -join ($sha.ComputeHash($stream) | ForEach-Object { $_.ToString('x2') }) } finally { $sha.Dispose() } } finally { $stream.Dispose() }
+                    if ($digest -ne $file.sha256) { throw ('Candidate member hash mismatch: ' + $file.path) }
+                }
+            } finally { $zip.Dispose() }
+        }
     }
     if (@($manifest.assets).Count -ne 3) { throw 'Candidate must contain exactly three product payloads.' }
     Write-Host ('VERIFIED ' + $Root)
@@ -63,7 +125,7 @@ $temp = Join-Path $destination 'bundle'
 if ($LASTEXITCODE -ne 0) { throw 'Existing self-contained bundle assembly failed.' }
 $bundle = Join-Path $temp ('MetaBrain-' + $version + '-win-x64')
 $definitions = @(
-    @{ product='CLI'; deps='cli/MetaBrain.Cli.deps.json'; name=('MetaBrain-CLI-' + $version + '-win-x64-' + $source + '-' + $id + '-payload.zip'); paths=@('cli','service','installer') },
+    @{ product='CLI'; deps='cli/MetaBrain.Cli.deps.json'; name=('MetaBrain-CLI-' + $version + '-win-x64-' + $source + '-' + $id + '.exe'); paths=@('cli','service','installer') },
     @{ product='OwnerUI'; deps='owner-ui/MetaBrain.OwnerUi.deps.json'; name=('MetaBrain-OwnerUI-' + $version + '-win-x64-' + $source + '-' + $id + '-payload.zip'); paths=@('owner-ui','service','installer') },
     @{ product='MCP'; deps='mcp/MetaBrain.Mcp.deps.json'; name=('MetaBrain-MCP-' + $version + '-win-x64-' + $source + '-' + $id + '.zip'); paths=@('mcp','service') }
 )
@@ -113,13 +175,17 @@ $dependencyInventories = @{}
 $assets = foreach ($d in $definitions) {
     $stage = Join-Path $destination ($d.product + '-stage'); New-Item -ItemType Directory -Path $stage | Out-Null
     foreach ($part in $d.paths) { Copy-Item -LiteralPath (Join-Path $bundle $part) -Destination $stage -Recurse }
+    $runtimeNote = ''
+    if ($d.product -eq 'CLI') {
+        $runtimeNote = 'The single-file setup may extract .NET runtime support files under the current user''s %TEMP%\.net bundle cache when it launches; it does not change global or profile environment settings.'
+    }
     $notice = @"
-Meta Brain $version — $($d.product) payload
+Meta Brain $version — $($d.product) distribution
 
 Unsigned; SHA-256 detects byte changes but does not authenticate the publisher.
-Self-contained Windows x64 payload; no installed .NET SDK/runtime, source repository or PowerShell is required to run the entrypoint.
+Self-contained Windows x64 distribution; no installed .NET SDK/runtime, source repository or PowerShell is required.
 Supported OS limits: see docs/release-contract.md and the .NET 10 Windows x64 support matrix. Compatibility is not asserted for every listed SKU.
-CLI and Owner UI archives are application payloads, not completed installers.
+$runtimeNote
 "@
     [IO.File]::WriteAllText((Join-Path $stage 'RELEASE-NOTES.txt'), $notice, [Text.UTF8Encoding]::new($false))
     $dependencyInventories[$d.product] = Add-PackageLicenses $stage $d.deps $d.product
@@ -129,8 +195,36 @@ CLI and Owner UI archives are application payloads, not completed installers.
     [IO.File]::WriteAllText((Join-Path $stage 'THIRD-PARTY-NOTICES.txt'), $thirdParty, [Text.UTF8Encoding]::new($false))
     $layout = @(Get-ChildItem -LiteralPath $stage -Recurse -File | ForEach-Object { $rel=$_.FullName.Substring($stage.Length+1).Replace('\','/'); [ordered]@{path=$rel;bytes=$_.Length;sha256=(Hash-File $_.FullName)} })
     $assetPath = Join-Path $destination $d.name
-    [IO.Compression.ZipFile]::CreateFromDirectory($stage,$assetPath,[IO.Compression.CompressionLevel]::Optimal,$false)
-    [ordered]@{product=$d.product;name=$d.name;bytes=(Get-Item $assetPath).Length;sha256=(Hash-File $assetPath);files=$layout}
+    if ($d.product -eq 'CLI') {
+        $payloadPath = Join-Path $destination 'CLI-setup-payload.zip'
+        [IO.Compression.ZipFile]::CreateFromDirectory($stage, $payloadPath, [IO.Compression.CompressionLevel]::Optimal, $false)
+        $payloadSha256 = Hash-File $payloadPath
+        $setupOutput = Join-Path $destination 'CLI-setup-build'
+        $installerProject = Join-Path $repo 'src\MetaBrain.Installer\MetaBrain.Installer.csproj'
+        $candidateIdentity = $source + '-' + $id
+        $identityArgument = '-p:CliSetupCandidateIdentity=' + $candidateIdentity
+        $payloadArgument = '-p:CliSetupPayloadPath=' + $payloadPath
+        $payloadHashArgument = '-p:CliSetupPayloadSha256=' + $payloadSha256
+        $publishOutput = & dotnet publish $installerProject -c Release -r win-x64 --self-contained true --no-restore --nologo `
+            -p:PublishSingleFile=true -p:IncludeAllContentForSelfExtract=true `
+            $payloadArgument $identityArgument $payloadHashArgument `
+            -p:DebugType=None -p:DebugSymbols=false -o $setupOutput
+        $publishExitCode = $LASTEXITCODE
+        $publishOutput | ForEach-Object { Write-Host $_ }
+        if ($publishExitCode -ne 0) { throw 'Dedicated CLI setup publish failed.' }
+        $setupExecutable = Join-Path $setupOutput 'MetaBrain.Installer.exe'
+        if (-not (Test-Path -LiteralPath $setupExecutable -PathType Leaf)) { throw 'Dedicated CLI setup executable is missing.' }
+        Copy-Item -LiteralPath $setupExecutable -Destination $assetPath
+        $payloadInfo = [ordered]@{bytes=(Get-Item $payloadPath).Length;sha256=(Hash-File $payloadPath);files=$layout}
+        $layout = @([ordered]@{path=$d.name;bytes=(Get-Item $assetPath).Length;sha256=(Hash-File $assetPath)})
+        Remove-Item -LiteralPath $setupOutput -Recurse -Force
+        Remove-Item -LiteralPath $payloadPath -Force
+        [ordered]@{product=$d.product;name=$d.name;bytes=(Get-Item $assetPath).Length;sha256=(Hash-File $assetPath);files=$layout;payload=$payloadInfo}
+    }
+    else {
+        [IO.Compression.ZipFile]::CreateFromDirectory($stage,$assetPath,[IO.Compression.CompressionLevel]::Optimal,$false)
+        [ordered]@{product=$d.product;name=$d.name;bytes=(Get-Item $assetPath).Length;sha256=(Hash-File $assetPath);files=$layout}
+    }
 }
 Remove-Item -LiteralPath $temp -Recurse -Force
 foreach ($p in @('CLI-stage','OwnerUI-stage','MCP-stage')) { Remove-Item -LiteralPath (Join-Path $destination $p) -Recurse -Force }
@@ -140,9 +234,9 @@ $manifest = [ordered]@{
     candidateId=$id; assembledAtUtc=[DateTime]::UtcNow.ToString('O')
     signing='unsigned; SHA-256 does not authenticate publisher'
     supportedPlatforms='64-bit Windows client/server releases supported by .NET 10 at publication time and satisfying required desktop/WPF capabilities; exact product-tested SKU coverage is not asserted.'
-    knownLimits=@('No Linux, macOS, ARM, unsupported Windows editions/builds, Server Core or Nano UI support.','CLI and Owner UI archives are payloads, not completed installers.','Public release remains owner-controlled; no publication is authorized by assembly.')
-    compatibility=[ordered]@{cli='cli/MetaBrain.Cli.exe --help|--version';ownerUi='owner-ui/MetaBrain.OwnerUi.exe';mcp='mcp/MetaBrain.Mcp.exe; stdio transport; configure client command/args to this path.'}
-    notes='SHA-256 is an integrity check, not publisher authentication. Package graph and per-package license/notice inventory are included; review the bundled license texts before distribution.'
+    knownLimits=@('No Linux, macOS, ARM, unsupported Windows editions/builds, Server Core or Nano UI support.','Owner UI remains a payload archive pending its separate graphical installer.','The CLI setup candidate is unsigned; SHA-256 is not publisher authentication.','The CLI single-file host may extract runtime support files under the current user''s %TEMP%\.net bundle cache; it does not change global or profile environment settings.','Public release remains owner-controlled; no publication is authorized by assembly.')
+    compatibility=[ordered]@{cli='Dedicated setup EXE installs cli/MetaBrain.Cli.exe; use that installed path directly with --help or --version.';ownerUi='owner-ui/MetaBrain.OwnerUi.exe';mcp='mcp/MetaBrain.Mcp.exe; stdio transport; configure client command/args to this path.'}
+    notes='SHA-256 is an integrity check, not publisher authentication. Package graph and per-package license/notice inventory are included; review the bundled license texts before distribution. On launch, the single-file CLI setup may use the current user temporary .NET bundle-extraction cache without changing global/profile settings.'
     dependencyInventories=$dependencyInventories
     assets=$assets
 }

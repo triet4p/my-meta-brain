@@ -22,7 +22,7 @@ sibling directories, as in the example above (`…\MetaBrain\App` and `…\MetaB
 root *inside* the install root (`…\MetaBrain` and `…\MetaBrain\data`) is refused with
 `The data root must not live inside the install root: an uninstall removes the install root.`
 
-On the daily path — `install`, `start`, `stop`, `restart`, `status`/`health`, `autostart`,
+On the daily path — `install`, `start`, `stop`, `restart`, `status`/`health`,
 `uninstall`, the owner unlock and the agent session — the product **does not change the
 permissions of a path**: it creates the data root, the settings file, the vault directory and its
 envelopes, the runtime directory and its log with the ordinary permissions of the owner account,
@@ -52,8 +52,7 @@ recovery key was shown by the interrupted run and is not shown again.
 ## 2. Install
 
 ```text
-MetaBrain.Installer.exe install --payload <published-payload-dir> --install-root <dir> --data-root <dir> [--control-pipe <name>] [--agent-pipe <name>] [--autostart] [--start]
-```
+MetaBrain.Installer.exe install --payload <published-payload-dir> --install-root <dir> --data-root <dir> [--component cli|owner-ui|mcp|all] [--start]
 
 - `--payload` — the published application: `cli/MetaBrain.Cli.exe`,
   `service/MetaBrain.Connections.exe`, `owner-ui/MetaBrain.OwnerUi.exe`,
@@ -66,7 +65,6 @@ MetaBrain.Installer.exe install --payload <published-payload-dir> --install-root
 - `--control-pipe` / `--agent-pipe` — optional fixed endpoint names. Without them the installer
   generates random ones. Fixing them lets the owner point a client at a known endpoint; an upgrade
   keeps the endpoints an existing installation already uses.
-- `--autostart` — opt-in login start (see §6). Without it, nothing is registered.
 - `--start` — start the service right away.
 
 A first install with sibling roots, exactly as the runbook intends it:
@@ -105,18 +103,33 @@ zip's SHA-256 under `runtime\release` by default, and changes no host state (no 
 service registration, no autostart entry, no registry value, no environment or profile change and
 no permission change).
 
-### 2.2 Immutable release candidate payloads (S10-T2)
+### 2.2 Immutable release candidates and CLI setup (S10-T2/T3)
 
-From a reviewed source checkout, assemble distinct CLI and Owner UI installer
-payloads and an independent MCP package with:
+From a reviewed source checkout, assemble the candidate with a dedicated,
+self-contained CLI setup executable and an independent MCP package:
 
 ```powershell
 powershell.exe -NoProfile -File scripts\release\assemble-candidate.ps1
 ```
 
 The command writes an immutable candidate directory under ignored
-`runtime\release-candidates`. To recheck an existing candidate's archive hashes,
-member hashes and exact file sets:
+`runtime\release-candidates`. The CLI asset is a standalone unsigned setup EXE;
+launch it for an interactive install/upgrade, or use
+`MetaBrain-CLI-...exe install --install-root <dir> [--data-root <dir>]`.
+At the confirmation prompt, enter `n` or `q` to cancel before setup changes any files.
+The installed entrypoint is `cli\MetaBrain.Cli.exe`; use its full path with
+`--help` or `--version`. Setup supports `uninstall --install-root <dir>` and
+removes only the CLI component, keeping the shared runtime while another
+registered frontend depends on it and always preserving the selected data root.
+It does not change PATH, profiles, autostart, services, registry, permissions or environment
+settings. The self-contained single-file .NET host may extract runtime support under
+`%TEMP%\.net\<bundle>\<hash>` on launch; this is runtime temp data, not an install or profile
+registration.
+
+The Owner UI remains a payload archive until its separately assigned graphical
+installer is delivered. The MCP asset is independently consumable.
+
+To recheck an existing candidate's asset hashes and file sets:
 
 ```powershell
 powershell.exe -NoProfile -File scripts\release\assemble-candidate.ps1 -VerifyOnly -CandidateDirectory <candidate-directory>
@@ -124,35 +137,38 @@ powershell.exe -NoProfile -File scripts\release\assemble-candidate.ps1 -VerifyOn
 
 Candidate identity records Git HEAD and a SHA-256 of the tracked source/working
 tree contents used by assembly; uncommitted source therefore does not masquerade
-as the HEAD revision. Compare that identity to the reviewed source snapshot
-before accepting a candidate. Rebuilds receive new IDs and never overwrite a
-candidate. These CLI and Owner UI ZIPs are installer payloads only, not completed
-installers. Archives disclose unsigned status and include the dependency graph,
-NuGet runtime package license texts and package-provided third-party notices.
-Public release remains owner-controlled and is not authorized by assembly.
+as the HEAD revision. The CLI setup embeds the exact staged CLI/shared-runtime
+payload and stores the candidate identity with the shared install state. A
+different candidate or runtime version is refused when another frontend is
+registered; install the matching complete candidate or remove the other
+frontend before replacing the shared runtime. Rebuilds receive new IDs and
+never overwrite a candidate. Candidate manifests record asset/payload hashes,
+dependency inventory, licenses and unsigned status; SHA-256 does not authenticate
+the publisher. Public release remains owner-controlled and is not authorized.
 
-An unpacked bundle is the installer's `--payload`, so one bundle installs, upgrades and carries
-every frontend. An entrypoint run from the unpacked directory (before or without an install) uses
-the `service\MetaBrain.Connections.exe` beside it.
+An unpacked developer bundle can still be passed to the shared installer's
+`--payload` command for a full-component install. An entrypoint run from the
+unpacked directory uses the `service\MetaBrain.Connections.exe` beside it.
 
 ## 3. The daily commands
 
-Every command below is run from the installed copy in `<install root>\installer`, and every one of
-them accepts `--install-root <dir>` to address an installation other than the one the running
-installer belongs to. `uninstall` is the one exception: it takes no options at all (§8).
+Every service command below is run from the installed copy in `<install root>\installer`; it
+accepts `--install-root <dir>` to address another installation. The installed `uninstall` command
+acts on its own installation and optionally accepts `--component`; the dedicated CLI setup has
+its own CLI-only uninstall command (§8).
 
 ```text
 MetaBrain.Installer.exe start        # start the service host (locked)
 MetaBrain.Installer.exe stop         # clean stop: the host drains, locks the vault and exits
 MetaBrain.Installer.exe restart      # stop and start again
-MetaBrain.Installer.exe status       # health: service, vault state, process, autostart
+MetaBrain.Installer.exe status       # health: service, vault state and process
 MetaBrain.Installer.exe health       # the same report as status
 ```
 
 `status` exits with `0` when the owner channel answers and with a non-zero code when it does not,
 so it can be used as a health check. The report contains the install root, the data root, the
 settings file, both pipe endpoints, the running process (pid plus whether it is still that
-process), the service state, the vault state and the autostart state.
+process), the service state and the vault state.
 
 The stop is a *request*, not a kill: the installer asks the host to stop, waits for the process to
 exit and confirms the exit. The host identifies itself with its pid **and** its start time, so a
@@ -558,49 +574,34 @@ console; the client redeems that handoff once (`metabrain_redeem`) and the resul
 what it uses. The grant is the only authority: an agent token, a working directory or a
 same-account process does not create owner authority.
 
-## 6. Autostart (explicit opt-in)
+## 6. Startup policy
 
-```text
-MetaBrain.Installer.exe autostart enable   # writes the per-user login entry
-MetaBrain.Installer.exe autostart status   # read-only
-MetaBrain.Installer.exe autostart disable  # removes it
-```
-
-The three autostart commands accept an optional `--install-root <dir>`; `enable` then registers
-the host of that installation. The login entry itself is a single per-user value (`MetaBrain`),
-so `status` and `disable` always refer to that one entry.
-
-`autostart enable` writes one value under
-`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (`MetaBrain`) that starts the same installed
-host in background mode. It needs no administrator rights because it lives in the current user's
-own key. The installer never writes that entry on its own: it is written only when the owner asks
-for it, and `uninstall` removes it when the entry still points at that installation.
-
-A login start is locked exactly like every other start.
+The CLI setup and shared installer do not register login startup. Start the host explicitly
+through the CLI, Owner UI or MCP entrypoint. No autostart, service, scheduled task or profile
+integration is created by installation.
 
 ## 7. Restart, logout and reboot
 
 - **Restart** (`restart`, or a crash): the host comes back locked, and no agent session survives.
-- **Logout / reboot**: the host is gone. The next start — manual or through the autostart entry —
-  is locked. Nothing is resurrected: no key, no session, no grant token.
+- **Logout / reboot**: the host is gone. The next start is manual and locked; nothing is
+  resurrected (no key, session or grant token).
 
 ## 8. Uninstall
 
+The dedicated CLI setup supports CLI-only removal:
+
 ```text
-MetaBrain.Installer.exe uninstall
+MetaBrain-CLI-<candidate>.exe uninstall --install-root <dir>
 ```
 
-The uninstall **takes no options**. It always acts on the installation the running installer
-belongs to, so it is run from the installed copy `<install root>\installer\MetaBrain.Installer.exe`
-and it finds that installation through its own `install-state.json`. Passing any option is
-refused with `The uninstall command takes no options.` — `uninstall --install-root <dir>` is not a
-valid command, and no option is ever silently ignored. To remove a different installation, run
-that installation's own installer.
+The installed shared installer removes the full shared installation by default; its optional
+`--component cli|owner-ui|mcp` removes only that registration. An individual component removal
+keeps the shared runtime while another component remains registered. When the final component is
+removed, application/runtime files are removed but the data root is always kept: the vault,
+source snapshots, backups and recovery material are never deleted by the installer.
 
-The uninstall stops the host, removes the autostart entry (if it points at that installation),
-removes the application files and **keeps the data root**: the vault, the source snapshots, the
-backups and the recovery material. The installer has no option that deletes the owner's data;
-removing it is a separate, deliberate act by the owner.
+Uninstall refuses with an actionable error if the shared host could not drain cleanly; it does not
+claim removal succeeded or replace live binaries.
 
 ## 9. Diagnostics
 
@@ -1446,8 +1447,8 @@ removes the fixture when the run ends.
 
 ## 11. Known limits
 
-- The autostart entry, a real logout or reboot, and a connection from the official Codex/OMP
-  clients need the owner in front of the machine; they cannot be proved by a headless run.
+- A real logout or reboot, and a connection from the official Codex/OMP clients,
+  need the owner in front of the machine; they cannot be proved by a headless run.
 - The installer is Windows-only and per-user. There is no multi-account or shared-machine install.
 - The vault is lost if the owner loses both the passphrase and the recovery key. There is no reset
   and no back door.

@@ -713,3 +713,43 @@ the assignment can fail before the sentinel check or any child starts.
 **Root cause:** The switch edit replaced the `revoke-session` arm instead of adding a separate `authorize` arm.
 **Fix / workaround:** Keep both dispatch arms and exercise the real `revoke-session` CLI path with a valid session ID and a random nonexistent control-pipe name; the handler's `transport_unavailable` refusal is distinguishable from the default usage result without creating a pipe server.
 **Watch out for:** Review adjacent switch arms when adding a command. An invalid-argument probe can be nondiscriminating when both the handler and default branch return usage; prefer an observable command-specific boundary that does not execute the service operation.
+
+## [2026-10-26] A direct release publish can touch the user dotnet profile
+
+**Symptom:** The candidate assembler successfully published its shared bundle, then the dedicated setup publish failed with access denied while dotnet attempted to create `C:\Users\admin\.dotnet\10.0.403.toolpath.sentinel`.
+
+**Root cause:** The existing bundle publisher sets `DOTNET_CLI_HOME`, `NUGET_PACKAGES`, first-run and telemetry variables only in its child PowerShell process. A later `dotnet publish` launched directly by the parent assembler therefore fell back to the user's profile.
+
+**Fix / workaround:** Set the same repository-local `runtime\dotnet-home` and process-only dotnet environment variables in the candidate assembler before invoking dotnet; do not change profile or global environment state.
+
+**Watch out for:** A script that launches another release script does not inherit that child's environment. Every direct SDK invocation must establish its own safe process-local CLI home and package cache before the first dotnet call.
+
+## [2026-10-26] A single-file bundle can extract outside the candidate directory
+
+**Symptom:** Running the candidate setup's read-only embedded-payload verifier created a .NET extraction directory under `C:\Users\admin\AppData\Local\Temp\.net\<candidate>\<hash>`.
+
+**Root cause:** The self-contained single-file host extracts bundled runtime support files before the application entrypoint runs; without `DOTNET_BUNDLE_EXTRACT_BASE_DIR`, the host uses its per-user temporary bundle cache even though the verifier itself only reads the embedded payload.
+
+**Fix / workaround:** Set `DOTNET_BUNDLE_EXTRACT_BASE_DIR` only in the assembler/verification process to a candidate-local ignored directory and remove that directory after verification. Staged setup tests likewise override the variable process-locally to an ignored repository temp directory.
+
+**Watch out for:** An application's `--verify` command can still cause runtime-host file writes before `Main`. Inspect single-file publish settings and confine bundle extraction before launching any staged asset; never change a global/profile setting to do so.
+
+## [2026-10-26] A candidate-nested bundle cache can exceed Windows path length
+
+**Symptom:** The CLI setup verifier failed to extract `MetaBrain.Connections.runtimeconfig.json` under a deeply nested candidate output directory.
+
+**Root cause:** The single-file host appends its bundle identity, hash directory and runtime file names to `DOTNET_BUNDLE_EXTRACT_BASE_DIR`; placing the base under the long candidate directory exceeded the Windows path limit.
+
+**Fix / workaround:** Use a short repository-local ignored extraction root (`runtime\.net\<candidate-id>`) for each verification, set it process-locally, and remove that candidate-specific directory afterward.
+
+**Watch out for:** Candidate paths already contain version, source and candidate identity. Include the host-generated nested path when calculating the extraction base; always confine it to an ignored path that remains below the platform path limit.
+
+## [2026-10-26] A started uninstall helper does not prove the root was removed
+
+**Symptom:** A staged final CLI uninstall returned a truthful failure because the install root remained after the shared installer reported that asynchronous removal had been scheduled.
+
+**Root cause:** The shared installer launches `cmd.exe` for delayed removal but does not observe that child's completion or exit status; the exact failure inside the helper was not captured.
+
+**Fix / workaround:** The standalone CLI setup asks the shared installer to defer root removal, waits for that installer process to exit, then deletes and verifies the exact application root itself. It returns a path-specific failure if the root remains and continues to preserve the data root.
+
+**Watch out for:** Starting a detached shell is not uninstall evidence. Component files and final-root deletion must be checked independently; keep delayed removal only for direct shared-installer use where success is reported as scheduled, not completed.

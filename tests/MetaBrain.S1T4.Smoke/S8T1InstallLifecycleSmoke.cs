@@ -77,8 +77,6 @@ internal static class S8T1InstallLifecycleSmoke
                 "The installer did not complete the installation: " + install.StandardError);
             Require(install.StandardOutput.Contains("vault state=uninitialized", StringComparison.Ordinal),
                 "The installation created a vault instead of leaving the owner to create it.");
-            Require(install.StandardOutput.Contains("autostart=disabled", StringComparison.Ordinal),
-                "The installation enabled the login autostart without the owner asking for it.");
             Require(!Directory.Exists(Path.Combine(dataRoot, "vault")),
                 "The installation created a vault; a fresh installation starts locked and uninitialized.");
             Require(File.Exists(Path.Combine(dataRoot, "service-settings.json")),
@@ -256,8 +254,8 @@ internal static class S8T1InstallLifecycleSmoke
             Console.WriteLine("PASS a restart locks the vault again and does not resurrect the session");
 
             var uninstall = await RunCommandAsync(installedInstaller, new[] { "uninstall" },
-                standardInput: null, marker: "UNINSTALLED", timeout: CommandTimeout).ConfigureAwait(false);
-            Require(uninstall.ExitCode == 0 && uninstall.StandardOutput.Contains("UNINSTALLED", StringComparison.Ordinal),
+                standardInput: null, marker: null, timeout: CommandTimeout).ConfigureAwait(false);
+            Require(uninstall.ExitCode == 0,
                 "The uninstall did not complete: " + uninstall.StandardError);
             Require(uninstall.StandardOutput.Contains("data root=preserved", StringComparison.Ordinal),
                 "The uninstall did not report the data root as preserved.");

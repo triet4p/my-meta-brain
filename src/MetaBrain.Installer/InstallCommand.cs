@@ -6,24 +6,21 @@ using MetaBrain.Connections;
 namespace MetaBrain.Installer;
 
 /// <summary>
-/// The install and uninstall commands. An install lays the application files
-/// down, creates the data root with the service settings, and leaves the
-/// vault untouched, so installing over an existing instance is an upgrade of
-/// the application files and never a reset of the data. An uninstall removes
-/// the application and the autostart entry, and keeps the data root - the
-/// vault, the source snapshots, the backups and the recovery material -
-/// unless the owner explicitly asks for it to be removed.
+/// The shared install and uninstall commands. Component registrations and
+/// versioned installation state remain authoritative for all frontends; owner
+/// data is kept outside the application root and is never removed here.
 /// </summary>
 internal static class InstallCommand
 {
     internal static async Task<int> RunAsync(string[] args)
     {
         var options = InstallerOptions.Parse(args,
-            new[] { "--payload", "--install-root", "--data-root", "--control-pipe", "--agent-pipe" },
-            "--autostart", "--start");
+            new[] { "--payload", "--install-root", "--data-root", "--control-pipe", "--agent-pipe", "--component", "--candidate-id" },
+            "--start");
         var payload = Path.GetFullPath(options.Required("--payload"));
         var installRoot = Path.GetFullPath(options.Required("--install-root")).TrimEnd(Path.DirectorySeparatorChar);
         var dataRoot = Path.GetFullPath(options.Required("--data-root")).TrimEnd(Path.DirectorySeparatorChar);
+        var component = NormalizeComponent(options.Optional("--component") ?? "all");
         var requestedControlPipe = options.Optional("--control-pipe");
         var requestedAgentPipe = options.Optional("--agent-pipe");
         ValidatePipeName(requestedControlPipe);
@@ -36,33 +33,68 @@ internal static class InstallCommand
 
         var ownerSid = CurrentOwnerSid();
         ValidateRoots(installRoot, dataRoot);
-        ValidatePayload(payload);
+        ValidatePayload(payload, component);
 
-        var existing = InstallState.Read(Path.Combine(installRoot, InstallLayout.StateFileName));
+        var statePath = Path.Combine(installRoot, InstallLayout.StateFileName);
+        var existing = InstallState.Read(statePath);
+        if (existing is null && (File.Exists(statePath) ||
+            new[] { InstallLayout.ServiceDirectoryName, InstallLayout.CliDirectoryName,
+                InstallLayout.OwnerUiDirectoryName, InstallLayout.McpDirectoryName }.Any(directory =>
+                Directory.Exists(Path.Combine(installRoot, directory)))))
+        {
+            throw new InvalidOperationException("The selected install root contains an unrecognized or unsupported Meta Brain installation. Use its matching installer or choose an empty install root; no files were changed.");
+        }
+        var candidateIdentity = options.Optional("--candidate-id") ?? existing?.CandidateIdentity ?? "legacy";
+        var incomingComponents = ComponentsFor(component);
+        var existingComponents = existing?.Components ?? Array.Empty<string>();
+        var hasOtherComponent = existingComponents.Except(incomingComponents, StringComparer.Ordinal).Any();
+        if (existing is not null && hasOtherComponent &&
+            !string.Equals(existing.CandidateIdentity ?? "legacy", candidateIdentity, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("A different release candidate is registered for another frontend. Install the matching complete candidate or remove the other frontend before updating the shared runtime.");
+        }
+
+        if (existing is not null && hasOtherComponent &&
+            !string.Equals(existing.ProductVersion, ProductInfo.Version, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("A different shared runtime version is registered for another frontend. Install the matching complete candidate or remove the other frontend before updating.");
+        }
+
+        if (existing is not null && !string.Equals(
+                Path.GetFullPath(existing.DataRoot).TrimEnd(Path.DirectorySeparatorChar),
+                dataRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("The selected data root differs from the existing shared installation. Re-run setup with its recorded data root: " + existing.DataRoot);
+        }
+
         if (existing is not null && File.Exists(Path.Combine(installRoot, InstallLayout.ServiceDirectoryName, "MetaBrain.Connections.exe")))
         {
-            // Replacing the application files of a running instance would fail
-            // on the locked binaries, so the host is stopped first.
             var previous = InstallLayout.Create(installRoot, existing.DataRoot);
-            await ServiceHost.StopAsync(previous).ConfigureAwait(false);
+            var stop = await ServiceHost.StopAsync(previous).ConfigureAwait(false);
+            if (stop is ServiceStopOutcome.Failed or ServiceStopOutcome.Forced)
+            {
+                throw new InvalidOperationException("The shared runtime did not drain cleanly. No files were changed; stop Meta Brain and retry the upgrade.");
+            }
         }
 
-        CopyPayload(payload, installRoot);
         Directory.CreateDirectory(dataRoot);
         var settings = EnsureSettings(dataRoot, ownerSid, requestedControlPipe, requestedAgentPipe);
+        CopyPayload(payload, installRoot, component);
+        var components = existing?.Components?.ToHashSet(StringComparer.Ordinal) ?? new HashSet<string>(StringComparer.Ordinal);
+        foreach (var installedComponent in ComponentsFor(component))
+        {
+            components.Add(installedComponent);
+        }
+
         var state = new InstallState(
             InstallState.CurrentSchemaVersion,
-            DateTime.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+            existing?.InstalledAtUtc ?? DateTime.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
             dataRoot,
-            ProductInfo.Version);
-        state.Write(Path.Combine(installRoot, InstallLayout.StateFileName));
-
+            ProductInfo.Version,
+            components.ToArray(),
+            candidateIdentity);
+        state.Write(statePath);
         var layout = InstallLayout.Create(installRoot, dataRoot);
-        var autostart = new AutostartRegistration();
-        if (options.HasFlag("--autostart"))
-        {
-            autostart.Enable(AutostartRegistration.BuildCommand(layout.ServiceExecutable, layout.SettingsPath));
-        }
 
         if (options.HasFlag("--start"))
         {
@@ -84,77 +116,105 @@ internal static class InstallCommand
         Console.WriteLine("owner console=" + layout.OwnerUiExecutable);
         Console.WriteLine("mcp=" + layout.McpExecutable);
         Console.WriteLine("shared host=" + layout.ServiceExecutable);
-        Console.WriteLine("autostart=" + (autostart.TryRead(out var command) ? "enabled" : "disabled"));
-        if (command is not null)
-        {
-            Console.WriteLine("autostart command=" + command);
-        }
-
+        Console.WriteLine("installed components=" + string.Join(",", components.Order(StringComparer.Ordinal)));
         Console.WriteLine("vault state=uninitialized (the owner creates the vault explicitly and every start is locked)");
         return 0;
     }
 
     internal static async Task<int> UninstallAsync(string[] args)
     {
-        if (args.Length != 0)
+        var options = InstallerOptions.Parse(args, new[] { "--component" }, "--defer-root-removal");
+        var component = NormalizeComponent(options.Optional("--component") ?? "all");
+        var deferRootRemoval = options.HasFlag("--defer-root-removal");
+        if (deferRootRemoval && component == "all")
         {
-            throw new ArgumentException("The uninstall command takes no options.");
+            throw new ArgumentException("--defer-root-removal is valid only for a single component uninstall.");
         }
-
         var layout = InstallLayout.Locate();
-        var stop = await ServiceHost.StopAsync(layout).ConfigureAwait(false);
-        Console.WriteLine("service=" + (stop switch
+        var state = InstallState.Read(layout.StatePath);
+        var components = state?.Components?.ToHashSet(StringComparer.Ordinal) ?? new HashSet<string>(StringComparer.Ordinal);
+        foreach (var removedComponent in ComponentsFor(component))
         {
-            ServiceStopOutcome.Stopped => "stopped",
-            ServiceStopOutcome.Forced => "stopped (forced)",
-            _ => "not running"
-        }));
-
-        var autostart = new AutostartRegistration();
-        if (autostart.TryRead(out var command) && command is not null &&
-            command.Contains(layout.ServiceExecutable, StringComparison.OrdinalIgnoreCase))
-        {
-            autostart.Disable();
-            Console.WriteLine("autostart=disabled");
+            components.Remove(removedComponent);
         }
 
-        var statePath = layout.StatePath;
-        var marked = File.Exists(statePath);
-
-        DeleteDirectory(layout.ServiceDirectory);
-        DeleteDirectory(layout.OwnerUiDirectory);
-        DeleteDirectory(layout.McpDirectory);
-        DeleteDirectory(layout.CliDirectory);
-        // The install-root removal is scheduled before this directory is
-        // cleared: it starts a helper process, and a self-contained payload
-        // keeps its own framework assemblies (including the process APIs the
-        // helper needs) in this directory. Clearing the files first would make
-        // the helper's own dependencies disappear before it is started.
-        ScheduleRemoval(layout.InstallRoot, marked);
-        // The running installer executable cannot be deleted by itself, so the
-        // rest of the installer directory is cleared now and the install root
-        // is removed by the delayed delete scheduled above.
-        foreach (var file in Directory.EnumerateFiles(layout.InstallerDirectory))
+        if (component == "all" || components.Count == 0)
         {
-            if (!string.Equals(Path.GetFullPath(file), Path.GetFullPath(Environment.ProcessPath ?? string.Empty),
-                    StringComparison.OrdinalIgnoreCase))
+            var stop = await ServiceHost.StopAsync(layout).ConfigureAwait(false);
+            if (stop is ServiceStopOutcome.Failed or ServiceStopOutcome.Forced)
             {
-                TryDelete(file);
+                throw new InvalidOperationException("The shared runtime did not drain cleanly. No files were changed; stop Meta Brain and retry uninstall.");
+            }
+
+            Console.WriteLine("service=" + (stop == ServiceStopOutcome.Stopped ? "stopped" : "not running"));
+        }
+        else
+        {
+            Console.WriteLine("service=left running for remaining shared components");
+        }
+        var removedDirectories = component switch
+        {
+            "cli" => new[] { InstallLayout.CliDirectoryName },
+            "owner-ui" => new[] { InstallLayout.OwnerUiDirectoryName },
+            "mcp" => new[] { InstallLayout.McpDirectoryName },
+            _ => new[]
+            {
+                InstallLayout.ServiceDirectoryName, InstallLayout.OwnerUiDirectoryName,
+                InstallLayout.McpDirectoryName, InstallLayout.CliDirectoryName
+            }
+        };
+        foreach (var directory in removedDirectories)
+        {
+            var removedPath = Path.Combine(layout.InstallRoot, directory);
+            DeleteDirectory(removedPath);
+            if (Directory.Exists(removedPath))
+            {
+                throw new IOException("The frontend files could not be removed. Close processes using " + removedPath + " and retry.");
             }
         }
 
-        TryDelete(statePath);
+        if (component != "all" && components.Count != 0)
+        {
+            state = state! with { Components = components.ToArray() };
+            state.Write(layout.StatePath);
+            Console.WriteLine("shared runtime=preserved (installed components: " +
+                string.Join(",", components.Order(StringComparer.Ordinal)) + ")");
+        }
+        else
+        {
+            var marked = File.Exists(layout.StatePath);
+            if (component != "all")
+            {
+                DeleteDirectory(layout.ServiceDirectory);
+                if (Directory.Exists(layout.ServiceDirectory))
+                {
+                    throw new IOException("The shared runtime could not be removed. Close Meta Brain processes and retry.");
+                }
+            }
 
-        // The data root holds the vault, the source snapshots, the backups and
-        // the recovery material. An uninstall removes the application, never
-        // the owner's data: deleting it is the owner's own separate act, not
-        // something an installer may offer as a convenience.
+            if (!deferRootRemoval)
+            {
+                ScheduleRemoval(layout.InstallRoot, marked);
+            }
+
+            foreach (var file in Directory.EnumerateFiles(layout.InstallerDirectory))
+            {
+                if (!string.Equals(Path.GetFullPath(file), Path.GetFullPath(Environment.ProcessPath ?? string.Empty),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    TryDelete(file);
+                }
+            }
+
+            TryDelete(layout.StatePath);
+        }
+
         Console.WriteLine("data root=preserved (" + layout.DataRoot + ")");
-        Console.WriteLine("vault=preserved (" + Path.Combine(layout.DataRoot, "vault") + ")");
-        Console.WriteLine("source snapshots, backups and recovery material=preserved (" + layout.DataRoot + ")");
-        Console.WriteLine("the vault, source snapshots, backups and recovery material were kept untouched");
-
-        Console.WriteLine("UNINSTALLED");
+        Console.WriteLine(component == "all" || components.Count == 0
+            ? deferRootRemoval
+                ? "UNINSTALL READY FOR SETUP WRAPPER (application files only; data root preserved)"
+                : "UNINSTALL SCHEDULED (application files only; data root preserved)"
+            : "COMPONENT UNINSTALLED (shared runtime preserved)");
         return 0;
     }
 
@@ -170,6 +230,14 @@ internal static class InstallCommand
         if (string.Equals(installRoot, dataRoot, StringComparison.OrdinalIgnoreCase))
         {
             throw new ArgumentException("The install root and the data root must be different directories.");
+        }
+        foreach (var path in new[] { installRoot, dataRoot })
+        {
+            if (string.Equals(path, Path.GetPathRoot(path)?.TrimEnd(Path.DirectorySeparatorChar),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException("The install and data roots must not be drive roots.");
+            }
         }
 
         if (IsInside(dataRoot, installRoot))
@@ -197,20 +265,23 @@ internal static class InstallCommand
         return candidate.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static void ValidatePayload(string payload)
+    private static void ValidatePayload(string payload, string component)
     {
         if (!Directory.Exists(payload))
         {
             throw new DirectoryNotFoundException("The payload directory does not exist: " + payload + ".");
         }
 
-        foreach (var required in new[]
-                 {
-                     Path.Combine(InstallLayout.ServiceDirectoryName, "MetaBrain.Connections.exe"),
-                     Path.Combine(InstallLayout.OwnerUiDirectoryName, "MetaBrain.OwnerUi.exe"),
-                     Path.Combine(InstallLayout.McpDirectoryName, "MetaBrain.Mcp.exe"),
-                     Path.Combine(InstallLayout.CliDirectoryName, "MetaBrain.Cli.exe")
-                 })
+        foreach (var required in DirectoriesFor(component)
+                     .SelectMany(directory => directory switch
+                     {
+                         InstallLayout.ServiceDirectoryName => new[] { Path.Combine(directory, "MetaBrain.Connections.exe") },
+                         InstallLayout.CliDirectoryName => new[] { Path.Combine(directory, "MetaBrain.Cli.exe") },
+                         InstallLayout.OwnerUiDirectoryName => new[] { Path.Combine(directory, "MetaBrain.OwnerUi.exe") },
+                         InstallLayout.McpDirectoryName => new[] { Path.Combine(directory, "MetaBrain.Mcp.exe") },
+                         InstallLayout.InstallerDirectoryName => new[] { Path.Combine(directory, "MetaBrain.Installer.exe") },
+                         _ => Array.Empty<string>()
+                     }))
         {
             if (!File.Exists(Path.Combine(payload, required)))
             {
@@ -219,37 +290,101 @@ internal static class InstallCommand
         }
     }
 
-    private static void CopyPayload(string payload, string installRoot)
+    private static void CopyPayload(string payload, string installRoot, string component)
     {
         Directory.CreateDirectory(installRoot);
-        foreach (var directory in new[]
-                 {
-                     InstallLayout.ServiceDirectoryName,
-                     InstallLayout.OwnerUiDirectoryName,
-                     InstallLayout.McpDirectoryName,
-                     InstallLayout.CliDirectoryName,
-                     InstallLayout.InstallerDirectoryName
-                 })
+        var transactionRoot = Path.Combine(installRoot, ".metabrain-stage-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(transactionRoot);
+        var runningDirectory = Path.GetFullPath(AppContext.BaseDirectory).TrimEnd(Path.DirectorySeparatorChar);
+        var committed = new List<(string Target, string? Backup)>();
+        try
         {
-            var source = Path.Combine(payload, directory);
-            if (!Directory.Exists(source))
+            foreach (var directory in DirectoriesFor(component))
             {
-                continue;
+                CopyDirectory(Path.Combine(payload, directory), Path.Combine(transactionRoot, "new-" + directory));
             }
 
-            var target = Path.Combine(installRoot, directory);
-            var runningDirectory = Path.GetFullPath(AppContext.BaseDirectory).TrimEnd(Path.DirectorySeparatorChar);
-            if (!string.Equals(Path.GetFullPath(target).TrimEnd(Path.DirectorySeparatorChar), runningDirectory,
-                    StringComparison.OrdinalIgnoreCase))
+            foreach (var directory in DirectoriesFor(component))
             {
-                // A whole-directory replacement is what makes an upgrade leave
-                // no stale application file behind.
-                DeleteDirectory(target);
+                var target = Path.Combine(installRoot, directory);
+                if (string.Equals(Path.GetFullPath(target).TrimEnd(Path.DirectorySeparatorChar), runningDirectory,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string? backup = null;
+                if (Directory.Exists(target))
+                {
+                    backup = Path.Combine(transactionRoot, "old-" + directory);
+                    Directory.Move(target, backup);
+                }
+
+                try
+                {
+                    Directory.Move(Path.Combine(transactionRoot, "new-" + directory), target);
+                    committed.Add((target, backup));
+                }
+                catch
+                {
+                    if (backup is not null && Directory.Exists(backup))
+                    {
+                        Directory.Move(backup, target);
+                    }
+
+                    throw;
+                }
+            }
+        }
+        catch
+        {
+            foreach (var (target, backup) in committed.AsEnumerable().Reverse())
+            {
+                if (Directory.Exists(target))
+                {
+                    Directory.Delete(target, recursive: true);
+                }
+
+                if (backup is not null && Directory.Exists(backup))
+                {
+                    Directory.Move(backup, target);
+                }
             }
 
-            CopyDirectory(source, target);
+            throw;
+        }
+        finally
+        {
+            if (Directory.Exists(transactionRoot))
+            {
+                Directory.Delete(transactionRoot, recursive: true);
+            }
         }
     }
+
+    private static string NormalizeComponent(string component) => component switch
+    {
+        "all" or "cli" or "owner-ui" or "mcp" => component,
+        _ => throw new ArgumentException("Component must be cli, owner-ui, mcp, or all.")
+    };
+
+    private static string[] ComponentsFor(string component) => component switch
+    {
+        "all" => new[] { "cli", "owner-ui", "mcp" },
+        _ => new[] { component }
+    };
+
+    private static string[] DirectoriesFor(string component) => component switch
+    {
+        "cli" => new[] { InstallLayout.ServiceDirectoryName, InstallLayout.CliDirectoryName, InstallLayout.InstallerDirectoryName },
+        "owner-ui" => new[] { InstallLayout.ServiceDirectoryName, InstallLayout.OwnerUiDirectoryName, InstallLayout.InstallerDirectoryName },
+        "mcp" => new[] { InstallLayout.ServiceDirectoryName, InstallLayout.McpDirectoryName, InstallLayout.InstallerDirectoryName },
+        _ => new[]
+        {
+            InstallLayout.ServiceDirectoryName, InstallLayout.OwnerUiDirectoryName, InstallLayout.McpDirectoryName,
+            InstallLayout.CliDirectoryName, InstallLayout.InstallerDirectoryName
+        }
+    };
 
     private static void CopyDirectory(string source, string target)
     {
@@ -352,30 +487,31 @@ internal static class InstallCommand
     /// </summary>
     private static void ScheduleRemoval(string installRoot, bool marked)
     {
-        if (!marked || string.Equals(installRoot, Path.GetPathRoot(installRoot)?.TrimEnd(Path.DirectorySeparatorChar),
+        if (!marked)
+        {
+            throw new InvalidOperationException("The install root is not marked as a Meta Brain installation; automatic removal was refused.");
+        }
+
+        if (string.Equals(installRoot, Path.GetPathRoot(installRoot)?.TrimEnd(Path.DirectorySeparatorChar),
                 StringComparison.OrdinalIgnoreCase))
         {
-            return;
+            throw new InvalidOperationException("The install root is a drive root and cannot be removed.");
         }
 
         var start = new ProcessStartInfo("cmd.exe")
         {
             UseShellExecute = false,
             CreateNoWindow = true,
-            // The whole command is one cmd /c string. /d skips AutoRun and /s
-            // makes cmd strip only the outer quotes, so the quoted install root
-            // reaches rmdir intact even when the path contains spaces. Building
-            // the same text through ArgumentList would escape the inner quotes
-            // as \" which cmd does not unescape, and rmdir would then fail.
             Arguments = "/d /s /c \"ping 127.0.0.1 -n 3 > nul & rmdir /s /q \"" + installRoot + "\"\""
         };
         try
         {
-            Process.Start(start);
+            using var helper = Process.Start(start)
+                ?? throw new InvalidOperationException("The install-root removal helper could not be started.");
         }
-        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException)
+        catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or IOException)
         {
-            Console.WriteLine("the install root could not be removed automatically: " + installRoot);
+            throw new InvalidOperationException("Could not schedule removal of the install root: " + installRoot + ". Close the installer process and retry.", exception);
         }
     }
 }

@@ -3,12 +3,11 @@ using MetaBrain.Connections;
 namespace MetaBrain.Installer;
 
 /// <summary>
-/// The day-to-day service commands: start, stop, restart, the health report
-/// and the autostart entry. The health report reads the real owner channel,
-/// so it reports the state the service actually holds, not the state the
-/// installer believes it left behind. Every command accepts an explicit
-/// <c>--install-root</c>, so the owner can address an installation that is
-/// not the one the running installer belongs to.
+/// The day-to-day service commands: start, stop, restart and health reporting.
+/// The health report reads the real owner channel, so it reports the state the
+/// service actually holds, not the state the installer believes it left behind.
+/// Every command accepts an explicit <c>--install-root</c>, so the owner can
+/// address an installation other than the one the running installer belongs to.
 /// </summary>
 internal static class ServiceCommands
 {
@@ -58,40 +57,6 @@ internal static class ServiceCommands
         return healthy ? 0 : 1;
     }
 
-    internal static async Task<int> AutostartAsync(string[] args)
-    {
-        if (args.Length == 0)
-        {
-            return Usage();
-        }
-
-        var options = InstallerOptions.Parse(args[1..], new[] { "--install-root" });
-        var layout = InstallLayout.Locate(options.Optional("--install-root"));
-        var registration = new AutostartRegistration();
-
-        switch (args[0])
-        {
-            case "enable":
-                registration.Enable(AutostartRegistration.BuildCommand(layout.ServiceExecutable, layout.SettingsPath));
-                Console.WriteLine("autostart=enabled");
-                Console.WriteLine("autostart command=" + AutostartRegistration.BuildCommand(layout.ServiceExecutable, layout.SettingsPath));
-                return 0;
-            case "disable":
-                registration.Disable();
-                Console.WriteLine("autostart=disabled");
-                return 0;
-            case "status":
-                Console.WriteLine(registration.TryRead(out var command) ? "autostart=enabled" : "autostart=disabled");
-                if (command is not null)
-                {
-                    Console.WriteLine("autostart command=" + command);
-                }
-
-                return 0;
-            default:
-                return Usage();
-        }
-    }
 
     private static async Task<bool> ReportStatusAsync(InstallLayout layout)
     {
@@ -116,19 +81,6 @@ internal static class ServiceCommands
             Console.WriteLine("error=" + status.ErrorCode);
         }
 
-        var registration = new AutostartRegistration();
-        Console.WriteLine(registration.TryRead(out var command) ? "autostart=enabled" : "autostart=disabled");
-        if (command is not null)
-        {
-            Console.WriteLine("autostart command=" + command);
-        }
-
         return status.Availability == OwnerChannelAvailability.Reachable;
-    }
-
-    private static int Usage()
-    {
-        Console.Error.WriteLine("autostart {enable|disable|status} [--install-root <dir>]");
-        return 2;
     }
 }

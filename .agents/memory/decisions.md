@@ -1136,3 +1136,13 @@ unknown; this is adverse evidence requiring review, not service acceptance or a 
 **Reason:** The owner explicitly decided that 1.0.0 does not require a certificate and selected transparent unsigned publication. No certificate is established; no claim or policy bypass is necessary to represent the actual release status.
 
 **Consequences:** Every release/download page must clearly disclose unsigned status and checksum limits. Never claim signed, direct users to disable SmartScreen/Defender, or weaken security policy.
+
+## [2026-10-26] Package CLI setup as a self-contained candidate-bound executable
+
+**Decision:** Build the dedicated CLI setup as a self-contained single-file executable embedding its exact candidate CLI/shared-runtime payload, then delegate component install and removal to the existing shared installer.
+
+**Alternatives considered:** Distribute a payload archive requiring scripts or PowerShell; require an installed SDK/runtime; install a generic multi-frontend bundle as the CLI product; add a separate installer framework.
+
+**Reason:** The release contract requires a real standalone CLI asset for end users with no SDK, repository or PowerShell, while S9 already provides the authoritative install/data-root and runtime lifecycle. An embedded payload makes the downloaded executable self-contained and candidate-specific without creating a second store or installer policy.
+
+**Consequences:** Candidate assembly must bind the setup executable and embedded payload hashes to one immutable candidate; component ownership and candidate identity stay in shared install state; setup never edits PATH, profiles, autostart, services or machine state. The Owner UI still requires its separate graphical setup.

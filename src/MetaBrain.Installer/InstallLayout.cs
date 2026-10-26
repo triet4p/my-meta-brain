@@ -82,17 +82,19 @@ internal sealed record InstallLayout(
 }
 
 /// <summary>
-/// The installer's own state file. It records where the instance lives and
-/// when it was installed; it holds no key, no token and no private content,
-/// and it is removed by an uninstall.
+/// The shared installation state. Component ownership is recorded alongside
+/// the one data-root and product-version authority so removing one frontend
+/// cannot remove files still required by another.
 /// </summary>
 internal sealed record InstallState(
     int SchemaVersion,
     string InstalledAtUtc,
     string DataRoot,
-    string ProductVersion)
+    string ProductVersion,
+    string[]? Components = null,
+    string? CandidateIdentity = null)
 {
-    internal const int CurrentSchemaVersion = 1;
+    internal const int CurrentSchemaVersion = 2;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -108,12 +110,16 @@ internal sealed record InstallState(
         }
 
         var state = JsonSerializer.Deserialize<InstallState>(File.ReadAllText(path), JsonOptions);
-        return state is { SchemaVersion: CurrentSchemaVersion } &&
+        return state is { SchemaVersion: 1 or CurrentSchemaVersion } &&
             !string.IsNullOrWhiteSpace(state.DataRoot)
-            ? state
+            ? state with
+            {
+                SchemaVersion = CurrentSchemaVersion,
+                Components = state.Components ?? new[] { "cli", "owner-ui", "mcp" }
+            }
             : null;
     }
 
     internal void Write(string path) =>
-        File.WriteAllText(path, JsonSerializer.Serialize(this, JsonOptions));
+        File.WriteAllText(path, JsonSerializer.Serialize(this with { SchemaVersion = CurrentSchemaVersion }, JsonOptions));
 }
