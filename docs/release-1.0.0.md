@@ -141,8 +141,8 @@ register services or modify global PATH/environment.
   replacement candidate. No product or installer flow was rerun for A2.
 - The candidate's three asset byte sizes and SHA-256 hashes match its manifest; setup payloads
   include the project MIT `LICENSE` and are member-hash verified; the MCP archive includes the same
-  license, 395 members with matching sizes/hashes, and a valid `package-manifest.json` stdio
-  command/argument contract.
+  license plus 395 further members (396 total) with matching sizes/hashes, and a valid
+  `package-manifest.json` stdio command/argument contract.
 - A2 reassembled candidate `1e2953ae6bf4` and the site builder verified candidate provenance plus
   all three asset hashes. The local preview was generated; publication mode was exercised offline
   and points to the exact Release URLs while stating publication remains pending. Neither site was
