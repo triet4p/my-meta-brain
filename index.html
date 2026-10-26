@@ -1,0 +1,112 @@
+﻿<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101c22">
+  <meta name="description" content="Meta Brain — bộ nhớ cá nhân mã hóa do bạn kiểm soát, với CLI, ứng dụng đồ họa và MCP độc lập.">
+  <title>Meta Brain — Bộ nhớ của bạn, quyền quyết định của bạn</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Bỏ qua điều hướng</a>
+  <header class="topbar">
+    <a class="brand" href="#home" aria-label="Meta Brain, về đầu trang"><span class="brand-mark" aria-hidden="true">M</span><span>meta brain</span></a>
+    <nav aria-label="Điều hướng chính">
+      <a href="#choose">Chọn sản phẩm</a><a href="#start">Bắt đầu</a><a href="#scenarios">Tình huống</a><a href="#security">Bảo mật</a><a href="#help">Trợ giúp</a>
+    </nav>
+    <a class="nav-cta" href="#downloads">Bản 1.0.0 <span aria-hidden="true">↗</span></a>
+  </header>
+
+  <main id="main">
+    <section class="hero wrap" id="home" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="live-dot" aria-hidden="true"></span> BỘ NHỚ CÁ NHÂN · WINDOWS X64</p>
+        <h1 id="hero-title">Giữ lại điều<br><span>đáng nhớ.</span><br>Chia sẻ có chủ đích.</h1>
+        <p class="hero-lead">Meta Brain giúp bạn lưu giữ tri thức trong vault cá nhân được mã hóa — và chỉ chia sẻ đúng phần bạn duyệt cho trợ lý AI.</p>
+        <div class="hero-actions"><a class="button button-primary" href="#choose">Chọn cách bắt đầu <span aria-hidden="true">↓</span></a><a class="text-link" href="#security">Hiểu ranh giới bảo mật <span aria-hidden="true">→</span></a></div>
+        <p class="hero-note">Bạn giữ khóa. Bạn duyệt quyền truy cập. AI không tự quyết định thay bạn.</p>
+      </div>
+      <div class="hero-art" aria-label="Minh họa vault cá nhân và các kết nối được bạn kiểm soát" role="img">
+        <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
+        <div class="node node-cli"><span>⌘</span><small>CLI</small></div><div class="node node-ui"><span>▤</span><small>OWNER UI</small></div><div class="node node-mcp"><span>↗</span><small>MCP</small></div>
+        <div class="vault"><div class="vault-lock" aria-hidden="true">⌑</div><strong>VAULT</strong><span>do bạn kiểm soát</span><i class="vault-light"></i></div>
+        <div class="art-caption"><span class="caption-line"></span><span>Một nguồn dữ liệu<br><b>ba lối vào độc lập</b></span></div>
+      </div>
+      <div class="hero-meta"><span>PHIÊN BẢN <b>1.0.0</b></span><span>64-BIT WINDOWS</span><span>CHƯA KÝ SỐ <i>·</i> SHA-256 để kiểm tra tính toàn vẹn</span></div>
+    </section>
+
+    <section class="section section-light" id="choose" aria-labelledby="choose-title">
+      <div class="wrap">
+        <div class="section-head"><div><p class="eyebrow">BẮT ĐẦU TỪ ĐÂU?</p><h2 id="choose-title">Chọn cách làm việc<br>của bạn.</h2></div><p>Ba sản phẩm riêng biệt, cùng dùng một vault và runtime. Bạn không cần cài cả ba.</p></div>
+        <div class="product-grid">
+          <article class="product-card product-featured"><div class="product-top"><span class="product-icon" aria-hidden="true">⌘</span><span class="product-tag">CHO NGƯỜI DÙNG TERMINAL</span></div><h3>Meta Brain CLI</h3><p>Dùng các lệnh rõ ràng để quản lý vault, ghi chú, tìm kiếm và phê duyệt chia sẻ.</p><ul><li>Bộ cài CLI riêng</li><li>Không cần UI hay PowerShell bootstrap</li><li>Dùng trực tiếp executable đã cài</li></ul><a class="card-link" href="#cli-start">Hướng dẫn CLI <span>→</span></a><a class="button button-dark" href="#download-cli">Tải bộ cài CLI</a></article>
+          <article class="product-card"><div class="product-top"><span class="product-icon icon-lilac" aria-hidden="true">▤</span><span class="product-tag">CHO NGƯỜI THÍCH GIAO DIỆN</span></div><h3>Owner UI</h3><p>Quản lý vault qua ứng dụng Windows. Chọn thư mục, khởi động và làm việc bằng giao diện.</p><ul><li>Bộ cài đồ họa, mở bằng nhấp đúp</li><li>Không cần CLI, terminal hay PowerShell</li><li>Chọn riêng vị trí ứng dụng và dữ liệu</li></ul><a class="card-link" href="#ui-start">Hướng dẫn Owner UI <span>→</span></a><a class="button button-outline" href="#download-ui">Tải bộ cài Owner UI</a></article>
+          <article class="product-card"><div class="product-top"><span class="product-icon icon-blue" aria-hidden="true">↗</span><span class="product-tag">CHO CODEX / OH MY PI</span></div><h3>MCP Server</h3><p>Kết nối trợ lý tương thích MCP qua stdio, dùng gói độc lập và giữ quyền duyệt ở phía bạn.</p><ul><li>ZIP tự chứa, độc lập với CLI và UI</li><li>Cấu hình đường dẫn executable đã giải nén</li><li>Không cần SDK, repo hoặc runtime .NET</li></ul><a class="card-link" href="#integrations">Cấu hình Codex / OMP <span>→</span></a><a class="button button-outline" href="#download-mcp">Tải gói MCP</a></article>
+        </div>
+        <p class="platform-note"><span aria-hidden="true">ℹ</span> Bản này dành cho Windows x64. Chỉ nêu tương thích với phiên bản Windows 64-bit còn được .NET 10 hỗ trợ tại thời điểm phát hành và có khả năng desktop/WPF cần thiết; không khẳng định mọi SKU đã được kiểm thử. Linux, macOS và ARM không thuộc phạm vi.</p>
+      </div>
+    </section>
+
+    <section class="section downloads" id="downloads" aria-labelledby="downloads-title">
+      <div class="wrap">
+        <div class="section-head"><div><p class="eyebrow">BẢN PHÁT HÀNH</p><h2 id="downloads-title">Bản dựng ứng viên<br>1.0.0.</h2></div><div class="release-alert"><span class="alert-dot"></span><span><b>Ch&#7901; c&#244;ng b&#7889; 1.0.0</b><br>Candidate &#273;&#227; s&#7861;n s&#224;ng; c&#244;ng b&#7889; public v&#7851;n ch&#7901; c&#225;c gate v&#224; smoke test.</span></div></div>
+        <div class="candidate-banner"><span class="candidate-mark" aria-hidden="true">◎</span><div><strong>CANDIDATE 1.0.0 &#183; CH&#431;A C&#212;NG B&#7888;</strong><p>Định danh ứng viên <code>1e2953ae6bf4</code> · mã nguồn <code>86626bda2908235c02392d421f2117b36c3d11cb</code> · SHA-256 cây nguồn <code>1edb06ca92549af2e26bd713b120f45b6f4c34affeb2d8d67ec581ecd008a7c6</code></p></div></div>
+        <div class="download-list">
+          <article class="download-row" id="download-cli"><div class="download-product"><span class="mini-icon">⌘</span><div><h3>CLI · Windows x64</h3><p>Bộ cài độc lập · 186187154 bytes</p></div></div><a class="download-action" href="https://github.com/triet4p/my-meta-brain/releases/download/v1.0.0/MetaBrain-CLI-1.0.0-win-x64-86626bda2908-tree1edb06ca9254-1e2953ae6bf4.exe" download>T&#7843;i candidate 1.0.0 <span aria-hidden="true">&darr;</span></a><details class="checksum"><summary>SHA-256</summary><code>dbfc8a13eefcd65060f4cd52e1d2b5d127be274f9b311162636a8b2bc6837e0a</code></details></article>
+          <article class="download-row" id="download-ui"><div class="download-product"><span class="mini-icon lilac">▤</span><div><h3>Owner UI · Windows x64</h3><p>Bộ cài đồ họa · 277357664 bytes</p></div></div><a class="download-action" href="https://github.com/triet4p/my-meta-brain/releases/download/v1.0.0/MetaBrain-OwnerUI-1.0.0-win-x64-86626bda2908-tree1edb06ca9254-1e2953ae6bf4.exe" download>T&#7843;i candidate 1.0.0 <span aria-hidden="true">&darr;</span></a><details class="checksum"><summary>SHA-256</summary><code>2a32a44d6beceb03bab195265bb2950b31961dadda396eff68f593a4491951a3</code></details></article>
+          <article class="download-row" id="download-mcp"><div class="download-product"><span class="mini-icon blue">↗</span><div><h3>MCP Server · Windows x64</h3><p>Gói ZIP độc lập · 73290820 bytes</p></div></div><a class="download-action" href="https://github.com/triet4p/my-meta-brain/releases/download/v1.0.0/MetaBrain-MCP-1.0.0-win-x64-86626bda2908-tree1edb06ca9254-1e2953ae6bf4.zip" download>T&#7843;i candidate 1.0.0 <span aria-hidden="true">&darr;</span></a><details class="checksum"><summary>SHA-256</summary><code>0a475496977b7f6ff4db187093869aa788e9fb52088ec49dfe6b9b3f844ab857</code></details></article>
+        </div>
+        <div class="signing-note"><span aria-hidden="true">!</span><p><b>Các bộ cài chưa được ký số.</b> SHA-256 chỉ giúp xác minh tệp có khớp với checksum công bố; nó không xác thực danh tính nhà phát hành. Không tắt SmartScreen, Defender hay chính sách bảo mật để cài.</p></div>
+      </div>
+    </section>
+
+    <section class="section section-light" id="start" aria-labelledby="start-title">
+      <div class="wrap"><div class="section-head"><div><p class="eyebrow">ĐƯỜNG ĐI NHANH</p><h2 id="start-title">Từ tải về<br>đến bước đầu tiên.</h2></div><p>Chọn hướng dẫn đúng với sản phẩm. Cài đặt không tự tạo vault, mở khóa hay bật chạy cùng máy.</p></div>
+        <div class="start-grid">
+          <article class="start-card" id="cli-start"><span class="step-number">01 / CLI</span><h3>Cài CLI và mở trợ giúp</h3><p>Tải bộ cài CLI riêng, làm theo cửa sổ cài đặt rồi gọi executable đã cài trực tiếp.</p><pre><code>MetaBrain.Cli.exe --version
+MetaBrain.Cli.exe --help
+MetaBrain.Cli.exe lifecycle start --data-root &lt;thư-mục-dữ-liệu&gt;</code></pre><p>Host bắt đầu ở trạng thái khóa. Tạo vault và mở khóa là thao tác riêng do bạn chủ động.</p><a class="inline-link" href="https://github.com/triet4p/my-meta-brain/blob/main/docs/OPERATIONS.md#2.2-immutable-release-candidates-and-cli-setup">Chi tiết cài CLI trong runbook <span>→</span></a></article>
+          <article class="start-card" id="ui-start"><span class="step-number">02 / OWNER UI</span><h3>Mở ứng dụng đồ họa</h3><p>Tải bộ cài Owner UI và nhấp đúp. Trong cửa sổ cài đặt, chọn vị trí ứng dụng và dữ liệu; có thể mở Owner UI sau khi cài.</p><p>Ứng dụng không tự khởi động dịch vụ hay mở khóa vault. Khởi chạy riêng bằng <code>MetaBrain.OwnerUi.exe</code> nếu chưa chọn mở sau cài.</p><a class="inline-link" href="https://github.com/triet4p/my-meta-brain/blob/main/docs/OPERATIONS.md#23-graphical-owner-ui-setup-s10-t4">Chi tiết Owner UI trong runbook <span>→</span></a></article>
+          <article class="start-card" id="integrations"><span class="step-number">03 / CODEX + OMP</span><h3>Kết nối MCP theo phạm vi dự án</h3><p>Giải nén ZIP đầy đủ vào thư mục ổn định. Trỏ cấu hình client tới đường dẫn tuyệt đối của <code>mcp/MetaBrain.Mcp.exe</code>; chọn đúng một đối số <code>--data-root</code> hoặc <code>--config</code>.</p><p>Không cần cài CLI/UI, sửa hồ sơ toàn cục, SDK hay PowerShell.</p><a class="inline-link" href="https://github.com/triet4p/my-meta-brain/blob/main/docs/OPERATIONS.md#321-mcp-client-registration-standalone-package-100">Cấu hình Codex CLI / Oh My Pi <span>→</span></a><p class="compat-note">Phiên bản client quan sát trong bằng chứng tương thích trước đây: Codex CLI 0.164.0 và Oh My Pi 18.12.6; đây không phải giới hạn hỗ trợ tối thiểu/tối đa.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section scenario-section" id="scenarios" aria-labelledby="scenarios-title"><div class="wrap"><div class="section-head"><div><p class="eyebrow">BẠN MUỐN LÀM GÌ?</p><h2 id="scenarios-title">Đi thẳng đến<br>tình huống.</h2></div><p>Hướng dẫn thực hành theo từng tình huống, có đường CLI và Owner UI riêng. Các ví dụ dùng dữ liệu giả định.</p></div><div class="scenario-grid">
+      <a href="scenarios.html#first"><span class="scenario-no">01</span><span><b>Bắt đầu lần đầu</b><small>Cài, chọn root, start, provision, unlock, status, lock</small></span><span class="arrow">↗</span></a>
+      <a href="scenarios.html#capture"><span class="scenario-no">02</span><span><b>Ghi research hoặc note</b><small>Capture nguồn trước, đọc lại, không fetch/provider tự động</small></span><span class="arrow">↗</span></a>
+      <a href="scenarios.html#recall"><span class="scenario-no">03</span><span><b>Tìm lỗi hoặc quyết định cũ</b><small>Search, filter, evidence, history, stale-index</small></span><span class="arrow">↗</span></a>
+      <a href="scenarios.html#sessions"><span class="scenario-no">04</span><span><b>Dùng lại session coding</b><small>Enroll/refresh nguồn read-only, preservation opt-in</small></span><span class="arrow">↗</span></a>
+      <a href="scenarios.html#sharing"><span class="scenario-no">05</span><span><b>Giới hạn quyền agent</b><small>Catalog, preview, narrow, approve, handoff, revoke</small></span><span class="arrow">↗</span></a>
+      <a href="scenarios.html#review"><span class="scenario-no">06</span><span><b>Review đề xuất và quan hệ</b><small>Publish/reject/undo, relation theo endpoint</small></span><span class="arrow">↗</span></a>
+      <a href="scenarios.html#lifecycle"><span class="scenario-no">07</span><span><b>Kết thúc và giữ dữ liệu</b><small>Lock, backup, restore, upgrade, uninstall</small></span><span class="arrow">↗</span></a>
+      <a href="codex.html"><span class="scenario-no">C</span><span><b>Kết nối Codex CLI</b><small>Cấu hình process-scoped, path quoting chính xác</small></span><span class="arrow">↗</span></a>
+      <a href="omp.html"><span class="scenario-no">O</span><span><b>Kết nối Oh My Pi</b><small>Project-local .omp/mcp.json</small></span><span class="arrow">↗</span></a>
+    </div></div></section>
+
+    <section class="section security-section" id="security" aria-labelledby="security-title"><div class="wrap security-layout"><div><p class="eyebrow">THIẾT KẾ QUANH QUYỀN KIỂM SOÁT</p><h2 id="security-title">Vault của bạn.<br>Quyền duyệt của bạn.</h2><p class="security-intro">Meta Brain giữ vault mã hóa dưới quyền kiểm soát của chủ sở hữu. Ứng dụng khởi động ở trạng thái khóa; việc cho trợ lý truy cập cần sự chấp thuận cụ thể của bạn.</p><a class="inline-link" href="https://github.com/triet4p/my-meta-brain/blob/main/README.md#security--scoped-sharing-model">Đọc mô hình chia sẻ và ranh giới bảo mật <span>→</span></a></div><div class="security-points">
+      <article><span>01</span><div><h3>Chia sẻ theo phạm vi</h3><p>Trợ lý chỉ thấy phần catalog bạn công bố. Yêu cầu truy cập cần được bạn xem xét và chấp thuận với quyền, mục dữ liệu và thời hạn phù hợp.</p></div></article>
+      <article><span>02</span><div><h3>Quyền sở hữu dữ liệu không biến mất</h3><p>Khóa vault và thu hồi phiên chặn các lần đọc tiếp theo qua Meta Brain. Nhưng điều đó không xóa nội dung mà một mô hình đã nhận trước đó.</p></div></article>
+      <article><span>03</span><div><h3>Không chống lại cùng tài khoản máy</h3><p>Meta Brain không bảo vệ khỏi người hoặc tiến trình khác có cùng quyền hệ điều hành với chủ sở hữu khi vault đang mở. Đây không phải sandbox cho Codex hay OMP.</p></div></article>
+      <article><span>04</span><div><h3>Một nguồn dữ liệu, ba lối vào</h3><p>CLI, Owner UI và MCP dùng chung instance/runtime và cùng trạng thái có thẩm quyền — không tạo một vault riêng cho từng client.</p></div></article>
+    </div></div></section>
+
+    <section class="section faq-section section-light" id="help" aria-labelledby="help-title"><div class="wrap"><div class="section-head"><div><p class="eyebrow">GIẢI ĐÁP & XỬ LÝ SỰ CỐ</p><h2 id="help-title">Rõ ràng trước<br>khi bạn bắt đầu.</h2></div><a class="inline-link" href="https://github.com/triet4p/my-meta-brain/blob/main/docs/OPERATIONS.md">Mở runbook đầy đủ <span>→</span></a></div><div class="faq-list">
+      <details><summary>Meta Brain có tự gửi dữ liệu lên nhà cung cấp AI không?</summary><p>Không tự động. Kết nối MCP phục vụ công cụ và quyền truy cập có phạm vi; việc gửi ngữ cảnh tới nhà cung cấp phụ thuộc ứng dụng AI và lựa chọn chia sẻ của bạn. Chỉ phê duyệt nội dung/phạm vi phù hợp với đích đến và ngữ cảnh mô hình dự kiến.</p></details>
+      <details><summary>Khóa vault hoặc thu hồi quyền có xóa nội dung đã chia sẻ không?</summary><p>Không. Khóa vault làm mất hiệu lực phiên truy cập hiện tại qua Meta Brain; thu hồi chặn lần truy cập tiếp theo. Nội dung đã được gửi ra ngoài không thể được Meta Brain thu hồi khỏi mô hình hay nhà cung cấp.</p></details>
+      <details><summary>Ứng dụng có hoạt động trên macOS, Linux hoặc ARM không?</summary><p>Không. Bản 1.0.0 này dành cho Windows x64. Hệ điều hành được nêu tương thích là các bản Windows 64-bit còn được .NET 10 hỗ trợ và đáp ứng khả năng desktop/WPF; không có khẳng định từng SKU đã được kiểm thử.</p></details>
+      <details><summary>Tôi có cần cài .NET, SDK hoặc PowerShell không?</summary><p>Không để sử dụng các gói tự chứa. Bộ cài Owner UI mở bằng nhấp đúp, không cần bootstrap PowerShell. PowerShell và .NET SDK chỉ dành cho quy trình phát triển/xây dựng trong repo.</p></details>
+      <details><summary>Windows cảnh báo vì bộ cài chưa ký số — tôi nên làm gì?</summary><p>Bản 1.0.0 chưa ký số. Dừng lại nếu bạn không thể xác minh nguồn và checksum; không vô hiệu hóa SmartScreen, Defender hoặc chính sách máy để tiếp tục.</p></details>
+      <details><summary>Checksum SHA-256 xác nhận điều gì?</summary><p>Nó giúp so sánh bytes của tệp tải về với giá trị công bố. Nó không chứng minh ai đã phát hành tệp. Chỉ dùng checksum từ một nguồn bạn tin cậy.</p></details>
+      <details><summary>Codex / Oh My Pi không khởi chạy được MCP?</summary><p>Giữ nguyên cấu trúc ZIP sau khi giải nén; kiểm tra đường dẫn tuyệt đối tới <code>mcp/MetaBrain.Mcp.exe</code>, dùng đúng một cặp đối số, và bảo đảm cấu hình đặt ở phạm vi dự án/client bạn dự định. Runbook có ví dụ và lưu ý escape đường dẫn.</p></details>
+      <details><summary>CLI báo host không khả dụng hoặc vault đang khóa?</summary><p>Kiểm tra trạng thái bằng lệnh lifecycle phù hợp, chọn đúng data root của instance và chỉ thực hiện thao tác owner khi vault được mở khóa có chủ ý. Xem mã lỗi và bước khắc phục trong phần vận hành của runbook.</p></details>
+    </div></div></section>
+
+    <section class="release-notes" id="release-notes" aria-labelledby="notes-title"><div class="wrap notes-inner"><div><p class="eyebrow">GHI CHÚ PHÁT HÀNH</p><h2 id="notes-title">1.0.0 <span>·</span> Windows x64</h2></div><div><p>Bộ cài CLI riêng, bộ cài Owner UI đồ họa và gói MCP tự chứa độc lập. Cả ba cùng phiên bản và cùng runtime dùng chung; không tự bật chạy nền hay mở khóa vault.</p><p>Trạng thái ký số: <b>chưa ký</b>. SHA-256 &#273;&#432;&#7907;c ghi nh&#7853;n cho t&#7915;ng t&#7879;p. C&#225;c li&#234;n k&#7871;t Release &#273;&#227; &#273;&#432;&#7907;c c&#7845;u h&#236;nh nh&#432;ng ch&#432;a &#273;&#432;&#7907;c x&#225;c nh&#7853;n l&#224; c&#244;ng khai.</p><p>Meta Brain được cấp phép theo <a href="https://github.com/triet4p/my-meta-brain/blob/main/LICENSE">MIT License</a>. Copyright (c) 2026 triet4p. Mỗi gói phát hành kèm LICENSE của dự án; giấy phép runtime .NET và thông báo thành phần bên thứ ba được giữ riêng.</p><a class="inline-link" href="https://github.com/triet4p/my-meta-brain/blob/main/docs/release-1.0.0.md">Bản ghi phát hành: SHA-256, giấy phép và giới hạn <span>&rarr;</span></a> &middot; <a class="inline-link" href="https://github.com/triet4p/my-meta-brain/blob/main/CHANGELOG.md">Xem changelog đầy đủ <span>&rarr;</span></a></div></div></section>
+  </main>
+
+  <footer class="footer"><div class="wrap footer-inner"><a class="brand" href="#home"><span class="brand-mark" aria-hidden="true">M</span><span>meta brain</span></a><p>Bộ nhớ cá nhân, do bạn làm chủ.</p><div><a href="scenarios.html">Hướng dẫn</a><a href="codex.html">Codex</a><a href="omp.html">OMP</a><a href="https://github.com/triet4p/my-meta-brain/blob/main/README.md">README</a><a href="operations.html">Runbook</a><a href="https://github.com/triet4p/my-meta-brain/blob/main/CHANGELOG.md">Changelog</a><a href="https://github.com/triet4p/my-meta-brain/blob/main/LICENSE">MIT License</a></div></div><div class="wrap footer-bottom"><span>Meta Brain 1.0.0 · Publication pending</span><span>Copyright (c) 2026 triet4p · MIT License · Trang tĩnh · Không gọi mạng bên thứ ba khi hiển thị</span></div></footer>
+</body>
+</html>
+
