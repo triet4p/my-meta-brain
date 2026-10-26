@@ -9,9 +9,9 @@ authenticate the publisher.
 - `MetaBrain-UI-1.0.0.exe` — graphical Owner UI setup.
 - `MetaBrain-MCP-1.0.0.zip` — standalone MCP server package.
 
-The owner-authorized in-place rename is pending the release review/checkpoint gates; no duplicate
-assets will be uploaded. Byte sizes, SHA-256 values, internal candidate provenance, installation
-details, licensing and known limits are in the
+The owner-authorized in-place rename is complete; no duplicate assets were uploaded. The three
+public download URLs resolve to the existing frozen assets. Byte sizes, SHA-256 values, internal
+candidate provenance, installation details, licensing and known limits are in the
 [`1.0.0 release record`](https://github.com/triet4p/my-meta-brain/blob/main/docs/release-1.0.0.md).
 
 ## What is included

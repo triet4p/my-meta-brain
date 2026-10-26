@@ -153,13 +153,16 @@ the owner approves or narrows requests in the CLI or the Owner console, never in
 
 ## Getting Started
 
-Release 1.0.0 is packaged as three dedicated assets: `MetaBrain-CLI-1.0.0.exe`,
-`MetaBrain-UI-1.0.0.exe` and `MetaBrain-MCP-1.0.0.zip`. The release record lists their frozen byte
-sizes, SHA-256 hashes, internal candidate provenance, dependency/license notices, signing status
-and known limits. The GitHub Release and Pages site are live; the owner-authorized in-place rename
-to these public filenames and refreshed site deployment remain pending review/checkpoint gates and
-publication execution. Use the website quick starts or the operations runbook for installation;
-do not treat the developer bundle below as the end-user download.
+Release 1.0.0 is published as three dedicated assets:
+[`MetaBrain-CLI-1.0.0.exe`](https://github.com/triet4p/my-meta-brain/releases/download/v1.0.0/MetaBrain-CLI-1.0.0.exe),
+[`MetaBrain-UI-1.0.0.exe`](https://github.com/triet4p/my-meta-brain/releases/download/v1.0.0/MetaBrain-UI-1.0.0.exe)
+and
+[`MetaBrain-MCP-1.0.0.zip`](https://github.com/triet4p/my-meta-brain/releases/download/v1.0.0/MetaBrain-MCP-1.0.0.zip).
+The release record lists their frozen byte sizes, SHA-256 hashes, internal candidate provenance,
+dependency/license notices, signing status and known limits. The GitHub Release and Pages site are
+live; the approved in-place asset rename, refreshed deployment and public smoke are complete. Use
+the website quick starts or the operations runbook for installation; do not treat the developer
+bundle below as the end-user download.
 
 ### Developer bundle: build the payload from a checkout
 
@@ -333,9 +336,8 @@ the restore stays available, and the real renders of the view.
 ## Project Status & Roadmap
 
 The project follows the authoritative milestone roadmap in [`docs/PLAN.md`](docs/PLAN.md).
-Milestones 1–8 and Sprint 9's three-product delivery are complete. The final public release and
-onboarding milestone remains in progress until the authorized asset-name cutover, updated Pages
-deployment, and public smoke are complete.
+Milestones 1–9 and Sprint 9's three-product delivery are complete; the public 1.0.0 release,
+asset-name cutover, updated Pages deployment and public smoke are complete.
 
 - [x] **Milestone 1 (M1) — Encrypted Vault & Scoped Sharing (Sprint 1):** User-controlled key lifecycle, authenticated ciphertext, owner-approved catalog publication, single-use token issuance/redemption, and in-memory scoped reads verified with official Codex and OMP clients.
 - [x] **Milestone 2 (M2) — Durable Encrypted Core (Sprint 2):** Canonical encrypted item/source/zone/revision models, relations, and rebuildable protected index.
@@ -345,7 +347,7 @@ deployment, and public smoke are complete.
 - [x] **Milestone 6 (M6) — Grounded Structuring (Sprint 6):** Layered syntheses, coding profile extraction, and strict provider egress controls.
 - [x] **Milestone 7 (M7) — Time & Lifecycle (Sprint 7):** Temporal recall, contextual intentions, active forgetting, and audited purging.
 - [x] **Milestone 8 (M8) — Daily Production (Sprint 8):** Installer, automated backups, encrypted restore/recovery, and production hardening.
-- [~] **Milestone 9 (M9) — Public Release 1.0.0 & Onboarding (Sprint 10):** CLI, Owner UI and MCP publication, landing page and scenario guides. Release and Pages are live; approved public asset-name cutover, refreshed deployment and final public smoke remain in progress.
+- [x] **Milestone 9 (M9) — Public Release 1.0.0 & Onboarding (Sprint 10):** CLI, Owner UI and MCP publication, landing page and scenario guides. The public Release assets and Pages site are live under the approved short filenames; refreshed deployment and public smoke are complete.
 
 ---
 

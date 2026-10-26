@@ -1,10 +1,9 @@
 # Meta Brain 1.0.0 — release record and publication handoff
 
-**Status: published; public asset filename cutover pending.** GitHub Release `v1.0.0` and the
-GitHub Pages site are public. After this cycle's review and checkpoint gates, the authorized
-publication executor must rename the three existing Release assets in place before deploying
-the updated site. No duplicate assets are to be uploaded. The tag, asset bytes and SHA-256 values
-remain frozen.
+**Status: published; public asset filename cutover complete.** GitHub Release `v1.0.0` and the
+GitHub Pages site are public. The three existing Release assets were renamed in place and the
+updated site was deployed after the rename; no duplicate assets were uploaded. The tag, asset
+bytes and SHA-256 values remain frozen. Public download URLs are listed below.
 
 This is the public release record for the three Meta Brain 1.0.0 products: the CLI, the Owner UI
 and the standalone MCP server. Product behavior was accepted in Sprint 9; Sprint 10 verifies only
@@ -35,11 +34,11 @@ filenames remain provenance-bound; the public-name mapping is separate and does 
 
 ## Download matrix and publication URLs
 
-These are the exact public names and URLs for the owner-authorized in-place rename. Until the
-executor completes that rename after the review/checkpoint gates, the already-published Release
-still has its original long filenames; this record does not claim the new URLs are live yet.
+These are the exact public filenames and live download URLs for the three frozen assets. The
+authorized in-place rename and updated Pages deployment are complete; internal candidate
+filenames, manifest data and byte provenance remain unchanged.
 
-| Product | Public asset name | Bytes | SHA-256 | Post-cutover download URL |
+| Product | Public asset name | Bytes | SHA-256 | Public download URL |
 | --- | --- | ---: | --- | --- |
 | CLI setup | `MetaBrain-CLI-1.0.0.exe` | 186,187,154 | `dbfc8a13eefcd65060f4cd52e1d2b5d127be274f9b311162636a8b2bc6837e0a` | `https://github.com/triet4p/my-meta-brain/releases/download/v1.0.0/MetaBrain-CLI-1.0.0.exe` |
 | Owner UI setup | `MetaBrain-UI-1.0.0.exe` | 277,357,664 | `2a32a44d6beceb03bab195265bb2950b31961dadda396eff68f593a4491951a3` | `https://github.com/triet4p/my-meta-brain/releases/download/v1.0.0/MetaBrain-UI-1.0.0.exe` |
@@ -48,8 +47,7 @@ still has its original long filenames; this record does not claim the new URLs a
 Public website: `https://triet4p.github.io/my-meta-brain/`.
 Public release page: `https://github.com/triet4p/my-meta-brain/releases/tag/v1.0.0`.
 The site builder keeps internal candidate filenames and provenance intact while presenting the
-short public names. Publication mode emits these exact post-cutover URLs; do not deploy that
-output until the asset rename has completed.
+short public names. Publication mode emits these exact URLs and published-status labels.
 
 ## Release notes
 
@@ -154,8 +152,8 @@ register services or modify global PATH/environment.
 
 ## Publication checklist and exact commands
 
-The Release and Pages deployment already exist. These remaining actions are for the owner or an
-executor the owner explicitly authorizes; they require authenticated GitHub API access.
+The following publication procedure and commands are retained for traceability; cutover and
+deployment are complete, so this is not a pending-action list.
 
 1. Verify the three internal candidate assets against the frozen sizes and SHA-256 values above.
    Do not rebuild the candidate, alter its manifest, recreate/move tag `v1.0.0`, or change the
@@ -202,12 +200,15 @@ executor the owner explicitly authorizes; they require authenticated GitHub API 
 ## Current status
 
 - Candidate `1e2953ae6bf4`, tag `v1.0.0`, asset sizes and SHA-256 digests remain frozen.
-- The published Release currently has the original filenames recorded in P1. The authorized
-  rename to the short names above is pending CYCLE2 review/checkpoint gates and Bronze execution.
-- GitHub Pages is deployed from `gh-pages` root; P2 records HTTP 200 for all six served files.
-  The deployed index still has stale pending-status text. This source includes A4's published
-  status correction and the short-name URLs for the post-rename build, but no deployment or asset
-  rename is claimed here.
+- The existing Release assets were renamed in place to the public filenames above, preserving
+  their asset IDs, sizes and SHA-256 digests. The public download URLs are listed in the matrix.
+- GitHub Pages is deployed from the `gh-pages` root at
+  `6c75b8f2230ebbf9f62644459b0b3ec0947c3c16`. P4 records HTTP 200 for all six served files;
+  the live index contains the short names and published status. The release body currently
+  still contains the historical pending-cutover sentence; refreshing that body from the reviewed
+  release notes is pending the final review/checkpoint handoff.
+- P4 records public download URL responses with HTTP 206 after redirect follow. Its public asset
+  IDs, sizes and digests match the frozen matrix.
 - No product, client, provider, security or performance flow was executed for this record.
 
 ## Publication prerequisites (completed at publication)
