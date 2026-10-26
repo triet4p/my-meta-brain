@@ -1106,3 +1106,33 @@ unknown; this is adverse evidence requiring review, not service acceptance or a 
 **Alternatives considered:** Keep installer ServiceHost start logic plus separate CLI/UI/MCP starters; rely on reachability probes alone to dedupe concurrent starts; alias a foreign reachable endpoint as AlreadyRunning.
 **Reason:** Reachability-only dedupe let a second starter spawn beside a live host (or alias a foreign live endpoint as its own) because the pre-start check and the spawn were not atomic; S9-T2 requires one writer per instance and truthful readiness/version/path/conflict errors across all entries.
 **Consequences:** Installer delegates start/stop to the shared lifecycle; concurrent same-instance starts yield one writer; foreign-endpoint aliasing is refused; entry-specific UX stays in T3–T5 on the same resolve/start/connect contract. No daemon, key store, auto-provision/unlock or permission change.
+
+## [2026-10-26] Reuse one shared runtime for the separate 1.0.0 installers
+
+**Decision:** The separate CLI and Owner UI installers manage frontends within one per-user installation identity and one versioned shared runtime; they never install competing host copies or own the data root.
+
+**Alternatives considered:** Duplicate a runtime per frontend; let whichever installer last ran replace shared runtime independently; adopt a new general-purpose installer framework.
+
+**Reason:** S9 already provides one self-contained Windows x64 payload, a shared lifecycle, root separation and a data-preserving per-user installer. Multiple runtime copies would conflict with the established one-instance/one-writer contract; independent replacement would let one frontend break another. Reusing the existing lifecycle is evidence-based, while component ownership/refusal behavior is a required S10 implementation gap.
+
+**Consequences:** Installers must bind the complete product set to one candidate/runtime version, refuse conflicting or active-host replacement with remediation, and preserve the runtime while any installed frontend depends on it. The final frontend uninstall may remove application files only; it must never remove the owner data root. The existing command-line installer does not satisfy the graphical UI installer requirement.
+
+## [2026-10-26] Use a static repo-local release website and owner-controlled GitHub hosting
+
+**Decision:** Keep sanitized static HTML/CSS under `website/`, copy it to ignored `dist/site/` without a frontend framework/build dependency, preview on loopback with Python's standard-library HTTP server, and use the owner-controlled `triet4p/my-meta-brain` GitHub Pages site and Releases for public site and immutable assets.
+
+**Alternatives considered:** Add a JavaScript frontend framework/site package; publish internal `docs/` wholesale; provision a new domain or third-party hosting destination.
+
+**Reason:** The site is product documentation/distribution, not an application frontend. Static files avoid new application dependencies and make the public surface explicit. GitHub metadata confirms this repository is already public and viewer permission is admin; the owner explicitly selected Pages and Releases. No Pages workflow/config or release assets were found, and publication actions remain owner-controlled.
+
+**Consequences:** T6 must implement and verify the static source/build/preview, exclude internal/private content, and link only exact release assets. The expected Pages URL is `https://triet4p.github.io/my-meta-brain/`; Pages enablement, release assets/tags and publication itself remain unverified and are not authorized by this decision.
+
+## [2026-10-26] Publish 1.0.0 unsigned with explicit integrity limits
+
+**Decision:** Ship Meta Brain 1.0.0 unsigned and disclose that SHA-256 verifies bytes but does not authenticate the publisher.
+
+**Alternatives considered:** Require an unavailable code-signing certificate before the 1.0.0 distribution; imply publisher identity from a checksum; advise bypassing operating-system security warnings.
+
+**Reason:** The owner explicitly decided that 1.0.0 does not require a certificate and selected transparent unsigned publication. No certificate is established; no claim or policy bypass is necessary to represent the actual release status.
+
+**Consequences:** Every release/download page must clearly disclose unsigned status and checksum limits. Never claim signed, direct users to disable SmartScreen/Defender, or weaken security policy.
