@@ -753,3 +753,23 @@ the assignment can fail before the sentinel check or any child starts.
 **Fix / workaround:** The standalone CLI setup asks the shared installer to defer root removal, waits for that installer process to exit, then deletes and verifies the exact application root itself. It returns a path-specific failure if the root remains and continues to preserve the data root.
 
 **Watch out for:** Starting a detached shell is not uninstall evidence. Component files and final-root deletion must be checked independently; keep delayed removal only for direct shared-installer use where success is reported as scheduled, not completed.
+
+## [2026-10-26] The setup status row can be clipped by an undersized window
+
+**Symptom:** The actual WPF setup screenshot showed only a fragment of the status message because the fixed-height window left too little space after the disclosure and location fields.
+
+**Root cause:** The rows above the status area were auto-sized while the status occupied the remaining star-sized row; the original minimum window height let those rows consume nearly all available space.
+
+**Fix / workaround:** Increase the setup window's default and minimum heights so the status text and action buttons remain visible together.
+
+**Watch out for:** Review the full real window at its initial dimensions after changes to disclosures, labels or controls; an otherwise usable form can still clip the only visible success/error status.
+
+## [2026-10-26] The setup uninstall action must follow the selected root
+
+**Symptom:** In the actual setup UI, selecting a non-default shared install root left `Remove Owner UI` disabled even though that root contained a registered Owner UI component.
+
+**Root cause:** The button was initialized from the default install root only and was not refreshed after the owner selected a different path.
+
+**Fix / workaround:** Recompute the button's availability from the selected install root whenever that field changes and whenever an operation completes.
+
+**Watch out for:** Exercise setup with a custom install location; default-path UI state does not cover owners using an existing shared installation elsewhere.

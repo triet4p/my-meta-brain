@@ -126,8 +126,13 @@ settings. The self-contained single-file .NET host may extract runtime support u
 `%TEMP%\.net\<bundle>\<hash>` on launch; this is runtime temp data, not an install or profile
 registration.
 
-The Owner UI remains a payload archive until its separately assigned graphical
-installer is delivered. The MCP asset is independently consumable.
+### 2.3 Graphical Owner UI setup (S10-T4)
+
+Download the candidate-specific `MetaBrain-OwnerUI-...exe` setup executable. It opens a graphical setup window where the owner selects separate application and data locations, installs or updates only the Owner UI component through the shared installer, and may open `owner-ui\MetaBrain.OwnerUi.exe` after installation. Setup can also remove only the Owner UI; other registered components keep the shared runtime, and the data location is always retained.
+
+The setup is self-contained for Windows x64 and requires no SDK, repository, command prompt, CLI bootstrap, or installed .NET runtime. The window supports keyboard navigation; Escape or Cancel closes setup before an operation begins. Once installation or removal starts, setup keeps the operation intact and reports the shared installer's actual success or refusal. It does not start or unlock the service. Setup is unsigned: SHA-256 checks bytes but does not authenticate the publisher. It temporarily extracts its embedded payload under the current user's `%TEMP%` and removes the staging directory when possible; the single-file host may also extract runtime support under `%TEMP%\.net`. No PATH, profile, service, registry, permission, environment or autostart changes are made.
+
+The Owner UI installer and CLI installer use the same installation identity, component state, runtime version and data root. If the other frontend is already installed, use the recorded data location; setup refuses a different data root or an incompatible shared candidate/version rather than replacing the other component's runtime.
 
 To recheck an existing candidate's asset hashes and file sets:
 
@@ -137,14 +142,15 @@ powershell.exe -NoProfile -File scripts\release\assemble-candidate.ps1 -VerifyOn
 
 Candidate identity records Git HEAD and a SHA-256 of the tracked source/working
 tree contents used by assembly; uncommitted source therefore does not masquerade
-as the HEAD revision. The CLI setup embeds the exact staged CLI/shared-runtime
-payload and stores the candidate identity with the shared install state. A
-different candidate or runtime version is refused when another frontend is
-registered; install the matching complete candidate or remove the other
-frontend before replacing the shared runtime. Rebuilds receive new IDs and
-never overwrite a candidate. Candidate manifests record asset/payload hashes,
-dependency inventory, licenses and unsigned status; SHA-256 does not authenticate
-the publisher. Public release remains owner-controlled and is not authorized.
+as the HEAD revision. The CLI and graphical Owner UI setups embed their exact
+staged component/shared-runtime payloads and store the same candidate identity
+with shared install state. A different candidate or runtime version is refused
+when another frontend is registered; install the matching complete candidate
+or remove the other frontend before replacing the shared runtime. Rebuilds
+receive new IDs and never overwrite a candidate. Candidate manifests record
+both setup assets and embedded payload hashes, dependency inventories, licenses
+and unsigned status; SHA-256 does not authenticate the publisher. Public
+release remains owner-controlled and is not authorized.
 
 An unpacked developer bundle can still be passed to the shared installer's
 `--payload` command for a full-component install. An entrypoint run from the
@@ -155,7 +161,7 @@ unpacked directory uses the `service\MetaBrain.Connections.exe` beside it.
 Every service command below is run from the installed copy in `<install root>\installer`; it
 accepts `--install-root <dir>` to address another installation. The installed `uninstall` command
 acts on its own installation and optionally accepts `--component`; the dedicated CLI setup has
-its own CLI-only uninstall command (§8).
+its own CLI-only uninstall command (§8), and the graphical Owner UI setup provides its own Owner UI-only removal surface (§2.3).
 
 ```text
 MetaBrain.Installer.exe start        # start the service host (locked)
@@ -576,7 +582,7 @@ same-account process does not create owner authority.
 
 ## 6. Startup policy
 
-The CLI setup and shared installer do not register login startup. Start the host explicitly
+The CLI and graphical Owner UI setups and the shared installer do not register login startup. Start the host explicitly
 through the CLI, Owner UI or MCP entrypoint. No autostart, service, scheduled task or profile
 integration is created by installation.
 

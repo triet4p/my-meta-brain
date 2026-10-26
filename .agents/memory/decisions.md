@@ -1146,3 +1146,13 @@ unknown; this is adverse evidence requiring review, not service acceptance or a 
 **Reason:** The release contract requires a real standalone CLI asset for end users with no SDK, repository or PowerShell, while S9 already provides the authoritative install/data-root and runtime lifecycle. An embedded payload makes the downloaded executable self-contained and candidate-specific without creating a second store or installer policy.
 
 **Consequences:** Candidate assembly must bind the setup executable and embedded payload hashes to one immutable candidate; component ownership and candidate identity stay in shared install state; setup never edits PATH, profiles, autostart, services or machine state. The Owner UI still requires its separate graphical setup.
+
+## [2026-10-26] Package Owner UI setup as a graphical candidate-bound executable
+
+**Decision:** Build the Owner UI setup as a separate self-contained WPF single-file executable that embeds its exact release payload and delegates component installation/removal to the shared installer.
+
+**Alternatives considered:** Keep distributing the Owner UI payload archive; make the shared command-line installer open a graphical mode; add a second lifecycle/configuration implementation.
+
+**Reason:** The release contract requires a genuinely graphical Owner UI setup that can select install/data locations and launch the application without a CLI or command-line bootstrap. A separate WPF executable supplies that owner-facing surface while preserving the already accepted installer as the one authority for shared runtime, component ownership, settings and data.
+
+**Consequences:** Candidate assembly binds the setup executable and embedded payload to the same immutable release identity and records their dependency/license inventory. The setup owns no duplicate store, policy, host or data root; keyboard/error/cancel behavior remains a responsibility of the graphical setup surface.
