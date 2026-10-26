@@ -233,13 +233,18 @@ are documented in [`docs/OPERATIONS.md`](docs/OPERATIONS.md) §3.3 and §5.
 
 ### 5. MCP client registration
 
-The MCP server is `mcp\MetaBrain.Mcp.exe`; it selects or creates the specified instance and
-starts/connects the same shared locked host, then serves the agent-only tools over stdio. It
-never provisions, unlocks, publishes, approves, issues tokens or purges — the owner performs
-those decisions in the CLI or the Owner console. Register it with the client's own supported
-process-scoped configuration; do not edit a user/profile settings path, and never send a key or
-bearer token to the client. Exact Codex and OMP command/argument examples are in
-[`docs/OPERATIONS.md`](docs/OPERATIONS.md) §3.2.1.
+The standalone self-contained MCP 1.0.0 ZIP includes `mcp\MetaBrain.Mcp.exe`, its shared
+runtime at `service\MetaBrain.Connections.exe`, and package/license manifests. Extract the
+complete ZIP to a stable directory while preserving its folders; configure the absolute
+extracted MCP executable path with either `--data-root <owner data root>` or
+`--config <service-settings.json>`. No CLI/Owner UI installation, SDK, repository or PowerShell is
+required. The MCP entrypoint connects to the same shared locked host and serves only the
+existing agent-scoped tools; owner authority remains in the CLI or Owner console.
+
+Codex CLI and Oh My Pi configuration examples, observed client versions, compatibility limits,
+and path-quoting instructions are in [`docs/OPERATIONS.md`](docs/OPERATIONS.md) §3.2.1. Register
+only with the client's supported process/project scoped configuration; do not auto-edit profiles
+or place keys or bearer tokens in configuration.
 
 ### 6. Upgrade and uninstall
 

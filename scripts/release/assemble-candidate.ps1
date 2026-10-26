@@ -113,6 +113,27 @@ function Verify-Candidate([string] $Root) {
                     try { $sha = [Security.Cryptography.SHA256]::Create(); try { $digest = -join ($sha.ComputeHash($stream) | ForEach-Object { $_.ToString('x2') }) } finally { $sha.Dispose() } } finally { $stream.Dispose() }
                     if ($digest -ne $file.sha256) { throw ('Candidate member hash mismatch: ' + $file.path) }
                 }
+                if ($asset.product -eq 'MCP') {
+                    $manifestEntry = $zip.GetEntry('package-manifest.json')
+                    if ($null -eq $manifestEntry) { throw 'MCP package manifest is missing.' }
+                    $manifestStream = $manifestEntry.Open()
+                    try {
+                        $reader = [IO.StreamReader]::new($manifestStream, [Text.Encoding]::UTF8)
+                        try { $packageManifest = $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
+                    } finally { $manifestStream.Dispose() }
+                    if ($packageManifest.product -ne 'Meta Brain MCP' -or
+                        $packageManifest.productVersion -ne $version -or
+                        $packageManifest.runtimeIdentifier -ne 'win-x64' -or
+                        $packageManifest.selfContained -ne $true -or
+                        $packageManifest.entrypoint -ne 'mcp/MetaBrain.Mcp.exe' -or
+                        $packageManifest.sharedRuntime -ne 'service/MetaBrain.Connections.exe' -or
+                        $packageManifest.command -ne 'mcp/MetaBrain.Mcp.exe' -or
+                        (@($packageManifest.args.dataRoot) -join "`n") -cne "--data-root`n<data-root>" -or
+                        (@($packageManifest.args.config) -join "`n") -cne "--config`n<service-settings.json>" -or
+                        $packageManifest.transport -ne 'stdio') {
+                        throw 'MCP package manifest identity or invocation contract mismatch.'
+                    }
+                    }
             } finally { $zip.Dispose() }
         }
     }
@@ -192,6 +213,8 @@ $assets = foreach ($d in $definitions) {
     $runtimeNote = ''
     if ($d.product -in @('CLI','OwnerUI')) {
         $runtimeNote = 'Setup temporarily extracts its embedded payload under the current user''s %TEMP% folder and removes the staging directory when possible; the single-file host may also extract runtime support under %TEMP%\.net. Setup does not change global or profile environment settings.'
+    } elseif ($d.product -eq 'MCP') {
+        $runtimeNote = 'Extract the complete ZIP while preserving its directories; register the extracted mcp/MetaBrain.Mcp.exe as an absolute stdio command with --data-root <owner data-root> or --config <service-settings.json>. The package manifest records exact layout, version, tested client versions, dependencies and limits.'
     }
     $notice = @"
 Meta Brain $version — $($d.product) distribution
@@ -207,6 +230,43 @@ $runtimeNote
     foreach ($dependency in $dependencyInventories[$d.product]) { if ($dependency.Contains('license')) { $thirdParty += ('- ' + $dependency.id + ' ' + $dependency.version + ' — license ' + $dependency.license + '; included text: ' + $dependency.licenseText + '; third-party notices: ' + $dependency.thirdPartyNotices + "`n") } else { $thirdParty += ('- ' + $dependency.id + ' ' + $dependency.version + ' — first-party Meta Brain project reference.' + "`n") } }
     $thirdParty += "Package-provided LICENSE and THIRD-PARTY-NOTICES files are in licenses/. Refer to those texts for notices and terms.`n"
     [IO.File]::WriteAllText((Join-Path $stage 'THIRD-PARTY-NOTICES.txt'), $thirdParty, [Text.UTF8Encoding]::new($false))
+    if ($d.product -eq 'MCP') {
+        $packageFiles = @(Get-ChildItem -LiteralPath $stage -Recurse -File | ForEach-Object {
+            $relative = $_.FullName.Substring($stage.Length + 1).Replace('\','/')
+            [ordered]@{path=$relative;bytes=$_.Length;sha256=(Hash-File $_.FullName)}
+        })
+        $packageManifest = [ordered]@{
+            schemaVersion=1
+            product='Meta Brain MCP'
+            productVersion=$version
+            runtimeIdentifier='win-x64'
+            selfContained=$true
+            candidateId=$id
+            source=[ordered]@{head=$head;sourceTreeSha256=$treeHash;identity=$source}
+            entrypoint='mcp/MetaBrain.Mcp.exe'
+            sharedRuntime='service/MetaBrain.Connections.exe'
+            transport='stdio'
+            command='mcp/MetaBrain.Mcp.exe'
+            protocolVersions=@('2025-11-25','2025-06-18','2025-03-26','2024-11-05')
+            args=[ordered]@{dataRoot=@('--data-root','<data-root>');config=@('--config','<service-settings.json>')}
+            help='mcp/MetaBrain.Mcp.exe --help'
+            version='mcp/MetaBrain.Mcp.exe --version'
+            compatibility=[ordered]@{
+                codexCli=[ordered]@{configuration='process-scoped -c overrides';observedVersion='0.164.0';evidence='Sprint 9 T7 accepted package compatibility observation'}
+                ohMyPi=[ordered]@{configuration='project-local .omp/mcp.json';observedVersion='18.12.6';evidence='Sprint 9 T7 accepted package compatibility observation'}
+            }
+            knownLimits=@(
+                'Windows x64 only, on a Windows release supported by .NET 10; the exact supported Windows SKU matrix was not separately established for this MCP asset.',
+                'Linux, macOS and ARM are unsupported.',
+                'The MCP server exposes agent-scoped tools only; owner authority and key/bearer credentials are not passed through client configuration.',
+                'Client configuration is owner-authored and scoped to the process (Codex) or project (OMP); the package does not edit profiles or configuration.',
+                'Unsigned; SHA-256 verifies integrity but does not authenticate publisher identity.'
+            )
+            dependencies=$dependencyInventories[$d.product]
+            files=$packageFiles
+        }
+        [IO.File]::WriteAllText((Join-Path $stage 'package-manifest.json'),($packageManifest | ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
+    }
     $layout = @(Get-ChildItem -LiteralPath $stage -Recurse -File | ForEach-Object { $rel=$_.FullName.Substring($stage.Length+1).Replace('\','/'); [ordered]@{path=$rel;bytes=$_.Length;sha256=(Hash-File $_.FullName)} })
     $assetPath = Join-Path $destination $d.name
     if ($d.product -in @('CLI','OwnerUI')) {
@@ -262,8 +322,7 @@ $manifest = [ordered]@{
     candidateId=$id; assembledAtUtc=[DateTime]::UtcNow.ToString('O')
     signing='unsigned; SHA-256 does not authenticate publisher'
     supportedPlatforms='64-bit Windows client/server releases supported by .NET 10 at publication time and satisfying required desktop/WPF capabilities; exact product-tested SKU coverage is not asserted.'
-    knownLimits=@('No Linux, macOS, ARM, unsupported Windows editions/builds, Server Core or Nano UI support.','The CLI and Owner UI setup candidates are unsigned; SHA-256 is not publisher authentication.','Setup stages payload files under the current user''s %TEMP% and single-file hosts may extract runtime support under %TEMP%\.net; neither changes global or profile environment settings.','Public release remains owner-controlled; no publication is authorized by assembly.')
-    compatibility=[ordered]@{cli='Dedicated setup EXE installs cli/MetaBrain.Cli.exe; use that installed path directly with --help or --version.';ownerUi='Dedicated graphical setup EXE installs owner-ui/MetaBrain.OwnerUi.exe; the installed console remains the Owner UI entrypoint.';mcp='mcp/MetaBrain.Mcp.exe; stdio transport; configure client command/args to this path.'}
+    compatibility=[ordered]@{cli='Dedicated setup EXE installs cli/MetaBrain.Cli.exe; use that installed path directly with --help or --version.';ownerUi='Dedicated graphical setup EXE installs owner-ui/MetaBrain.OwnerUi.exe; the installed console remains the Owner UI entrypoint.';mcp=[ordered]@{package='standalone self-contained zip';version=$version;entrypoint='mcp/MetaBrain.Mcp.exe';sharedRuntime='service/MetaBrain.Connections.exe';transport='stdio';command='absolute path to extracted mcp/MetaBrain.Mcp.exe';args=[ordered]@{dataRoot=@('--data-root','<owner data-root>');config=@('--config','<service-settings.json>')};protocolVersions=@('2025-11-25','2025-06-18','2025-03-26','2024-11-05');testedCodexCliVersion='0.164.0';testedOhMyPiVersion='18.12.6';configuration='process-scoped Codex overrides or project-local OMP .omp/mcp.json';limits='No SDK, repository, installed .NET runtime, PowerShell, key or bearer is required; no profile is edited.'}}
     notes='SHA-256 is an integrity check, not publisher authentication. Package graph and per-package license/notice inventory are included; review bundled license texts before distribution. Setups temporarily stage payload in the current user temporary directory and single-file hosts may use the .NET bundle-extraction cache; neither changes global/profile settings.'
     dependencyInventories=$dependencyInventories
     assets=$assets

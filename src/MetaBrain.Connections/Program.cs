@@ -46,8 +46,8 @@ public static class McpAgentProduct
             Console.Error.WriteLine("MetaBrain.Mcp.exe " + ProductInfo.Version + " — agent MCP server (stdio) for the shared Meta Brain instance");
             Console.Error.WriteLine("usage: MetaBrain.Mcp.exe --data-root <dir> | --config <service-settings.json>");
             Console.Error.WriteLine("Starts or connects the same shared locked host. JSON-RPC stays on stdout; diagnostics go to stderr.");
-            Console.Error.WriteLine("Owner decisions (unlock, approve, revoke, purge) stay in cli\\MetaBrain.Cli.exe or owner-ui\\MetaBrain.OwnerUi.exe.");
-            Console.Error.WriteLine("Release layout: cli/, owner-ui/, mcp/, service/ (shared host), installer/.");
+            Console.Error.WriteLine("Owner decisions stay in the separately installed CLI or Owner UI; neither is included in this MCP package.");
+            Console.Error.WriteLine("Standalone MCP package layout: mcp/ (this entrypoint), service/ (shared host), licenses/, package-manifest.json, release notes.");
             return 0;
         }
 

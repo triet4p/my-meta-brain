@@ -241,43 +241,64 @@ the console showed. Exit codes are truthful: `0` done, `2` usage (nothing change
 refused/locked/unavailable/denied, `4` invalid input or unwritable output, `5` a job that ended
 without completing, `1` transport or unexpected failure.
 
-### 3.2.1 MCP client registration (S9-T5)
+### 3.2.1 MCP client registration (standalone package 1.0.0)
 
-The packaged MCP entrypoint is `mcp/MetaBrain.Mcp.exe`. It selects or creates the specified
-instance and starts/connects the same shared host in its locked state before serving the
-existing agent-only MCP tools over stdio. It never provisions or unlocks a vault, publishes
-catalog entries, approves/rejects requests, issues tokens or purges data. The owner performs
-those decisions through either the CLI or Owner console; MCP handles the request/status/
-redeem/scoped-agent steps. Closing MCP does not stop the shared host.
-
-Use the installed owner-chosen data root in `<data-root>`. A clean root receives the ordinary
-nonsensitive settings file at first startup; an existing instance keeps its settings and
-endpoints. The host starts locked. The owner must explicitly unlock and approve agent requests
-using either `cli\MetaBrain.Cli.exe owner ...` or `owner-ui\MetaBrain.OwnerUi.exe`; never
-send a key or bearer token to the client.
-
-`MetaBrain.Mcp.exe --version` and `--help` print the identity and the release layout on stderr,
-never on stdout. The MCP process writes JSON-RPC only to stdout and sanitized startup
-diagnostics to stderr.
-
-Register as stdio MCP using the client's supported process-scoped configuration, not `mcp add`,
-`/mcp add`, or persistent user/profile settings. This Codex CLI example uses documented `-c`
-overrides and a separate workspace; do not submit a prompt when only checking MCP connection:
+The candidate includes a standalone self-contained MCP ZIP. Extract the complete archive into
+a stable directory while preserving its folders; for example, choose
+`%LOCALAPPDATA%\MetaBrain\MCP\1.0.0\`. This package is separate from the CLI and Owner UI setup
+executables, and does not require either frontend to be installed, an SDK, a repository, an
+installed .NET runtime or PowerShell.
 
 ```text
-codex -C <isolated-workspace> -c 'mcp_servers.metabrain.command="C:\\Program Files\\MetaBrain\\mcp\\MetaBrain.Mcp.exe"' -c 'mcp_servers.metabrain.args=["--data-root","C:\\Users\\<owner>\\AppData\\Local\\MetaBrain\\Data"]'
+mcp\MetaBrain.Mcp.exe
+service\MetaBrain.Connections.exe
+package-manifest.json
+RELEASE-NOTES.txt
+THIRD-PARTY-NOTICES.txt
+licenses\...
 ```
 
-For OMP, create `.omp/mcp.json` in an isolated temporary workspace (not the product repository),
-then launch OMP with that workspace and `--no-session`. Do not use `/mcp add` or a user-level
-configuration path:
+Register the absolute extracted path to `mcp\MetaBrain.Mcp.exe` as a `stdio` command. The
+`service\MetaBrain.Connections.exe` shared runtime is packaged beside it and is selected
+automatically; do not point a client at the service executable. Supply exactly one instance
+selector: `--data-root <owner-data-root>` or `--config <service-settings.json>`. Use the
+owner-selected data root also used by any existing owner frontend. On first startup a clean root
+receives ordinary nonsensitive settings and the shared host starts locked; an existing instance
+keeps its settings and endpoints. Closing MCP does not stop the shared host.
+
+MCP only exposes existing agent-scoped operations. It never provisions or unlocks a vault,
+publishes catalog entries, approves/rejects requests, issues tokens or purges data. The owner
+performs those acts through the CLI or Owner console. Never place keys or bearer tokens in client
+configuration; only DPAPI-protected handoff/session-file paths cross MCP.
+
+Run `mcp\MetaBrain.Mcp.exe --version` or `--help` from the extracted package to print the
+entrypoint identity and usage on stderr. Neither writes informational text to stdout, which stays
+reserved for JSON-RPC. Startup diagnostics are sanitized and go to stderr.
+
+Sprint 9 T7 accepted compatibility evidence observed Codex CLI `0.164.0` and Oh My Pi `18.12.6`
+with this stdio package. These are evidence versions, not a claimed minimum/maximum support
+range. MCP negotiates `2025-11-25`, `2025-06-18`, `2025-03-26` or `2024-11-05`; absent or
+unknown client offers use `2025-11-25`. No client version range is asserted. The package manifest
+records the observed client versions, protocol revisions, layout, dependencies and known limits.
+
+Register it with each client's supported scoped configuration; do not edit user/profile settings
+or use `mcp add` / `/mcp add`. Replace `<owner>` and `<isolated-workspace>` with real paths.
+This Codex CLI example uses documented process-scoped `-c` overrides and does not submit a
+prompt:
+
+```text
+codex -C "<isolated-workspace>" -c 'mcp_servers.metabrain.command="C:\\Users\\<owner>\\AppData\\Local\\MetaBrain\\MCP\\1.0.0\\mcp\\MetaBrain.Mcp.exe"' -c 'mcp_servers.metabrain.args=["--data-root","C:\\Users\\<owner>\\AppData\\Local\\MetaBrain\\Data"]'
+```
+
+For OMP, create `.omp/mcp.json` only inside an isolated workspace, not the product repository
+or a user-level configuration directory, then start OMP with that workspace and `--no-session`:
 
 ```json
 {
   "mcpServers": {
     "metabrain": {
       "type": "stdio",
-      "command": "C:\\Program Files\\MetaBrain\\mcp\\MetaBrain.Mcp.exe",
+      "command": "C:\\Users\\<owner>\\AppData\\Local\\MetaBrain\\MCP\\1.0.0\\mcp\\MetaBrain.Mcp.exe",
       "args": ["--data-root", "C:\\Users\\<owner>\\AppData\\Local\\MetaBrain\\Data"]
     }
   }
@@ -285,13 +306,13 @@ configuration path:
 ```
 
 ```text
-omp --cwd <isolated-workspace> --no-session
+omp --cwd "<isolated-workspace>" --no-session
 ```
 
-Both client launches initialize MCP and discover the existing tool catalog without a prepared
-agent request. MCP writes JSON-RPC only to stdout and sanitized startup diagnostics to stderr.
-Only DPAPI-protected handoff/session-file paths cross MCP—never a key, raw bearer token, or
-provider/model context.
+The selected `--data-root` and executable paths are plain filesystem paths; JSON strings escape
+backslashes, while Codex `-c` values are quoted as shown. To use an existing settings file,
+replace the two-element `--data-root` argument pair with `["--config","<settings-file>"]`.
+These examples describe registration only; they do not replay client/product workflows.
 
 ### 3.2.2 Approving one agent request in the CLI (one owner frontend)
 
