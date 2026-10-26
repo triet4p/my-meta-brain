@@ -245,6 +245,31 @@ agent request. MCP writes JSON-RPC only to stdout and sanitized startup diagnost
 Only DPAPI-protected handoff/session-file paths cross MCP—never a key, raw bearer token, or
 provider/model context.
 
+### 3.2.2 Approving one agent request in the CLI (one owner frontend)
+
+The agent sees only catalog metadata and receives an opaque request ID from
+`metabrain_access_request`. The owner completes the decision in the CLI; no script, no PowerShell
+helper and no second frontend are involved:
+
+```text
+cli\MetaBrain.Cli.exe owner requests --control-pipe <pipe>
+cli\MetaBrain.Cli.exe owner request-preview --control-pipe <pipe> --request-id <request id>
+cli\MetaBrain.Cli.exe owner request-approve --control-pipe <pipe> --request-id <request id> --preview-id <preview id> --operations memory.read,memory.search --expires-at-utc 2026-11-01T00:00:00Z --handoff-file <new file>
+```
+
+- `request-preview` prints the exact resources, revisions, operations and bodies. It must run in
+  the attached terminal: redirected output is refused with `preview_redirect_denied` so reviewed
+  bodies never reach disk.
+- `--operations` must be a subset of the operations the preview printed. Omitting it narrows the
+  approval to `resource.read`; a request that asked for `memory.read`/`memory.search` is then
+  refused as `request_invalid` because the approval would not match what was requested. Copy the
+  previewed operations you intend to approve (for example `memory.read,memory.search`).
+- `--resource-ids` is optional narrowing; omitting it approves every previewed resource.
+  `--destination-resource-ids` and the provider fields apply only when the preview declared them.
+- `--expires-at-utc` requires an explicit UTC instant (`Z` or `+00:00`). `--handoff-file` must be a
+  new path; the typed `APPROVE` mints the single-use token into that DPAPI-protected file. Give
+  the path to the agent, which redeems it with `metabrain_redeem` into its own session file.
+
 ### 3.3 The owner console (S9-T4)
 
 The packaged console is `owner-ui/MetaBrain.OwnerUi.exe`. It opens on the **Owner session**

@@ -197,6 +197,22 @@ shown only on an attached owner console: `owner request-preview` refuses redirec
 refused/locked/unavailable/denied, `4` invalid input or unwritable output, `5` a job that ended
 without completing, `1` transport or unexpected failure.
 
+Sharing one item with an agent is also a CLI workflow, with no script and no second frontend:
+
+```text
+cli\MetaBrain.Cli.exe owner requests --control-pipe <control pipe>
+cli\MetaBrain.Cli.exe owner request-preview --control-pipe <control pipe> --request-id <request id>
+cli\MetaBrain.Cli.exe owner request-approve --control-pipe <control pipe> --request-id <request id> --preview-id <preview id> --operations memory.read,memory.search --expires-at-utc <UTC instant ending in Z or +00:00> --handoff-file <new file>
+```
+
+`owner request-preview` shows the exact bodies and must run in the attached terminal (redirected
+output is refused). `--operations` must contain the operations the preview printed (for example
+`memory.read,memory.search`); omitting it narrows the approval to `resource.read`, which the
+service refuses as `request_invalid` when the request did not ask for that operation.
+`--resource-ids` is optional narrowing, and `--handoff-file` must be a new path: the typed
+`APPROVE` mints the one-time token there, and the agent redeems that path with
+`metabrain_redeem`.
+
 ### 4. Owner console
 
 ```text
