@@ -105,6 +105,32 @@ zip's SHA-256 under `runtime\release` by default, and changes no host state (no 
 service registration, no autostart entry, no registry value, no environment or profile change and
 no permission change).
 
+### 2.2 Immutable release candidate payloads (S10-T2)
+
+From a reviewed source checkout, assemble distinct CLI and Owner UI installer
+payloads and an independent MCP package with:
+
+```powershell
+powershell.exe -NoProfile -File scripts\release\assemble-candidate.ps1
+```
+
+The command writes an immutable candidate directory under ignored
+`runtime\release-candidates`. To recheck an existing candidate's archive hashes,
+member hashes and exact file sets:
+
+```powershell
+powershell.exe -NoProfile -File scripts\release\assemble-candidate.ps1 -VerifyOnly -CandidateDirectory <candidate-directory>
+```
+
+Candidate identity records Git HEAD and a SHA-256 of the tracked source/working
+tree contents used by assembly; uncommitted source therefore does not masquerade
+as the HEAD revision. Compare that identity to the reviewed source snapshot
+before accepting a candidate. Rebuilds receive new IDs and never overwrite a
+candidate. These CLI and Owner UI ZIPs are installer payloads only, not completed
+installers. Archives disclose unsigned status and include the dependency graph,
+NuGet runtime package license texts and package-provided third-party notices.
+Public release remains owner-controlled and is not authorized by assembly.
+
 An unpacked bundle is the installer's `--payload`, so one bundle installs, upgrades and carries
 every frontend. An entrypoint run from the unpacked directory (before or without an install) uses
 the `service\MetaBrain.Connections.exe` beside it.
