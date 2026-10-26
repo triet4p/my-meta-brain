@@ -241,6 +241,16 @@ the console showed. Exit codes are truthful: `0` done, `2` usage (nothing change
 refused/locked/unavailable/denied, `4` invalid input or unwritable output, `5` a job that ended
 without completing, `1` transport or unexpected failure.
 
+## Scenario guides and client connections (S10-T7)
+
+The public-safe, actionable CLI/UI matrix is in [`website/scenarios.html`](../website/scenarios.html);
+the connection pages are [`website/codex.html`](../website/codex.html) and
+[`website/omp.html`](../website/omp.html). The local candidate site serves these pages with the
+landing page and this runbook. Follow those guides for first use, capture/read-back, recall,
+read-only source enrollment, scoped sharing, proposal/relation review, and data-preserving
+lifecycle actions. Their client examples match this runbook's §3.2.1 contract; accepted Sprint 9
+evidence is inherited and no fresh client/product walkthrough is claimed.
+
 ### 3.2.1 MCP client registration (standalone package 1.0.0)
 
 The candidate includes a standalone self-contained MCP ZIP. Extract the complete archive into

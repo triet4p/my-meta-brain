@@ -17,6 +17,12 @@ $expectedTree = '7af6bd77709c2a42dcd54224082b7d3f7bd16d90d923d3fec0b0d76c273e673
 $manifestPath = Join-Path $candidateRoot 'candidate-manifest.json'
 $templatePath = Join-Path $sourceDirectory 'index.template.html'
 $stylePath = Join-Path $sourceDirectory 'styles.css'
+$guidePaths = @('scenarios.html', 'codex.html', 'omp.html')
+foreach ($guidePath in $guidePaths) {
+    if (-not (Test-Path -LiteralPath (Join-Path $sourceDirectory $guidePath) -PathType Leaf)) { throw "Website guide is missing: $guidePath" }
+}
+$operationsPath = Join-Path $repoRoot 'docs\OPERATIONS.md'
+if (-not (Test-Path -LiteralPath $operationsPath -PathType Leaf)) { throw 'Operations runbook is missing.' }
 
 if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw "Candidate manifest not found: $manifestPath" }
 if (-not (Test-Path -LiteralPath $templatePath -PathType Leaf)) { throw 'Website template is missing.' }
@@ -84,6 +90,11 @@ $html = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8
 foreach ($token in $replacements.Keys) { $html = $html.Replace($token, [string]$replacements[$token]) }
 if ($html -match '\{\{[A-Z_]+\}\}') { throw 'Website template contains an unresolved release or documentation placeholder.' }
 Set-Content -LiteralPath (Join-Path $outputRoot 'index.html') -Value $html -Encoding utf8
+$operationsHtml = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Operations runbook - Meta Brain</title><link rel="stylesheet" href="styles.css"></head><body><main class="wrap"><p><a href="index.html">Home</a> | <a href="scenarios.html">Scenario guides</a></p><h1>Operations runbook</h1><pre id="321-mcp-client-registration-standalone-package-100">' + [Net.WebUtility]::HtmlEncode((Get-Content -LiteralPath $operationsPath -Raw -Encoding UTF8)) + '</pre></main></body></html>'
+Set-Content -LiteralPath (Join-Path $outputRoot 'operations.html') -Value $operationsHtml -Encoding utf8
+foreach ($guidePath in $guidePaths) {
+    Copy-Item -LiteralPath (Join-Path $sourceDirectory $guidePath) -Destination (Join-Path $outputRoot $guidePath)
+}
 Write-Host "Built local candidate preview at $outputRoot"
 Write-Host "Candidate $($manifest.candidateId); version $($manifest.productVersion); verified all three assets (size + SHA-256)."
 Write-Host 'This output is a local candidate preview, not a public release or deployment.'

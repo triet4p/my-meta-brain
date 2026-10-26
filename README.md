@@ -6,8 +6,14 @@ Meta Brain serves as an owner-controlled second brain designed to preserve evide
 
 ## Website
 
-The Vietnamese static landing-page source is under [`website/`](website/). Build its reviewed
-local candidate preview with:
+The Vietnamese static landing-page source is under [`website/`](website/). Its seven practical
+scenario guides and separate Codex CLI / Oh My Pi connection pages are
+[`website/scenarios.html`](website/scenarios.html), [`website/codex.html`](website/codex.html),
+and [`website/omp.html`](website/omp.html). They are copied into the local site preview as
+`scenarios.html`, `codex.html`, and `omp.html`; the versioned operations runbook is served locally
+as `operations.html`.
+
+Build its reviewed local candidate preview with:
 
 ```powershell
 powershell.exe -NoProfile -File scripts/site/build.ps1
@@ -17,7 +23,6 @@ python -m http.server --bind 127.0.0.1 --directory dist/site 8000
 Open `http://127.0.0.1:8000/`. The ignored `dist/site/` output includes the exact candidate
 assets only after its manifest sizes and SHA-256 hashes are verified. This is a local preview,
 not a public release or deployment; no public download or hosting destination is enabled here.
-
 ---
 
 ## Overview
