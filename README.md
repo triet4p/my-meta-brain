@@ -133,10 +133,14 @@ the owner approves or narrows requests in the CLI or the Owner console, never in
 
 ## Prerequisites
 
-- **Operating System:** Windows 10 / 11 or Windows Server (uses Windows Named Pipes and DPAPI).
-- **Running the release bundle:** no .NET SDK, no installed .NET runtime and no PowerShell are
-  required. The bundle is a self-contained `win-x64` publish and carries its own runtime; unpack
-  the zip and run the entrypoints.
+- **Operating System:** 64-bit Windows releases that Microsoft lists as supported for .NET 10 at
+  release time and that can run the required desktop/WPF UI. The product is not verified on every
+  supported Windows SKU; Linux, macOS, ARM, Server Core and Nano Server are out of scope for this
+  release (uses Windows Named Pipes and DPAPI).
+- **Running the 1.0.0 release:** use the dedicated CLI setup executable, graphical Owner UI setup
+  executable or standalone MCP ZIP. They are self-contained `win-x64` distributions, so no .NET
+  SDK, installed .NET runtime, source checkout or PowerShell is required. The repository payload
+  bundle described below is developer tooling, not the end-user installation path.
 - **Building from source:** [.NET 10 SDK](https://dotnet.microsoft.com/) (`net10.0` /
   `net10.0-windows`), plus PowerShell for the release script.
 - **AI Clients (Optional):** Official [Codex CLI](https://github.com/openai/codex) or
@@ -146,9 +150,15 @@ the owner approves or narrows requests in the CLI or the Owner console, never in
 
 ## Getting Started
 
-### 1. Get the release bundle
+Release 1.0.0 is packaged as three dedicated assets: a CLI setup executable, a graphical Owner
+UI setup executable and an MCP ZIP. Their exact filenames, byte sizes, SHA-256 hashes, planned
+GitHub Releases URLs, dependency/license notices, signing status and known limits are recorded in
+[docs/release-1.0.0.md](docs/release-1.0.0.md). Public download links become active only after the
+owner-controlled publication gate; the record states the current publication status. Use the
+website quick starts or the operations runbook for installation; do not treat the developer bundle
+below as the end-user download.
 
-The release bundle is built from a checkout — developer tooling that the owner never runs:
+### Developer bundle: build the payload from a checkout
 
 ```powershell
 powershell.exe -NoProfile -File scripts\release\publish-release-bundle.ps1
@@ -174,8 +184,8 @@ installer\MetaBrain.Installer.exe install --payload <unpacked-bundle> --install-
 ```
 
 The install is per-user, needs no administrator rights, and changes no registry, service,
-autostart, firewall, account or environment state. `--autostart` (a login start) and `--start`
-(start the host now) are explicit opt-ins.
+autostart, firewall, account or environment state. `--start` starts the host now as an explicit
+opt-in; there is no login autostart registration.
 
 An install **never creates the vault**: the first start is locked and uninitialized, and the owner
 creates the vault explicitly. `<install root>\install-state.json` records the instance, the data
@@ -331,6 +341,12 @@ The project follows a phased milestone roadmap defined in [`docs/PLAN.md`](docs/
 - [ ] **Milestone 8 (M8) — Daily Production (Sprint 8):** Installer, automated backups, encrypted restore/recovery, and production hardening.
 
 ---
+
+## License
+
+Meta Brain is licensed under the [MIT License](LICENSE). Copyright (c) 2026 triet4p.
+The release assets include this project license and separate Microsoft .NET runtime
+licenses and third-party notices; those bundled components retain their own terms.
 
 ## Documentation Links
 

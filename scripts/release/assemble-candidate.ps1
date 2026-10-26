@@ -208,8 +208,9 @@ function Add-PackageLicenses([string] $Stage, [string] $DepsPath, [string] $Prod
 }
 $dependencyInventories = @{}
 $assets = foreach ($d in $definitions) {
-    $stage = Join-Path $destination ($d.product + '-stage'); New-Item -ItemType Directory -Path $stage | Out-Null
-    foreach ($part in $d.paths) { Copy-Item -LiteralPath (Join-Path $bundle $part) -Destination $stage -Recurse }
+$stage = Join-Path $destination ($d.product + '-stage'); New-Item -ItemType Directory -Path $stage | Out-Null
+foreach ($part in $d.paths) { Copy-Item -LiteralPath (Join-Path $bundle $part) -Destination $stage -Recurse }
+Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination (Join-Path $stage 'LICENSE')
     $runtimeNote = ''
     if ($d.product -in @('CLI','OwnerUI')) {
         $runtimeNote = 'Setup temporarily extracts its embedded payload under the current user''s %TEMP% folder and removes the staging directory when possible; the single-file host may also extract runtime support under %TEMP%\.net. Setup does not change global or profile environment settings.'
@@ -219,6 +220,8 @@ $assets = foreach ($d in $definitions) {
     $notice = @"
 Meta Brain $version — $($d.product) distribution
 
+Project license: MIT; see LICENSE. Copyright (c) 2026 triet4p.
+Third-party runtime/dependency licenses and notices remain separate in licenses/.
 Unsigned; SHA-256 detects byte changes but does not authenticate the publisher.
 Self-contained Windows x64 distribution; no installed .NET SDK/runtime, source repository or PowerShell is required.
 Supported OS limits: see docs/release-contract.md and the .NET 10 Windows x64 support matrix. Compatibility is not asserted for every listed SKU.
@@ -228,7 +231,7 @@ $runtimeNote
     $dependencyInventories[$d.product] = Add-PackageLicenses $stage $d.deps $d.product
     $thirdParty = "The publish dependency graphs contain only Meta Brain project references and these self-contained .NET runtime packages:`n"
     foreach ($dependency in $dependencyInventories[$d.product]) { if ($dependency.Contains('license')) { $thirdParty += ('- ' + $dependency.id + ' ' + $dependency.version + ' — license ' + $dependency.license + '; included text: ' + $dependency.licenseText + '; third-party notices: ' + $dependency.thirdPartyNotices + "`n") } else { $thirdParty += ('- ' + $dependency.id + ' ' + $dependency.version + ' — first-party Meta Brain project reference.' + "`n") } }
-    $thirdParty += "Package-provided LICENSE and THIRD-PARTY-NOTICES files are in licenses/. Refer to those texts for notices and terms.`n"
+    $thirdParty += "Project license: MIT (LICENSE at package root). Package-provided dependency LICENSE and THIRD-PARTY-NOTICES files are in licenses/. Refer to those texts for third-party terms.`n"
     [IO.File]::WriteAllText((Join-Path $stage 'THIRD-PARTY-NOTICES.txt'), $thirdParty, [Text.UTF8Encoding]::new($false))
     if ($d.product -eq 'MCP') {
         $packageFiles = @(Get-ChildItem -LiteralPath $stage -Recurse -File | ForEach-Object {
@@ -241,6 +244,7 @@ $runtimeNote
             productVersion=$version
             runtimeIdentifier='win-x64'
             selfContained=$true
+            license=[ordered]@{name='MIT';file='LICENSE';copyright='Copyright (c) 2026 triet4p'}
             candidateId=$id
             source=[ordered]@{head=$head;sourceTreeSha256=$treeHash;identity=$source}
             entrypoint='mcp/MetaBrain.Mcp.exe'

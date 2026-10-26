@@ -5,6 +5,7 @@ All notable changes to Meta Brain are documented here.
 ## [Unreleased]
 
 ### Added
+- Added the MIT License for Meta Brain source and release packages, retaining `Copyright (c) 2026 triet4p` and keeping bundled third-party license terms separate.
 - Added a Vietnamese static landing page with product selection, quick starts, scenario navigation, security boundaries, release information and a local-only, checksum-verified candidate preview.
 
 - Added a standalone self-contained Windows CLI setup executable for candidate-specific install, upgrade, reinstall and CLI-only removal. It reuses the shared installation/data-root lifecycle, records frontend ownership and candidate identity, refuses unsafe shared-runtime conflicts, preserves owner data, and does not register PATH, profiles, autostart or services.

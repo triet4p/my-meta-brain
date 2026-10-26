@@ -1156,3 +1156,13 @@ unknown; this is adverse evidence requiring review, not service acceptance or a 
 **Reason:** The release contract requires a genuinely graphical Owner UI setup that can select install/data locations and launch the application without a CLI or command-line bootstrap. A separate WPF executable supplies that owner-facing surface while preserving the already accepted installer as the one authority for shared runtime, component ownership, settings and data.
 
 **Consequences:** Candidate assembly binds the setup executable and embedded payload to the same immutable release identity and records their dependency/license inventory. The setup owns no duplicate store, policy, host or data root; keyboard/error/cancel behavior remains a responsibility of the graphical setup surface.
+
+## [2026-10-26] Distribute Meta Brain under MIT with separate third-party terms
+
+**Decision:** License Meta Brain source and release payloads under the standard MIT License, retaining the factual repository-owner attribution `Copyright (c) 2026 triet4p`.
+
+**Alternatives considered:** Keep the earlier no-project-license/all-rights-reserved choice; treat the bundled .NET runtime's MIT terms as applying to Meta Brain.
+
+**Reason:** The owner explicitly superseded the earlier terms decision with a request to publish using an MIT `LICENSE` while keeping copyright. Third-party licenses apply only to their components and cannot substitute for the project's own license.
+
+**Consequences:** Include the project `LICENSE` in source and each release package; continue to carry dependency-provided license texts and notices separately. No EULA or copyright-holder identity beyond the established repository-owner handle is introduced.

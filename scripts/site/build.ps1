@@ -1,23 +1,31 @@
 [CmdletBinding()]
 param(
     [string]$CandidateDirectory,
-    [string]$OutputDirectory
+    [string]$OutputDirectory,
+    [string]$ReleaseDownloadBaseUrl
 )
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
-if ([string]::IsNullOrWhiteSpace($CandidateDirectory)) { $CandidateDirectory = Join-Path $repoRoot 'runtime\release-candidates\s10-t5-impl-a1\1.0.0-win-x64-cfb060c29e3d-tree7af6bd77709c-80576c073f06' }
+if ([string]::IsNullOrWhiteSpace($CandidateDirectory)) { $CandidateDirectory = Join-Path $repoRoot 'runtime\release-candidates\1.0.0-win-x64-86626bda2908-tree1edb06ca9254-1e2953ae6bf4' }
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) { $OutputDirectory = Join-Path $repoRoot 'dist\site' }
 $sourceDirectory = Join-Path $repoRoot 'website'
 $candidateRoot = [IO.Path]::GetFullPath($CandidateDirectory)
 $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
-$expectedCandidate = '80576c073f06'
-$expectedHead = 'cfb060c29e3d2b5e1aecd791cae3d3c88c92a02a'
-$expectedTree = '7af6bd77709c2a42dcd54224082b7d3f7bd16d90d923d3fec0b0d76c273e6738'
+$expectedCandidate = '1e2953ae6bf4'
+$expectedHead = '86626bda2908235c02392d421f2117b36c3d11cb'
+$expectedTree = '1edb06ca92549af2e26bd713b120f45b6f4c34affeb2d8d67ec581ecd008a7c6'
 $manifestPath = Join-Path $candidateRoot 'candidate-manifest.json'
 $templatePath = Join-Path $sourceDirectory 'index.template.html'
 $stylePath = Join-Path $sourceDirectory 'styles.css'
 $guidePaths = @('scenarios.html', 'codex.html', 'omp.html')
+$published = -not [string]::IsNullOrWhiteSpace($ReleaseDownloadBaseUrl)
+if ($published) {
+    $ReleaseDownloadBaseUrl = $ReleaseDownloadBaseUrl.TrimEnd('/')
+    if ($ReleaseDownloadBaseUrl -cne 'https://github.com/triet4p/my-meta-brain/releases/download/v1.0.0') {
+        throw 'ReleaseDownloadBaseUrl must be the exact owner-controlled 1.0.0 GitHub Releases download URL.'
+    }
+}
 foreach ($guidePath in $guidePaths) {
     if (-not (Test-Path -LiteralPath (Join-Path $sourceDirectory $guidePath) -PathType Leaf)) { throw "Website guide is missing: $guidePath" }
 }
@@ -39,9 +47,11 @@ $assetRecords = @{}
 foreach ($asset in $manifest.assets) {
     if ($asset.product -notin $expectedProducts -or $assetRecords.ContainsKey($asset.product)) { throw "Unexpected or duplicate product asset: $($asset.product)" }
     $extension = if ($asset.product -eq 'MCP') { 'zip' } else { 'exe' }
-    $expectedName = "MetaBrain-$($asset.product)-1.0.0-win-x64-cfb060c29e3d-tree7af6bd77709c-80576c073f06.$extension"
+    $expectedName = "MetaBrain-$($asset.product)-1.0.0-win-x64-86626bda2908-tree1edb06ca9254-1e2953ae6bf4.$extension"
     $hashMatches = $asset.sha256 -match '^[a-fA-F0-9]{64}$'
-    if ($asset.name -cne $expectedName -or -not $hashMatches -or [long]$asset.bytes -le 0) { throw "Invalid candidate metadata for $($asset.product): name=$($asset.name) hashValid=$hashMatches bytes=$($asset.bytes)." }
+    $licenseEntries = @()
+    if ($asset.product -eq 'MCP') { $licenseEntries = @($asset.files | Where-Object { $_.path -ceq 'LICENSE' }) } else { $licenseEntries = @($asset.payload.files | Where-Object { $_.path -ceq 'LICENSE' }) }
+    if ($asset.name -cne $expectedName -or -not $hashMatches -or [long]$asset.bytes -le 0 -or $licenseEntries.Count -ne 1) { throw "Invalid candidate metadata or missing project LICENSE for $($asset.product)." }
     $assetPath = Join-Path $candidateRoot $asset.name
     if (-not (Test-Path -LiteralPath $assetPath -PathType Leaf)) { throw "Candidate asset missing: $($asset.name)" }
     $file = [IO.FileInfo]::new($assetPath)
@@ -60,15 +70,28 @@ foreach ($product in $expectedProducts) { if (-not $assetRecords.ContainsKey($pr
 
 if ($outputRoot -ne [IO.Path]::GetFullPath((Join-Path $repoRoot 'dist\site'))) { throw 'Build output is fixed to the ignored repository-local dist/site directory.' }
 if (Test-Path -LiteralPath $outputRoot) { Remove-Item -LiteralPath $outputRoot -Recurse -Force }
-$downloadDirectory = Join-Path $outputRoot 'downloads'
-New-Item -ItemType Directory -Path $downloadDirectory -Force | Out-Null
+New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
 Copy-Item -LiteralPath $stylePath -Destination (Join-Path $outputRoot 'styles.css')
-foreach ($asset in $assetRecords.Values) { Copy-Item -LiteralPath $asset.Path -Destination (Join-Path $downloadDirectory $asset.Name) }
+if (-not $published) {
+    $downloadDirectory = Join-Path $outputRoot 'downloads'
+    New-Item -ItemType Directory -Path $downloadDirectory -Force | Out-Null
+    foreach ($asset in $assetRecords.Values) { Copy-Item -LiteralPath $asset.Path -Destination (Join-Path $downloadDirectory $asset.Name) }
+}
 
+$downloadHrefs = @{}
+foreach ($product in $expectedProducts) {
+    $downloadHrefs[$product] = if ($published) { $ReleaseDownloadBaseUrl + '/' + $assetRecords[$product].Name } else { 'downloads/' + $assetRecords[$product].Name }
+}
+$actionLabel = if ($published) { 'T&#7843;i candidate 1.0.0' } else { 'T&#7843;i trong xem tr&#432;&#7899;c c&#7909;c b&#7897;' }
 $replacements = @{
     '{{CANDIDATE}}' = $manifest.candidateId
     '{{SOURCE_HEAD}}' = $manifest.source.head
     '{{SOURCE_TREE}}' = $manifest.source.sourceTreeSha256
+    '{{RELEASE_STATUS_TITLE}}' = if ($published) { 'Ch&#7901; c&#244;ng b&#7889; 1.0.0' } else { 'Ch&#432;a ph&#225;t h&#224;nh c&#244;ng khai' }
+    '{{RELEASE_STATUS_TEXT}}' = if ($published) { 'Candidate &#273;&#227; s&#7861;n s&#224;ng; c&#244;ng b&#7889; public v&#7851;n ch&#7901; c&#225;c gate v&#224; smoke test.' } else { 'C&#225;c t&#7879;p d&#432;&#7899;i &#273;&#226;y ch&#7881; c&#243; trong b&#7843;n xem tr&#432;&#7899;c c&#7909;c b&#7897; &#273;&#227; d&#7921;ng.' }
+    '{{RELEASE_BANNER}}' = if ($published) { 'CANDIDATE 1.0.0 &#183; CH&#431;A C&#212;NG B&#7888;' } else { 'B&#7842;N XEM TR&#431;&#7898;C C&#7908;C B&#7896; &#183; KH&#212;NG PH&#7842;I GITHUB RELEASE' }
+    '{{RELEASE_FOOTER}}' = if ($published) { 'Publication pending' } else { 'B&#7843;n xem tr&#432;&#7899;c c&#7909;c b&#7897;' }
+    '{{RELEASE_NOTES_STATUS}}' = if ($published) { 'SHA-256 &#273;&#432;&#7907;c ghi nh&#7853;n cho t&#7915;ng t&#7879;p. C&#225;c li&#234;n k&#7871;t Release &#273;&#227; &#273;&#432;&#7907;c c&#7845;u h&#236;nh nh&#432;ng ch&#432;a &#273;&#432;&#7907;c x&#225;c nh&#7853;n l&#224; c&#244;ng khai.' } else { 'SHA-256 &#273;&#432;&#7907;c cung c&#7845;p cho t&#7915;ng t&#7879;p trong b&#7843;n xem tr&#432;&#7899;c c&#7909;c b&#7897;. G&#243;i t&#7843;i c&#244;ng khai v&#224; ph&#225;t h&#224;nh GitHub ch&#432;a &#273;&#432;&#7907;c b&#7853;t.' }
     '{{CLI_NAME}}' = $assetRecords['CLI'].Name
     '{{CLI_BYTES}}' = $assetRecords['CLI'].Bytes.ToString([Globalization.CultureInfo]::InvariantCulture)
     '{{CLI_HASH}}' = $assetRecords['CLI'].Hash
@@ -78,23 +101,34 @@ $replacements = @{
     '{{MCP_NAME}}' = $assetRecords['MCP'].Name
     '{{MCP_BYTES}}' = $assetRecords['MCP'].Bytes.ToString([Globalization.CultureInfo]::InvariantCulture)
     '{{MCP_HASH}}' = $assetRecords['MCP'].Hash
-    '{{CLI_ACTION}}' = ('<a class="download-action" href="downloads/' + $assetRecords['CLI'].Name + '" download>T&#7843;i trong xem tr&#432;&#7899;c c&#7909;c b&#7897; <span aria-hidden="true">&darr;</span></a>')
-    '{{UI_ACTION}}' = ('<a class="download-action" href="downloads/' + $assetRecords['OwnerUI'].Name + '" download>T&#7843;i trong xem tr&#432;&#7899;c c&#7909;c b&#7897; <span aria-hidden="true">&darr;</span></a>')
-    '{{MCP_ACTION}}' = ('<a class="download-action" href="downloads/' + $assetRecords['MCP'].Name + '" download>T&#7843;i trong xem tr&#432;&#7899;c c&#7909;c b&#7897; <span aria-hidden="true">&darr;</span></a>')
+    '{{CLI_ACTION}}' = ('<a class="download-action" href="' + $downloadHrefs['CLI'] + '" download>' + $actionLabel + ' <span aria-hidden="true">&darr;</span></a>')
+    '{{UI_ACTION}}' = ('<a class="download-action" href="' + $downloadHrefs['OwnerUI'] + '" download>' + $actionLabel + ' <span aria-hidden="true">&darr;</span></a>')
+    '{{MCP_ACTION}}' = ('<a class="download-action" href="' + $downloadHrefs['MCP'] + '" download>' + $actionLabel + ' <span aria-hidden="true">&darr;</span></a>')
     '{{OPS_URL}}' = 'https://github.com/triet4p/my-meta-brain/blob/main/docs/OPERATIONS.md'
     '{{SECURITY_URL}}' = 'https://github.com/triet4p/my-meta-brain/blob/main/README.md'
     '{{CHANGELOG_URL}}' = 'https://github.com/triet4p/my-meta-brain/blob/main/CHANGELOG.md'
+    '{{RELEASE_NOTES_URL}}' = 'https://github.com/triet4p/my-meta-brain/blob/main/docs/release-1.0.0.md'
     '{{README_URL}}' = 'https://github.com/triet4p/my-meta-brain/blob/main/README.md'
 }
 $html = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8
 foreach ($token in $replacements.Keys) { $html = $html.Replace($token, [string]$replacements[$token]) }
 if ($html -match '\{\{[A-Z_]+\}\}') { throw 'Website template contains an unresolved release or documentation placeholder.' }
 Set-Content -LiteralPath (Join-Path $outputRoot 'index.html') -Value $html -Encoding utf8
-$operationsHtml = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Operations runbook - Meta Brain</title><link rel="stylesheet" href="styles.css"></head><body><main class="wrap"><p><a href="index.html">Home</a> | <a href="scenarios.html">Scenario guides</a></p><h1>Operations runbook</h1><pre id="321-mcp-client-registration-standalone-package-100">' + [Net.WebUtility]::HtmlEncode((Get-Content -LiteralPath $operationsPath -Raw -Encoding UTF8)) + '</pre></main></body></html>'
+$operationsText = Get-Content -LiteralPath $operationsPath -Raw -Encoding UTF8
+$operationsText = [regex]::Replace($operationsText, '\[([^\]]+)\]\((?:\.\./)?(?:artifacts|\.agents/tmp)/[^)]*\)', '$1')
+$operationsText = [regex]::Replace($operationsText, '(?:\.\./)?artifacts/[A-Za-z0-9._/-]+', 'internal evidence record')
+$operationsText = [regex]::Replace($operationsText, '\.agents/tmp/[A-Za-z0-9._/-]+', 'internal evidence record')
+$operationsHtml = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Operations runbook - Meta Brain</title><link rel="stylesheet" href="styles.css"></head><body><main class="wrap"><p><a href="index.html">Home</a> | <a href="scenarios.html">Scenario guides</a></p><h1>Operations runbook</h1><pre id="321-mcp-client-registration-standalone-package-100">' + [Net.WebUtility]::HtmlEncode($operationsText) + '</pre></main></body></html>'
 Set-Content -LiteralPath (Join-Path $outputRoot 'operations.html') -Value $operationsHtml -Encoding utf8
 foreach ($guidePath in $guidePaths) {
     Copy-Item -LiteralPath (Join-Path $sourceDirectory $guidePath) -Destination (Join-Path $outputRoot $guidePath)
 }
-Write-Host "Built local candidate preview at $outputRoot"
-Write-Host "Candidate $($manifest.candidateId); version $($manifest.productVersion); verified all three assets (size + SHA-256)."
-Write-Host 'This output is a local candidate preview, not a public release or deployment.'
+if ($published) {
+    Write-Host "Built publication candidate at $outputRoot"
+    Write-Host "Candidate $($manifest.candidateId); version $($manifest.productVersion); verified all three assets (size + SHA-256); download actions target $ReleaseDownloadBaseUrl."
+    Write-Host 'This output links the exact owner-controlled GitHub Releases assets; it was not deployed.'
+} else {
+    Write-Host "Built local candidate preview at $outputRoot"
+    Write-Host "Candidate $($manifest.candidateId); version $($manifest.productVersion); verified all three assets (size + SHA-256)."
+    Write-Host 'This output is a local candidate preview, not a public release or deployment.'
+}
