@@ -46,6 +46,12 @@ if ($manifest.assets.Count -ne $expectedProducts.Count) { throw 'Candidate must 
 $assetRecords = @{}
 foreach ($asset in $manifest.assets) {
     if ($asset.product -notin $expectedProducts -or $assetRecords.ContainsKey($asset.product)) { throw "Unexpected or duplicate product asset: $($asset.product)" }
+    $publicName = switch ($asset.product) {
+        'CLI' { 'MetaBrain-CLI-' + $manifest.productVersion + '.exe' }
+        'OwnerUI' { 'MetaBrain-UI-' + $manifest.productVersion + '.exe' }
+        'MCP' { 'MetaBrain-MCP-' + $manifest.productVersion + '.zip' }
+    }
+    if ([string]::IsNullOrWhiteSpace($publicName)) { throw "No public filename is defined for $($asset.product)." }
     $extension = if ($asset.product -eq 'MCP') { 'zip' } else { 'exe' }
     $expectedName = "MetaBrain-$($asset.product)-1.0.0-win-x64-86626bda2908-tree1edb06ca9254-1e2953ae6bf4.$extension"
     $hashMatches = $asset.sha256 -match '^[a-fA-F0-9]{64}$'
@@ -64,7 +70,7 @@ foreach ($asset in $manifest.assets) {
     }
     finally { $sha256.Dispose() }
     if ($actualHash -ne $asset.sha256.ToLowerInvariant()) { throw "Candidate SHA-256 mismatch for $($asset.name)." }
-    $assetRecords[$asset.product] = [pscustomobject]@{ Name = $asset.name; Bytes = [long]$asset.bytes; Hash = $actualHash; Path = $assetPath }
+    $assetRecords[$asset.product] = [pscustomobject]@{ Name = $asset.name; PublicName = $publicName; Bytes = [long]$asset.bytes; Hash = $actualHash; Path = $assetPath }
 }
 foreach ($product in $expectedProducts) { if (-not $assetRecords.ContainsKey($product)) { throw "Candidate is missing $product." } }
 
@@ -75,30 +81,31 @@ Copy-Item -LiteralPath $stylePath -Destination (Join-Path $outputRoot 'styles.cs
 if (-not $published) {
     $downloadDirectory = Join-Path $outputRoot 'downloads'
     New-Item -ItemType Directory -Path $downloadDirectory -Force | Out-Null
-    foreach ($asset in $assetRecords.Values) { Copy-Item -LiteralPath $asset.Path -Destination (Join-Path $downloadDirectory $asset.Name) }
+    foreach ($asset in $assetRecords.Values) { Copy-Item -LiteralPath $asset.Path -Destination (Join-Path $downloadDirectory $asset.PublicName) }
 }
 
 $downloadHrefs = @{}
 foreach ($product in $expectedProducts) {
-    $downloadHrefs[$product] = if ($published) { $ReleaseDownloadBaseUrl + '/' + $assetRecords[$product].Name } else { 'downloads/' + $assetRecords[$product].Name }
+    $downloadHrefs[$product] = if ($published) { $ReleaseDownloadBaseUrl + '/' + $assetRecords[$product].PublicName } else { 'downloads/' + $assetRecords[$product].PublicName }
 }
-$actionLabel = if ($published) { 'T&#7843;i candidate 1.0.0' } else { 'T&#7843;i trong xem tr&#432;&#7899;c c&#7909;c b&#7897;' }
+$actionLabel = if ($published) { 'T&#7843;i b&#7843;n ph&#225;t h&#224;nh 1.0.0' } else { 'T&#7843;i b&#7843;n xem tr&#432;&#7899;c c&#7909;c b&#7897;' }
 $replacements = @{
     '{{CANDIDATE}}' = $manifest.candidateId
     '{{SOURCE_HEAD}}' = $manifest.source.head
     '{{SOURCE_TREE}}' = $manifest.source.sourceTreeSha256
-    '{{RELEASE_STATUS_TITLE}}' = if ($published) { 'Ch&#7901; c&#244;ng b&#7889; 1.0.0' } else { 'Ch&#432;a ph&#225;t h&#224;nh c&#244;ng khai' }
-    '{{RELEASE_STATUS_TEXT}}' = if ($published) { 'Candidate &#273;&#227; s&#7861;n s&#224;ng; c&#244;ng b&#7889; public v&#7851;n ch&#7901; c&#225;c gate v&#224; smoke test.' } else { 'C&#225;c t&#7879;p d&#432;&#7899;i &#273;&#226;y ch&#7881; c&#243; trong b&#7843;n xem tr&#432;&#7899;c c&#7909;c b&#7897; &#273;&#227; d&#7921;ng.' }
-    '{{RELEASE_BANNER}}' = if ($published) { 'CANDIDATE 1.0.0 &#183; CH&#431;A C&#212;NG B&#7888;' } else { 'B&#7842;N XEM TR&#431;&#7898;C C&#7908;C B&#7896; &#183; KH&#212;NG PH&#7842;I GITHUB RELEASE' }
-    '{{RELEASE_FOOTER}}' = if ($published) { 'Publication pending' } else { 'B&#7843;n xem tr&#432;&#7899;c c&#7909;c b&#7897;' }
-    '{{RELEASE_NOTES_STATUS}}' = if ($published) { 'SHA-256 &#273;&#432;&#7907;c ghi nh&#7853;n cho t&#7915;ng t&#7879;p. C&#225;c li&#234;n k&#7871;t Release &#273;&#227; &#273;&#432;&#7907;c c&#7845;u h&#236;nh nh&#432;ng ch&#432;a &#273;&#432;&#7907;c x&#225;c nh&#7853;n l&#224; c&#244;ng khai.' } else { 'SHA-256 &#273;&#432;&#7907;c cung c&#7845;p cho t&#7915;ng t&#7879;p trong b&#7843;n xem tr&#432;&#7899;c c&#7909;c b&#7897;. G&#243;i t&#7843;i c&#244;ng khai v&#224; ph&#225;t h&#224;nh GitHub ch&#432;a &#273;&#432;&#7907;c b&#7853;t.' }
-    '{{CLI_NAME}}' = $assetRecords['CLI'].Name
+    '{{RELEASE_STATUS_TITLE}}' = if ($published) { '&#272;&#227; c&#244;ng b&#7889; 1.0.0' } else { 'Ch&#432;a ph&#225;t h&#224;nh c&#244;ng khai' }
+    '{{RELEASE_STATUS_TEXT}}' = if ($published) { 'Meta Brain 1.0.0 &#273;&#227; &#273;&#432;&#7907;c ph&#225;t h&#224;nh. C&#225;c li&#234;n k&#7871;t b&#234;n d&#432;&#7899;i tr&#7887; t&#7899;i GitHub Release v1.0.0.' } else { 'C&#225;c t&#7879;p d&#432;&#7899;i &#273;&#226;y ch&#7881; c&#243; trong b&#7843;n xem tr&#432;&#7899;c c&#7909;c b&#7897; &#273;&#227; d&#7921;ng.' }
+    '{{RELEASE_BANNER}}' = if ($published) { 'B&#7842;N PH&#193;T H&#192;NH 1.0.0 &#183; &#272;&#195; C&#212;NG B&#7888;' } else { 'B&#7842;N XEM TR&#431;&#7898;C C&#7908;C B&#7896; &#183; KH&#212;NG PH&#7842;I GITHUB RELEASE' }
+    '{{RELEASE_FOOTER}}' = if ($published) { 'Published release' } else { 'B&#7843;n xem tr&#432;&#7899;c c&#7909;c b&#7897;' }
+    '{{RELEASE_NOTES_STATUS}}' = if ($published) { 'SHA-256 &#273;&#432;&#7907;c ghi nh&#7853;n cho t&#7915;ng t&#7879;p. T&#7843;i b&#7843;n ph&#225;t h&#224;nh t&#7915; GitHub Release v1.0.0.' } else { 'SHA-256 &#273;&#432;&#7907;c cung c&#7845;p cho t&#7915;ng t&#7879;p trong b&#7843;n xem tr&#432;&#7899;c c&#7909;c b&#7897;. G&#243;i t&#7843;i c&#244;ng khai v&#224; ph&#225;t h&#224;nh GitHub ch&#432;a &#273;&#432;&#7907;c x&#225;c nh&#7853;n.' }
+    '{{RELEASE_HEADING}}' = if ($published) { 'B&#7843;n ph&#225;t h&#224;nh' } else { 'B&#7843;n xem tr&#432;&#7899;c c&#7909;c b&#7897;' }
+    '{{CLI_NAME}}' = $assetRecords['CLI'].PublicName
     '{{CLI_BYTES}}' = $assetRecords['CLI'].Bytes.ToString([Globalization.CultureInfo]::InvariantCulture)
     '{{CLI_HASH}}' = $assetRecords['CLI'].Hash
-    '{{UI_NAME}}' = $assetRecords['OwnerUI'].Name
+    '{{UI_NAME}}' = $assetRecords['OwnerUI'].PublicName
     '{{UI_BYTES}}' = $assetRecords['OwnerUI'].Bytes.ToString([Globalization.CultureInfo]::InvariantCulture)
     '{{UI_HASH}}' = $assetRecords['OwnerUI'].Hash
-    '{{MCP_NAME}}' = $assetRecords['MCP'].Name
+    '{{MCP_NAME}}' = $assetRecords['MCP'].PublicName
     '{{MCP_BYTES}}' = $assetRecords['MCP'].Bytes.ToString([Globalization.CultureInfo]::InvariantCulture)
     '{{MCP_HASH}}' = $assetRecords['MCP'].Hash
     '{{CLI_ACTION}}' = ('<a class="download-action" href="' + $downloadHrefs['CLI'] + '" download>' + $actionLabel + ' <span aria-hidden="true">&darr;</span></a>')

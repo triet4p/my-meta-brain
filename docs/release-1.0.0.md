@@ -1,8 +1,10 @@
 # Meta Brain 1.0.0 — release record and publication handoff
 
-**Status: candidate frozen; not published.** Public release assets, the tag `v1.0.0`, GitHub
-Pages deployment and any external publication remain pending the owner's separate authorization and
-a public smoke test. This record does not authorize a push, tag, upload, deployment or host change.
+**Status: published; public asset filename cutover pending.** GitHub Release `v1.0.0` and the
+GitHub Pages site are public. After this cycle's review and checkpoint gates, the authorized
+publication executor must rename the three existing Release assets in place before deploying
+the updated site. No duplicate assets are to be uploaded. The tag, asset bytes and SHA-256 values
+remain frozen.
 
 This is the public release record for the three Meta Brain 1.0.0 products: the CLI, the Owner UI
 and the standalone MCP server. Product behavior was accepted in Sprint 9; Sprint 10 verifies only
@@ -22,31 +24,32 @@ re-verified or re-claimed here.
 | Binary source revision (committed content) | `35e01ec1c6d80bac41d8d2fe7aeef8144f3d34f7` |
 | Signing | Unsigned; SHA-256 verifies bytes, not publisher identity |
 
-The candidate was reassembled on 2026-10-26 from the working tree whose base HEAD was
+The candidate was assembled on 2026-10-26 from the working tree whose base HEAD was
 `86626bda2908235c02392d421f2117b36c3d11cb`. Its source-tree digest binds the generated release
 payload source and project MIT license; later A2 changes to release record/site text and builder
 candidate pinning are docs/site-only and did not alter the three built assets. The binary source
 revision remains `35e01ec1c6d80bac41d8d2fe7aeef8144f3d34f7`, as product source was not changed.
 Candidate `80576c073f06` is superseded because its distributable packages lacked the project
-license; use only this replacement candidate. Any future rebuild is another candidate with new
-filenames and hashes.
+license; use only this replacement candidate. A future candidate's internal identity and manifest
+filenames remain provenance-bound; the public-name mapping is separate and does not rewrite them.
 
-## Download matrix and planned publication URLs
+## Download matrix and publication URLs
 
-All three assets come from this one candidate and share the same product version and runtime.
-The exact planned locations are the owner-controlled repository
-`https://github.com/triet4p/my-meta-brain`:
+These are the exact public names and URLs for the owner-authorized in-place rename. Until the
+executor completes that rename after the review/checkpoint gates, the already-published Release
+still has its original long filenames; this record does not claim the new URLs are live yet.
 
-| Product | Asset | Bytes | SHA-256 | Planned download URL |
+| Product | Public asset name | Bytes | SHA-256 | Post-cutover download URL |
 | --- | --- | ---: | --- | --- |
-| CLI setup | `MetaBrain-CLI-1.0.0-win-x64-86626bda2908-tree1edb06ca9254-1e2953ae6bf4.exe` | 186,187,154 | `dbfc8a13eefcd65060f4cd52e1d2b5d127be274f9b311162636a8b2bc6837e0a` | `https://github.com/triet4p/my-meta-brain/releases/download/v1.0.0/MetaBrain-CLI-1.0.0-win-x64-86626bda2908-tree1edb06ca9254-1e2953ae6bf4.exe` |
-| Owner UI setup | `MetaBrain-OwnerUI-1.0.0-win-x64-86626bda2908-tree1edb06ca9254-1e2953ae6bf4.exe` | 277,357,664 | `2a32a44d6beceb03bab195265bb2950b31961dadda396eff68f593a4491951a3` | `https://github.com/triet4p/my-meta-brain/releases/download/v1.0.0/MetaBrain-OwnerUI-1.0.0-win-x64-86626bda2908-tree1edb06ca9254-1e2953ae6bf4.exe` |
-| MCP package | `MetaBrain-MCP-1.0.0-win-x64-86626bda2908-tree1edb06ca9254-1e2953ae6bf4.zip` | 73,290,820 | `0a475496977b7f6ff4db187093869aa788e9fb52088ec49dfe6b9b3f844ab857` | `https://github.com/triet4p/my-meta-brain/releases/download/v1.0.0/MetaBrain-MCP-1.0.0-win-x64-86626bda2908-tree1edb06ca9254-1e2953ae6bf4.zip` |
+| CLI setup | `MetaBrain-CLI-1.0.0.exe` | 186,187,154 | `dbfc8a13eefcd65060f4cd52e1d2b5d127be274f9b311162636a8b2bc6837e0a` | `https://github.com/triet4p/my-meta-brain/releases/download/v1.0.0/MetaBrain-CLI-1.0.0.exe` |
+| Owner UI setup | `MetaBrain-UI-1.0.0.exe` | 277,357,664 | `2a32a44d6beceb03bab195265bb2950b31961dadda396eff68f593a4491951a3` | `https://github.com/triet4p/my-meta-brain/releases/download/v1.0.0/MetaBrain-UI-1.0.0.exe` |
+| MCP package | `MetaBrain-MCP-1.0.0.zip` | 73,290,820 | `0a475496977b7f6ff4db187093869aa788e9fb52088ec49dfe6b9b3f844ab857` | `https://github.com/triet4p/my-meta-brain/releases/download/v1.0.0/MetaBrain-MCP-1.0.0.zip` |
 
-Planned website: `https://triet4p.github.io/my-meta-brain/`.
-Planned release page: `https://github.com/triet4p/my-meta-brain/releases/tag/v1.0.0`.
-Website downloads are required to resolve to the exact Release URLs above; the local preview
-never claims that the public links are live.
+Public website: `https://triet4p.github.io/my-meta-brain/`.
+Public release page: `https://github.com/triet4p/my-meta-brain/releases/tag/v1.0.0`.
+The site builder keeps internal candidate filenames and provenance intact while presenting the
+short public names. Publication mode emits these exact post-cutover URLs; do not deploy that
+output until the asset rename has completed.
 
 ## Release notes
 
@@ -143,89 +146,80 @@ register services or modify global PATH/environment.
   include the project MIT `LICENSE` and are member-hash verified; the MCP archive includes the same
   license plus 395 further members (396 total) with matching sizes/hashes, and a valid
   `package-manifest.json` stdio command/argument contract.
-- A2 reassembled candidate `1e2953ae6bf4` and the site builder verified candidate provenance plus
-  all three asset hashes. The local preview was generated; publication mode was exercised offline
-  and points to the exact Release URLs while stating publication remains pending. Neither site was
-  deployed. A1 CLI/UI staged distribution observations are inherited evidence for candidate
-  `80576c073f06`; A2 did not rerun product or installer flows on the new licensed candidate.
-- No product, client, provider, security or performance flow was executed for this record.
-
-## Publication prerequisites (owner-controlled)
-
-- [ ] Owner authorizes publication (push/tag, Release upload, Pages deployment) separately.
-- [x] Owner accepted the documented source/payload delta on 2026-10-26; the exact final setup bytes
-      were not owner-run. Staged proof informs but does not authorize publication.
-- [ ] No `v1.0.0` tag or release already exists with different bytes. If it does, stop and decide
-      version/distribution; never overwrite a published version or asset name.
-- [x] Owner terms decision recorded: MIT License for Meta Brain, with copyright retained; third-party terms remain separate.
-- [ ] Release notes, download matrix and the three hashes above are copied from this record without
-      alteration.
+- Candidate `1e2953ae6bf4` remains frozen; its manifest asset names retain candidate provenance.
+  The public names in the matrix are a separate download-name mapping, not changed manifest data.
+- The original publication evidence remains in P1/P2. A4 corrected published-status presentation
+  while preserving an honest local preview. The CYCLE2 build changes only public download names;
+  no candidate rebuild, asset mutation, new publication or product flow is claimed.
 
 ## Publication checklist and exact commands
 
-These commands are for the owner or an executor the owner explicitly authorizes. They require Git
-and GitHub CLI authentication and change the public repository, Releases and Pages; an agent must
-not run them without that separate authorization.
+The Release and Pages deployment already exist. These remaining actions are for the owner or an
+executor the owner explicitly authorizes; they require authenticated GitHub API access.
 
-1. Verify the local files before upload:
+1. Verify the three internal candidate assets against the frozen sizes and SHA-256 values above.
+   Do not rebuild the candidate, alter its manifest, recreate/move tag `v1.0.0`, or change the
+   release notes.
+2. After the evidence review and checkpoint gates pass, check for collisions with all three target
+   names. If any target exists, stop without mutation. Rename the existing Release assets in place
+   using the GitHub API, preserving each asset's bytes and SHA-256; do not upload duplicate assets:
 
-    ```powershell
-    Get-FileHash -Algorithm SHA256 -LiteralPath <the three assets>
+    ```text
+    MetaBrain-CLI-1.0.0.exe
+    MetaBrain-UI-1.0.0.exe
+    MetaBrain-MCP-1.0.0.zip
     ```
 
-2. Check collisions, then create and push the tag only after the hash check:
-
-    ```powershell
-    git ls-remote --tags origin v1.0.0
-    gh release view v1.0.0
-    git tag -a v1.0.0 -m "Meta Brain 1.0.0"
-    git push origin v1.0.0
-    ```
-
-3. Upload exactly the three candidate files with these notes:
-
-    ```powershell
-    gh release create v1.0.0 `
-      "MetaBrain-CLI-1.0.0-win-x64-86626bda2908-tree1edb06ca9254-1e2953ae6bf4.exe" `
-      "MetaBrain-OwnerUI-1.0.0-win-x64-86626bda2908-tree1edb06ca9254-1e2953ae6bf4.exe" `
-      "MetaBrain-MCP-1.0.0-win-x64-86626bda2908-tree1edb06ca9254-1e2953ae6bf4.zip" `
-      --title "Meta Brain 1.0.0" --notes-file docs/release-notes-1.0.0.md --verify-tag
-    ```
-
-4. Build the publication site with the exact owner-controlled download base, inspect that the
-   three actions point at the Release URLs and the status text says published, then deploy
-   `dist/site` to GitHub Pages using the owner's chosen Pages source (no deployment workflow is
-   committed in this repository):
+3. Build the publication site with the exact owner-controlled download base, inspect its three
+   short URLs and published status, then deploy `dist/site` to GitHub Pages only after the asset
+   rename completes:
 
     ```powershell
     powershell.exe -NoProfile -File scripts/site/build.ps1 -ReleaseDownloadBaseUrl https://github.com/triet4p/my-meta-brain/releases/download/v1.0.0
     ```
 
-5. Public smoke from outside the checkout: open the website and each of the three download URLs,
+4. Public smoke from outside the checkout: open the website and each of the three download URLs,
    confirm HTTP success and byte sizes, compare SHA-256 after download, check the CLI/UI/MCP guides
-   and the release record link, and record the deployed site revision and release timestamps.
+   and release-record link, and record the deployed site revision and release timestamps.
 
 ## Rollback and withdrawal
 
-- **Before publication:** stop; nothing public has changed.
+- **Before the authorized rename:** stop; the published Release and current Pages deployment remain
+  unchanged.
 - **Website rollback:** redeploy the previous known-good Pages artifact/commit, or disable Pages in
   the repository settings. This affects only the static site; it does not change release assets.
 - **Release withdrawal:** if the bytes or notes are wrong, stop distribution and create a corrected
   release under a new version/candidate. Do not overwrite `v1.0.0` assets or reuse their names. A
   published GitHub Release can be deleted (or its assets removed) with owner authorization; the tag
-  can be deleted separately. Downloads already taken cannot be recalled, so announce the
-  withdrawal and keep the old hashes visible for verification.
+  can be deleted separately. Downloads already taken cannot be recalled, so announce withdrawal
+  and keep the old hashes visible for verification.
 - **Security correction:** withdraw the release if a security defect is confirmed, preserve the
   evidence and hashes, and follow the owner's disclosure decision. Do not silently replace bytes
   under the same version.
 - **Local rollback:** an installed CLI/Owner UI can be removed with its own setup (component-scoped
   removal) while the data root, vault, snapshots, backups and recovery material remain.
 
-## Current gates
+## Current status
 
-- Release assets are frozen at the candidate identified above; no actionable in-scope release/install/site defect is
-  known. The owner selected MIT with copyright retained; the exact final setup bytes were not owner-run.
-- Publication remains subject to the owner-controlled publication gate: final release review gates,
-  `v1.0.0` tag/asset collision checks, the owner's final go-ahead and public smoke.
-- Public publication is **not** authorized or performed by this record. Release 1.0.0 must not be
-  described as published until those gates complete.
+- Candidate `1e2953ae6bf4`, tag `v1.0.0`, asset sizes and SHA-256 digests remain frozen.
+- The published Release currently has the original filenames recorded in P1. The authorized
+  rename to the short names above is pending CYCLE2 review/checkpoint gates and Bronze execution.
+- GitHub Pages is deployed from `gh-pages` root; P2 records HTTP 200 for all six served files.
+  The deployed index still has stale pending-status text. This source includes A4's published
+  status correction and the short-name URLs for the post-rename build, but no deployment or asset
+  rename is claimed here.
+- No product, client, provider, security or performance flow was executed for this record.
+
+## Publication prerequisites (completed at publication)
+
+- [x] Owner authorized publication and Pages deployment (execution evidence:
+      `artifacts/sprint-10/publication/S10-PUBLISH-P1.md` and
+      `artifacts/sprint-10/publication/S10-PUBLISH-P2.md`).
+- [x] `v1.0.0` tag/release collision checks passed; frozen asset hashes and sizes match the
+      published Release assets.
+- [x] Owner accepted the documented source/payload delta on 2026-10-26; the exact final setup
+      bytes were not owner-run.
+- [x] Owner terms decision recorded: MIT License for Meta Brain, with copyright retained;
+      third-party terms remain separate.
+- [x] Release notes, download matrix and hashes were copied without alteration.
+

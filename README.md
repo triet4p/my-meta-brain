@@ -6,12 +6,15 @@ Meta Brain serves as an owner-controlled second brain designed to preserve evide
 
 ## Website
 
-The Vietnamese static landing-page source is under [`website/`](website/). Its seven practical
-scenario guides and separate Codex CLI / Oh My Pi connection pages are
-[`website/scenarios.html`](website/scenarios.html), [`website/codex.html`](website/codex.html),
-and [`website/omp.html`](website/omp.html). They are copied into the local site preview as
-`scenarios.html`, `codex.html`, and `omp.html`; the versioned operations runbook is served locally
-as `operations.html`.
+Visit the [Meta Brain website](https://triet4p.github.io/my-meta-brain/) for downloads and
+practical usage guides:
+
+- [CLI and Owner UI scenarios](https://triet4p.github.io/my-meta-brain/scenarios.html)
+- [Connect Codex CLI](https://triet4p.github.io/my-meta-brain/codex.html)
+- [Connect Oh My Pi](https://triet4p.github.io/my-meta-brain/omp.html)
+- [Installation and operations runbook](https://triet4p.github.io/my-meta-brain/operations.html)
+
+The static landing-page source is under [`website/`](website/).
 
 Build its reviewed local candidate preview with:
 
@@ -20,9 +23,9 @@ powershell.exe -NoProfile -File scripts/site/build.ps1
 python -m http.server --bind 127.0.0.1 --directory dist/site 8000
 ```
 
-Open `http://127.0.0.1:8000/`. The ignored `dist/site/` output includes the exact candidate
-assets only after its manifest sizes and SHA-256 hashes are verified. This is a local preview,
-not a public release or deployment; no public download or hosting destination is enabled here.
+Open `http://127.0.0.1:8000/`. The ignored `dist/site/` output is a local preview with verified,
+byte-identical candidate copies under the short public filenames. It does not publish or deploy
+anything; the public Release and Pages site have separate owner-controlled publication flows.
 ---
 
 ## Overview
@@ -144,19 +147,19 @@ the owner approves or narrows requests in the CLI or the Owner console, never in
 - **Building from source:** [.NET 10 SDK](https://dotnet.microsoft.com/) (`net10.0` /
   `net10.0-windows`), plus PowerShell for the release script.
 - **AI Clients (Optional):** Official [Codex CLI](https://github.com/openai/codex) or
-  [Oh My Pi (OMP)](https://github.com/canhld94/oh-my-pi) with MCP stdio support.
+  [Oh My Pi (OMP)](https://github.com/can1357/oh-my-pi) with MCP stdio support.
 
 ---
 
 ## Getting Started
 
-Release 1.0.0 is packaged as three dedicated assets: a CLI setup executable, a graphical Owner
-UI setup executable and an MCP ZIP. Their exact filenames, byte sizes, SHA-256 hashes, planned
-GitHub Releases URLs, dependency/license notices, signing status and known limits are recorded in
-[docs/release-1.0.0.md](docs/release-1.0.0.md). Public download links become active only after the
-owner-controlled publication gate; the record states the current publication status. Use the
-website quick starts or the operations runbook for installation; do not treat the developer bundle
-below as the end-user download.
+Release 1.0.0 is packaged as three dedicated assets: `MetaBrain-CLI-1.0.0.exe`,
+`MetaBrain-UI-1.0.0.exe` and `MetaBrain-MCP-1.0.0.zip`. The release record lists their frozen byte
+sizes, SHA-256 hashes, internal candidate provenance, dependency/license notices, signing status
+and known limits. The GitHub Release and Pages site are live; the owner-authorized in-place rename
+to these public filenames and refreshed site deployment remain pending review/checkpoint gates and
+publication execution. Use the website quick starts or the operations runbook for installation;
+do not treat the developer bundle below as the end-user download.
 
 ### Developer bundle: build the payload from a checkout
 
@@ -329,16 +332,20 @@ the restore stays available, and the real renders of the view.
 
 ## Project Status & Roadmap
 
-The project follows a phased milestone roadmap defined in [`docs/PLAN.md`](docs/PLAN.md):
+The project follows the authoritative milestone roadmap in [`docs/PLAN.md`](docs/PLAN.md).
+Milestones 1–8 and Sprint 9's three-product delivery are complete. The final public release and
+onboarding milestone remains in progress until the authorized asset-name cutover, updated Pages
+deployment, and public smoke are complete.
 
 - [x] **Milestone 1 (M1) — Encrypted Vault & Scoped Sharing (Sprint 1):** User-controlled key lifecycle, authenticated ciphertext, owner-approved catalog publication, single-use token issuance/redemption, and in-memory scoped reads verified with official Codex and OMP clients.
 - [x] **Milestone 2 (M2) — Durable Encrypted Core (Sprint 2):** Canonical encrypted item/source/zone/revision models, relations, and rebuildable protected index.
-- [ ] **Milestone 3 (M3) — Faithful Encrypted Capture (Sprint 3):** Read-only allowlisted transcript ingestion from Codex/OMP sessions, encrypted caching, and lock-aware refresh.
-- [ ] **Milestone 4 (M4) — Scoped Agent Memory Access (Sprint 4):** Rich retrieval, evidence briefs, proposals, and linking over MCP.
-- [ ] **Milestone 5 (M5) — Owner Workbench (Sprint 5):** Desktop UI (WPF) for unlock, review, catalog curation, and token handoffs.
-- [ ] **Milestone 6 (M6) — Grounded Structuring (Sprint 6):** Layered syntheses, coding profile extraction, and strict provider egress controls.
-- [ ] **Milestone 7 (M7) — Time & Lifecycle (Sprint 7):** Temporal recall, contextual intentions, active forgetting, and audited purging.
-- [ ] **Milestone 8 (M8) — Daily Production (Sprint 8):** Installer, automated backups, encrypted restore/recovery, and production hardening.
+- [x] **Milestone 3 (M3) — Faithful Encrypted Capture (Sprint 3):** Read-only allowlisted transcript ingestion from Codex/OMP sessions, encrypted caching, and lock-aware refresh.
+- [x] **Milestone 4 (M4) — Scoped Agent Memory Access (Sprint 4):** Rich retrieval, evidence briefs, proposals, and linking over MCP.
+- [x] **Milestone 5 (M5) — Owner Workbench (Sprint 5):** Desktop UI (WPF) for unlock, review, catalog curation, and token handoffs.
+- [x] **Milestone 6 (M6) — Grounded Structuring (Sprint 6):** Layered syntheses, coding profile extraction, and strict provider egress controls.
+- [x] **Milestone 7 (M7) — Time & Lifecycle (Sprint 7):** Temporal recall, contextual intentions, active forgetting, and audited purging.
+- [x] **Milestone 8 (M8) — Daily Production (Sprint 8):** Installer, automated backups, encrypted restore/recovery, and production hardening.
+- [~] **Milestone 9 (M9) — Public Release 1.0.0 & Onboarding (Sprint 10):** CLI, Owner UI and MCP publication, landing page and scenario guides. Release and Pages are live; approved public asset-name cutover, refreshed deployment and final public smoke remain in progress.
 
 ---
 

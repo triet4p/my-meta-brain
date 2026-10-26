@@ -5,15 +5,14 @@ authenticate the publisher.
 
 ## Downloads
 
-- `MetaBrain-CLI-1.0.0-win-x64-86626bda2908-tree1edb06ca9254-1e2953ae6bf4.exe` — CLI setup.
-- `MetaBrain-OwnerUI-1.0.0-win-x64-86626bda2908-tree1edb06ca9254-1e2953ae6bf4.exe` — graphical
-  Owner UI setup.
-- `MetaBrain-MCP-1.0.0-win-x64-86626bda2908-tree1edb06ca9254-1e2953ae6bf4.zip` — standalone MCP
-  server package.
+- `MetaBrain-CLI-1.0.0.exe` — CLI setup.
+- `MetaBrain-UI-1.0.0.exe` — graphical Owner UI setup.
+- `MetaBrain-MCP-1.0.0.zip` — standalone MCP server package.
 
-Sizes and SHA-256 values for all three assets, the exact planned URLs, installation details,
-licensing and known limits are in the
-[1.0.0 release record](https://github.com/triet4p/my-meta-brain/blob/main/docs/release-1.0.0.md).
+The owner-authorized in-place rename is pending the release review/checkpoint gates; no duplicate
+assets will be uploaded. Byte sizes, SHA-256 values, internal candidate provenance, installation
+details, licensing and known limits are in the
+[`1.0.0 release record`](https://github.com/triet4p/my-meta-brain/blob/main/docs/release-1.0.0.md).
 
 ## What is included
 
