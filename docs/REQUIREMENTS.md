@@ -25,9 +25,9 @@ Mỗi requirement có một sprint chịu trách nhiệm chính và có thể c�
 | R13 | Phân tầng L0/L1/L2/L3+ có provenance, không xếp độ đúng theo tầng | Nhiều nguồn/nhiều dẫn xuất; derived_from không vòng; item trực tiếp không bị bịa tầng nguồn; synthesis trace về nguồn còn được phép | 6 |
 | R14 | Relation typed, có provenance/revision/lifecycle | Structural link theo stable ID; evidence link gắn revision; nguồn đổi/mất được báo; không biến similarity thành supports | 2 |
 | R15 | Explicit linking qua chat/MCP, không giả ý chí owner | Agent tạo/link/unlink rõ ràng trong grant; ambiguous endpoint được làm rõ; executed_by khác owner-confirmed; link không share dữ liệu | 4 |
-| R16 | Source và item có quyền API riêng; originals ngoài bảo vệ vault | Import/recall không sửa/rename/move/delete .codex/.omp; chỉ owner allowlist; đọc item không tự cho source expansion; không claim ngăn original-source OS access của agent | 3 |
-| R17 | Incremental ingestion Codex/OMP đáng tin cậy | Append, partial tail, nhập lại, restart, replacement/truncation, format không hỗ trợ không làm trùng/mất im lặng; checkpoint/attribution chính xác | 3 |
-| R18 | Reference-only mặc định, encrypted preservation opt-in và availability | Snapshot/cache/chunk/locator trong Meta Brain encrypted, không plaintext index/temp; locked dừng private ingestion/expansion; missing source nói rõ, không bảo mật lại original transcripts | 3 |
+| R16 | Source và item có quyền API riêng; originals ngoài bảo vệ vault | Import/recall không sửa/rename/move/delete .codex/.omp; chỉ owner allowlist; đọc item không tự cho source expansion; không claim ngăn original-source OS access của agent. CR02: preserved bytes chỉ khi owner opt-in và nằm trong purge/retention; không sửa/rename/move source | 3 |
+| R17 | Incremental ingestion Codex/OMP đáng tin cậy | Append, partial tail, nhập lại, restart, replacement/truncation, format không hỗ trợ không làm trùng/mất im lặng; checkpoint/attribution chính xác. CR02: record chưa hiểu chỉ được đi qua khi bytes đã preserve bền vững và đọc lại được; version/root barrier không diễn giải tiếp; không silent drop | 3 |
+| R18 | Reference-only mặc định, encrypted preservation opt-in và availability | Snapshot/cache/chunk/locator trong Meta Brain encrypted, không plaintext index/temp; locked dừng private ingestion/expansion; missing source nói rõ, không bảo mật lại original transcripts. CR02: preservation mở rộng sang record chưa hiểu khi owner opt-in; reference-only vẫn mặc định; `unprocessed_bytes`/`pending_tail_bytes`/facet trạng thái phải báo thật | 3 |
 | R19 | Capture research phi cấu trúc nhanh, lưu nguồn trước xử lý | Nhập text + zone, metadata tùy chọn; ghi chú còn sau restart/provider lỗi; URL không bị coi là full paper đã đọc | 3 |
 | R20 | Profile coding/research/trend cùng model, không bóp nghĩa | Phân biệt tool result, claim tác giả, giới hạn, giả thuyết user, câu hỏi; trend chỉ nói trên corpus đã lưu và không đếm lặp nguồn như xác nhận độc lập | 6 |
 | R21 | Synthesis chọn lọc và phân tầng giữ điều kiện/ngoại lệ | Job hữu hạn/opt-in; bản tổng hợp có citations, limitations, contradictions, revision và invalidation; không summary drift âm thầm | 6 |
@@ -38,18 +38,18 @@ Mỗi requirement có một sprint chịu trách nhiệm chính và có thể c�
 | R26 | Thời gian đúng ngữ nghĩa và truy vấn lịch sử | Occurred khác recorded; validity/review_after, unknown/timezone; superseded/historical và contradiction không newest-wins | 7 |
 | R27 | Intention theo thời gian/ngữ cảnh, không tự hoàn thành | Pending/done/cancelled/superseded; due còn khi offline, acknowledged khác completed; chỉ trigger đã được bật | 7 |
 | R28 | Quên phân cấp, có giải thích và bảo vệ item hiếm quan trọng | Demote/archive/pin/restore; không tự xóa vì ít đọc hoặc củng cố truth bằng read count | 7 |
-| R29 | Purge đầy đủ trong phạm vi kiểm soát, không hứa xóa bên ngoài | Preview canonical/index/cache/snapshot/derivatives/backups; session nguồn chỉ xóa nếu cấp quyền riêng; nêu retention và dữ liệu đã xuất/đã đọc không thu hồi được | 7 |
+| R29 | Purge đầy đủ trong phạm vi kiểm soát, không hứa xóa bên ngoài | Preview canonical/index/cache/snapshot/derivatives/backups; session nguồn chỉ xóa nếu cấp quyền riêng; nêu retention và dữ liệu đã xuất/đã đọc không thu hồi được. CR02: preserved span/bytes nằm trong preview/purge/backup/export scope | 7 |
 | R30 | UI owner cho library/capture/review/relations/source history | Thao tác thật trên UI, keyboard cơ bản, Việt–Anh; trả lời được vì sao nhớ và ai thấy; không UI giả nối mock backend | 5 |
 | R31 | UI unlock/catalog/access requests và scoped sessions | User unlock/lock, preview/publication catalog, review/thu hẹp/approve/reject requests, handoff token, expiry/revoke; dùng core policy, không sửa config bằng tay hoặc protected-runtime launcher | 5 |
 | R32 | Ba thành phần tách ranh giới, một domain/policy implementation | Core không lệ thuộc UI/MCP SDK; adapters không ghi vault; UI/MCP dùng cùng policy và persistence; không cần microservices | 2 |
 | R33 | Encrypted file-first canonical, private index rebuildable và durable writes | Plaintext readable chỉ sau owner unlock/explicit export; ciphertext revision conflict/crash/rebuild/migrations đúng; index/WAL/journal/temp không dual truth hoặc plaintext leak | 2 |
-| R34 | Encrypted backup/restore, key recovery và explicit scoped export | Restore cần key, tái hiện lineage/lifecycle, không hồi sinh live sessions/used tokens/purged data; lost key không fake recovery; plaintext export có owner disclosure, không gồm private citations ngoài scope | 8 |
+| R34 | Encrypted backup/restore, key recovery và explicit scoped export | Restore cần key, tái hiện lineage/lifecycle, không hồi sinh live sessions/used tokens/purged data; lost key không fake recovery; plaintext export có owner disclosure, không gồm private citations ngoài scope. CR02: preserved bytes không tái tạo được sau khi nguồn đổi → phải vào backup/restore/export scope | 8 |
 | R35 | Install/start/restart/upgrade/uninstall đủ dùng hằng ngày | App startup locked, owner unlock và hai client thường dùng được; không sandbox/account/patch prerequisites; upgrade không reset, uninstall không xóa vault/source/key material khi chưa đồng ý | 8 |
-| R36 | Private metadata/index/audit/cache/credentials và artifacts được bảo vệ | Encrypt sensitive persisted product data; chỉ approved catalog/minimal format envelope công khai; không commit vault/transcript/key/token; không log raw secrets/body; same-owner OS hostile access ngoài cam kết | 8 |
+| R36 | Private metadata/index/audit/cache/credentials và artifacts được bảo vệ | Encrypt sensitive persisted product data; chỉ approved catalog/minimal format envelope công khai; không commit vault/transcript/key/token; không log raw secrets/body; same-owner OS hostile access ngoài cam kết. CR02: preserved bytes encrypted, diagnostic chỉ code+offset, không body | 8 |
 | R37 | Chất lượng định tính trên công việc thật, không thay bằng benchmark | Owner walk-through recall lỗi cũ/quyết định/research/link/synthesis/intentions; ghi nhận sai/cũ/thiếu; không finding nghiêm trọng chưa giải quyết | 8 |
 | R38 | Operational envelope đo được, khóa trước tuning | Sprint 1 ghi số đo/giới hạn dataset, p95, indexing, disk/idle resources và model budget; Sprint 8 đo lại không đổi mục tiêu để che fail | 8 |
-| R39 | Recovery và migration không được né bằng reset dữ liệu | Interrupted writes/jobs, service restart, index corruption, schema upgrade có kịch bản recovery; dữ liệu báo saved không mất | 8 |
-| R40 | Yêu cầu cứng, kế hoạch và evidence trung thực | Thay baseline qua change control, cập nhật traceability; task chỉ [x] sau gate, không claim runtime/test chưa chạy | 8 |
+| R39 | Recovery và migration không được né bằng reset dữ liệu | Interrupted writes/jobs, service restart, index corruption, schema upgrade có kịch bản recovery; dữ liệu báo saved không mất. CR02: journal+checkpoint atomic với preserved span; truncation/replacement vẫn quarantine | 8 |
+| R40 | Yêu cầu cứng, kế hoạch và evidence trung thực | Thay baseline qua change control, cập nhật traceability; task chỉ [x] sau gate, không claim runtime/test chưa chạy. CR02: approval thật + sync docs; corpus expectation không thay product PASS | 8 |
 
 ## Hợp đồng mỗi chặng
 
@@ -193,3 +193,39 @@ không tạo PASS cho bất kỳ kết quả cũ nào. Nó thay thế phần ng�
 - **Còn mở, không xóa.** Owner R37 walkthrough định tính, evidence real service/WPF/owner UI/IPC, review
   độc lập trên snapshot sau thay đổi và mọi checkpoint vẫn mở. Không product changelog entry: đây là
   thay đổi tiêu chí nghiệm thu/tài liệu, không phải feature.
+
+## Approved Change Record — CR02 (2026-10-29)
+
+Owner đã chọn **“Duyệt gói đề xuất”** cho [CR02 §8](CR02-PROPOSAL.md#8-gói-quyết-định-cho-owner):
+**D1=B, D2–D8=A**. Đây là approval thật cho changed parser/folder contract, không suy từ việc bắt đầu
+Sprint 11. Quyết định được ghi tại [D088](../.agents/memory/decisions.md); proposal, measurement protocol
+và corpus schema 3 là evidence đi kèm.
+
+- **Contract được duyệt.** Record chưa hiểu chỉ được đi qua khi bytes chính xác của record đã được
+  preserve bền vững, encrypted, đọc lại được trong cùng giao dịch journal/checkpoint (D1=B). Reference-only
+  vẫn là mặc định; preservation là owner opt-in theo nguồn/folder kèm retention (D2=A). Record khai báo
+  version/root mới là barrier: preserve tail nhưng không diễn giải tiếp (D3=A). Không lossy transcode;
+  record lỗi encoding chỉ recoverable qua preservation (D4=A). Chain identity chỉ được admit bởi
+  envelope validator độc lập của format/version; envelope không validate không cấp `id`/`parentId` và
+  tham chiếu sau đó bị refusal (D5=A). Không đi theo reparse point; entry bị loại với
+  `excluded_reparse_point`, không admit target của link, mỗi file vẫn qua final-path check (D6=A).
+  Cross-record parent validation dùng `omp_chain_reference_unresolved` (D7=A). Journal v2 chỉ được ghi
+  khi lần ghi thực sự chứa phần tử chỉ có ở v2 (preserved span/status v2-only); source reference-only
+  giữ v1, đọc cả v1+v2, không auto-downgrade, schema v3+ fail closed (D8=A).
+- **Trạng thái là bốn facet độc lập**: `availability`, `preservation`, `interpretation`, `derivation`.
+  `preserved` không hàm ý `partially_interpreted`; `fully_supported` chỉ dùng khi mọi record hoàn chỉnh
+  đã diễn giải và không còn byte chưa xử lý ngoài tail dở dang. Mọi owner surface phải hiển thị facet
+  đúng, cùng `pending_tail_bytes`, `preserved_bytes`, `uninterpreted_records`, `last_diagnostic`.
+- **Requirement IDs giữ nguyên; không xóa/hạ mức requirement nào.** R16–R19, R29, R34, R36, R39, R40 được
+  làm rõ điều kiện nghiệm thu trong registry ở trên; R38 không đổi (không thêm ngưỡng hiệu năng mới).
+  R01–R15, R20–R28, R30–R33, R35, R37 giữ nguyên.
+- **Bảo vệ giữ nguyên.** Nguồn gốc vẫn read-only; preserved bytes là dữ liệu private bổ sung, encrypted
+  bằng cơ chế vault hiện có, nằm trong purge/backup/export/retention; diagnostic chỉ code + offset, không
+  echo transcript/body; lock dừng private ingestion và preservation; không grant/scope mới cho agent.
+- **Compatibility.** Vault/canonical format không đổi; upgrade 1.0 → 1.1 không rewrite journal cũ, không
+  migrate/reset dữ liệu; source fully supported phải giữ đúng event/span/digest như 1.0. "Additive" không
+  có nghĩa mọi journal chuyển sang v2.
+- **Chưa shipped.** Đây là contract approval, không phải product behavior: S11-T2–T5 chưa triển khai và
+  chưa có runtime/UI/CLI/MCP evidence. Corpus expectation không phải PASS sản phẩm. Approval không bao
+  gồm push/tag/publication, provider/network access, host/ACL/registry mutation hoặc migration dữ liệu 1.0;
+  các gate full-route và checkpoint vẫn giữ nguyên.

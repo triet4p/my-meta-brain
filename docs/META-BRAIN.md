@@ -230,6 +230,87 @@ Adapter Codex session JSONL (S3-T2, read-only, coordinator S3-T1) hỗ trợ đ�
 
 Adapter OMP session JSONL (S3-T3, read-only, coordinator S3-T1) hỗ trợ đúng schema đã quan sát trong một session OMP hoàn chỉnh được owner cho phép của project này (session record `version` 3, title record `v` 1; writer là OMP runtime; không có upstream format definition đọc được trong consent nên không claim shape chưa quan sát): envelope một JSON object mỗi dòng; `title` (`v` 1, không có event id nên identity neo theo byte offset), `session` (version 3, branch root mang session identity và cwd context), `message` (role `user`/`assistant`/`toolResult`; user-role chỉ thành user statement khi chính record khai báo attribution `user`; tool result không bao giờ thành user statement), `custom` (envelope `{customType, data}`, data không bao giờ được diễn giải), `custom_message` (envelope `{customType, content, display, details, attribution}` với attribution `user`→user, `agent`→assistant), `thinking_level_change`, `service_tier_change`, `credential_pin`, `title_change`, `compaction` (giữ `firstKeptEntryId` boundary đã validate). Content parts hỗ trợ `text`, `thinking`, `toolCall`. Timestamp envelope là ISO-8601 UTC (`updatedAt` ở title record); message body mang `message.timestamp` dạng epoch-millis và đó là instant event giữ. Định dạng owner khai báo là `omp.session.jsonl` phiên bản 1. Chuỗi id/parentId được giữ nguyên qua event identity (null parent là chain root/branch origin); mỗi bản ghi chấp nhận tạo đúng một event reference-only (identity, attribution, thời gian UTC, digest và span chính xác), không copy body. Bất kỳ record/shape/role/part/stop-reason/attribution/version ngoài tập đã quan sát bị từ chối tường minh kèm diagnostic đặt tên tại đúng offset; checkpoint không bao giờ vượt qua byte chưa giải thích và không có silent drop. Giới hạn đã biết: mẫu thật chứa đúng một session (617 records) nên branch/fork đa nhánh chỉ được chứng minh trên fixture tổng hợp; session writer version khác 3 hoặc title `v` khác 1 bị từ chối thay vì stretch.
 
+### 8.1. Approved contract — folder enrollment và raw-preserved parsing (CR02/D088, 2026-10-29)
+
+Owner đã duyệt [CR02](CR02-PROPOSAL.md) với **D1=B, D2–D8=A**; quyết định tại
+[D088](../.agents/memory/decisions.md) và change record tại
+[REQUIREMENTS](REQUIREMENTS.md). Đây là contract đã duyệt cho
+S11-T2–T5, **chưa phải hành vi đã ship**: binary 1.0.0 vẫn fail-closed như mô tả ở trên, và các mục
+dưới đây chỉ trở thành product behavior khi task tương ứng có evidence/gate riêng.
+
+**Bốn facet trạng thái độc lập.** Surface owner không được gộp trạng thái thành một nhãn ok/error:
+
+| Facet | Giá trị | Ý nghĩa |
+| --- | --- | --- |
+| `availability` | `available`, `missing`, `changed`, `locked`, `unreadable`, `empty` | Quan sát trên generation/locator hiện tại; `empty` tách khỏi `unreadable` |
+| `preservation` | `reference_only`, `preserved(retention)` | Bytes gốc của generation/record nằm encrypted trong vault; mặc định `reference_only` |
+| `interpretation` | `fully_supported`, `partially_interpreted`, `uninterpreted`, `empty` | Mức hiểu **đã đạt**, không phải mức sẽ đạt |
+| `derivation` | `not_indexed`, `indexed_text` | 1.1.0 giữ `not_indexed`; không thêm source text indexing |
+
+`preserved` không hàm ý `partially_interpreted`; `partially_interpreted` không hàm ý `preserved`.
+`fully_supported` chỉ dùng khi mọi record hoàn chỉnh đã được diễn giải và không còn byte chưa xử lý
+ngoài tail dở dang. Status owner phải kèm `pending_tail_bytes`, `preserved_bytes`,
+`uninterpreted_records` và `last_diagnostic {code, offset}`; remediation theo file/offset, không echo
+transcript.
+
+**Đơn vị lỗi và continuation (D1=B).** Đơn vị là một record hoàn chỉnh theo framing của format (JSONL:
+một dòng kết thúc `\n`). Record chưa diễn giải được chỉ được vượt qua khi bytes chính xác của record đó
+đã được lưu bền vững, encrypted và đọc lại được trong cùng giao dịch journal/checkpoint; khi đó record
+là preserved-uninterpreted và checkpoint được phép đi qua. Không có "skip bytes rồi tiếp tục" khi chưa
+preserve; tail dở dang (`NeedMoreBytes`) không bao giờ được preserve như record và không bao giờ đẩy
+checkpoint.
+
+**Version/root barrier (D3=A).** Record khai báo version mới của format/root (ví dụ OMP
+`session.version > 3`) là barrier: preserve tail nếu owner bật preservation nhưng **không** diễn giải
+tiếp, vì version mới có thể đổi nghĩa toàn bộ phần sau. Status phân biệt `unprocessed_bytes` (chưa
+preserve) với `preserved_pending_bytes` (đã preserve nhưng checkpoint chưa qua barrier).
+
+**Encoding (D4=A).** Không lossy transcode, không thay byte lỗi bằng `U+FFFD` rồi coi là đã đọc. BOM và
+UTF-8 lỗi theo cùng luật: framing xác định thì preservable, nhưng không có BOM tolerance ngầm.
+
+**Offset, attribution, coverage.** Offset tuyệt đối theo byte trong generation đã enroll, không theo ký
+tự/dòng. Span do coordinator gán `[start, end)`; normalizer không tự khai span. `[0, checkpoint)` phải
+phủ kín bởi event span hoặc preserved span rời nhau, không lỗ hổng. Với `reference_only`, suffix
+`[checkpoint, size)` là vùng chưa xử lý hợp lệ và phải báo `unprocessed_bytes`; với `preserved`, suffix
+chỉ được còn `pending_tail_bytes`. Attribution chỉ từ khai báo của nguồn: record chưa hiểu không có
+author, không suy `User` từ tên file/folder/cwd/nội dung; preserved bytes không được trả như memory
+evidence hay citation.
+
+**Chain identity (D5=A, D7=A).** Preserved node chỉ được admit `id`/`parentId` khi envelope của record đã
+được validator độc lập của format/version chấp nhận (JSON object, `type` non-empty string, token `id`,
+`parentId` null/token, timestamp hợp lệ) — độc lập với `type`/payload đã biết. Envelope không validate
+(JSON/encoding/version barrier/thiếu field) không cấp identity; record sau trỏ tới id không được admit
+phải refusal `omp_chain_reference_unresolved`, không được chain-valid. Không suy identity/author từ
+path/folder/cwd/text/vị trí.
+
+**Preservation consent và retention (D2=A).** Preservation là hành động owner, bật theo nguồn/folder,
+mặc định tắt. Bytes preserve dùng đúng cơ chế encrypted vault hiện có (không crypto/key store mới),
+không plaintext scratch/log/temp. Preserved span gắn `(source, generation, offset, length, digest)` và
+đọc lại phải trả đúng bytes gốc, verify digest. Preserved bytes nằm trong purge/backup/export/retention
+và không đi qua MCP/catalog hay cấp quyền agent mới. Không bật preservation thì phải nói rõ khả năng đọc
+lại phụ thuộc nguồn.
+
+**Checkpoint, crash, thay đổi nguồn.** Journal + checkpoint vẫn là một resource write nguyên tử.
+Retry không tạo event trùng; preserved span idempotent theo `(offset, length, digest)`. Crash trước
+commit giữ revision cũ; append giữ anchor cũ; truncation/replacement vẫn quarantine (`generation_truncated`
+/ `generation_replaced`), không splice generation mới, preserved span của generation cũ không thành
+evidence của generation mới. Pause/lock dừng đọc private và preservation.
+
+**Journal compatibility (D8=A).** Journal v2 chỉ được ghi khi lần ghi thực sự chứa ít nhất một phần tử
+chỉ có ở v2 (preserved span hoặc record status v2-only); source reference-only tiếp tục ghi v1 và giữ
+hành vi 1.0. Reader 1.1 đọc v1+v2; schema v3+ fail closed, không đoán/rebuild; không auto-downgrade
+source đã ghi v2. Upgrade 1.0 → 1.1 không rewrite journal cũ, không migrate vault; source fully
+supported phải giữ đúng event/span/digest như 1.0.
+
+**Folder enrollment và reparse boundary (D6=A).** Đơn vị enroll là root do owner chọn tường minh, kèm
+include/exclude tường minh và preview trước khi xác nhận một lần; không mặc định scan home/profile hay
+toàn ổ đĩa. Enumeration không đi theo reparse point (symlink, junction, mount point); entry bị loại với
+lý do `excluded_reparse_point`, không vào allowlist, không được coi là file mới. Không admit path ngoài
+root và target của link không tự thành nguồn. Mỗi file admit vẫn qua reader hiện tại: final-path equality
+với locator, từ chối reparse/directory, share mode đọc không cho writer, kiểm tra độ dài ổn định. TOCTOU
+được thu hẹp bởi final-path check, không tuyên bố loại trừ tuyệt đối. Path Windows so sánh
+case-insensitive; không đổi ACL/permission hay cấu hình host.
+
 ## 9. Research và cấu trúc hóa
 
 Đầu vào bắt buộc là ô nhập văn bản phi cấu trúc, chọn zone, có thể thêm URL/tác giả/ngày nguồn. Không cần crawler hay PDF parser để sử dụng được. URL chỉ là locator, không tự chứng minh đã đọc bài gốc.
