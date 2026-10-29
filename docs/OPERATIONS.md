@@ -349,6 +349,22 @@ cli\MetaBrain.Cli.exe owner request-approve --control-pipe <pipe> --request-id <
   new path; the typed `APPROVE` mints the single-use token into that DPAPI-protected file. Give
   the path to the agent, which redeems it with `metabrain_redeem` into its own session file.
 
+### 3.2.3 Owner-selected folder source enrollment (S11-T2)
+
+Use the owner CLI only with an unlocked vault. Select one absolute folder and declare recursion and include/exclude globs explicitly; `--exclude-globs none` means no exclusions. The preview is bounded and metadata-only. Type `ENROLL` once to confirm the exact preview; any other input or end-of-input cancels without changing membership.
+
+```text
+cli\MetaBrain.Cli.exe owner source-folder-enroll --control-pipe "<pipe>" --folder "<absolute-folder>" --zone-id <zone> --format <format> --format-version <N> --recursive true|false --include-globs "<glob[,glob...]>" --exclude-globs "<glob[,glob...]|none>"
+```
+
+Include globs are required. Each include/exclude list allows at most 16 unique relative patterns of at most 256 characters; patterns cannot contain absolute paths, drive/colon syntax, `.` or `..` segments. `*`, `?` and `**` are supported. Enumeration stops at 512 visited entries, and every included locator must fit the source registry's 512-character limit.
+
+Only the selected root is examined; Meta Brain does not scan home/profile folders. A selected root is refused if any component from its volume root through the selected folder is a reparse point. Reparse entries found below the selected root are excluded, and their targets are never admitted. Confirmation re-enumerates the preview and reads selected files only through the existing bounded source reader to record anchors; it registers encrypted source metadata, not source bodies. A duplicate is idempotent only when the confirmed selection and membership still match; later folder changes are not adopted automatically.
+
+Before creating canonical source records, enrollment writes their opaque IDs to the existing encrypted source-enrollment state. If enrollment is interrupted, unlock removes any still-uncommitted records before granting vault operations. If a storage failure prevents in-process cleanup and the command reports `source_folder_recovery_pending`, further vault operations remain refused in that unlocked epoch; resolve the storage failure, then run `owner lock` followed by `owner unlock` so recovery can retry. The recovery marker contains IDs only, not source content or paths.
+
+Enumeration and source reading are separate filesystem operations. The reader's final-path/handle checks narrow the race and fail closed when the path changes, but do not eliminate every time-of-check/time-of-use window.
+
 ### 3.3 The owner console (S9-T4)
 
 The packaged console is `owner-ui/MetaBrain.OwnerUi.exe`. It opens on the **Owner session**

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using MetaBrain.Core.Domain;
 using MetaBrain.Core.Index;
 using MetaBrain.Core.Security;
 
@@ -22,6 +23,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
     private CancellationTokenSource? _lockCancellation;
     private CancellationTokenSource _refreshCancellation = new();
     private long _lockEpoch;
+    private volatile bool _sourceEnrollmentRecoveryRequired;
 
     public VaultLifecycle(EncryptedVaultStore store)
     {
@@ -101,6 +103,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
                 // files are never visible to readers; reaping them here keeps
                 // no half-published state across restarts.
                 _store.ReconcileUnpublished(manifest);
+                RecoverPendingFolderRegistrations();
                 BumpUnlockEpochLocked();
                 ResetRefreshSignalLocked();
                 _lockEpoch++;
@@ -157,7 +160,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
     {
         lock (_stateGate)
         {
-            if (_dataKey is null || _locking || _maintenance)
+            if (_dataKey is null || _locking || _maintenance || _sourceEnrollmentRecoveryRequired)
             {
                 return null;
             }
@@ -290,6 +293,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
     {
         lock (_contentGate)
         {
+            EnsureSourceEnrollmentRecoveryComplete();
             if (_manifest is null)
             {
                 zoneId = null;
@@ -304,6 +308,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
     {
         lock (_contentGate)
         {
+            EnsureSourceEnrollmentRecoveryComplete();
             if (_manifest is null)
             {
                 throw new ManagedResourceUnavailableException();
@@ -391,6 +396,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
     {
         lock (_contentGate)
         {
+            EnsureSourceEnrollmentRecoveryComplete();
             if (_manifest is null || _dataKey is null)
             {
                 throw new ManagedResourceUnavailableException();
@@ -402,10 +408,45 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
     }
 
     private T UpdateSourceEnrollmentState<T>(
-        Func<SourceEnrollmentState, (SourceEnrollmentState State, T Result)> update)
+        Func<SourceEnrollmentState, (SourceEnrollmentState State, T Result)> update) =>
+        UpdateSourceEnrollmentStateWithRollback(update, rollback: null);
+    private void BeginFolderRegistrationRecovery(IReadOnlyList<string> sourceIds)
+    {
+        ArgumentNullException.ThrowIfNull(sourceIds);
+        var pendingIds = sourceIds.ToArray();
+        if (pendingIds.Length is <= 0 or > SourceIngestionLimits.MaximumEnrollments)
+        {
+            throw new ArgumentOutOfRangeException(nameof(sourceIds));
+        }
+
+        UpdateSourceEnrollmentState(state =>
+        {
+            if (state.PendingFolderSourceIds is { Length: > 0 })
+            {
+                throw new InvalidDataException("A folder registration recovery is already pending.");
+            }
+
+            return (state with { PendingFolderSourceIds = pendingIds }, true);
+        });
+    }
+
+    private void CompleteFolderRegistrationRecovery()
+    {
+        UpdateSourceEnrollmentState(state =>
+            (state with { PendingFolderSourceIds = Array.Empty<string>() }, true));
+        _sourceEnrollmentRecoveryRequired = false;
+    }
+
+    private void RequireFolderRegistrationRecovery() =>
+        _sourceEnrollmentRecoveryRequired = true;
+
+    private T UpdateSourceEnrollmentStateWithRollback<T>(
+        Func<SourceEnrollmentState, (SourceEnrollmentState State, T Result)> update,
+        Action? rollback)
     {
         lock (_contentGate)
         {
+            EnsureSourceEnrollmentRecoveryComplete();
             if (_manifest is null || _dataKey is null)
             {
                 throw new ManagedResourceUnavailableException();
@@ -413,17 +454,67 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
 
             var state = SourceEnrollmentAuthority.ValidateAndNormalizeState(
                 _store.LoadSourceEnrollmentState(_manifest, _dataKey));
-            var (nextState, result) = update(state);
-            if (!ReferenceEquals(nextState, state))
+            try
             {
-                nextState = SourceEnrollmentAuthority.ValidateAndNormalizeState(nextState);
-                _store.SaveSourceEnrollmentState(_manifest, _dataKey, nextState);
-            }
+                var (nextState, result) = update(state);
+                if (!ReferenceEquals(nextState, state))
+                {
+                    nextState = SourceEnrollmentAuthority.ValidateAndNormalizeState(nextState);
+                    _store.SaveSourceEnrollmentState(_manifest, _dataKey, nextState);
+                    if (nextState.PendingFolderSourceIds is not { Length: > 0 })
+                    {
+                        _sourceEnrollmentRecoveryRequired = false;
+                    }
+                }
 
-            return result;
+                return result;
+            }
+            catch
+            {
+                rollback?.Invoke();
+                throw;
+            }
         }
     }
 
+    private void RecoverPendingFolderRegistrations()
+    {
+        lock (_contentGate)
+        {
+            _sourceEnrollmentRecoveryRequired = true;
+            if (_manifest is null || _dataKey is null)
+            {
+                throw new ManagedResourceUnavailableException();
+            }
+
+            var state = SourceEnrollmentAuthority.ValidateAndNormalizeState(
+                _store.LoadSourceEnrollmentState(_manifest, _dataKey));
+            var pendingIds = state.PendingFolderSourceIds!;
+            for (var index = pendingIds.Length - 1; index >= 0; index--)
+            {
+                if (_manifest.FindResource(pendingIds[index]) is not null)
+                {
+                    _manifest = _store.DeleteResource(_manifest, _dataKey, pendingIds[index]);
+                }
+            }
+
+            if (pendingIds.Length > 0)
+            {
+                _store.SaveSourceEnrollmentState(
+                    _manifest, _dataKey, state with { PendingFolderSourceIds = Array.Empty<string>() });
+            }
+
+            _sourceEnrollmentRecoveryRequired = false;
+        }
+    }
+
+    private void EnsureSourceEnrollmentRecoveryComplete()
+    {
+        if (_sourceEnrollmentRecoveryRequired)
+        {
+            throw new ManagedResourceUnavailableException();
+        }
+    }
     private OwnerRecallPolicyState LoadRecallPolicyState()
     {
         lock (_contentGate)
@@ -581,6 +672,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
     {
         lock (_contentGate)
         {
+            EnsureSourceEnrollmentRecoveryComplete();
             if (_manifest is null || _dataKey is null)
             {
                 throw new ManagedResourceUnavailableException();
@@ -602,6 +694,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
     {
         lock (_contentGate)
         {
+            EnsureSourceEnrollmentRecoveryComplete();
             if (_manifest is null || _dataKey is null)
             {
                 throw new ManagedResourceUnavailableException();
@@ -633,6 +726,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
         CancellationTokenSource? lockCancellation;
         lock (_contentGate)
         {
+            EnsureSourceEnrollmentRecoveryComplete();
             if (_manifest is null || _dataKey is null)
             {
                 throw new ManagedResourceUnavailableException();
@@ -656,6 +750,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
     {
         lock (_contentGate)
         {
+            EnsureSourceEnrollmentRecoveryComplete();
             if (_manifest is null)
             {
                 throw new ManagedResourceUnavailableException();
@@ -669,6 +764,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
     {
         lock (_contentGate)
         {
+            EnsureSourceEnrollmentRecoveryComplete();
             if (_manifest is null || _dataKey is null)
             {
                 throw new ManagedResourceUnavailableException();
@@ -686,6 +782,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
     {
         lock (_contentGate)
         {
+            EnsureSourceEnrollmentRecoveryComplete();
             if (_manifest is null || _dataKey is null)
             {
                 throw new ManagedResourceUnavailableException();
@@ -862,6 +959,16 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
         public T UpdateSourceEnrollmentState<T>(
             Func<SourceEnrollmentState, (SourceEnrollmentState State, T Result)> update) =>
             GetOwner().UpdateSourceEnrollmentState(update);
+        public T UpdateSourceEnrollmentStateWithRollback<T>(
+            Func<SourceEnrollmentState, (SourceEnrollmentState State, T Result)> update,
+            Action rollback) =>
+            GetOwner().UpdateSourceEnrollmentStateWithRollback(update, rollback);
+        public void BeginFolderRegistrationRecovery(IReadOnlyList<string> sourceIds) =>
+            GetOwner().BeginFolderRegistrationRecovery(sourceIds);
+        public void CompleteFolderRegistrationRecovery() =>
+            GetOwner().CompleteFolderRegistrationRecovery();
+        public void RequireFolderRegistrationRecovery() =>
+            GetOwner().RequireFolderRegistrationRecovery();
         public OwnerRecallPolicyState LoadRecallPolicyState() => GetOwner().LoadRecallPolicyState();
         public T UpdateRecallPolicyState<T>(
             Func<OwnerRecallPolicyState, (OwnerRecallPolicyState State, T Result)> update) =>
@@ -891,7 +998,11 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
             Interlocked.Exchange(ref _owner, null)?.ReleaseOperation();
         }
 
-        private VaultLifecycle GetOwner() =>
-            _owner ?? throw new ObjectDisposedException(nameof(Operation));
+        private VaultLifecycle GetOwner()
+        {
+            var owner = _owner ?? throw new ObjectDisposedException(nameof(Operation));
+            owner.EnsureSourceEnrollmentRecoveryComplete();
+            return owner;
+        }
     }
 }

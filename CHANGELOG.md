@@ -5,6 +5,8 @@ All notable changes to Meta Brain are documented here.
 ## [Unreleased]
 
 ### Added
+
+- Added owner-selected `source-folder-enroll`: owners choose a folder with explicit recursive/include/exclude rules, inspect a bounded metadata-only preview, then confirm once; confirmed members use canonical encrypted source-registry records and the existing encrypted membership index, with exact duplicate enrollment remaining idempotent.
 - Added the MIT License for Meta Brain source and release packages, retaining `Copyright (c) 2026 triet4p` and keeping bundled third-party license terms separate.
 - Added a Vietnamese static landing page with product selection, quick starts, scenario navigation, security boundaries, release information and a local-only, checksum-verified candidate preview.
 
@@ -119,6 +121,8 @@ All notable changes to Meta Brain are documented here.
 
 ### Fixed
 
+- Fixed owner-selected folder enrollment so cancellation, a later registration failure, or an encrypted membership-state persistence failure rolls back newly created canonical source registrations, and selected folders beneath reparse-point ancestors are refused.
+- Fixed folder enrollment persisting a recovery marker in the encrypted source-enrollment state before canonical registration; the next unlock removes any uncommitted records before vault operations resume, including after process interruption or a failed manifest delete.
 - Fixed the packaged owner CLI writing owner content through the console's active code page (S9-T7). On a non-UTF-8 console (the default Windows OEM page), non-ASCII text such as Vietnamese was printed with `?` substitutions, and redirected output was not valid UTF-8 even though the vault, the owner console, the JSON preview and the MCP transport held the exact text. `cli/MetaBrain.Cli.exe` now writes its output as UTF-8, and it restores the terminal's previous code page when the command exits. The `request-approve` help and the CLI quick starts also state that `--operations` must repeat the operations the preview printed: omitting it narrows the approval to `resource.read`, which the service refuses as `request_invalid` when the request asked for other operations.
 - Fixed uninstall leaving the application files behind (S9-T6). The uninstall now schedules the install-root removal before it clears its own self-contained runtime directory, so the helper's process APIs are still on disk when it starts, and it passes one correctly quoted `cmd /d /s /c` line (the previous argument list escaped the inner quotes as `\"`, which `cmd` does not unescape, so `rmdir` failed). The `cli/` and `mcp/` directories are now removed with the rest of the application, and the data root, vault, source snapshots, backups and recovery material are still always kept.
 - Fixed `metabrain_authorize` returning CLI usage instead of a scoped allow/deny decision for valid session, operation and resource arguments (S8-T6). The owner CLI now dispatches the command to its existing authorization handler without changing the policy boundary or exposing content.

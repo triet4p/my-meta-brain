@@ -91,6 +91,18 @@ public sealed record SourceEnrollmentStatus(
     long JournalCiphertextBytes = 0,
     long SnapshotCiphertextBytes = 0,
     long SnapshotRevision = 0);
+public sealed record SourceFolderPreviewResult(
+    string PreviewId,
+    SourceFolderEnrollmentDraft Selection,
+    SourceFolderEnumeration Enumeration,
+    DateTimeOffset ExpiresAtUtc);
+
+internal sealed record PendingSourceFolderPreview(
+    SourceFolderEnrollmentDraft Selection,
+    SourceFolderEnumeration Enumeration,
+    DateTimeOffset ExpiresAtUtc);
+
+
 
 /// <summary>
 /// S3-T1 source enrollment and incremental ingestion coordinator.
@@ -117,18 +129,25 @@ public sealed record SourceEnrollmentStatus(
 /// </summary>
 public sealed class SourceIngestionCoordinator
 {
+    private static readonly TimeSpan FolderPreviewLifetime = TimeSpan.FromMinutes(5);
+    private const int MaximumPendingFolderPreviews = 32;
     private readonly SourceEnrollmentAuthority _enrollments;
     private readonly SourceNormalizerRegistry _normalizers;
     private readonly ISourceSnapshotReader _reader;
+    private readonly ISourceFolderEnumerator? _folderEnumerator;
+    private readonly object _folderPreviewGate = new();
+    private readonly Dictionary<string, PendingSourceFolderPreview> _folderPreviews = new(StringComparer.Ordinal);
 
     public SourceIngestionCoordinator(
         SourceEnrollmentAuthority enrollments,
         SourceNormalizerRegistry normalizers,
-        ISourceSnapshotReader reader)
+        ISourceSnapshotReader reader,
+        ISourceFolderEnumerator? folderEnumerator = null)
     {
         _enrollments = enrollments ?? throw new ArgumentNullException(nameof(enrollments));
         _normalizers = normalizers ?? throw new ArgumentNullException(nameof(normalizers));
         _reader = reader ?? throw new ArgumentNullException(nameof(reader));
+        _folderEnumerator = folderEnumerator;
     }
 
     public EnrolledSource Enroll(
@@ -171,6 +190,377 @@ public sealed class SourceIngestionCoordinator
             CryptographicOperations.ZeroMemory(snapshot.Content);
         }
     }
+
+    /// <summary>
+    /// Enumerates a single owner-selected folder without reading file contents.
+    /// The short-lived preview is process memory only; nothing is enrolled
+    /// until the caller submits the one explicit confirmation.
+    /// </summary>
+    public SourceFolderPreviewResult PreviewFolder(
+        AuthenticatedContext owner,
+        SourceFolderEnrollmentDraft selection,
+        ISourceEnrollmentPersistence persistence,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        ArgumentNullException.ThrowIfNull(persistence);
+        if (owner.Kind != PrincipalKind.Owner)
+        {
+            throw new UnauthorizedAccessException("Only the owner may preview source-folder enrollment.");
+        }
+
+        var enumerator = _folderEnumerator ?? throw new SourceOperationException("source_folder_unavailable");
+        var normalizedSelection = SourceFolderEnrollmentGrammar.NormalizeDraft(selection);
+        // Fail closed on corrupt enrollment metadata before showing a preview.
+        _ = _enrollments.List(owner, persistence);
+        var enumeration = enumerator.Enumerate(
+            normalizedSelection.RootLocator,
+            normalizedSelection.Recursive,
+            normalizedSelection.IncludePatterns,
+            normalizedSelection.ExcludePatterns,
+            cancellationToken);
+        var previewId = Guid.NewGuid().ToString("N");
+        var expiresAtUtc = DateTimeOffset.UtcNow.Add(FolderPreviewLifetime);
+        lock (_folderPreviewGate)
+        {
+            RemoveExpiredFolderPreviews(DateTimeOffset.UtcNow);
+            if (_folderPreviews.Count >= MaximumPendingFolderPreviews)
+            {
+                throw new SourceOperationException("source_folder_preview_limit");
+            }
+
+            _folderPreviews.Add(previewId, new PendingSourceFolderPreview(
+                normalizedSelection, enumeration, expiresAtUtc));
+        }
+
+        return new SourceFolderPreviewResult(previewId, normalizedSelection, enumeration, expiresAtUtc);
+    }
+
+    /// <summary>
+    /// Re-enumerates and verifies the preview, anchors every selected file
+    /// through the existing bounded source reader, and creates canonical
+    /// registry metadata. A write-ahead encrypted ID journal makes every new
+    /// registration recoverable across process interruption; live compensation
+    /// is still attempted when registration or membership persistence fails.
+    /// </summary>
+    public SourceFolderEnrollmentResult EnrollFolder(
+        AuthenticatedContext owner,
+        string previewId,
+        string confirmation,
+        IVaultOperation operation,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        ArgumentNullException.ThrowIfNull(operation);
+        if (owner.Kind != PrincipalKind.Owner)
+        {
+            throw new UnauthorizedAccessException("Only the owner may enroll a source folder.");
+        }
+
+        if (!string.Equals(confirmation, "ENROLL", StringComparison.Ordinal) ||
+            !Guid.TryParseExact(previewId, "N", out _))
+        {
+            throw new SourceOperationException("source_folder_confirmation_invalid");
+        }
+
+        PendingSourceFolderPreview pending;
+        lock (_folderPreviewGate)
+        {
+            RemoveExpiredFolderPreviews(DateTimeOffset.UtcNow);
+            if (!_folderPreviews.Remove(previewId, out pending!))
+            {
+                throw new SourceOperationException("source_folder_preview_expired");
+            }
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var enumerator = _folderEnumerator ?? throw new SourceOperationException("source_folder_unavailable");
+        var currentEnumeration = enumerator.Enumerate(
+            pending.Selection.RootLocator,
+            pending.Selection.Recursive,
+            pending.Selection.IncludePatterns,
+            pending.Selection.ExcludePatterns,
+            cancellationToken);
+        if (!SameEnumeration(pending.Enumeration, currentEnumeration))
+        {
+            throw new SourceOperationException("source_folder_preview_stale");
+        }
+
+        var included = currentEnumeration.Entries.Where(entry => entry.Included).ToArray();
+        if (included.Length == 0)
+        {
+            throw new SourceOperationException("source_folder_empty");
+        }
+
+        if (included.Length > SourceIngestionLimits.MaximumEnrollments)
+        {
+            throw new SourceOperationException("source_folder_limit");
+        }
+
+        var sourceIds = included.Select(entry =>
+            SourceFolderEnrollmentGrammar.MemberSourceIdFor(pending.Selection.RootLocator, entry.RelativePath)).ToArray();
+        var orderedSourceIds = sourceIds.OrderBy(sourceId => sourceId, StringComparer.Ordinal).ToArray();
+        var validatedState = SourceEnrollmentAuthority.ValidateAndNormalizeState(operation.LoadSourceEnrollmentState());
+        var folderId = SourceFolderEnrollmentGrammar.FolderIdFor(pending.Selection.RootLocator);
+        var existingFolder = SourceFolderEnrollmentAuthority.FindFolder(validatedState, folderId);
+        if (existingFolder is not null)
+        {
+            if (!SameSelection(existingFolder, pending.Selection))
+            {
+                throw new SourceOperationException("source_folder_conflict");
+            }
+
+            if (!existingFolder.MemberSourceIds.SequenceEqual(orderedSourceIds, StringComparer.Ordinal))
+            {
+                throw new SourceOperationException("source_folder_membership_changed");
+            }
+
+            var existingMembers = orderedSourceIds.Select(sourceId =>
+                    SourceEnrollmentAuthority.FindEnrollment(validatedState, sourceId) ??
+                    throw new InvalidDataException("The folder membership references a missing enrollment."))
+                .ToArray();
+            return new SourceFolderEnrollmentResult(existingFolder, existingMembers, AlreadyEnrolled: true);
+        }
+
+        var purgeState = OwnerPurgeLedgerAuthority.ValidateAndNormalizeState(operation.LoadPurgeLedgerState());
+        var purgedResourceIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var intent in purgeState.Intents)
+        {
+            purgedResourceIds.Add(intent.TargetResourceId);
+            foreach (var impacted in intent.Impacted)
+            {
+                purgedResourceIds.Add(impacted.ResourceId);
+            }
+        }
+
+        if (sourceIds.Any(purgedResourceIds.Contains))
+        {
+            throw new SourceOperationException("resource_purged");
+        }
+
+        var additionalEnrollments = sourceIds.Count(sourceId =>
+            SourceEnrollmentAuthority.FindEnrollment(validatedState, sourceId) is null);
+        if (validatedState.Enrollments.Length + additionalEnrollments > SourceIngestionLimits.MaximumEnrollments)
+        {
+            throw new SourceOperationException("source_folder_limit");
+        }
+
+        var anchors = new SourceFolderMemberAnchor[included.Length];
+        for (var index = 0; index < included.Length; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var entry = included[index];
+            var snapshot = _reader.TryReadSnapshot(entry.Locator, cancellationToken);
+            if (snapshot.Status != SourceSnapshotStatus.Snapshot || snapshot.Content is not { Length: > 0 } content)
+            {
+                throw new SourceOperationException(
+                    snapshot.Status switch
+                    {
+                        SourceSnapshotStatus.TooLarge => "source_too_large",
+                        SourceSnapshotStatus.Missing => "source_missing",
+                        SourceSnapshotStatus.Snapshot => "source_empty",
+                        _ => "source_locator_unreadable"
+                    });
+            }
+
+            try
+            {
+                anchors[index] = new SourceFolderMemberAnchor(
+                    sourceIds[index],
+                    entry.RelativePath,
+                    entry.Locator,
+                    content.Length,
+                    SourceFingerprint.Compute(content));
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(content);
+            }
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return SourceFolderEnrollmentAuthority.Enroll(owner, pending.Selection, anchors, operation,
+            () => RegisterFolderSources(owner, pending.Selection, anchors, operation, cancellationToken));
+    }
+
+    private static Action RegisterFolderSources(
+        AuthenticatedContext owner,
+        SourceFolderEnrollmentDraft selection,
+        IReadOnlyList<SourceFolderMemberAnchor> members,
+        IVaultOperation operation,
+        CancellationToken cancellationToken)
+    {
+        if (members.Any(member => member.Locator.Length > RegisteredSourceCodec.MaximumLocatorLength))
+        {
+            throw new SourceOperationException("source_folder_registry_locator_too_long");
+        }
+
+        var registry = new SourceRegistryService();
+        var missing = new List<SourceFolderMemberAnchor>();
+        foreach (var member in members)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var revision = SourceRegistryService.TryGetLiveRevision(operation, member.SourceId);
+            if (revision is null)
+            {
+                missing.Add(member);
+                continue;
+            }
+
+            RegisteredSource source;
+            try
+            {
+                source = registry.Read(owner, member.SourceId, revision, operation);
+            }
+            catch (ArgumentException ex)
+            {
+                throw new SourceOperationException("source_folder_registry_conflict", ex);
+            }
+
+            string registeredLocator;
+            try
+            {
+                registeredLocator = SourceEnrollmentGrammar.NormalizeLocator(source.Locator ?? string.Empty);
+            }
+            catch (ArgumentException ex)
+            {
+                throw new SourceOperationException("source_folder_registry_conflict", ex);
+            }
+
+            if (!string.Equals(source.Id, member.SourceId, StringComparison.Ordinal) ||
+                source.Text is not null ||
+                !string.Equals(source.ZoneId, selection.ZoneId, StringComparison.Ordinal) ||
+                !string.Equals(registeredLocator, member.Locator, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new SourceOperationException("source_folder_registry_conflict");
+            }
+        }
+
+        if (missing.Count == 0)
+        {
+            return static () => { };
+        }
+
+        var pendingIds = missing.Select(member => member.SourceId).ToArray();
+        operation.BeginFolderRegistrationRecovery(pendingIds);
+        try
+        {
+            foreach (var member in missing)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var draft = RegisteredSourceCodec.EncodeDraft(new RegisteredSourceDraft(
+                    Title: null,
+                    Locator: member.Locator,
+                    Version: null,
+                    Availability: SourceAvailability.Available,
+                    CreationMethod: CreationMethod.DirectWrite,
+                    CapturedAtUtc: null,
+                    RecordedAtUtc: DateTimeOffset.UtcNow));
+                try
+                {
+                    _ = registry.Create(owner, member.SourceId, selection.ZoneId, draft, operation);
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+                catch (ArgumentException ex)
+                {
+                    throw new SourceOperationException("source_folder_registry_conflict", ex);
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(draft);
+                }
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch
+        {
+            var rollbackFailure = RollbackFolderSourceRegistrations(operation, pendingIds);
+            if (rollbackFailure is not null)
+            {
+                throw new SourceOperationException("source_folder_recovery_pending", rollbackFailure);
+            }
+
+            throw;
+        }
+
+        return () =>
+        {
+            var rollbackFailure = RollbackFolderSourceRegistrations(operation, pendingIds);
+            if (rollbackFailure is not null)
+            {
+                throw new SourceOperationException("source_folder_recovery_pending", rollbackFailure);
+            }
+        };
+    }
+
+    private static Exception? RollbackFolderSourceRegistrations(
+        IVaultOperation operation,
+        IReadOnlyList<string> pendingIds)
+    {
+        Exception? firstFailure = null;
+        for (var index = pendingIds.Count - 1; index >= 0; index--)
+        {
+            try
+            {
+                _ = operation.DeleteCanonicalResource(pendingIds[index]);
+            }
+            catch (Exception ex)
+            {
+                firstFailure ??= ex;
+            }
+        }
+
+        if (firstFailure is null)
+        {
+            try
+            {
+                operation.CompleteFolderRegistrationRecovery();
+            }
+            catch (Exception ex)
+            {
+                firstFailure = ex;
+            }
+        }
+
+        if (firstFailure is not null)
+        {
+            operation.RequireFolderRegistrationRecovery();
+        }
+
+        return firstFailure;
+    }
+
+    private void RemoveExpiredFolderPreviews(DateTimeOffset now)
+    {
+        foreach (var previewId in _folderPreviews
+                     .Where(pair => pair.Value.ExpiresAtUtc <= now)
+                     .Select(pair => pair.Key)
+                     .ToArray())
+        {
+            _folderPreviews.Remove(previewId);
+        }
+    }
+
+    private static bool SameEnumeration(
+        SourceFolderEnumeration expected,
+        SourceFolderEnumeration actual) =>
+        string.Equals(expected.RootLocator, actual.RootLocator, StringComparison.OrdinalIgnoreCase) &&
+        expected.Entries.Length == actual.Entries.Length &&
+        expected.Entries.Zip(actual.Entries).All(pair =>
+            string.Equals(pair.First.RelativePath, pair.Second.RelativePath, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(pair.First.Locator, pair.Second.Locator, StringComparison.OrdinalIgnoreCase) &&
+            pair.First.Included == pair.Second.Included &&
+            string.Equals(pair.First.ExclusionReason, pair.Second.ExclusionReason, StringComparison.Ordinal));
+
+    private static bool SameSelection(SourceFolderEnrollment folder, SourceFolderEnrollmentDraft selection) =>
+        string.Equals(folder.RootLocator, selection.RootLocator, StringComparison.Ordinal) &&
+        string.Equals(folder.ZoneId, selection.ZoneId, StringComparison.Ordinal) &&
+        string.Equals(folder.Format, selection.Format, StringComparison.Ordinal) &&
+        folder.FormatVersion == selection.FormatVersion &&
+        folder.Recursive == selection.Recursive &&
+        folder.IncludePatterns.SequenceEqual(selection.IncludePatterns, StringComparer.Ordinal) &&
+        folder.ExcludePatterns.SequenceEqual(selection.ExcludePatterns, StringComparer.Ordinal);
     public EnrolledSource Relocate(
         AuthenticatedContext owner,
         string sourceId,

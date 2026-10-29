@@ -900,10 +900,11 @@ internal sealed class EncryptedVaultStore
     }
 
     /// <summary>
-    /// S3-T1 owner source enrollment state (allowlist + quarantine). Same
-    /// dedicated-file pattern as the scope-grant and catalog states: bound to
-    /// the vault and schema, written atomically, never a resource envelope and
-    /// never part of the approved catalog.
+    /// S3-T1/S11-T2 owner source enrollment state (allowlist, folder index and
+    /// pending canonical-registration recovery IDs). The schema-2 state uses
+    /// the same dedicated encrypted-file pattern as scope grants and catalogs,
+    /// and schema 1 is migrated on load. It is atomically replaced, never a
+    /// canonical resource and never part of the approved catalog.
     /// </summary>
     public SourceEnrollmentState LoadSourceEnrollmentState(VaultManifest manifest, ReadOnlySpan<byte> dataKey)
     {
@@ -933,12 +934,40 @@ internal sealed class EncryptedVaultStore
             var json = PrivateFile.Read(_sourceEnrollmentPath, MaximumSourceEnrollmentEnvelopeBytes).Text;
             var envelope = JsonSerializer.Deserialize<EncryptedPayload>(json, JsonOptions)
                 ?? throw new InvalidDataException("Invalid encrypted source enrollment envelope.");
+            var decryptedSchemaVersion = SourceEnrollmentState.CurrentSchemaVersion;
             associatedData = ResourceAssociatedData(
-                manifest.VaultId, "source-enrollment", SourceEnrollmentState.CurrentSchemaVersion, 1);
-            plaintext = DecryptPayload(
-                envelope, dataKey, associatedData, SourceEnrollmentState.CurrentSchemaVersion, 1, MaximumSourceEnrollmentBytes);
-            return JsonSerializer.Deserialize<SourceEnrollmentState>(plaintext, JsonOptions)
+                manifest.VaultId, "source-enrollment", decryptedSchemaVersion, 1);
+            try
+            {
+                plaintext = DecryptPayload(
+                    envelope, dataKey, associatedData, decryptedSchemaVersion, 1, MaximumSourceEnrollmentBytes);
+            }
+            catch (CryptographicException)
+            {
+                CryptographicOperations.ZeroMemory(associatedData);
+                decryptedSchemaVersion = SourceEnrollmentState.PreviousSchemaVersion;
+                associatedData = ResourceAssociatedData(
+                    manifest.VaultId, "source-enrollment", decryptedSchemaVersion, 1);
+                plaintext = DecryptPayload(
+                    envelope, dataKey, associatedData, decryptedSchemaVersion, 1, MaximumSourceEnrollmentBytes);
+            }
+
+            var persisted = JsonSerializer.Deserialize<SourceEnrollmentState>(plaintext, JsonOptions)
                 ?? throw new InvalidDataException("Invalid encrypted source enrollment state.");
+            if (persisted.SchemaVersion != decryptedSchemaVersion)
+            {
+                throw new InvalidDataException("The encrypted source enrollment schema does not match its envelope.");
+            }
+
+            var normalized = persisted.SchemaVersion == SourceEnrollmentState.PreviousSchemaVersion
+                ? SourceEnrollmentAuthority.ValidateAndNormalizeState(persisted)
+                : persisted;
+            if (normalized.SchemaVersion != persisted.SchemaVersion)
+            {
+                SaveSourceEnrollmentState(manifest, dataKey, normalized);
+            }
+
+            return normalized;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or
                                    CryptographicException or ArgumentException or FormatException or OverflowException)
@@ -964,7 +993,8 @@ internal sealed class EncryptedVaultStore
         ReadOnlySpan<byte> dataKey,
         SourceEnrollmentState state)
     {
-        var plaintext = JsonSerializer.SerializeToUtf8Bytes(state, JsonOptions);
+        var normalized = SourceEnrollmentAuthority.ValidateAndNormalizeState(state);
+        var plaintext = JsonSerializer.SerializeToUtf8Bytes(normalized, JsonOptions);
         if (plaintext.Length is <= 0 or > MaximumSourceEnrollmentBytes)
         {
             CryptographicOperations.ZeroMemory(plaintext);

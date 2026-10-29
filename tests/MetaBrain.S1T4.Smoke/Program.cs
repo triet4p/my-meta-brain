@@ -6,6 +6,12 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
+        if (args.Length == 5 && string.Equals(args[0], "s11-t2-recovery-crash-worker", StringComparison.Ordinal))
+        {
+            await OwnerServiceSmoke.RunS11T2RecoveryCrashWorkerAsync(
+                args[1], args[2], args[3], args[4]).ConfigureAwait(false);
+            return 0;
+        }
         var scenario = args.Length == 2 &&
             (string.Equals(args[0], "scope-issue", StringComparison.Ordinal) ||
              string.Equals(args[0], "agent-session", StringComparison.Ordinal) ||
@@ -63,7 +69,8 @@ internal static class Program
                 string.Equals(args[0], "s8-t2-ui", StringComparison.Ordinal) ||
                 string.Equals(args[0], "s8-t4", StringComparison.Ordinal) ||
                 string.Equals(args[0], "s8-t4-ui", StringComparison.Ordinal) ||
-                string.Equals(args[0], "s8-t6-authorize-dispatch", StringComparison.Ordinal))
+                string.Equals(args[0], "s8-t6-authorize-dispatch", StringComparison.Ordinal) ||
+                string.Equals(args[0], "s11-t2", StringComparison.Ordinal))
             ? args[0]
                 : args.Length == 5 &&
                   string.Equals(args[0], "s8-t5", StringComparison.Ordinal)
@@ -121,6 +128,7 @@ internal static class Program
             Console.Error.WriteLine("S8-T5 in-process index invocation: MetaBrain.S1T4.Smoke.exe s8-t5-index");
             Console.Error.WriteLine("S8-T5 lifecycle invocation: MetaBrain.S1T4.Smoke.exe s8-t5-lifecycle build|reopen <fixture-root>");
             Console.Error.WriteLine("S8-T6 authorization dispatch invocation: MetaBrain.S1T4.Smoke.exe s8-t6-authorize-dispatch <MetaBrain.Connections.exe>");
+            Console.Error.WriteLine("S11-T2 invocation: MetaBrain.S1T4.Smoke.exe s11-t2 <MetaBrain.Connections.exe>");
             return 2;
         }
 
@@ -185,6 +193,9 @@ internal static class Program
                     break;
                 case "s3-t6":
                     await OwnerServiceSmoke.RunS3T6OperationsAsync(fullPath).ConfigureAwait(false);
+                    break;
+                case "s11-t2":
+                    await OwnerServiceSmoke.RunS11T2FolderEnrollmentAsync(fullPath).ConfigureAwait(false);
                     break;
                 case "s4-t2":
                     await OwnerServiceSmoke.RunS4T2SearchAsync(fullPath).ConfigureAwait(false);

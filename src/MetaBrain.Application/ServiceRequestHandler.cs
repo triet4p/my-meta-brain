@@ -79,7 +79,13 @@ public sealed record ServiceRequest(
     int? OperationsLimit = null,
     int? RetentionDays = null,
     int? RetentionMaxRecords = null,
-    bool? PurgeOperationalLog = null);
+    bool? PurgeOperationalLog = null,
+    string? SourceFolderRoot = null,
+    bool? SourceFolderRecursive = null,
+    string[]? SourceFolderIncludePatterns = null,
+    string[]? SourceFolderExcludePatterns = null,
+    string? SourceFolderPreviewId = null,
+    string? SourceFolderConfirmation = null);
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
     ScopeResourceRevision[] Resources,
@@ -806,6 +812,32 @@ public sealed record SourceRefreshWire(
     int EventsAdded,
     int DiagnosticsAdded,
     string? DiagnosticCode);
+public sealed record SourceFolderEntryWire(string RelativePath, bool Included, string? ExclusionReason);
+
+public sealed record SourceFolderPreviewWire(
+    string PreviewId,
+    string RootLocator,
+    string ZoneId,
+    string Format,
+    int FormatVersion,
+    bool Recursive,
+    string[] IncludePatterns,
+    string[] ExcludePatterns,
+    SourceFolderEntryWire[] Entries,
+    DateTimeOffset ExpiresAtUtc);
+
+public sealed record SourceFolderEnrollmentWire(
+    string FolderId,
+    string ZoneId,
+    string Format,
+    int FormatVersion,
+    bool Recursive,
+    int MemberCount,
+    string[] MemberSourceIds,
+    DateTimeOffset EnrolledAtUtc,
+    bool AlreadyEnrolled);
+
+
 public sealed record SourceSnapshotWire(
     string Id,
     string ZoneId,
@@ -989,6 +1021,8 @@ public sealed record ServiceReply(
     OperationsAuditWire[]? OperationsAudit = null,
     OperationsDiagnosticWire[]? OperationsDiagnostics = null,
     OperationsRetentionWire? OperationsRetention = null,
+    SourceFolderPreviewWire? SourceFolderPreview = null,
+    SourceFolderEnrollmentWire? SourceFolderEnrollment = null,
     string? ErrorCode = null);
 
 public sealed class ServiceRequestHandler
@@ -1123,6 +1157,8 @@ public sealed class ServiceRequestHandler
     public const string OwnerDeclassifyPublishOperation = "owner.declassify.publish";
     public const string OwnerDeclassifyProposalPublishOperation = "owner.declassify.proposal.publish";
     public const string SourceEnrollOperation = "source.enroll";
+    public const string SourceFolderPreviewOperation = "source.folder.preview";
+    public const string SourceFolderEnrollOperation = "source.folder.enroll";
     public const string SourceRevokeOperation = "source.revoke";
     public const string SourceStatusOperation = "source.status";
     public const string SourceIngestOperation = "source.ingest";
@@ -1193,7 +1229,8 @@ public sealed class ServiceRequestHandler
         TimeProvider? timeProvider = null,
         IVaultBackupService? vaultBackup = null,
         IVaultMaintenanceService? vaultMaintenance = null,
-        IOperationalLog? operationalLog = null)
+        IOperationalLog? operationalLog = null,
+        ISourceFolderEnumerator? sourceFolderEnumerator = null)
     {
         _modelJobs = new ModelJobService(vault, modelProvider);
         _synthesisSchedule = new SynthesisScheduleService(_modelJobs);
@@ -1219,7 +1256,7 @@ public sealed class ServiceRequestHandler
         if (sourceNormalizers is not null && sourceReader is not null)
         {
             _sourceIngestion = new SourceIngestionCoordinator(
-                new SourceEnrollmentAuthority(), sourceNormalizers, sourceReader);
+                new SourceEnrollmentAuthority(), sourceNormalizers, sourceReader, sourceFolderEnumerator);
         }
     }
 
@@ -1798,6 +1835,8 @@ public sealed class ServiceRequestHandler
         }
 
         if (string.Equals(request.Operation, SourceEnrollOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceFolderPreviewOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceFolderEnrollOperation, StringComparison.Ordinal) ||
             string.Equals(request.Operation, SourceRelocateOperation, StringComparison.Ordinal) ||
             string.Equals(request.Operation, SourceRevokeOperation, StringComparison.Ordinal) ||
             string.Equals(request.Operation, SourceStatusOperation, StringComparison.Ordinal) ||
@@ -3639,6 +3678,125 @@ public sealed class ServiceRequestHandler
         if (IsPurgedResource(operation, request.ResourceId))
         {
             return Error("resource_purged");
+        }
+
+
+        if (string.Equals(request.Operation, SourceFolderPreviewOperation, StringComparison.Ordinal))
+        {
+            if (HasSourceEnrollExtras(request, allowFolderSelection: true) ||
+                request.ResourceId is not null || request.SourceLocator is not null ||
+                string.IsNullOrWhiteSpace(request.SourceFolderRoot) ||
+                string.IsNullOrWhiteSpace(request.ZoneId) ||
+                string.IsNullOrWhiteSpace(request.SourceFormat) ||
+                request.SourceFormatVersion is not { } folderFormatVersion || folderFormatVersion < 1 ||
+                request.SourceFolderRecursive is not { } recursive ||
+                request.SourceFolderIncludePatterns is not { Length: > 0 } includePatterns ||
+                request.SourceFolderExcludePatterns is null ||
+                request.SourceFolderPreviewId is not null || request.SourceFolderConfirmation is not null)
+            {
+                return Error("invalid_request");
+            }
+
+            try
+            {
+                var preview = _sourceIngestion.PreviewFolder(
+                    context,
+                    new SourceFolderEnrollmentDraft(
+                        request.SourceFolderRoot,
+                        request.ZoneId,
+                        request.SourceFormat,
+                        folderFormatVersion,
+                        recursive,
+                        includePatterns,
+                        request.SourceFolderExcludePatterns),
+                    operation,
+                    cancellationToken);
+                return new ServiceReply(CurrentProtocolVersion, "source_folder_previewed", "owner", null,
+                    SourceFolderPreview: new SourceFolderPreviewWire(
+                        preview.PreviewId,
+                        preview.Selection.RootLocator,
+                        preview.Selection.ZoneId,
+                        preview.Selection.Format,
+                        preview.Selection.FormatVersion,
+                        preview.Selection.Recursive,
+                        preview.Selection.IncludePatterns,
+                        preview.Selection.ExcludePatterns,
+                        preview.Enumeration.Entries.Select(entry => new SourceFolderEntryWire(
+                            entry.RelativePath, entry.Included, entry.ExclusionReason)).ToArray(),
+                        preview.ExpiresAtUtc));
+            }
+            catch (ArgumentException)
+            {
+                return Error("invalid_request");
+            }
+            catch (SourceOperationException ex)
+            {
+                return Error(ex.Code);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Error("forbidden");
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException)
+            {
+                return Error("source_state_unavailable");
+            }
+        }
+
+        if (string.Equals(request.Operation, SourceFolderEnrollOperation, StringComparison.Ordinal))
+        {
+            if (HasSourceEnrollExtras(request, allowFolderConfirmation: true) ||
+                request.ResourceId is not null || request.ZoneId is not null ||
+                request.SourceLocator is not null || request.SourceFormat is not null ||
+                request.SourceFormatVersion is not null ||
+                request.SourceFolderRoot is not null || request.SourceFolderRecursive is not null ||
+                request.SourceFolderIncludePatterns is not null || request.SourceFolderExcludePatterns is not null ||
+                string.IsNullOrWhiteSpace(request.SourceFolderPreviewId) ||
+                request.SourceFolderConfirmation is null)
+            {
+                return Error("invalid_request");
+            }
+
+            try
+            {
+                var enrolled = _sourceIngestion.EnrollFolder(
+                    context,
+                    request.SourceFolderPreviewId,
+                    request.SourceFolderConfirmation,
+                    operation,
+                    cancellationToken);
+                return new ServiceReply(
+                    CurrentProtocolVersion,
+                    enrolled.AlreadyEnrolled ? "source_folder_already_enrolled" : "source_folder_enrolled",
+                    "owner",
+                    null,
+                    SourceFolderEnrollment: new SourceFolderEnrollmentWire(
+                        enrolled.Folder.FolderId,
+                        enrolled.Folder.ZoneId,
+                        enrolled.Folder.Format,
+                        enrolled.Folder.FormatVersion,
+                        enrolled.Folder.Recursive,
+                        enrolled.Members.Length,
+                        enrolled.Folder.MemberSourceIds,
+                        enrolled.Folder.EnrolledAtUtc,
+                        enrolled.AlreadyEnrolled));
+            }
+            catch (ArgumentException)
+            {
+                return Error("invalid_request");
+            }
+            catch (SourceOperationException ex)
+            {
+                return Error(ex.Code);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Error("forbidden");
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException)
+            {
+                return Error("source_state_unavailable");
+            }
         }
 
         if (string.Equals(request.Operation, SourceEnrollOperation, StringComparison.Ordinal))
@@ -10028,7 +10186,10 @@ public sealed class ServiceRequestHandler
     /// session, catalog, cost and request fields — is refused, so a body can
     /// never steer enrollment toward another zone or reuse a token flow.
     /// </summary>
-    private static bool HasSourceEnrollExtras(ServiceRequest request) =>
+    private static bool HasSourceEnrollExtras(
+        ServiceRequest request,
+        bool allowFolderSelection = false,
+        bool allowFolderConfirmation = false) =>
         request.Passphrase is not null || request.RecoveryCode is not null ||
         request.ContentBase64 is not null || request.ResourceIds is not null ||
         request.Operations is not null || request.DestinationResourceIds is not null ||
@@ -10045,7 +10206,12 @@ public sealed class ServiceRequestHandler
         request.CatalogIds is not null || request.Purpose is not null ||
         request.RequestId is not null || request.SourceTitle is not null ||
         request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
-        request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null;
+        request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null ||
+        (!allowFolderSelection && (request.SourceFolderRoot is not null ||
+            request.SourceFolderRecursive is not null || request.SourceFolderIncludePatterns is not null ||
+            request.SourceFolderExcludePatterns is not null)) ||
+        (!allowFolderConfirmation && (request.SourceFolderPreviewId is not null ||
+            request.SourceFolderConfirmation is not null));
 
     /// <summary>
     /// S3-T1 revoke/status/ingest carry only the source ID: the zone,
@@ -10073,7 +10239,10 @@ public sealed class ServiceRequestHandler
         (!allowRelocationFields && (request.SourceLocator is not null || request.SourceGeneration is not null)) ||
         request.SourceFormat is not null || request.SourceFormatVersion is not null ||
         request.SourceTitle is not null || request.SourceAuthor is not null ||
-        request.SourceCapturedAtUtc is not null || request.SnapshotRetainUntilUtc is not null;
+        request.SourceCapturedAtUtc is not null || request.SnapshotRetainUntilUtc is not null ||
+        request.SourceFolderRoot is not null || request.SourceFolderRecursive is not null ||
+        request.SourceFolderIncludePatterns is not null || request.SourceFolderExcludePatterns is not null ||
+        request.SourceFolderPreviewId is not null || request.SourceFolderConfirmation is not null;
     /// <summary>
     /// S5-T7 mapping review submission carries only the source ID, the
     /// submitted locator, the optional unresolved zone/format/version the

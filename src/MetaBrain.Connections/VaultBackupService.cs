@@ -415,7 +415,8 @@ internal sealed class VaultBackupService : IVaultBackupService
             var restoredGrants = VaultRestorePolicy.RestoreScopeGrantState(payload.States.ScopeGrants);
             store.SaveScopeGrantState(manifest, dataKey, restoredGrants);
             store.SaveCatalogState(manifest, dataKey, payload.States.Catalog);
-            store.SaveSourceEnrollmentState(manifest, dataKey, payload.States.SourceEnrollment);
+            store.SaveSourceEnrollmentState(
+                manifest, dataKey, SourceEnrollmentAuthority.ValidateAndNormalizeState(payload.States.SourceEnrollment));
             store.SaveRecallPolicyState(manifest, dataKey, payload.States.RecallPolicy);
             store.SaveReviewState(manifest, dataKey, payload.States.ReviewState);
             store.SavePurgeLedgerState(manifest, dataKey, payload.States.PurgeLedger);

@@ -28,6 +28,9 @@ internal sealed class NamedPipeService
     // vault, so they get the same kind of room as the index rebuild. Every
     // other request keeps the general 10-second guard.
     private static readonly TimeSpan VaultSnapshotTimeout = TimeSpan.FromMinutes(10);
+    // Folder preview/enrollment is bounded by the source and enumeration limits,
+    // but may safely process more than one maximum-sized source in sequence.
+    private static readonly TimeSpan SourceFolderEnrollmentTimeout = TimeSpan.FromMinutes(10);
     private readonly ServiceSettings _settings;
     private readonly ServiceRequestHandler _handler;
     private readonly VaultLifecycle _vault;
@@ -59,6 +62,7 @@ internal sealed class NamedPipeService
             projections: new FileCatalogProjectionStore(store), privateIndex: _privateIndex,
             sourceNormalizers: sourceNormalizers ?? SourceNormalizerFactory.CreateShipped(),
             sourceReader: new EnrolledSourceFileReader(),
+            sourceFolderEnumerator: new SourceFolderFileEnumerator(),
             modelProvider: modelProvider ?? CreateDefaultModelProvider(),
             vaultBackup: new VaultBackupService(store, _vault),
             vaultMaintenance: new VaultMaintenanceService(store, _vault),
@@ -217,6 +221,12 @@ internal sealed class NamedPipeService
                     // set of files, so they share the bound.
                     timeout.CancelAfter(VaultSnapshotTimeout);
                 }
+                if (string.Equals(request.Operation, ServiceRequestHandler.SourceFolderPreviewOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceFolderEnrollOperation, StringComparison.Ordinal))
+                {
+                    timeout.CancelAfter(SourceFolderEnrollmentTimeout);
+                }
+
 
                 var needsVaultOperation =
                     string.Equals(request.Operation, ServiceRequestHandler.ResourceReadOperation, StringComparison.Ordinal) ||
@@ -301,6 +311,8 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerDeclassifyPublishOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerDeclassifyProposalPublishOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceEnrollOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceFolderPreviewOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceFolderEnrollOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceRevokeOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceStatusOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceIngestOperation, StringComparison.Ordinal) ||

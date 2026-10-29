@@ -163,11 +163,9 @@ public interface IVaultLifecycle
 }
 
 /// <summary>
-/// Owner purge deletion: removes one canonical resource from the encrypted
-/// manifest and deletes its ciphertext file. S7-T5 only: called exclusively
-/// by the owner purge service after an explicit confirmed intent. Deleting an
-/// ID that is already gone succeeds idempotently (already deleted), so an
-/// interrupted purge resumes honestly instead of failing on partial progress.
+/// Owner-only canonical-resource deletion used by confirmed purge and by
+/// source-folder enrollment compensation for records created by the same
+/// uncommitted operation. Missing IDs are reported as already absent.
 /// </summary>
 public interface IPurgeResourceDeletion
 {

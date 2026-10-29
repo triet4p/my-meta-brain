@@ -77,6 +77,7 @@ internal static class OwnerControlCli
                 "source-revise" => await SourceReviseAsync(options).ConfigureAwait(false),
                 "source-read" => await SourceReadAsync(options).ConfigureAwait(false),
                 "source-enroll" => await SourceEnrollAsync(options).ConfigureAwait(false),
+                "source-folder-enroll" => await SourceFolderEnrollAsync(options).ConfigureAwait(false),
                 "source-revoke" => await SourceRevokeAsync(options).ConfigureAwait(false),
                 "source-status" => await SourceStatusAsync(options).ConfigureAwait(false),
                 "source-ingest" => await SourceIngestAsync(options).ConfigureAwait(false),
@@ -1722,6 +1723,140 @@ internal static class OwnerControlCli
         PrintSourceEnrollment(result.Reply);
         return 0;
     }
+    private static async Task<int> SourceFolderEnrollAsync(CommandOptions options)
+    {
+        options.RequireOnly(
+            "--control-pipe", "--folder", "--zone-id", "--format", "--format-version",
+            "--recursive", "--include-globs", "--exclude-globs");
+        var controlPipe = ControlPipe(options);
+        var root = options.Required("--folder");
+        var zoneId = options.Required("--zone-id");
+        var format = options.Required("--format");
+        if (!SourceEnrollmentGrammar.IsLocator(root) ||
+            !ServiceSettingsLoader.IsSafeIdentifier(zoneId) ||
+            !SourceEnrollmentGrammar.IsFormat(format) ||
+            !int.TryParse(options.Required("--format-version"), NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out var formatVersion) ||
+            formatVersion is < 1 or > 1_000_000 ||
+            !bool.TryParse(options.Required("--recursive"), out var recursive))
+        {
+            return Usage();
+        }
+
+        string[] includePatterns;
+        string[] excludePatterns;
+        try
+        {
+            includePatterns = ParseFolderPatterns(options.Required("--include-globs"), allowNone: false);
+            excludePatterns = ParseFolderPatterns(options.Required("--exclude-globs"), allowNone: true);
+            includePatterns = SourceFolderEnrollmentGrammar.NormalizePatterns(includePatterns, required: true);
+            excludePatterns = SourceFolderEnrollmentGrammar.NormalizePatterns(excludePatterns, required: false);
+        }
+        catch (ArgumentException)
+        {
+            return Usage();
+        }
+
+        var previewResult = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceFolderPreviewOperation,
+                ZoneId: zoneId,
+                SourceFormat: format,
+                SourceFormatVersion: formatVersion,
+                SourceFolderRoot: root,
+                SourceFolderRecursive: recursive,
+                SourceFolderIncludePatterns: includePatterns,
+                SourceFolderExcludePatterns: excludePatterns)).ConfigureAwait(false);
+        if (!previewResult.Success || !HasStatus(previewResult.Reply, "source_folder_previewed") ||
+            !previewResult.Reply.TryGetProperty("sourceFolderPreview", out var preview) ||
+            preview.ValueKind != JsonValueKind.Object)
+        {
+            WriteServiceError(previewResult);
+            return 4;
+        }
+
+        PrintSourceFolderPreview(preview);
+        Console.Write("Type ENROLL to enroll exactly these files; any other input cancels: ");
+        if (!string.Equals(Console.ReadLine(), "ENROLL", StringComparison.Ordinal))
+        {
+            Console.WriteLine("CANCELLED; folder membership unchanged");
+            return 0;
+        }
+
+        var previewId = JsonValueText(preview, "previewId");
+        var enrollmentResult = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceFolderEnrollOperation,
+                SourceFolderPreviewId: previewId,
+                SourceFolderConfirmation: "ENROLL")).ConfigureAwait(false);
+        var alreadyEnrolled = HasStatus(enrollmentResult.Reply, "source_folder_already_enrolled");
+        var enrolledNow = HasStatus(enrollmentResult.Reply, "source_folder_enrolled");
+        if (!enrollmentResult.Success || (!alreadyEnrolled && !enrolledNow))
+        {
+            WriteServiceError(enrollmentResult);
+            return 4;
+        }
+
+        if (!enrollmentResult.Reply.TryGetProperty("sourceFolderEnrollment", out var enrollment) ||
+            enrollment.ValueKind != JsonValueKind.Object)
+        {
+            WriteServiceError(enrollmentResult);
+            return 4;
+        }
+
+        Console.WriteLine(
+            $"SOURCE FOLDER {(alreadyEnrolled ? "already_enrolled" : "enrolled")} id={JsonValueText(enrollment, "folderId")} " +
+            $"members={JsonValueText(enrollment, "memberCount")} format={JsonValueText(enrollment, "format")} " +
+            $"recursive={JsonFlagText(enrollment, "recursive")}");
+        return 0;
+    }
+
+    private static string[] ParseFolderPatterns(string value, bool allowNone)
+    {
+        if (allowNone && string.Equals(value.Trim(), "none", StringComparison.OrdinalIgnoreCase))
+        {
+            return Array.Empty<string>();
+        }
+
+        var patterns = value.Split(',', StringSplitOptions.TrimEntries);
+        if (patterns.Length == 0 || patterns.Any(string.IsNullOrWhiteSpace))
+        {
+            throw new ArgumentException("Folder glob patterns must be comma-separated and non-empty.");
+        }
+
+        return patterns;
+    }
+
+    private static void PrintSourceFolderPreview(JsonElement preview)
+    {
+        Console.WriteLine(
+            $"SOURCE FOLDER PREVIEW root={JsonSerializer.Serialize(JsonValueText(preview, "rootLocator"))} " +
+            $"zone={JsonValueText(preview, "zoneId")} format={JsonValueText(preview, "format")} " +
+            $"version={JsonValueText(preview, "formatVersion")} recursive={JsonFlagText(preview, "recursive")}");
+        var entries = preview.GetProperty("entries");
+        var includedCount = 0;
+        foreach (var entry in entries.EnumerateArray())
+        {
+            var relativePath = JsonValueText(entry, "relativePath");
+            var included = JsonFlagText(entry, "included") == "true";
+            if (included)
+            {
+                includedCount++;
+            }
+
+            var reason = JsonValueText(entry, "exclusionReason");
+            Console.WriteLine(
+                $"FOLDER ENTRY path={JsonSerializer.Serialize(relativePath)} " +
+                $"included={(included ? "true" : "false")}" +
+                (included ? string.Empty : $" reason={reason}"));
+        }
+
+        Console.WriteLine($"FOLDER PREVIEW entries={entries.GetArrayLength()} included={includedCount}");
+    }
+
+
 
     /// <summary>
     /// The owner names one candidate path through a private request file.
@@ -7396,7 +7531,7 @@ internal static class OwnerControlCli
             Console.Error.WriteLine("  library: library|memory-read|source-read|research-read|relation-read|lifecycle-read|lifecycle-retained-read|recall-read|review-list|review-record|index-status|index-rebuild");
             Console.Error.WriteLine("  review: proposal-list|proposal-read|proposal-publish|proposal-reject|lifecycle-publish|lifecycle-reject|lifecycle-withdraw|lifecycle-repropose|lifecycle-question-resolve|lifecycle-question-reopen|relation-list|relation-read|relation-create|relation-accept|relation-reject|relation-unlink|relation-relink|declassify-preview|declassify-publish|declassify-proposal-publish");
             Console.Error.WriteLine("  sharing: catalog-preview|catalog-publish|catalog-list|catalog-withdraw|collections|collection-set|grants|grant|requests|request-preview|request-approve|request-reject|sessions|session|revoke-session|redeem (+ agent-mcp transport)");
-            Console.Error.WriteLine("  sources: collections|source-list|source-status|source-enroll|source-relocate|source-revoke|source-ingest|source-pause|source-resume|source-refresh-optin|source-refresh-optout|source-refresh|source-mapping-submit|source-mapping-resolve|source-snapshot-list|source-snapshot-preserve|source-snapshot-read|source-snapshot-retain|source-snapshot-purge");
+            Console.Error.WriteLine("  sources: collections|source-list|source-status|source-enroll|source-folder-enroll|source-relocate|source-revoke|source-ingest|source-pause|source-resume|source-refresh-optin|source-refresh-optout|source-refresh|source-mapping-submit|source-mapping-resolve|source-snapshot-list|source-snapshot-preserve|source-snapshot-read|source-snapshot-retain|source-snapshot-purge");
             Console.Error.WriteLine("  planning: lifecycle-create|lifecycle-validity-set|lifecycle-retain|lifecycle-intention-complete|lifecycle-intention-cancel|lifecycle-intention-supersede|lifecycle-intention-notify|lifecycle-intention-acknowledge|intentions|intention-trigger-set|intention-trigger-clear|intention-context-set|intention-context-disable|intention-schedule-run|recall-apply|purge-preview|purge-confirm|purge-resume");
             Console.Error.WriteLine("  models: provider-config|provider-status|job-create|job-start|job-cancel|job-status|job-list|job-ledger|schedule-set|schedule-disable|schedule-status|schedule-run");
             Console.Error.WriteLine("Every owner command needs --control-pipe <pipe>; agent-scoped reads use --agent-pipe plus --session-file instead. Credentials are interactive prompts only, never options. Destructive or authority-minting acts print a frozen preview and require a typed confirmation.");
@@ -7423,6 +7558,7 @@ internal static class OwnerControlCli
         "source-create" => "owner source-create --control-pipe <pipe> --resource-id <id> --zone-id <zone> (--title T --locator L --version V --availability available|unavailable|unknown [--author role] [--method M]... | --input-file <draft.json>): register source metadata.",
         "source-revise" => "owner source-revise --control-pipe <pipe> --resource-id <id> --zone-id <zone> --expected-revision <live> (same inputs as source-create): revision-gated metadata edit.",
         "source-read" => "owner source-read --control-pipe <pipe> --resource-id <id> [--resource-revision N]: registered source metadata.",
+        "source-folder-enroll" => "owner source-folder-enroll --control-pipe <pipe> --folder <absolute-path> --zone-id <zone> --format <format> --format-version <N> --recursive true|false --include-globs <glob[,glob...]> --exclude-globs <glob[,glob...]|none>: preview one bounded folder enumeration, then type ENROLL once to add the exact member metadata to the canonical source registry and encrypted source allowlist. Included locator paths use the existing source-registry limit of 512 characters. The format mapping applies to every included file; later folder changes are not adopted.",
         "research-capture" => "owner research-capture --control-pipe <pipe> --resource-id <id> --zone-id <zone> (--text text [--title T --source-url U --source-author A --source-date ISO] | --input-file <utf8.txt>): persist verbatim text encrypted before any structuring. Never fetches the URL.",
         "research-read" => "owner research-read --control-pipe <pipe> --resource-id <id> [--resource-revision N] [--output-file <new-file>]: exact captured text.",
         "feedback-create" => "owner feedback-create --control-pipe <pipe> --resource-id <fb-id> --zone-id <zone> --target <item-or-source-id@rev> --kind useful|wrong|stale [--note text] [--method M] | --input-file <draft.json>: append-only verdict on a seen target; never edits the target.",

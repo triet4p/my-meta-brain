@@ -158,22 +158,26 @@ public sealed record SourceQuarantineRecord(
     DateTimeOffset RecordedAtUtc);
 
 /// <summary>
-/// The owner allowlist plus quarantine, persisted as one encrypted private
-/// state file beside the scope-grant and catalog states (never as an
-/// approved-catalog entry). It carries only enrollment metadata: locators,
-/// mappings, generations, anchors and quarantine reasons.
+/// The owner allowlist plus quarantine and folder-recovery journal, persisted as one encrypted private
+/// state file beside the scope-grant and catalog states (never as an approved-catalog entry). It carries
+/// only enrollment metadata and pending canonical source IDs, never source bytes.
 /// </summary>
 public sealed record SourceEnrollmentState(
     int SchemaVersion,
     EnrolledSource[] Enrollments,
-    SourceQuarantineRecord[] Quarantine)
+    SourceQuarantineRecord[] Quarantine,
+    SourceFolderEnrollment[]? Folders = null,
+    string[]? PendingFolderSourceIds = null)
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
+    public const int PreviousSchemaVersion = 1;
 
     public static SourceEnrollmentState Empty { get; } = new(
         CurrentSchemaVersion,
         Array.Empty<EnrolledSource>(),
-        Array.Empty<SourceQuarantineRecord>());
+        Array.Empty<SourceQuarantineRecord>(),
+        Array.Empty<SourceFolderEnrollment>(),
+        Array.Empty<string>());
 }
 
 /// <summary>
@@ -190,13 +194,21 @@ public sealed class SourceOperationException : Exception
         Code = code;
     }
 
+    public SourceOperationException(string code, Exception innerException)
+        : base(code, innerException)
+    {
+        Code = code;
+    }
+
     public string Code { get; }
 }
 
 /// <summary>
 /// Encrypted persistence for the owner enrollment state, implemented by the
 /// vault lifecycle so enrollment transitions share the same atomic update
-/// and revision semantics as scope grants and the owner catalog.
+/// and revision semantics as scope grants and the owner catalog. Pending
+/// canonical folder IDs are committed in this state before source creation;
+/// unlock recovery removes any uncommitted registrations durably.
 /// </summary>
 public interface ISourceEnrollmentPersistence
 {
@@ -204,6 +216,20 @@ public interface ISourceEnrollmentPersistence
 
     T UpdateSourceEnrollmentState<T>(
         Func<SourceEnrollmentState, (SourceEnrollmentState State, T Result)> update);
+
+    T UpdateSourceEnrollmentStateWithRollback<T>(
+        Func<SourceEnrollmentState, (SourceEnrollmentState State, T Result)> update,
+        Action rollback) =>
+        throw new NotSupportedException("Atomic source enrollment rollback is unavailable.");
+
+    void BeginFolderRegistrationRecovery(IReadOnlyList<string> sourceIds) =>
+        throw new NotSupportedException("Durable folder registration recovery is unavailable.");
+
+    void CompleteFolderRegistrationRecovery() =>
+        throw new NotSupportedException("Durable folder registration recovery is unavailable.");
+
+    void RequireFolderRegistrationRecovery() =>
+        throw new NotSupportedException("Durable folder registration recovery is unavailable.");
 }
 
 public enum SourceSnapshotStatus
@@ -299,6 +325,11 @@ public sealed class SourceEnrollmentAuthority
         return persistence.UpdateSourceEnrollmentState(state =>
         {
             var validated = ValidateAndNormalizeState(state);
+            var folder = SourceFolderEnrollmentAuthority.FindFolderForSource(validated, sourceId);
+            if (folder is not null && !SourceFolderEnrollmentGrammar.IsWithinRoot(folder.RootLocator, normalizedLocator))
+            {
+                throw new SourceOperationException("source_folder_path_outside_root");
+            }
             foreach (var other in validated.Enrollments)
             {
                 if (other.RevokedAtUtc is null &&
@@ -554,6 +585,11 @@ public sealed class SourceEnrollmentAuthority
         return persistence.UpdateSourceEnrollmentState(state =>
         {
             var validated = ValidateAndNormalizeState(state);
+            var folder = SourceFolderEnrollmentAuthority.FindFolderForSource(validated, sourceId);
+            if (folder is not null && !SourceFolderEnrollmentGrammar.IsWithinRoot(folder.RootLocator, normalizedLocator))
+            {
+                throw new SourceOperationException("source_folder_path_outside_root");
+            }
             var current = FindEnrollment(validated, sourceId)
                 ?? throw new SourceOperationException("source_not_enrolled");
             if (current.RevokedAtUtc is not null)
@@ -841,16 +877,23 @@ public sealed class SourceEnrollmentAuthority
     public static SourceEnrollmentState ValidateAndNormalizeState(SourceEnrollmentState state)
     {
         ArgumentNullException.ThrowIfNull(state);
-        if (state.SchemaVersion != SourceEnrollmentState.CurrentSchemaVersion)
+        if (state.SchemaVersion is not (SourceEnrollmentState.CurrentSchemaVersion or SourceEnrollmentState.PreviousSchemaVersion))
         {
             throw new InvalidDataException("The source enrollment state schema version is unsupported.");
         }
 
         if (state.Enrollments is null || state.Quarantine is null ||
             state.Enrollments.Length > SourceIngestionLimits.MaximumEnrollments ||
-            state.Quarantine.Length > SourceIngestionLimits.MaximumQuarantineRecords)
+            state.Quarantine.Length > SourceIngestionLimits.MaximumQuarantineRecords ||
+            state.PendingFolderSourceIds is { Length: > SourceIngestionLimits.MaximumEnrollments })
         {
             throw new InvalidDataException("The source enrollment state exceeds its bounds.");
+        }
+
+        if (state.SchemaVersion == SourceEnrollmentState.PreviousSchemaVersion &&
+            state.PendingFolderSourceIds is { Length: > 0 })
+        {
+            throw new InvalidDataException("The legacy source enrollment state cannot contain a folder recovery journal.");
         }
 
         var sourceIds = new HashSet<string>(StringComparer.Ordinal);
@@ -878,7 +921,36 @@ public sealed class SourceEnrollmentAuthority
             }
         }
 
-        return state;
+        var pending = state.PendingFolderSourceIds ?? Array.Empty<string>();
+        if (pending.Length > 0)
+        {
+            var pendingIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var sourceId in pending)
+            {
+                if (!DomainIdentifiers.IsDomainIdentifier(sourceId) ||
+                    sourceId.Length > SourceIngestionLimits.MaximumSourceIdLength ||
+                    !pendingIds.Add(sourceId))
+                {
+                    throw new InvalidDataException("The folder registration recovery journal is invalid.");
+                }
+            }
+        }
+
+        var normalized = state;
+        if (state.SchemaVersion != SourceEnrollmentState.CurrentSchemaVersion ||
+            state.Folders is null ||
+            state.PendingFolderSourceIds is null)
+        {
+            normalized = state with
+            {
+                SchemaVersion = SourceEnrollmentState.CurrentSchemaVersion,
+                Folders = state.Folders ?? Array.Empty<SourceFolderEnrollment>(),
+                PendingFolderSourceIds = pending
+            };
+        }
+
+        SourceFolderEnrollmentAuthority.ValidateState(normalized);
+        return normalized;
     }
 
     public static EnrolledSource? FindEnrollment(SourceEnrollmentState state, string sourceId) =>
