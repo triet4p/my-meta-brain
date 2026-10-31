@@ -18,6 +18,8 @@ namespace MetaBrain.Connections;
 /// </summary>
 internal sealed class EnrolledSourceFileReader : ISourceSnapshotReader
 {
+    private const int SnapshotReadChunkBytes = 64 * 1024;
+
     public SourceSnapshotResult TryReadSnapshot(string locator) =>
         TryReadSnapshot(locator, CancellationToken.None);
 
@@ -111,7 +113,10 @@ internal sealed class EnrolledSourceFileReader : ISourceSnapshotReader
                     // read stops mid-file (its partial bytes are zeroed and no
                     // checkpoint moves) instead of only refusing the next call.
                     cancellationToken.ThrowIfCancellationRequested();
-                    var read = stream.Read(buffer, offset, buffer.Length - offset);
+                    var read = stream.Read(
+                        buffer,
+                        offset,
+                        Math.Min(SnapshotReadChunkBytes, buffer.Length - offset));
                     if (read == 0)
                     {
                         // The file shrank under the open handle: a partial
@@ -141,7 +146,17 @@ internal sealed class EnrolledSourceFileReader : ISourceSnapshotReader
                     return new SourceSnapshotResult(SourceSnapshotStatus.Unreadable);
                 }
 
+                cancellationToken.ThrowIfCancellationRequested();
                 return new SourceSnapshotResult(SourceSnapshotStatus.Snapshot, buffer);
+            }
+            catch (OperationCanceledException)
+            {
+                if (buffer is not null)
+                {
+                    Array.Clear(buffer);
+                }
+
+                throw;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
                                        System.Security.SecurityException or ArgumentException or

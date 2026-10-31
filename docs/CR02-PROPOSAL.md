@@ -118,6 +118,13 @@ Encoding: không transcode lossy, không thay byte lỗi bằng `U+FFFD` rồi c
 - Path comparison trên Windows là case-insensitive; canonical root được ghi lại; không thay ACL/permission hay cấu hình host.
 - Folder membership thay đổi (file mới/xóa) là chủ đề refresh của T4 và sharing scope của S17; proposal này chỉ chốt rằng link không tạo quyền và không tạo membership ngầm.
 
+**T4 owner decision (2026-10-31).** Owner approved an explicit `folder-refresh-optin` / `folder-refresh-optout` control, default off. Enrollment preview/confirmation covers only the exact selected membership and is not ongoing refresh consent. Folder opt-in authorizes current and future matching regular files under the owner-selected canonical root and stored include/exclude rules; enumeration never follows reparse points, and every admitted path still passes the existing final-path reader checks. A newly matching file may be admitted and read only while folder opt-in is active and its source-specific controls permit it.
+
+- A member's source-level pause, revoke, or explicit refresh opt-out vetoes folder refresh. Folder opt-out and vault lock stop refresh at the source boundary; they do not overwrite per-source consent or erase committed data.
+- A deleted member remains canonical/history and is reported missing; refresh does not automatically revoke or purge it.
+- Manual and background folder refresh use the shared coordinator. Excluded, reparse, outside-root, or final-path-mismatched files are never read or admitted.
+
+
 ### 3.8 Trạng thái owner nhìn thấy và remediation
 
 - `source-status`/`source-list` (và surface folder ở T5) phải trả các facet ở §3.1 cùng số liệu: `pending_tail_bytes`, `preserved_bytes`, `uninterpreted_records`, `last_diagnostic {code, offset}`.

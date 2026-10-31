@@ -40,9 +40,10 @@ public interface ISourceFolderEnumerator
 }
 
 /// <summary>
-/// Encrypted folder membership index. Member IDs reference the canonical source
-/// records and per-file enrollment anchors; this index stores selection rules
-/// and member IDs, not another copy of each member locator.
+/// Encrypted folder membership index and owner refresh-consent state. Refresh
+/// is opt-in and defaults off. Member IDs reference canonical source records
+/// and per-file enrollment anchors; this index stores selection rules and IDs,
+/// not another copy of each member locator.
 /// </summary>
 public sealed record SourceFolderEnrollment(
     string FolderId,
@@ -55,7 +56,8 @@ public sealed record SourceFolderEnrollment(
     string[] ExcludePatterns,
     string[] MemberSourceIds,
     DateTimeOffset EnrolledAtUtc,
-    DateTimeOffset? RawPreservationRetainUntilUtc = null);
+    DateTimeOffset? RawPreservationRetainUntilUtc = null,
+    bool RefreshOptIn = false);
 
 /// <summary>Anchor captured for one selected file after explicit confirmation.</summary>
 public sealed record SourceFolderMemberAnchor(
@@ -381,6 +383,251 @@ public static class SourceFolderEnrollmentAuthority
         }, () => rollbackMemberSources?.Invoke());
     }
 
+    public static SourceFolderEnrollment SetRefreshOptIn(
+        AuthenticatedContext actor,
+        string folderId,
+        bool optIn,
+        ISourceEnrollmentPersistence persistence,
+        IReadOnlySet<string>? legacyRefreshOptOuts = null)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(persistence);
+        EnsureOwner(actor);
+        if (!DomainIdentifiers.IsDomainIdentifier(folderId))
+        {
+            throw new ArgumentException("The folder ID must be an opaque safe identifier.");
+        }
+
+        return persistence.UpdateSourceEnrollmentState(state =>
+        {
+            var validated = SourceEnrollmentAuthority.ValidateAndNormalizeState(state);
+            if (validated.PendingFolderSourceIds is { Length: > 0 })
+            {
+                throw new SourceOperationException("source_folder_recovery_pending");
+            }
+
+            var folder = FindFolder(validated, folderId)
+                ?? throw new SourceOperationException("source_folder_not_enrolled");
+            var enrollments = validated.Enrollments;
+            if (optIn && legacyRefreshOptOuts is { Count: > 0 })
+            {
+                // Migrate explicit source-level opt-outs before audit retention can
+                // discard their action; folder consent must never erase those vetoes.
+                var changed = false;
+                enrollments = validated.Enrollments.Select(enrollment =>
+                {
+                    if (!enrollment.RefreshOptIn &&
+                        !enrollment.RefreshOptOut &&
+                        legacyRefreshOptOuts.Contains(enrollment.SourceId))
+                    {
+                        changed = true;
+                        return enrollment with { RefreshOptOut = true };
+                    }
+
+                    return enrollment;
+                }).ToArray();
+                if (!changed)
+                {
+                    enrollments = validated.Enrollments;
+                }
+            }
+
+            if (folder.RefreshOptIn == optIn && ReferenceEquals(enrollments, validated.Enrollments))
+            {
+                return (state, folder);
+            }
+
+            var updatedFolder = folder with { RefreshOptIn = optIn };
+            var folders = validated.Folders!
+                .Select(candidate => string.Equals(candidate.FolderId, folderId, StringComparison.Ordinal)
+                    ? updatedFolder
+                    : candidate)
+                .ToArray();
+            return (validated with { Enrollments = enrollments, Folders = folders }, updatedFolder);
+        });
+    }
+
+    public static SourceFolderEnrollmentResult AddMembers(
+        AuthenticatedContext actor,
+        string folderId,
+        IReadOnlyList<SourceFolderMemberAnchor> members,
+        ISourceEnrollmentPersistence persistence,
+        Func<Action> registerMemberSources,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(members);
+        ArgumentNullException.ThrowIfNull(persistence);
+        ArgumentNullException.ThrowIfNull(registerMemberSources);
+        EnsureOwner(actor);
+        if (!DomainIdentifiers.IsDomainIdentifier(folderId))
+        {
+            throw new ArgumentException("The folder ID must be an opaque safe identifier.");
+        }
+
+        if (members.Count is < 1 or > SourceIngestionLimits.MaximumEnrollments)
+        {
+            throw new SourceOperationException("source_folder_limit");
+        }
+
+        Action? rollbackMemberSources = null;
+        return persistence.UpdateSourceEnrollmentStateWithRollback(state =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var validated = SourceEnrollmentAuthority.ValidateAndNormalizeState(state);
+            if (validated.PendingFolderSourceIds is { Length: > 0 })
+            {
+                throw new SourceOperationException("source_folder_recovery_pending");
+            }
+
+            var folder = FindFolder(validated, folderId)
+                ?? throw new SourceOperationException("source_folder_not_enrolled");
+            if (!folder.RefreshOptIn)
+            {
+                throw new SourceOperationException("source_folder_refresh_opted_out");
+            }
+
+            if (folder.MemberSourceIds.Length + members.Count > SourceIngestionLimits.MaximumEnrollments ||
+                validated.Enrollments.Length + members.Count(member =>
+                    SourceEnrollmentAuthority.FindEnrollment(validated, member.SourceId) is null) >
+                SourceIngestionLimits.MaximumEnrollments)
+            {
+                throw new SourceOperationException("source_folder_limit");
+            }
+
+            var normalizedMembers = new SourceFolderMemberAnchor[members.Count];
+            var newSourceIds = new HashSet<string>(StringComparer.Ordinal);
+            var locators = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var currentMembers = new HashSet<string>(folder.MemberSourceIds, StringComparer.Ordinal);
+            for (var index = 0; index < members.Count; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var member = members[index] ?? throw new ArgumentException("A folder member is required.");
+                var relativePath = SourceFolderEnrollmentGrammar.NormalizeRelativePath(member.RelativePath);
+                var locator = SourceEnrollmentGrammar.NormalizeLocator(member.Locator);
+                var expectedLocator = Path.GetFullPath(Path.Combine(
+                    folder.RootLocator, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+                var sourceId = SourceFolderEnrollmentGrammar.MemberSourceIdFor(folder.RootLocator, relativePath);
+                if (!string.Equals(locator, expectedLocator, StringComparison.OrdinalIgnoreCase) ||
+                    !SourceFolderEnrollmentGrammar.IsWithinRoot(folder.RootLocator, locator) ||
+                    !string.Equals(member.SourceId, sourceId, StringComparison.Ordinal) ||
+                    currentMembers.Contains(sourceId) || !newSourceIds.Add(sourceId) ||
+                    !locators.Add(locator) ||
+                    member.AnchorLength is < 0 or > SourceIngestionLimits.MaximumSourceBytes ||
+                    !SourceEnrollmentGrammar.IsAnchorDigest(member.AnchorDigest))
+                {
+                    throw new ArgumentException("A refreshed folder member anchor is invalid.");
+                }
+
+                normalizedMembers[index] = member with
+                {
+                    RelativePath = relativePath,
+                    Locator = locator
+                };
+            }
+
+            Array.Sort(normalizedMembers, static (left, right) =>
+                StringComparer.Ordinal.Compare(left.SourceId, right.SourceId));
+            var nextEnrollments = validated.Enrollments.ToDictionary(
+                enrollment => enrollment.SourceId, StringComparer.Ordinal);
+            foreach (var member in normalizedMembers)
+            {
+                if (FindFolderForSource(validated, member.SourceId) is not null)
+                {
+                    throw new SourceOperationException("source_folder_member_conflict");
+                }
+
+                if (SourceEnrollmentAuthority.FindQuarantine(validated, member.SourceId) is not null)
+                {
+                    throw new SourceOperationException("source_quarantined");
+                }
+
+                var current = SourceEnrollmentAuthority.FindEnrollment(validated, member.SourceId);
+                if (current is not null)
+                {
+                    if (current.RevokedAtUtc is not null)
+                    {
+                        throw new SourceOperationException("source_revoked");
+                    }
+
+                    if (current.PausedAtUtc is not null)
+                    {
+                        throw new SourceOperationException("source_paused");
+                    }
+
+                    if (current.RefreshOptOut)
+                    {
+                        throw new SourceOperationException("source_refresh_opted_out");
+                    }
+
+                    if (!string.Equals(current.ZoneId, folder.ZoneId, StringComparison.Ordinal) ||
+                        !string.Equals(current.Locator, member.Locator, StringComparison.OrdinalIgnoreCase) ||
+                        !string.Equals(current.Format, folder.Format, StringComparison.Ordinal) ||
+                        current.FormatVersion != folder.FormatVersion)
+                    {
+                        throw new SourceOperationException("source_enrollment_conflict");
+                    }
+                }
+
+                foreach (var other in validated.Enrollments)
+                {
+                    if (other.RevokedAtUtc is null &&
+                        !string.Equals(other.SourceId, member.SourceId, StringComparison.Ordinal) &&
+                        string.Equals(other.Locator, member.Locator, StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new SourceOperationException("source_locator_in_use");
+                    }
+                }
+
+                if (current is null)
+                {
+                    var retention = folder.RawPreservationRetainUntilUtc is { } requestedRetention &&
+                        requestedRetention > DateTimeOffset.UtcNow
+                            ? requestedRetention
+                            : (DateTimeOffset?)null;
+                    nextEnrollments.Add(member.SourceId, new EnrolledSource(
+                        member.SourceId,
+                        folder.ZoneId,
+                        member.Locator,
+                        folder.Format,
+                        folder.FormatVersion,
+                        1,
+                        member.AnchorLength,
+                        member.AnchorDigest,
+                        DateTimeOffset.UtcNow,
+                        null,
+                        RawPreservationOptIn: retention is not null,
+                        RawPreservationRetainUntilUtc: retention));
+                }
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var nextMemberIds = folder.MemberSourceIds
+                .Concat(normalizedMembers.Select(member => member.SourceId))
+                .OrderBy(sourceId => sourceId, StringComparer.Ordinal)
+                .ToArray();
+            var updatedFolder = folder with { MemberSourceIds = nextMemberIds };
+            rollbackMemberSources = registerMemberSources();
+            cancellationToken.ThrowIfCancellationRequested();
+            var folders = validated.Folders!
+                .Select(candidate => string.Equals(candidate.FolderId, folderId, StringComparison.Ordinal)
+                    ? updatedFolder
+                    : candidate)
+                .ToArray();
+            var nextState = validated with
+            {
+                Enrollments = nextEnrollments.Values
+                    .OrderBy(enrollment => enrollment.SourceId, StringComparer.Ordinal)
+                    .ToArray(),
+                Folders = folders
+            };
+            var enrolledMembers = normalizedMembers
+                .Select(member => nextEnrollments[member.SourceId])
+                .ToArray();
+            return (nextState, new SourceFolderEnrollmentResult(updatedFolder, enrolledMembers, AlreadyEnrolled: false));
+        }, () => rollbackMemberSources?.Invoke());
+    }
+
     public static SourceFolderEnrollment? FindFolder(SourceEnrollmentState state, string folderId) =>
         Array.Find(state.Folders ?? Array.Empty<SourceFolderEnrollment>(), folder =>
             string.Equals(folder.FolderId, folderId, StringComparison.Ordinal));
@@ -455,4 +702,11 @@ public static class SourceFolderEnrollmentAuthority
         existing.ExcludePatterns.SequenceEqual(draft.ExcludePatterns, StringComparer.Ordinal) &&
         existing.RawPreservationRetainUntilUtc == draft.RawPreservationRetainUntilUtc &&
         existing.MemberSourceIds.SequenceEqual(members.Select(member => member.SourceId), StringComparer.Ordinal);
+    private static void EnsureOwner(AuthenticatedContext actor)
+    {
+        if (actor.Kind != PrincipalKind.Owner)
+        {
+            throw new UnauthorizedAccessException("Only the owner may manage source-folder enrollment.");
+        }
+    }
 }

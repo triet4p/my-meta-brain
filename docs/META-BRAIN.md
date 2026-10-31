@@ -313,6 +313,13 @@ với locator, từ chối reparse/directory, share mode đọc không cho write
 được thu hẹp bởi final-path check, không tuyên bố loại trừ tuyệt đối. Path Windows so sánh
 case-insensitive; không đổi ACL/permission hay cấu hình host.
 
+### 8.1.1. Owner-approved S11-T4 folder refresh policy (2026-10-31)
+
+Owner-approved folder refresh uses explicit `folder-refresh-optin` / `folder-refresh-optout`, default off. The enrollment preview and confirmation are not refresh consent. Opt-in covers current and future matching regular files within the selected root and stored include/exclude rules, subject to the no-reparse enumeration and per-file final-path checks above. New members are admitted and read only while the folder remains opted in and the source's own controls allow it.
+
+A member's pause, revoke, or explicit source refresh opt-out vetoes folder refresh; folder opt-out and vault lock stop the pass at a source boundary without changing member consent or committed data. Deletion leaves canonical/history intact and reports the member missing; it never triggers automatic revoke or purge. Manual and background folder refresh use the same coordinator. This is contract approval, not runtime evidence or a T4 completion claim.
+
+
 ## 9. Research và cấu trúc hóa
 
 Đầu vào bắt buộc là ô nhập văn bản phi cấu trúc, chọn zone, có thể thêm URL/tác giả/ngày nguồn. Không cần crawler hay PDF parser để sử dụng được. URL chỉ là locator, không tự chứng minh đã đọc bài gốc.

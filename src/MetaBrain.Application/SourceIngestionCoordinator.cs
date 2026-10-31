@@ -96,7 +96,10 @@ public sealed record SourceEnrollmentStatus(
     long SnapshotRevision = 0,
     bool RawPreservationOptIn = false,
     DateTimeOffset? RawPreservationRetainUntilUtc = null,
-    SourceIngestionSummary? Ingestion = null);
+    SourceIngestionSummary? Ingestion = null,
+    bool RefreshOptOut = false,
+    string? FolderId = null,
+    bool? FolderRefreshOptIn = null);
 public sealed record SourceFolderPreviewResult(
     string PreviewId,
     SourceFolderEnrollmentDraft Selection,
@@ -141,6 +144,11 @@ public sealed class SourceIngestionCoordinator
     private readonly SourceNormalizerRegistry _normalizers;
     private readonly ISourceSnapshotReader _reader;
     private readonly ISourceFolderEnumerator? _folderEnumerator;
+    private readonly object _refreshStopGate = new();
+    private readonly Dictionary<string, CancellationTokenSource> _activeFolderRefreshes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, CancellationTokenSource> _activeSourceRefreshes = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _stoppedFolderRefreshes = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _stoppedSourceRefreshes = new(StringComparer.Ordinal);
     private readonly object _folderPreviewGate = new();
     private readonly Dictionary<string, PendingSourceFolderPreview> _folderPreviews = new(StringComparer.Ordinal);
 
@@ -188,8 +196,10 @@ public sealed class SourceIngestionCoordinator
         try
         {
             var digest = SourceFingerprint.Compute(snapshot.Content);
-            return _enrollments.Enroll(owner, sourceId, zoneId, normalizedLocator, format, formatVersion,
+            var enrolled = _enrollments.Enroll(owner, sourceId, zoneId, normalizedLocator, format, formatVersion,
                 snapshot.Content.Length, digest, persistence);
+            ClearSourceRefreshStop(sourceId);
+            return enrolled;
         }
         finally
         {
@@ -636,8 +646,13 @@ public sealed class SourceIngestionCoordinator
     public EnrolledSource Revoke(
         AuthenticatedContext owner,
         string sourceId,
-        ISourceEnrollmentPersistence persistence) =>
-        _enrollments.Revoke(owner, sourceId, persistence);
+        ISourceEnrollmentPersistence persistence)
+    {
+        EnsureOwner(owner);
+        ArgumentNullException.ThrowIfNull(persistence);
+        RequestSourceRefreshStop(sourceId);
+        return _enrollments.Revoke(owner, sourceId, persistence);
+    }
 
     /// <summary>
     /// Probes only the exact enrolled locator for an active, unpaused
@@ -650,7 +665,8 @@ public sealed class SourceIngestionCoordinator
     public SourceEnrollmentStatus Status(
         AuthenticatedContext owner,
         string sourceId,
-        IVaultOperation operation)
+        IVaultOperation operation,
+        bool probeAvailability = true)
     {
         ArgumentNullException.ThrowIfNull(owner);
         ArgumentNullException.ThrowIfNull(operation);
@@ -687,6 +703,7 @@ public sealed class SourceIngestionCoordinator
         }
 
         var enrollment = LoadActiveEnrollment(owner, sourceId, operation);
+        var sourceFolder = SourceFolderEnrollmentAuthority.FindFolderForSource(fullState, enrollment.SourceId);
         var quarantine = SourceEnrollmentAuthority.FindQuarantine(
             SourceEnrollmentAuthority.ValidateAndNormalizeState(operation.LoadSourceEnrollmentState()), sourceId);
         var (revision, journal) = ReadJournal(operation, enrollment);
@@ -699,7 +716,9 @@ public sealed class SourceIngestionCoordinator
                     : enrollment.PausedAtUtc is not null
                         ? SourceEnrollmentLife.Paused
                         : SourceEnrollmentLife.Enrolled;
-            var observedAt = life == SourceEnrollmentLife.Enrolled ? DateTimeOffset.UtcNow : (DateTimeOffset?)null;
+            var observedAt = probeAvailability && life == SourceEnrollmentLife.Enrolled
+                ? DateTimeOffset.UtcNow
+                : (DateTimeOffset?)null;
             var availability = observedAt is null
                 ? SourceAvailabilityObservation.NotChecked
                 : ObserveAvailability(enrollment);
@@ -734,7 +753,10 @@ public sealed class SourceIngestionCoordinator
                 snapshotRevision,
                 enrollment.RawPreservationOptIn,
                 enrollment.RawPreservationRetainUntilUtc,
-                CreateSummary(enrollment, journal));
+                CreateSummary(enrollment, journal),
+                enrollment.RefreshOptOut,
+                sourceFolder?.FolderId,
+                sourceFolder?.RefreshOptIn);
         }
         finally
         {
@@ -1232,6 +1254,7 @@ public sealed class SourceIngestionCoordinator
                     encoded = SourceIngestionJournalCodec.Encode(nextJournal);
                     try
                     {
+                        cancellationToken.ThrowIfCancellationRequested();
                         operation.WriteContent(journalId, enrollment.ZoneId, encoded, liveRevision);
                     }
                     catch (ManagedResourceUnavailableException)
@@ -1281,21 +1304,73 @@ public sealed class SourceIngestionCoordinator
     public EnrolledSource Pause(
         AuthenticatedContext owner,
         string sourceId,
-        ISourceEnrollmentPersistence persistence) =>
-        _enrollments.Pause(owner, sourceId, persistence);
+        ISourceEnrollmentPersistence persistence)
+    {
+        EnsureOwner(owner);
+        ArgumentNullException.ThrowIfNull(persistence);
+        RequestSourceRefreshStop(sourceId);
+        return _enrollments.Pause(owner, sourceId, persistence);
+    }
 
     public EnrolledSource Resume(
         AuthenticatedContext owner,
         string sourceId,
-        ISourceEnrollmentPersistence persistence) =>
-        _enrollments.Resume(owner, sourceId, persistence);
+        ISourceEnrollmentPersistence persistence)
+    {
+        var resumed = _enrollments.Resume(owner, sourceId, persistence);
+        ClearSourceRefreshStop(sourceId);
+        return resumed;
+    }
 
     public EnrolledSource SetRefreshOptIn(
         AuthenticatedContext owner,
         string sourceId,
         bool optIn,
-        ISourceEnrollmentPersistence persistence) =>
-        _enrollments.SetRefreshOptIn(owner, sourceId, optIn, persistence);
+        ISourceEnrollmentPersistence persistence)
+    {
+        EnsureOwner(owner);
+        ArgumentNullException.ThrowIfNull(persistence);
+        if (!optIn)
+        {
+            RequestSourceRefreshStop(sourceId);
+        }
+
+        var updated = _enrollments.SetRefreshOptIn(owner, sourceId, optIn, persistence);
+        if (optIn)
+        {
+            ClearSourceRefreshStop(sourceId);
+        }
+
+        return updated;
+    }
+
+    public SourceFolderEnrollment SetFolderRefreshOptIn(
+        AuthenticatedContext owner,
+        string folderId,
+        bool optIn,
+        IVaultOperation operation)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        EnsureOwner(owner);
+        if (!optIn)
+        {
+            RequestFolderRefreshStop(folderId);
+        }
+        IReadOnlySet<string>? legacyRefreshOptOuts = null;
+        if (optIn)
+        {
+            legacyRefreshOptOuts = ReadLegacySourceRefreshOptOuts(operation);
+        }
+
+        var updated = SourceFolderEnrollmentAuthority.SetRefreshOptIn(
+            owner, folderId, optIn, operation, legacyRefreshOptOuts);
+        if (optIn)
+        {
+            ClearFolderRefreshStop(folderId);
+        }
+
+        return updated;
+    }
     public EnrolledSource SetRawPreservationOptIn(
         AuthenticatedContext owner,
         string sourceId,
@@ -1397,6 +1472,7 @@ public sealed class SourceIngestionCoordinator
                     : enrollment.PausedAtUtc is not null
                         ? SourceEnrollmentLife.Paused
                         : SourceEnrollmentLife.Enrolled;
+            var sourceFolder = SourceFolderEnrollmentAuthority.FindFolderForSource(state, enrollment.SourceId);
             var (revision, journal) = ReadJournal(operation, enrollment);
             try
             {
@@ -1428,7 +1504,10 @@ public sealed class SourceIngestionCoordinator
                     snapshotRevision,
                     enrollment.RawPreservationOptIn,
                     enrollment.RawPreservationRetainUntilUtc,
-                    CreateSummary(enrollment, journal)));
+                    CreateSummary(enrollment, journal),
+                    enrollment.RefreshOptOut,
+                    sourceFolder?.FolderId,
+                    sourceFolder?.RefreshOptIn));
             }
             finally
             {
@@ -1476,14 +1555,9 @@ public sealed class SourceIngestionCoordinator
     }
 
     /// <summary>
-    /// S3-T6 safe incremental background refresh over the owner allowlist.
-    /// Each enrolled source is visited once, in source-ID order, with only
-    /// its exact enrolled locator ever opened: an opted-in, active source
-    /// runs one idempotent incremental ingest from its persisted checkpoint;
-    /// every other source reports its skip reason without any read. There is
-    /// no filesystem polling, no directory listing, no timer, no autonomous
-    /// unlock and no plaintext key: the caller already holds an unlocked
-    /// vault operation, and lock/restart still deny every refresh read.
+    /// Runs one shared refresh pass: explicit folder consent first discovers
+    /// matching members, then the same per-source checkpoint path processes
+    /// opted-in standalone sources and members of opted-in folders.
     /// </summary>
     public IReadOnlyList<SourceRefreshResult> Refresh(
         AuthenticatedContext owner,
@@ -1492,74 +1566,532 @@ public sealed class SourceIngestionCoordinator
     {
         ArgumentNullException.ThrowIfNull(owner);
         ArgumentNullException.ThrowIfNull(operation);
-        // S3-T6-A2 live-state revalidation: the pass re-reads the encrypted
-        // enrollment state before every source, so an owner pause/opt-out/revoke
-        // that lands mid-pass stops that source's read at its own boundary
-        // instead of acting on a stale snapshot taken at pass start.
         var results = new List<SourceRefreshResult>();
-        foreach (var enrollment in ListEnrolledInOrder(operation))
+        var activeFolders = new Dictionary<string, CancellationTokenSource>(StringComparer.Ordinal);
+        try
+        {
+            var initialState = SourceEnrollmentAuthority.ValidateAndNormalizeState(operation.LoadSourceEnrollmentState());
+            IReadOnlySet<string>? legacyRefreshOptOuts = null;
+            foreach (var folder in (initialState.Folders ?? Array.Empty<SourceFolderEnrollment>())
+                         .OrderBy(candidate => candidate.FolderId, StringComparer.Ordinal))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!folder.RefreshOptIn || IsFolderRefreshStopped(folder.FolderId))
+                {
+                    continue;
+                }
+
+                var folderRefresh = BeginFolderRefresh(folder.FolderId, cancellationToken);
+                activeFolders.Add(folder.FolderId, folderRefresh);
+                if (folderRefresh.IsCancellationRequested)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var legacyOptOuts = legacyRefreshOptOuts ??= ReadLegacySourceRefreshOptOuts(operation);
+                    results.AddRange(RefreshFolderMembership(owner, folder, operation, legacyOptOuts, folderRefresh.Token));
+                }
+                catch (OperationCanceledException) when (
+                    !cancellationToken.IsCancellationRequested && folderRefresh.IsCancellationRequested)
+                {
+                    // A pending folder opt-out cancels discovery/admission before its state write.
+                }
+            }
+
+            foreach (var enrollment in ListEnrolledInOrder(operation))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var liveState = SourceEnrollmentAuthority.ValidateAndNormalizeState(operation.LoadSourceEnrollmentState());
+                var live = SourceEnrollmentAuthority.FindEnrollment(liveState, enrollment.SourceId);
+                if (live is null)
+                {
+                    results.Add(new SourceRefreshResult(enrollment.SourceId, "source_not_enrolled", 0, 0, 0, null));
+                    continue;
+                }
+
+                if (live.RevokedAtUtc is not null)
+                {
+                    results.Add(new SourceRefreshResult(live.SourceId, "skipped_revoked", 0, 0, 0, null));
+                    continue;
+                }
+
+                if (live.PausedAtUtc is not null)
+                {
+                    results.Add(new SourceRefreshResult(live.SourceId, "skipped_paused", 0, 0, 0, null));
+                    continue;
+                }
+
+                if (SourceEnrollmentAuthority.FindQuarantine(liveState, live.SourceId) is not null)
+                {
+                    results.Add(new SourceRefreshResult(live.SourceId, "skipped_quarantined", 0, 0, 0, null));
+                    continue;
+                }
+
+                if (live.RefreshOptOut)
+                {
+                    results.Add(new SourceRefreshResult(live.SourceId, "skipped_source_opted_out", 0, 0, 0, null));
+                    continue;
+                }
+
+                if (IsSourceRefreshStopped(live.SourceId))
+                {
+                    results.Add(new SourceRefreshResult(live.SourceId, "skipped_source_stop_requested", 0, 0, 0, null));
+                    continue;
+                }
+
+                var folder = SourceFolderEnrollmentAuthority.FindFolderForSource(liveState, live.SourceId);
+                CancellationTokenSource? folderRefresh = null;
+                if (folder is not null)
+                {
+                    if (!folder.RefreshOptIn)
+                    {
+                        results.Add(new SourceRefreshResult(live.SourceId, "skipped_folder_opted_out", 0, 0, 0, null));
+                        continue;
+                    }
+
+                    if (IsFolderRefreshStopped(folder.FolderId) ||
+                        !activeFolders.TryGetValue(folder.FolderId, out folderRefresh) ||
+                        folderRefresh.IsCancellationRequested)
+                    {
+                        results.Add(new SourceRefreshResult(live.SourceId, "skipped_folder_stop_requested", 0, 0, 0, null));
+                        continue;
+                    }
+                }
+                else if (!live.RefreshOptIn)
+                {
+                    results.Add(new SourceRefreshResult(live.SourceId, "skipped_not_opted_in", 0, 0, 0, null));
+                    continue;
+                }
+
+                var sourceRefresh = BeginSourceRefresh(
+                    live.SourceId, folderRefresh?.Token ?? cancellationToken);
+                try
+                {
+                    if (sourceRefresh.IsCancellationRequested)
+                    {
+                        var stopStatus = folderRefresh?.IsCancellationRequested == true
+                            ? "skipped_folder_stop_requested"
+                            : "skipped_source_stop_requested";
+                        results.Add(new SourceRefreshResult(live.SourceId, stopStatus, 0, 0, 0, null));
+                        continue;
+                    }
+
+                    SourceIngestionOutcome outcome;
+                    try
+                    {
+                        outcome = Ingest(owner, live.SourceId, operation, sourceRefresh.Token);
+                    }
+                    catch (OperationCanceledException) when (
+                        !cancellationToken.IsCancellationRequested && sourceRefresh.IsCancellationRequested)
+                    {
+                        var stopStatus = folderRefresh?.IsCancellationRequested == true
+                            ? "skipped_folder_stop_requested"
+                            : "skipped_source_stop_requested";
+                        results.Add(new SourceRefreshResult(live.SourceId, stopStatus, 0, 0, 0, null));
+                        continue;
+                    }
+
+                    var status = outcome.Kind switch
+                    {
+                        SourceIngestionOutcomeKind.Advanced => "ingest_advanced",
+                        SourceIngestionOutcomeKind.Empty => "ingest_empty",
+                        SourceIngestionOutcomeKind.Idle => "ingest_idle",
+                        SourceIngestionOutcomeKind.PartialPending => "ingest_partial_pending",
+                        SourceIngestionOutcomeKind.UnsupportedFormat => "ingest_unsupported_format",
+                        SourceIngestionOutcomeKind.UnsupportedRecord => "ingest_unsupported_record",
+                        SourceIngestionOutcomeKind.NotEnrolled => "source_not_enrolled",
+                        SourceIngestionOutcomeKind.Revoked => "source_revoked",
+                        SourceIngestionOutcomeKind.MixedQuarantined => "source_mixed_quarantined",
+                        SourceIngestionOutcomeKind.GenerationChanged => "source_generation_changed",
+                        SourceIngestionOutcomeKind.SourceMissing => "source_missing",
+                        SourceIngestionOutcomeKind.SourceUnreadable => "source_unreadable",
+                        SourceIngestionOutcomeKind.SourceTooLarge => "source_too_large",
+                        SourceIngestionOutcomeKind.JournalLimit => "source_journal_limit",
+                        SourceIngestionOutcomeKind.JournalConflict => "source_journal_conflict",
+                        SourceIngestionOutcomeKind.Paused => "source_paused",
+                        _ => "source_ingest_rejected"
+                    };
+                    results.Add(new SourceRefreshResult(
+                        live.SourceId, status, outcome.ConsumedOffset, outcome.EventsAdded,
+                        outcome.DiagnosticsAdded, outcome.DiagnosticCode));
+                }
+                finally
+                {
+                    EndSourceRefresh(live.SourceId, sourceRefresh);
+                    sourceRefresh.Dispose();
+                }
+            }
+
+            return results;
+        }
+        finally
+        {
+            foreach (var (folderId, refresh) in activeFolders)
+            {
+                EndFolderRefresh(folderId, refresh);
+                refresh.Dispose();
+            }
+        }
+    }
+
+    private IReadOnlyList<SourceRefreshResult> RefreshFolderMembership(
+        AuthenticatedContext owner,
+        SourceFolderEnrollment folder,
+        IVaultOperation operation,
+        IReadOnlySet<string> legacyRefreshOptOuts,
+        CancellationToken cancellationToken)
+    {
+        var enumerator = _folderEnumerator ?? throw new SourceOperationException("source_folder_unavailable");
+        SourceFolderEnumeration enumeration;
+        try
+        {
+            enumeration = enumerator.Enumerate(
+                folder.RootLocator,
+                folder.Recursive,
+                folder.IncludePatterns,
+                folder.ExcludePatterns,
+                cancellationToken);
+        }
+        catch (SourceOperationException exception) when (exception.Code == "source_folder_missing")
+        {
+            // Existing exact members remain enrolled; the source pass reports each missing path below.
+            return Array.Empty<SourceRefreshResult>();
+        }
+
+        var state = SourceEnrollmentAuthority.ValidateAndNormalizeState(operation.LoadSourceEnrollmentState());
+        var liveFolder = SourceFolderEnrollmentAuthority.FindFolder(state, folder.FolderId);
+        if (liveFolder is null || !liveFolder.RefreshOptIn || IsFolderRefreshStopped(folder.FolderId))
+        {
+            return Array.Empty<SourceRefreshResult>();
+        }
+
+        var purgedState = OwnerPurgeLedgerAuthority.ValidateAndNormalizeState(operation.LoadPurgeLedgerState());
+        var purgedResourceIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var intent in purgedState.Intents)
+        {
+            purgedResourceIds.Add(intent.TargetResourceId);
+            foreach (var impacted in intent.Impacted)
+            {
+                purgedResourceIds.Add(impacted.ResourceId);
+            }
+        }
+
+        var existingMemberIds = new HashSet<string>(liveFolder.MemberSourceIds, StringComparer.Ordinal);
+        var anchors = new List<SourceFolderMemberAnchor>();
+        var results = new List<SourceRefreshResult>();
+        foreach (var entry in enumeration.Entries)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var live = RefreshLiveEnrollment(operation, enrollment.SourceId);
-            if (live is null)
+            if (!entry.Included)
             {
-                results.Add(new SourceRefreshResult(enrollment.SourceId, "source_not_enrolled", 0, 0, 0, null));
                 continue;
             }
 
-            if (live.RevokedAtUtc is not null)
+            var sourceId = SourceFolderEnrollmentGrammar.MemberSourceIdFor(
+                liveFolder.RootLocator, entry.RelativePath);
+            if (existingMemberIds.Contains(sourceId))
             {
-                results.Add(new SourceRefreshResult(live.SourceId, "skipped_revoked", 0, 0, 0, null));
                 continue;
             }
 
-            if (live.PausedAtUtc is not null)
+            if (purgedResourceIds.Contains(sourceId))
             {
-                results.Add(new SourceRefreshResult(live.SourceId, "skipped_paused", 0, 0, 0, null));
+                throw new SourceOperationException("resource_purged");
+            }
+            if (legacyRefreshOptOuts.Contains(sourceId))
+            {
+                results.Add(new SourceRefreshResult(sourceId, "skipped_source_opted_out", 0, 0, 0, null));
                 continue;
             }
 
-            var liveState = SourceEnrollmentAuthority.ValidateAndNormalizeState(operation.LoadSourceEnrollmentState());
-            if (SourceEnrollmentAuthority.FindQuarantine(liveState, live.SourceId) is not null)
+            if (IsSourceRefreshStopped(sourceId))
             {
-                results.Add(new SourceRefreshResult(live.SourceId, "skipped_quarantined", 0, 0, 0, null));
+                results.Add(new SourceRefreshResult(sourceId, "skipped_source_stop_requested", 0, 0, 0, null));
                 continue;
             }
 
-            if (!live.RefreshOptIn)
+            var current = SourceEnrollmentAuthority.FindEnrollment(state, sourceId);
+            var quarantine = SourceEnrollmentAuthority.FindQuarantine(state, sourceId);
+            if (quarantine is not null)
             {
-                results.Add(new SourceRefreshResult(live.SourceId, "skipped_not_opted_in", 0, 0, 0, null));
+                if (current is null)
+                {
+                    results.Add(new SourceRefreshResult(sourceId, "skipped_quarantined", 0, 0, 0, null));
+                }
+
                 continue;
             }
 
-            var outcome = Ingest(owner, live.SourceId, operation, cancellationToken);
-            var status = outcome.Kind switch
+            if (current is not null)
             {
-                SourceIngestionOutcomeKind.Advanced => "ingest_advanced",
-                SourceIngestionOutcomeKind.Empty => "ingest_empty",
-                SourceIngestionOutcomeKind.Idle => "ingest_idle",
-                SourceIngestionOutcomeKind.PartialPending => "ingest_partial_pending",
-                SourceIngestionOutcomeKind.UnsupportedFormat => "ingest_unsupported_format",
-                SourceIngestionOutcomeKind.UnsupportedRecord => "ingest_unsupported_record",
-                SourceIngestionOutcomeKind.NotEnrolled => "source_not_enrolled",
-                SourceIngestionOutcomeKind.Revoked => "source_revoked",
-                SourceIngestionOutcomeKind.MixedQuarantined => "source_mixed_quarantined",
-                SourceIngestionOutcomeKind.GenerationChanged => "source_generation_changed",
-                SourceIngestionOutcomeKind.SourceMissing => "source_missing",
-                SourceIngestionOutcomeKind.SourceUnreadable => "source_unreadable",
-                SourceIngestionOutcomeKind.SourceTooLarge => "source_too_large",
-                SourceIngestionOutcomeKind.JournalLimit => "source_journal_limit",
-                SourceIngestionOutcomeKind.JournalConflict => "source_journal_conflict",
-                SourceIngestionOutcomeKind.Paused => "source_paused",
-                _ => "source_ingest_rejected"
-            };
-            results.Add(new SourceRefreshResult(
-                live.SourceId, status, outcome.ConsumedOffset, outcome.EventsAdded, outcome.DiagnosticsAdded, outcome.DiagnosticCode));
+                if (current.RevokedAtUtc is not null ||
+                    current.PausedAtUtc is not null ||
+                    current.RefreshOptOut ||
+                    SourceFolderEnrollmentAuthority.FindFolderForSource(state, sourceId) is not null)
+                {
+                    continue;
+                }
+
+                if (!string.Equals(current.ZoneId, liveFolder.ZoneId, StringComparison.Ordinal) ||
+                    !string.Equals(current.Locator, entry.Locator, StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(current.Format, liveFolder.Format, StringComparison.Ordinal) ||
+                    current.FormatVersion != liveFolder.FormatVersion)
+                {
+                    throw new SourceOperationException("source_enrollment_conflict");
+                }
+            }
+
+            var sourceRefresh = BeginSourceRefresh(sourceId, cancellationToken);
+            try
+            {
+                if (sourceRefresh.IsCancellationRequested)
+                {
+                    var stopStatus = cancellationToken.IsCancellationRequested
+                        ? "skipped_folder_stop_requested"
+                        : "skipped_source_stop_requested";
+                    results.Add(new SourceRefreshResult(sourceId, stopStatus, 0, 0, 0, null));
+                    continue;
+                }
+
+                SourceSnapshotResult snapshot;
+                try
+                {
+                    snapshot = _reader.TryReadSnapshot(entry.Locator, sourceRefresh.Token);
+                }
+                catch (OperationCanceledException) when (
+                    !cancellationToken.IsCancellationRequested && sourceRefresh.IsCancellationRequested)
+                {
+                    results.Add(new SourceRefreshResult(sourceId, "skipped_source_stop_requested", 0, 0, 0, null));
+                    continue;
+                }
+
+                if (snapshot.Status != SourceSnapshotStatus.Snapshot || snapshot.Content is not { } content)
+                {
+                    var status = snapshot.Status switch
+                    {
+                        SourceSnapshotStatus.Missing => "source_missing",
+                        SourceSnapshotStatus.TooLarge => "source_too_large",
+                        _ => "source_unreadable"
+                    };
+                    results.Add(new SourceRefreshResult(sourceId, status, 0, 0, 0, null));
+                    continue;
+                }
+
+                try
+                {
+                    sourceRefresh.Token.ThrowIfCancellationRequested();
+                    var digest = SourceFingerprint.Compute(content);
+                    sourceRefresh.Token.ThrowIfCancellationRequested();
+                    anchors.Add(new SourceFolderMemberAnchor(
+                        sourceId, entry.RelativePath, entry.Locator, content.Length, digest));
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(content);
+                }
+            }
+            catch (OperationCanceledException) when (
+                !cancellationToken.IsCancellationRequested && sourceRefresh.IsCancellationRequested)
+            {
+                results.Add(new SourceRefreshResult(sourceId, "skipped_source_stop_requested", 0, 0, 0, null));
+            }
+            finally
+            {
+                EndSourceRefresh(sourceId, sourceRefresh);
+                sourceRefresh.Dispose();
+            }
+        }
+
+        if (anchors.Count > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var selection = new SourceFolderEnrollmentDraft(
+                liveFolder.RootLocator,
+                liveFolder.ZoneId,
+                liveFolder.Format,
+                liveFolder.FormatVersion,
+                liveFolder.Recursive,
+                liveFolder.IncludePatterns,
+                liveFolder.ExcludePatterns,
+                liveFolder.RawPreservationRetainUntilUtc);
+            _ = SourceFolderEnrollmentAuthority.AddMembers(
+                owner,
+                liveFolder.FolderId,
+                anchors,
+                operation,
+                () => RegisterFolderSources(owner, selection, anchors, operation, cancellationToken),
+                cancellationToken);
         }
 
         return results;
     }
 
+    internal void RequestFolderRefreshStop(string? folderId)
+    {
+        if (folderId is null || !DomainIdentifiers.IsDomainIdentifier(folderId))
+        {
+            return;
+        }
+
+        lock (_refreshStopGate)
+        {
+            _stoppedFolderRefreshes.Add(folderId);
+            if (_activeFolderRefreshes.TryGetValue(folderId, out var refresh))
+            {
+                refresh.Cancel();
+            }
+        }
+    }
+
+    internal void RequestSourceRefreshStop(string? sourceId)
+    {
+        if (sourceId is null || !DomainIdentifiers.IsDomainIdentifier(sourceId))
+        {
+            return;
+        }
+
+        lock (_refreshStopGate)
+        {
+            _stoppedSourceRefreshes.Add(sourceId);
+            if (_activeSourceRefreshes.TryGetValue(sourceId, out var refresh))
+            {
+                refresh.Cancel();
+            }
+        }
+    }
+
+    private CancellationTokenSource BeginFolderRefresh(string folderId, CancellationToken cancellationToken)
+    {
+        var refresh = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        lock (_refreshStopGate)
+        {
+            if (_stoppedFolderRefreshes.Contains(folderId))
+            {
+                refresh.Cancel();
+            }
+
+            if (_activeFolderRefreshes.TryGetValue(folderId, out var previous))
+            {
+                previous.Cancel();
+            }
+
+            _activeFolderRefreshes[folderId] = refresh;
+        }
+
+        return refresh;
+    }
+
+    private void EndFolderRefresh(string folderId, CancellationTokenSource refresh)
+    {
+        lock (_refreshStopGate)
+        {
+            if (_activeFolderRefreshes.TryGetValue(folderId, out var active) &&
+                ReferenceEquals(active, refresh))
+            {
+                _activeFolderRefreshes.Remove(folderId);
+            }
+        }
+    }
+
+    private CancellationTokenSource BeginSourceRefresh(string sourceId, CancellationToken cancellationToken)
+    {
+        var refresh = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        lock (_refreshStopGate)
+        {
+            if (_stoppedSourceRefreshes.Contains(sourceId))
+            {
+                refresh.Cancel();
+            }
+
+            if (_activeSourceRefreshes.TryGetValue(sourceId, out var previous))
+            {
+                previous.Cancel();
+            }
+
+            _activeSourceRefreshes[sourceId] = refresh;
+        }
+
+        return refresh;
+    }
+
+    private void EndSourceRefresh(string sourceId, CancellationTokenSource refresh)
+    {
+        lock (_refreshStopGate)
+        {
+            if (_activeSourceRefreshes.TryGetValue(sourceId, out var active) &&
+                ReferenceEquals(active, refresh))
+            {
+                _activeSourceRefreshes.Remove(sourceId);
+            }
+        }
+    }
+
+    private bool IsFolderRefreshStopped(string folderId)
+    {
+        lock (_refreshStopGate)
+        {
+            return _stoppedFolderRefreshes.Contains(folderId);
+        }
+    }
+
+    private bool IsSourceRefreshStopped(string sourceId)
+    {
+        lock (_refreshStopGate)
+        {
+            return _stoppedSourceRefreshes.Contains(sourceId);
+        }
+    }
+
+    private void ClearFolderRefreshStop(string folderId)
+    {
+        lock (_refreshStopGate)
+        {
+            _stoppedFolderRefreshes.Remove(folderId);
+        }
+    }
+
+    private void ClearSourceRefreshStop(string sourceId)
+    {
+        lock (_refreshStopGate)
+        {
+            _stoppedSourceRefreshes.Remove(sourceId);
+        }
+    }
+
+    private static void EnsureOwner(AuthenticatedContext owner)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        if (owner.Kind != PrincipalKind.Owner)
+        {
+            throw new UnauthorizedAccessException("Only the owner may change source enrollment or refresh consent.");
+        }
+    }
+
+    private static IReadOnlySet<string> ReadLegacySourceRefreshOptOuts(IVaultOperation operation)
+    {
+        var audit = OperationsAuditAuthority.ValidateAndNormalizeState(operation.LoadOperationsAuditState());
+        var optedOutSources = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var entry in audit.Audit)
+        {
+            if (entry.ResourceId is not { } sourceId)
+            {
+                continue;
+            }
+
+            if (string.Equals(entry.Action, ServiceRequestHandler.SourceRefreshOptOutOperation, StringComparison.Ordinal))
+            {
+                optedOutSources.Add(sourceId);
+            }
+            else if (string.Equals(entry.Action, ServiceRequestHandler.SourceRefreshOptInOperation, StringComparison.Ordinal))
+            {
+                optedOutSources.Remove(sourceId);
+            }
+        }
+
+        return optedOutSources;
+    }
     private static bool IsDiagnostic(string value) =>
         SourceEnrollmentGrammar.IsDiagnosticCode(value);
     private static IReadOnlyList<EnrolledSource> ListEnrolledInOrder(IVaultOperation operation)
@@ -1568,11 +2100,6 @@ public sealed class SourceIngestionCoordinator
         return state.Enrollments.OrderBy(candidate => candidate.SourceId, StringComparer.Ordinal).ToArray();
     }
 
-    private static EnrolledSource? RefreshLiveEnrollment(IVaultOperation operation, string sourceId)
-    {
-        var state = SourceEnrollmentAuthority.ValidateAndNormalizeState(operation.LoadSourceEnrollmentState());
-        return SourceEnrollmentAuthority.FindEnrollment(state, sourceId);
-    }
 
     private void RecordQuarantine(
         AuthenticatedContext owner,

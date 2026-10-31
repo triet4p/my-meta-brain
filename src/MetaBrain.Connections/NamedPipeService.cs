@@ -162,6 +162,8 @@ internal sealed class NamedPipeService
             timeout.CancelAfter(RequestTimeout);
             using var reader = new StreamReader(pipe, new UTF8Encoding(false, true), detectEncodingFromByteOrderMarks: false, 4096, leaveOpen: true);
             using var writer = new StreamWriter(pipe, new UTF8Encoding(false, true), 4096, leaveOpen: true) { AutoFlush = true };
+            string? requestOperation = null;
+            var lockRefreshCancellation = CancellationToken.None;
 
             try
             {
@@ -195,6 +197,8 @@ internal sealed class NamedPipeService
                     await WriteErrorAsync(writer, "forbidden", timeout.Token).ConfigureAwait(false);
                     return;
                 }
+                requestOperation = request.Operation;
+                _handler.RequestRefreshStop(request);
 
                 if (string.Equals(request.Operation, ServiceRequestHandler.OwnerIndexRebuildOperation, StringComparison.Ordinal))
                 {
@@ -313,6 +317,8 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.SourceEnrollOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceFolderPreviewOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceFolderEnrollOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceFolderRefreshOptInOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.SourceFolderRefreshOptOutOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceRevokeOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceStatusOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.SourceIngestOperation, StringComparison.Ordinal) ||
@@ -385,7 +391,17 @@ internal sealed class NamedPipeService
                     var context = channel == PrincipalKind.Owner
                         ? AuthenticatedContext.ForOwner()
                         : AuthenticatedContext.ForAgent("agent", "pending");
-                    var reply = await _handler.HandleAsync(context, request, operation, timeout.Token).ConfigureAwait(false);
+                    if (string.Equals(request.Operation, ServiceRequestHandler.SourceRefreshOperation, StringComparison.Ordinal))
+                    {
+                        lockRefreshCancellation = _vault.RefreshCancellation;
+                    }
+
+                    using var refreshCancellation = string.Equals(
+                            request.Operation, ServiceRequestHandler.SourceRefreshOperation, StringComparison.Ordinal)
+                        ? CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, lockRefreshCancellation)
+                        : null;
+                    var requestCancellation = refreshCancellation?.Token ?? timeout.Token;
+                    var reply = await _handler.HandleAsync(context, request, operation, requestCancellation).ConfigureAwait(false);
                     await writer.WriteLineAsync(JsonSerializer.Serialize(reply, OutputOptions).AsMemory(), timeout.Token).ConfigureAwait(false);
                 }
                 finally
@@ -396,11 +412,15 @@ internal sealed class NamedPipeService
                     }
                 }
             }
-            catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+            catch (OperationCanceledException) when (
+                timeout.IsCancellationRequested ||
+                (string.Equals(requestOperation, ServiceRequestHandler.SourceRefreshOperation, StringComparison.Ordinal) &&
+                 lockRefreshCancellation.IsCancellationRequested))
             {
                 if (!stoppingToken.IsCancellationRequested)
                 {
-                    await WriteErrorAsync(writer, "request_timeout", CancellationToken.None).ConfigureAwait(false);
+                    var error = lockRefreshCancellation.IsCancellationRequested ? "vault_locked" : "request_timeout";
+                    await WriteErrorAsync(writer, error, CancellationToken.None).ConfigureAwait(false);
                 }
             }
             catch (Exception ex) when (ex is IOException or JsonException or InvalidDataException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)

@@ -78,6 +78,8 @@ internal static class OwnerControlCli
                 "source-read" => await SourceReadAsync(options).ConfigureAwait(false),
                 "source-enroll" => await SourceEnrollAsync(options).ConfigureAwait(false),
                 "source-folder-enroll" => await SourceFolderEnrollAsync(options).ConfigureAwait(false),
+                "source-folder-refresh-optin" => await SourceFolderRefreshOptInAsync(options, optIn: true).ConfigureAwait(false),
+                "source-folder-refresh-optout" => await SourceFolderRefreshOptInAsync(options, optIn: false).ConfigureAwait(false),
                 "source-revoke" => await SourceRevokeAsync(options).ConfigureAwait(false),
                 "source-status" => await SourceStatusAsync(options).ConfigureAwait(false),
                 "source-ingest" => await SourceIngestAsync(options).ConfigureAwait(false),
@@ -1824,7 +1826,43 @@ internal static class OwnerControlCli
             $"SOURCE FOLDER {(alreadyEnrolled ? "already_enrolled" : "enrolled")} id={JsonValueText(enrollment, "folderId")} " +
             $"members={JsonValueText(enrollment, "memberCount")} format={JsonValueText(enrollment, "format")} " +
             $"recursive={JsonFlagText(enrollment, "recursive")} " +
-            $"rawPreservationRetainUntilUtc={JsonValueText(enrollment, "rawPreservationRetainUntilUtc")}");
+            $"rawPreservationRetainUntilUtc={JsonValueText(enrollment, "rawPreservationRetainUntilUtc")} " +
+            $"refreshOptIn={JsonFlagText(enrollment, "refreshOptIn")}");
+        return 0;
+    }
+
+    private static async Task<int> SourceFolderRefreshOptInAsync(CommandOptions options, bool optIn)
+    {
+        options.RequireOnly("--control-pipe", "--folder-id");
+        var controlPipe = ControlPipe(options);
+        var folderId = options.Required("--folder-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(folderId))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                optIn
+                    ? ServiceRequestHandler.SourceFolderRefreshOptInOperation
+                    : ServiceRequestHandler.SourceFolderRefreshOptOutOperation,
+                ResourceId: folderId)).ConfigureAwait(false);
+        var expected = optIn ? "source_folder_refresh_opted_in" : "source_folder_refresh_opted_out";
+        if (!result.Success || !HasStatus(result.Reply, expected) ||
+            !result.Reply.TryGetProperty("sourceFolderEnrollment", out var enrollment) ||
+            enrollment.ValueKind != JsonValueKind.Object)
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        Console.WriteLine(
+            $"SOURCE FOLDER {(optIn ? "refresh_opted_in" : "refresh_opted_out")} " +
+            $"id={JsonValueText(enrollment, "folderId")} " +
+            $"refreshOptIn={JsonFlagText(enrollment, "refreshOptIn")} " +
+            $"members={JsonValueText(enrollment, "memberCount")}");
         return 0;
     }
 
@@ -2263,7 +2301,7 @@ internal static class OwnerControlCli
 
         foreach (var enrollment in enrollments.EnumerateArray())
         {
-            Console.WriteLine($"SOURCE id={JsonValueText(enrollment, "sourceId")} zone={JsonValueText(enrollment, "zoneId")} format={JsonValueText(enrollment, "format")} version={JsonValueText(enrollment, "formatVersion")} generation={JsonValueText(enrollment, "generation")} life={JsonValueText(enrollment, "life")} availability={JsonValueText(enrollment, "availability")} pausedUtc={JsonValueText(enrollment, "pausedAtUtc")} refreshOptIn={JsonFlagText(enrollment, "refreshOptIn")} sourceReferenceRevision={JsonValueText(enrollment, "sourceReferenceRevision")} journalCiphertextBytes={JsonValueText(enrollment, "journalCiphertextBytes")} snapshotCiphertextBytes={JsonValueText(enrollment, "snapshotCiphertextBytes")} snapshotRevision={JsonValueText(enrollment, "snapshotRevision")}");
+            Console.WriteLine($"SOURCE id={JsonValueText(enrollment, "sourceId")} zone={JsonValueText(enrollment, "zoneId")} format={JsonValueText(enrollment, "format")} version={JsonValueText(enrollment, "formatVersion")} generation={JsonValueText(enrollment, "generation")} life={JsonValueText(enrollment, "life")} availability={JsonValueText(enrollment, "availability")} pausedUtc={JsonValueText(enrollment, "pausedAtUtc")} refreshOptIn={JsonFlagText(enrollment, "refreshOptIn")} refreshOptOut={JsonFlagText(enrollment, "refreshOptOut")} folderId={JsonValueText(enrollment, "folderId")} folderRefreshOptIn={JsonFlagText(enrollment, "folderRefreshOptIn")} sourceReferenceRevision={JsonValueText(enrollment, "sourceReferenceRevision")} journalCiphertextBytes={JsonValueText(enrollment, "journalCiphertextBytes")} snapshotCiphertextBytes={JsonValueText(enrollment, "snapshotCiphertextBytes")} snapshotRevision={JsonValueText(enrollment, "snapshotRevision")}");
         }
 
         Console.WriteLine($"SOURCES count={enrollments.GetArrayLength()}");
@@ -2601,6 +2639,9 @@ internal static class OwnerControlCli
             $"relocatedUtc={JsonValueText(enrollment, "relocatedAtUtc")} " +
             $"pausedUtc={JsonValueText(enrollment, "pausedAtUtc")} " +
             $"refreshOptIn={JsonFlagText(enrollment, "refreshOptIn")} " +
+            $"refreshOptOut={JsonFlagText(enrollment, "refreshOptOut")} " +
+            $"folderId={JsonValueText(enrollment, "folderId")} " +
+            $"folderRefreshOptIn={JsonFlagText(enrollment, "folderRefreshOptIn")} " +
             $"rawPreservationOptIn={JsonFlagText(enrollment, "rawPreservationOptIn")} " +
             $"rawPreservationRetainUntilUtc={JsonValueText(enrollment, "rawPreservationRetainUntilUtc")} " +
             $"journalCiphertextBytes={JsonValueText(enrollment, "journalCiphertextBytes")} " +
@@ -7775,7 +7816,7 @@ internal static class OwnerControlCli
             Console.Error.WriteLine("  library: library|memory-read|source-read|research-read|relation-read|lifecycle-read|lifecycle-retained-read|recall-read|review-list|review-record|index-status|index-rebuild");
             Console.Error.WriteLine("  review: proposal-list|proposal-read|proposal-publish|proposal-reject|lifecycle-publish|lifecycle-reject|lifecycle-withdraw|lifecycle-repropose|lifecycle-question-resolve|lifecycle-question-reopen|relation-list|relation-read|relation-create|relation-accept|relation-reject|relation-unlink|relation-relink|declassify-preview|declassify-publish|declassify-proposal-publish");
             Console.Error.WriteLine("  sharing: catalog-preview|catalog-publish|catalog-list|catalog-withdraw|collections|collection-set|grants|grant|requests|request-preview|request-approve|request-reject|sessions|session|revoke-session|redeem (+ agent-mcp transport)");
-            Console.Error.WriteLine("  sources: collections|source-list|source-status|source-enroll|source-folder-enroll|source-relocate|source-revoke|source-ingest|source-pause|source-resume|source-refresh-optin|source-refresh-optout|source-raw-preservation-optin|source-raw-preservation-optout|source-preserved-record-read|source-refresh|source-mapping-submit|source-mapping-resolve|source-snapshot-list|source-snapshot-preserve|source-snapshot-read|source-snapshot-retain|source-snapshot-purge");
+            Console.Error.WriteLine("  sources: collections|source-list|source-status|source-enroll|source-folder-enroll|source-folder-refresh-optin|source-folder-refresh-optout|source-relocate|source-revoke|source-ingest|source-pause|source-resume|source-refresh-optin|source-refresh-optout|source-raw-preservation-optin|source-raw-preservation-optout|source-preserved-record-read|source-refresh|source-mapping-submit|source-mapping-resolve|source-snapshot-list|source-snapshot-preserve|source-snapshot-read|source-snapshot-retain|source-snapshot-purge");
             Console.Error.WriteLine("  planning: lifecycle-create|lifecycle-validity-set|lifecycle-retain|lifecycle-intention-complete|lifecycle-intention-cancel|lifecycle-intention-supersede|lifecycle-intention-notify|lifecycle-intention-acknowledge|intentions|intention-trigger-set|intention-trigger-clear|intention-context-set|intention-context-disable|intention-schedule-run|recall-apply|purge-preview|purge-confirm|purge-resume");
             Console.Error.WriteLine("  models: provider-config|provider-status|job-create|job-start|job-cancel|job-status|job-list|job-ledger|schedule-set|schedule-disable|schedule-status|schedule-run");
             Console.Error.WriteLine("Every owner command needs --control-pipe <pipe>; agent-scoped reads use --agent-pipe plus --session-file instead. Credentials are interactive prompts only, never options. Destructive or authority-minting acts print a frozen preview and require a typed confirmation.");
@@ -7802,7 +7843,9 @@ internal static class OwnerControlCli
         "source-create" => "owner source-create --control-pipe <pipe> --resource-id <id> --zone-id <zone> (--title T --locator L --version V --availability available|unavailable|unknown [--author role] [--method M]... | --input-file <draft.json>): register source metadata.",
         "source-revise" => "owner source-revise --control-pipe <pipe> --resource-id <id> --zone-id <zone> --expected-revision <live> (same inputs as source-create): revision-gated metadata edit.",
         "source-read" => "owner source-read --control-pipe <pipe> --resource-id <id> [--resource-revision N]: registered source metadata.",
-        "source-folder-enroll" => "owner source-folder-enroll --control-pipe <pipe> --folder <absolute-path> --zone-id <zone> --format <format> --format-version <N> --recursive true|false --include-globs <glob[,glob...]> --exclude-globs <glob[,glob...]|none> [--raw-preservation-until-utc <UTC>]: preview one bounded folder enumeration, then type ENROLL once to add the exact member metadata to the canonical source registry and encrypted source allowlist. The optional retention explicitly opts every newly enrolled member into raw-byte preservation through that UTC deadline; omission stays reference-only. Included locator paths use the existing source-registry limit of 512 characters. The format mapping applies to every included file; later folder changes are not adopted.",
+        "source-folder-enroll" => "owner source-folder-enroll --control-pipe <pipe> --folder <absolute-path> --zone-id <zone> --format <format> --format-version <N> --recursive true|false --include-globs <glob[,glob...]> --exclude-globs <glob[,glob...]|none> [--raw-preservation-until-utc <UTC>]: preview one bounded folder enumeration, then type ENROLL once to add the exact member metadata to the canonical source registry and encrypted source allowlist. The optional retention explicitly opts every newly enrolled member into raw-byte preservation through that UTC deadline; omission stays reference-only. Included locator paths use the existing source-registry limit of 512 characters. The format mapping applies to every included file; membership changes require separate folder refresh consent.",
+        "source-folder-refresh-optin" => "owner source-folder-refresh-optin --control-pipe <pipe> --folder-id <id>: explicitly allow the shared manual/background refresh pass to read and admit current and future matching regular files within the stored root/include/exclude and reparse/final-path boundaries. Default is off; enrollment confirmation alone is not refresh consent. Per-source pause, revoke, and opt-out remain vetoes; lock and folder opt-out stop reads.",
+        "source-folder-refresh-optout" => "owner source-folder-refresh-optout --control-pipe <pipe> --folder-id <id>: stop manual/background refresh for this folder without changing member consent, membership, or saved canonical/history data.",
         "source-status" => "owner source-status --control-pipe <pipe> --source-id <id>: reports availability, preservation, interpretation and derivation independently, plus offsets/diagnostics and preserved byte descriptors. Reference-only exact reads remain source-dependent.",
         "source-ingest" => "owner source-ingest --control-pipe <pipe> --source-id <id>: interpret supported records, preserve complete unsupported records only after explicit preservation opt-in, and report checkpoint/facets.",
         "source-raw-preservation-optin" => "owner source-raw-preservation-optin --control-pipe <pipe> --source-id <id> --retain-until-utc <UTC>: explicit owner consent to retain future unsupported original bytes encrypted in this source's journal through the deadline.",

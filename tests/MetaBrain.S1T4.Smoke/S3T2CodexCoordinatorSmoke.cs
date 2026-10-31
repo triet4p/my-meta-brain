@@ -47,7 +47,7 @@ internal sealed class S3T2CodexCoordinatorHarness : IDisposable
 
     public ServiceRequestHandler Handler { get; private set; }
 
-    public static S3T2CodexCoordinatorHarness Create()
+    public static S3T2CodexCoordinatorHarness Create(ISourceSnapshotReader? sourceReader = null)
     {
         var root = Path.Combine(Path.GetTempPath(), "MetaBrain-S3-T2-" + Guid.NewGuid().ToString("N"));
         if (Directory.Exists(root) || File.Exists(root))
@@ -74,7 +74,7 @@ internal sealed class S3T2CodexCoordinatorHarness : IDisposable
                 "The synthetic harness vault did not unlock.");
             var index = new EncryptedPrivateIndexStore(Path.Combine(serviceDirectory, "vault"), lifecycle);
             return new S3T2CodexCoordinatorHarness(
-                root, store, index, lifecycle, BuildHandler(lifecycle, index));
+                root, store, index, lifecycle, BuildHandler(lifecycle, index, sourceReader));
         }
         catch
         {
@@ -121,7 +121,11 @@ internal sealed class S3T2CodexCoordinatorHarness : IDisposable
     public async Task<ServiceReply> OwnerSendAsync(ServiceRequest request, CancellationToken cancellationToken = default)
     {
         var needsOperation =
-            request.Operation is ServiceRequestHandler.SourceEnrollOperation or
+            request.Operation is ServiceRequestHandler.SourceFolderPreviewOperation or
+                ServiceRequestHandler.SourceFolderEnrollOperation or
+                ServiceRequestHandler.SourceFolderRefreshOptInOperation or
+                ServiceRequestHandler.SourceFolderRefreshOptOutOperation or
+                ServiceRequestHandler.SourceEnrollOperation or
                 ServiceRequestHandler.SourceRevokeOperation or
                 ServiceRequestHandler.SourceStatusOperation or
                 ServiceRequestHandler.SourceIngestOperation or
@@ -158,7 +162,10 @@ internal sealed class S3T2CodexCoordinatorHarness : IDisposable
         DeleteS3T2Root(_root);
     }
 
-    private static ServiceRequestHandler BuildHandler(VaultLifecycle lifecycle, IPrivateIndexStore privateIndex)
+    private static ServiceRequestHandler BuildHandler(
+        VaultLifecycle lifecycle,
+        IPrivateIndexStore privateIndex,
+        ISourceSnapshotReader? sourceReader = null)
     {
         // The real shipped registry content: the Codex parser, and nothing
         // else, attached through the same registry the service uses.
@@ -171,7 +178,8 @@ internal sealed class S3T2CodexCoordinatorHarness : IDisposable
             projections: null,
             privateIndex: privateIndex,
             sourceNormalizers: normalizers,
-            sourceReader: new EnrolledSourceFileReader());
+            sourceReader: sourceReader ?? new EnrolledSourceFileReader(),
+            sourceFolderEnumerator: new SourceFolderFileEnumerator());
     }
 
     private static void RequireHarness(bool condition, string message)

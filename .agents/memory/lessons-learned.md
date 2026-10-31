@@ -802,3 +802,10 @@ the assignment can fail before the sentinel check or any child starts.
 **Fix / workaround:** Keep the validated envelope identity on the refusal decode; the existing preserved branch records it and adds it to the known-chain set only after preserving the exact bytes. The smoke now checks the corrected baseline and asserts the preserved `e13` identity and `e14` user child independently.
 **Watch out for:** A valid envelope with a dangling parent refuses that record, but preserving the record can still admit its own validated identity for later children. Invalid JSON/encoding, missing or invalid envelope fields, and version barriers still provide no identity.
 
+
+## [2026-10-31] Cancelled file snapshots bypassed partial-buffer cleanup
+
+**Symptom:** Static inspection found that canceling a source refresh mid-snapshot could exit before the partially filled byte buffer was cleared.
+**Root cause:** `OperationCanceledException` propagated outside the reader's existing I/O failure handler, which was the only path clearing the allocated buffer.
+**Fix / workaround:** Read in bounded 64 KiB chunks, check cancellation between chunks and before returning a complete snapshot, and clear the buffer in a dedicated cancellation catch before rethrowing. The coordinator's existing `finally` still clears a snapshot after ownership transfers to ingestion.
+**Watch out for:** Lock, folder opt-out, source pause, or source opt-out can cancel an active exact-file snapshot; every pre-publication cancellation path must clear temporary source bytes and leave the journal checkpoint unchanged.

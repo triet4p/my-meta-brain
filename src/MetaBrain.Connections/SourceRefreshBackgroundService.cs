@@ -4,20 +4,16 @@ using MetaBrain.Core.Security;
 namespace MetaBrain.Connections;
 
 /// <summary>
-/// S3-T6-A2 owner-opt-in background incremental refresh loop. The loop runs inside
-/// the service process alongside the named-pipe listeners and wakes periodically
-/// while the vault is unlocked; every pass visits only enrolled allowlist sources
-/// whose owners explicitly opted in, in source-ID order, through the same
-/// coordinator path as the manual refresh command. There is no filesystem polling,
-/// no directory listing, no autonomous unlock and no plaintext key or queue: a pass
-/// opens a counted vault operation only while unlocked, reads only exact enrolled
-/// locators, commits through the existing encrypted journal checkpoint, and stops at
-/// the next per-source boundary when the vault locks or a source is paused, revoked
-/// or opted out. A lock cancels the in-flight pass via the lifecycle's
-/// refresh-cancellation signal; a pause/opt-out/revoke observed at the per-source
-/// boundary skips that source with no read. Checkpoints resume on the next pass or
-/// after unlock/restart without duplicates because every pass is the same idempotent
-/// incremental ingest from the persisted checkpoint.
+/// S3-T6/S11-T4 owner-opt-in background incremental refresh loop. It runs in the service
+/// process and shares the exact coordinator path with manual `source-refresh`. Standalone
+/// sources require per-source consent; an opted-in folder may enumerate only its stored root
+/// and include/exclude rules to admit matching regular members. Every read still uses the
+/// enrolled-source reader and its final-path/reparse checks. The loop does not scan home or
+/// profile locations, unlock autonomously, or use a plaintext key or private queue. It opens a
+/// counted vault operation only while unlocked and commits through the encrypted journal
+/// checkpoint. Source pause, revoke and explicit opt-out veto folder consent; folder opt-out
+/// and vault lock cancel the active pass at a read boundary, zero partial bytes and leave the
+/// checkpoint frozen. The persisted checkpoint makes the next pass/restart idempotent.
 /// </summary>
 internal sealed class SourceRefreshBackgroundService
 {

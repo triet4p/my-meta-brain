@@ -798,7 +798,10 @@ public sealed record SourceEnrollmentWire(
     long UnprocessedBytes = 0,
     long PreservedPendingBytes = 0,
     SourceRecordDiagnosticWire? LastDiagnostic = null,
-    SourcePreservedRecordDescriptorWire[]? PreservedRecords = null);
+    SourcePreservedRecordDescriptorWire[]? PreservedRecords = null,
+    bool RefreshOptOut = false,
+    string? FolderId = null,
+    bool? FolderRefreshOptIn = null);
 
 public sealed record SourceRecordDiagnosticWire(string Code, long Offset);
 
@@ -868,7 +871,8 @@ public sealed record SourceFolderEnrollmentWire(
     string[] MemberSourceIds,
     DateTimeOffset EnrolledAtUtc,
     bool AlreadyEnrolled,
-    DateTimeOffset? RawPreservationRetainUntilUtc = null);
+    DateTimeOffset? RawPreservationRetainUntilUtc = null,
+    bool RefreshOptIn = false);
 
 
 public sealed record SourceSnapshotWire(
@@ -1193,6 +1197,8 @@ public sealed class ServiceRequestHandler
     public const string SourceEnrollOperation = "source.enroll";
     public const string SourceFolderPreviewOperation = "source.folder.preview";
     public const string SourceFolderEnrollOperation = "source.folder.enroll";
+    public const string SourceFolderRefreshOptInOperation = "source.folder.refresh.optin";
+    public const string SourceFolderRefreshOptOutOperation = "source.folder.refresh.optout";
     public const string SourceRevokeOperation = "source.revoke";
     public const string SourceStatusOperation = "source.status";
     public const string SourceIngestOperation = "source.ingest";
@@ -1294,6 +1300,26 @@ public sealed class ServiceRequestHandler
         {
             _sourceIngestion = new SourceIngestionCoordinator(
                 new SourceEnrollmentAuthority(), sourceNormalizers, sourceReader, sourceFolderEnumerator);
+        }
+    }
+
+    public void RequestRefreshStop(ServiceRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (_sourceIngestion is null || request.ResourceId is null || HasSourceCommandExtras(request))
+        {
+            return;
+        }
+
+        if (string.Equals(request.Operation, SourceFolderRefreshOptOutOperation, StringComparison.Ordinal))
+        {
+            _sourceIngestion.RequestFolderRefreshStop(request.ResourceId);
+        }
+        else if (string.Equals(request.Operation, SourcePauseOperation, StringComparison.Ordinal) ||
+                 string.Equals(request.Operation, SourceRevokeOperation, StringComparison.Ordinal) ||
+                 string.Equals(request.Operation, SourceRefreshOptOutOperation, StringComparison.Ordinal))
+        {
+            _sourceIngestion.RequestSourceRefreshStop(request.ResourceId);
         }
     }
 
@@ -1884,6 +1910,8 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, SourceEnrollOperation, StringComparison.Ordinal) ||
             string.Equals(request.Operation, SourceFolderPreviewOperation, StringComparison.Ordinal) ||
             string.Equals(request.Operation, SourceFolderEnrollOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceFolderRefreshOptInOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceFolderRefreshOptOutOperation, StringComparison.Ordinal) ||
             string.Equals(request.Operation, SourceRelocateOperation, StringComparison.Ordinal) ||
             string.Equals(request.Operation, SourceRevokeOperation, StringComparison.Ordinal) ||
             string.Equals(request.Operation, SourceStatusOperation, StringComparison.Ordinal) ||
@@ -3832,7 +3860,56 @@ public sealed class ServiceRequestHandler
                         enrolled.Folder.MemberSourceIds,
                         enrolled.Folder.EnrolledAtUtc,
                         enrolled.AlreadyEnrolled,
-                        enrolled.Folder.RawPreservationRetainUntilUtc));
+                        enrolled.Folder.RawPreservationRetainUntilUtc,
+                        enrolled.Folder.RefreshOptIn));
+            }
+            catch (ArgumentException)
+            {
+                return Error("invalid_request");
+            }
+            catch (SourceOperationException ex)
+            {
+                return Error(ex.Code);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Error("forbidden");
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException)
+            {
+                return Error("source_state_unavailable");
+            }
+        }
+
+        if (string.Equals(request.Operation, SourceFolderRefreshOptInOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceFolderRefreshOptOutOperation, StringComparison.Ordinal))
+        {
+            if (HasSourceCommandExtras(request) || string.IsNullOrEmpty(request.ResourceId))
+            {
+                return Error("invalid_request");
+            }
+
+            try
+            {
+                var optIn = string.Equals(request.Operation, SourceFolderRefreshOptInOperation, StringComparison.Ordinal);
+                var folder = _sourceIngestion.SetFolderRefreshOptIn(context, request.ResourceId, optIn, operation);
+                return new ServiceReply(
+                    CurrentProtocolVersion,
+                    optIn ? "source_folder_refresh_opted_in" : "source_folder_refresh_opted_out",
+                    "owner",
+                    null,
+                    SourceFolderEnrollment: new SourceFolderEnrollmentWire(
+                        folder.FolderId,
+                        folder.ZoneId,
+                        folder.Format,
+                        folder.FormatVersion,
+                        folder.Recursive,
+                        folder.MemberSourceIds.Length,
+                        folder.MemberSourceIds,
+                        folder.EnrolledAtUtc,
+                        true,
+                        folder.RawPreservationRetainUntilUtc,
+                        folder.RefreshOptIn));
             }
             catch (ArgumentException)
             {
@@ -4172,7 +4249,7 @@ public sealed class ServiceRequestHandler
 
                 var optIn = string.Equals(request.Operation, SourceRefreshOptInOperation, StringComparison.Ordinal);
                 var updated = _sourceIngestion.SetRefreshOptIn(context, request.ResourceId, optIn, operation);
-                var current = _sourceIngestion.Status(context, request.ResourceId, operation);
+                var current = _sourceIngestion.Status(context, request.ResourceId, operation, probeAvailability: optIn);
                 return new ServiceReply(CurrentProtocolVersion,
                     optIn ? "source_refresh_opted_in" : "source_refresh_opted_out", "owner", null,
                     SourceEnrollment: ToSourceEnrollmentWire(current),
@@ -4383,7 +4460,10 @@ public sealed class ServiceRequestHandler
             ingestion is null
                 ? null
                 : ingestion.PreservedRecords.Select(record => new SourcePreservedRecordDescriptorWire(
-                    record.Offset, record.Length, record.Digest, record.RetainUntilUtc)).ToArray());
+                    record.Offset, record.Length, record.Digest, record.RetainUntilUtc)).ToArray(),
+            status.RefreshOptOut,
+            status.FolderId,
+            status.FolderRefreshOptIn);
     }
 
     private static SourceEnrollmentWire ToSourceEnrollmentWire(
@@ -4424,7 +4504,8 @@ public sealed class ServiceRequestHandler
         enrolled.PausedAtUtc,
         enrolled.RefreshOptIn,
         RawPreservationOptIn: enrolled.RawPreservationOptIn,
-        RawPreservationRetainUntilUtc: enrolled.RawPreservationRetainUntilUtc);
+        RawPreservationRetainUntilUtc: enrolled.RawPreservationRetainUntilUtc,
+        RefreshOptOut: enrolled.RefreshOptOut);
 
     private ServiceReply HandleSourceSnapshotCommand(
         AuthenticatedContext context,

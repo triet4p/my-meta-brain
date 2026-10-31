@@ -229,3 +229,10 @@ và corpus schema 3 là evidence đi kèm.
   chưa có runtime/UI/CLI/MCP evidence. Corpus expectation không phải PASS sản phẩm. Approval không bao
   gồm push/tag/publication, provider/network access, host/ACL/registry mutation hoặc migration dữ liệu 1.0;
   các gate full-route và checkpoint vẫn giữ nguyên.
+
+### Owner-approved S11-T4 folder refresh policy — 2026-10-31
+
+The owner approved explicit `folder-refresh-optin` / `folder-refresh-optout` consent, default off. The original folder preview/confirmation is not refresh consent. While opted in, the folder policy covers current and future matching regular files under the selected root and stored include/exclude rules; new files are admitted and read only after reparse, root, and final-path boundaries pass. A source-level pause, revoke, or explicit refresh opt-out vetoes the folder policy without being overwritten. Folder opt-out and vault lock stop refresh at the source boundary. Deleted members remain canonical/history and are reported missing; refresh never automatically revokes or purges them. Manual and background refresh share the same coordinator.
+
+This records the owner-approved T4 contract, not shipped behavior or runtime evidence. Existing CR02/D088 requirements, encrypted preservation and retention, journal/checkpoint atomicity and compatibility, attribution, and scoped-rights constraints remain unchanged; S11-T4 remains subject to its full-route evidence and separate checkpoint gates.
+

@@ -266,9 +266,16 @@ internal static partial class OwnerServiceSmoke
             var folderStatus = await RunOwnerCommandAsync(
                 connectionsExecutable, "owner", "source-status", "--control-pipe", fixture.ControlPipe,
                 "--source-id", folderSourceId).ConfigureAwait(false);
-            Require(folderStatus.ExitCode == 0 && folderStatus.StandardOutput.Contains("rawPreservationOptIn=true", StringComparison.Ordinal) &&
-                    folderStatus.StandardOutput.Contains(retentionText, StringComparison.Ordinal),
-                "Folder preservation consent was not propagated to its enrolled member.");
+            Require(folderStatus.ExitCode == 0,
+                "Folder member status failed (exit=" + folderStatus.ExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+                "; stdout=" + folderStatus.StandardOutput.Trim() + "; stderr=" + folderStatus.StandardError.Trim() + ").");
+            Require(folderStatus.StandardOutput.Contains("rawPreservationOptIn=true", StringComparison.Ordinal),
+                "Folder member raw-preservation consent was not propagated (stdout=" +
+                folderStatus.StandardOutput.Trim() + "; stderr=" + folderStatus.StandardError.Trim() + ").");
+            Require(folderStatus.StandardOutput.Contains(retentionText, StringComparison.Ordinal),
+                "Folder member raw-preservation retention differs from the explicit choice (expected=" +
+                retentionText + "; stdout=" + folderStatus.StandardOutput.Trim() +
+                "; stderr=" + folderStatus.StandardError.Trim() + ").");
             var folderIngest = await RunOwnerCommandAsync(
                 connectionsExecutable, "owner", "source-ingest", "--control-pipe", fixture.ControlPipe,
                 "--source-id", folderSourceId).ConfigureAwait(false);

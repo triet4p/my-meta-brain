@@ -113,7 +113,9 @@ public static class SourceEnrollmentGrammar
 /// the generation anchor (length + digest) captured when the owner enrolled
 /// or explicitly re-enrolled the fixture. Revocation is recorded, never
 /// erased, so a revoked source stays auditable and re-enrollment starts a new
-/// generation instead of reviving the old one.
+/// generation. Standalone refresh opt-in remains separate from the default
+/// false state, and an explicit durable refresh opt-out remains a veto when
+/// the parent folder is opted in.
 /// </summary>
 public sealed record EnrolledSource(
     string SourceId,
@@ -130,7 +132,8 @@ public sealed record EnrolledSource(
     DateTimeOffset? PausedAtUtc = null,
     bool RefreshOptIn = false,
     bool RawPreservationOptIn = false,
-    DateTimeOffset? RawPreservationRetainUntilUtc = null);
+    DateTimeOffset? RawPreservationRetainUntilUtc = null,
+    bool RefreshOptOut = false);
 
 public enum SourceQuarantineReason
 {
@@ -805,13 +808,17 @@ public sealed class SourceEnrollmentAuthority
             {
                 throw new SourceOperationException("source_revoked");
             }
-
-            if (current.RefreshOptIn == optIn)
+            var updatedRefreshOptOut = !optIn;
+            if (current.RefreshOptIn == optIn && current.RefreshOptOut == updatedRefreshOptOut)
             {
                 return (state, current);
             }
 
-            var updated = current with { RefreshOptIn = optIn };
+            var updated = current with
+            {
+                RefreshOptIn = optIn,
+                RefreshOptOut = updatedRefreshOptOut
+            };
             var enrollments = validated.Enrollments
                 .Select((candidate, position) => position == index ? updated : candidate)
                 .ToArray();

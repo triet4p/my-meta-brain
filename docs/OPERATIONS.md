@@ -359,7 +359,7 @@ cli\MetaBrain.Cli.exe owner source-folder-enroll --control-pipe "<pipe>" --folde
 
 Include globs are required. Each include/exclude list allows at most 16 unique relative patterns of at most 256 characters; patterns cannot contain absolute paths, drive/colon syntax, `.` or `..` segments. `*`, `?` and `**` are supported. Enumeration stops at 512 visited entries, and every included locator must fit the source registry's 512-character limit.
 
-Only the selected root is examined; Meta Brain does not scan home/profile folders. A selected root is refused if any component from its volume root through the selected folder is a reparse point. Reparse entries found below the selected root are excluded, and their targets are never admitted. Confirmation re-enumerates the preview and reads selected files only through the existing bounded source reader to record anchors; it registers encrypted source metadata, not source bodies. A duplicate is idempotent only when the confirmed selection and membership still match; later folder changes are not adopted automatically.
+Only the selected root is examined; Meta Brain does not scan home/profile folders. A selected root is refused if any component from its volume root through the selected folder is a reparse point. Reparse entries found below the selected root are excluded, and their targets are never admitted. Confirmation re-enumerates the preview and reads selected files only through the existing bounded source reader to record anchors; it registers encrypted source metadata, not source bodies. A duplicate is idempotent only when the confirmed selection and membership still match. Later matching files require explicit folder-level refresh consent; `ENROLL` confirmation is not refresh consent and folder refresh is default off.
 
 Before creating canonical source records, enrollment writes their opaque IDs to the existing encrypted source-enrollment state. If enrollment is interrupted, unlock removes any still-uncommitted records before granting vault operations. If a storage failure prevents in-process cleanup and the command reports `source_folder_recovery_pending`, further vault operations remain refused in that unlocked epoch; resolve the storage failure, then run `owner lock` followed by `owner unlock` so recovery can retry. The recovery marker contains IDs only, not source content or paths.
 
@@ -404,6 +404,37 @@ available on an agent/MCP surface. Fully supported reference-only sources contin
 v1; v2 is written only when a real v2-only element (preserved bytes or a preserved version barrier)
 is present. Existing v1 journals are not rewritten merely because consent is enabled; an existing
 v2 journal is never automatically downgraded.
+
+### 3.2.5 Folder membership refresh (S11-T4)
+
+This section describes the unreleased S11-T4 owner behavior; installed 1.0.0 remains unchanged
+until a separately authorized S11-T6 release.
+
+Enrollment confirmation adds only the exact previewed member metadata. To let the shared manual
+and background refresh pass discover current or future matching regular files, explicitly opt in
+the persisted folder ID printed by `source-folder-enroll`:
+
+```text
+cli\MetaBrain.Cli.exe owner source-folder-refresh-optin --control-pipe "<pipe>" --folder-id <folder-id>
+cli\MetaBrain.Cli.exe owner source-refresh --control-pipe "<pipe>"
+cli\MetaBrain.Cli.exe owner source-folder-refresh-optout --control-pipe "<pipe>" --folder-id <folder-id>
+cli\MetaBrain.Cli.exe owner source-list --control-pipe "<pipe>"
+```
+
+Folder refresh is off by default. Opt-in covers only files beneath that stored root which satisfy
+its saved include/exclude rules; reparse points, excluded paths and paths outside the root are
+never read or admitted. A new matching file is added to the existing encrypted folder membership
+and canonical source registry, then goes through the same incremental source reader and journal
+checkpoint as an existing member. `source-list` and `source-status` report `folderId` and
+`folderRefreshOptIn` beside each member.
+
+Folder opt-out stops reads and future membership discovery without revoking a member, deleting
+canonical/history data or purging a journal. A deleted member stays enrolled and reports missing.
+Per-source refresh opt-out, pause and revoke remain vetoes after folder consent; folder opt-out and
+vault lock cancel an active refresh at its read boundary, zero any partial snapshot, and do not
+advance the checkpoint. Raw-byte preservation remains separate consent with its own retention
+deadline; folder refresh consent alone does not enable it. The background pass is the same shared
+coordinator and does not scan outside an opted-in folder selection.
 
 ### 3.3 The owner console (S9-T4)
 

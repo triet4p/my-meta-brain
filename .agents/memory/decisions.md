@@ -1186,3 +1186,23 @@ unknown; this is adverse evidence requiring review, not service acceptance or a 
 **Reason:** The canonical records are manifest-committed individually while folder membership is a separate atomically replaced encrypted state file, so those existing atomic writes cannot make the two-file update atomic. The source-enrollment state already uses the vault data key, is available during unlock, and can retain only opaque IDs for retries without creating another registry or storing source paths/content. A failed cleanup must leave the marker durable and keep the current lifecycle from serving further operations until relock/unlock recovery succeeds.
 
 **Consequences:** Source-enrollment state advances to schema 2 with a fail-closed migration from encrypted schema 1. Folder enrollment writes the journal before the first canonical create; unlock removes any surviving resources named by that journal and clears it only after all manifest deletions succeed. Failed deletions remain retryable and prevent incomplete batches from being read in the current unlocked epoch.
+
+## [2026-10-31] Require explicit folder refresh consent and preserve member vetoes
+
+**Decision:** Folder refresh is off by default and requires explicit owner `folder-refresh-optin`; that consent covers current and future matching regular files within the selected root and include/exclude rules, while per-source pause, revoke, or explicit opt-out vetoes refresh and deleted members remain canonical/history as missing rather than being automatically revoked or purged.
+
+**Alternatives considered:** Treat initial folder enrollment confirmation as ongoing consent; require a new owner preview and confirmation for every membership change; or let folder consent overwrite member-level controls.
+
+**Reason:** The owner explicitly approved ongoing folder refresh after the earlier contract gap was identified, but required consent to remain opt-in, source-specific controls to retain veto authority, and deletion not to erase canonical/history state.
+
+**Consequences:** The shared coordinator may refresh/admit current and future matching regular files only while folder consent is active and all root/include/exclude, non-reparse, final-path, lock, and source-level controls pass. Manual and background refresh share this contract; selection confirmation alone, folder opt-out, and lock cannot authorize reads. This decision adds no agent scope, host permission, migration, purge, or release authority.
+
+## [2026-10-31] Persist source refresh opt-out separately from default-off consent
+
+**Decision:** Store an explicit per-source `RefreshOptOut` separate from default `RefreshOptIn=false`, and migrate retained legacy `source.refresh.optout` audit actions before folder consent or future admission can override them.
+
+**Alternatives considered:** Treat every legacy false refresh flag as a veto; let folder opt-in set every member's refresh flag to true; or rely on the bounded audit log as the only durable opt-out state.
+
+**Reason:** The old boolean cannot distinguish never-enabled from explicitly opted out. Treating all false values as veto would prevent folder consent from covering current members; setting every member true would erase an explicit veto. Retained audit actions can identify legacy explicit opt-outs, but audit retention cannot replace durable state for future actions.
+
+**Consequences:** New per-source opt-outs survive audit retention and folder opt-in. Retained legacy opt-outs are migrated to the explicit field or veto future discovery while their audit action remains; legacy opt-outs already removed by audit retention cannot be reconstructed from the old boolean and remain a disclosed migration limit.
