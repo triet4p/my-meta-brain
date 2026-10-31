@@ -140,16 +140,34 @@ To recheck an existing candidate&#39;s asset hashes and file sets:
 powershell.exe -NoProfile -File scripts\release\assemble-candidate.ps1 -VerifyOnly -CandidateDirectory &lt;candidate-directory&gt;
 ```
 
-Candidate identity records Git HEAD and a SHA-256 of the tracked source/working
-tree contents used by assembly; uncommitted source therefore does not masquerade
-as the HEAD revision. The CLI and graphical Owner UI setups embed their exact
-staged component/shared-runtime payloads and store the same candidate identity
-with shared install state. A different candidate or runtime version is refused
-when another frontend is registered; install the matching complete candidate
-or remove the other frontend before replacing the shared runtime. Rebuilds
-receive new IDs and never overwrite a candidate. Candidate manifests record
-both setup assets and embedded payload hashes, dependency inventories, licenses
-and unsigned status; SHA-256 does not authenticate the publisher. Public
+Candidate identity records two different things. `source.head` is the Git HEAD the
+assembly ran from. `source.sourceTreeSha256` is a **SHA-256 content digest of the
+source population the assembler read from the worktree**, not a Git tree object and
+not the commit&#39;s tree ID. The assembler enumerates
+`git ls-files --cached --others --exclude-standard`, drops the fixed excluded roots
+(`artifacts/`, `runtime/`, `dist/`, `build/`, `out/`, `.git/`, `docs/PLAN.md`,
+`docs/sprint-plans/sprint-10.md`, `scripts/sprint-6/__pycache__/`), sorts the
+remaining paths, and hashes the UTF-8 text of one line per file in the form
+`&lt;file SHA-256&gt;&lt;two spaces&gt;&lt;relative/path&gt;`, joined by newlines. The population is
+therefore the tracked files at HEAD **plus every untracked file Git does not ignore
+at that instant**: uncommitted edits to tracked files and untracked non-ignored
+files both contribute, and the candidate manifest records
+`source.workingTreeIncluded=true` for that. For the frozen 1.1.0 candidate the
+population included uncommitted planning documents (`docs/ROADMAP-2.0.md`,
+`docs/POST-1.0-DIRECTION.md`, `docs/sprint-plans/sprint-11.md` through
+`sprint-18.md`) and a Python bytecode cache under `scripts/sprint-11/__pycache__/`.
+The value binds the assembly base HEAD plus that dirty worktree snapshot, not the
+separately approved source checkpoint commit, and it cannot be recomputed once any
+population file changes; it is not a Git object ID at all. Uncommitted source
+therefore does not masquerade as the HEAD revision, and a matching digest is not a
+signature: the candidate is unsigned. The CLI and graphical Owner UI setups embed
+their exact staged component/shared-runtime payloads and store the same candidate
+identity with shared install state. A different candidate or runtime version is
+refused when another frontend is registered; install the matching complete
+candidate or remove the other frontend before replacing the shared runtime.
+Rebuilds receive new IDs and never overwrite a candidate. Candidate manifests
+record both setup assets and embedded payload hashes, dependency inventories,
+licenses and unsigned status; SHA-256 does not authenticate the publisher. Public
 release remains owner-controlled and is not authorized.
 
 An unpacked developer bundle can still be passed to the shared installer&#39;s
@@ -251,13 +269,14 @@ read-only source enrollment, scoped sharing, proposal/relation review, and data-
 lifecycle actions. Their client examples match this runbook&#39;s &#167;3.2.1 contract; accepted Sprint 9
 evidence is inherited and no fresh client/product walkthrough is claimed.
 
-### 3.2.1 MCP client registration (standalone package 1.0.0)
+### 3.2.1 MCP client registration (standalone package 1.1.0; installed 1.0.0 unchanged)
 
-The candidate includes a standalone self-contained MCP ZIP. Extract the complete archive into
+The 1.1.0 release includes a standalone self-contained MCP ZIP. Extract the complete archive into
 a stable directory while preserving its folders; for example, choose
-`%LOCALAPPDATA%\MetaBrain\MCP\1.0.0\`. This package is separate from the CLI and Owner UI setup
-executables, and does not require either frontend to be installed, an SDK, a repository, an
-installed .NET runtime or PowerShell.
+`%LOCALAPPDATA%\MetaBrain\MCP\&lt;version&gt;\`, replacing `&lt;version&gt;` with the release you installed
+(`1.1.0` here; use `1.0.0` only for the earlier release). This package is
+separate from the CLI and Owner UI setup executables, and does not require either frontend to be
+installed, an SDK, a repository, an installed .NET runtime or PowerShell.
 
 ```text
 mcp\MetaBrain.Mcp.exe
@@ -297,7 +316,7 @@ This Codex CLI example uses documented process-scoped `-c` overrides and does no
 prompt:
 
 ```text
-codex -C &quot;&lt;isolated-workspace&gt;&quot; -c &#39;mcp_servers.metabrain.command=&quot;C:\\Users\\&lt;owner&gt;\\AppData\\Local\\MetaBrain\\MCP\\1.0.0\\mcp\\MetaBrain.Mcp.exe&quot;&#39; -c &#39;mcp_servers.metabrain.args=[&quot;--data-root&quot;,&quot;C:\\Users\\&lt;owner&gt;\\AppData\\Local\\MetaBrain\\Data&quot;]&#39;
+codex -C &quot;&lt;isolated-workspace&gt;&quot; -c &#39;mcp_servers.metabrain.command=&quot;C:\\Users\\&lt;owner&gt;\\AppData\\Local\\MetaBrain\\MCP\\&lt;version&gt;\\mcp\\MetaBrain.Mcp.exe&quot;&#39; -c &#39;mcp_servers.metabrain.args=[&quot;--data-root&quot;,&quot;C:\\Users\\&lt;owner&gt;\\AppData\\Local\\MetaBrain\\Data&quot;]&#39;
 ```
 
 For OMP, create `.omp/mcp.json` only inside an isolated workspace, not the product repository
@@ -308,7 +327,7 @@ or a user-level configuration directory, then start OMP with that workspace and 
   &quot;mcpServers&quot;: {
     &quot;metabrain&quot;: {
       &quot;type&quot;: &quot;stdio&quot;,
-      &quot;command&quot;: &quot;C:\\Users\\&lt;owner&gt;\\AppData\\Local\\MetaBrain\\MCP\\1.0.0\\mcp\\MetaBrain.Mcp.exe&quot;,
+      &quot;command&quot;: &quot;C:\\Users\\&lt;owner&gt;\\AppData\\Local\\MetaBrain\\MCP\\&lt;version&gt;\\mcp\\MetaBrain.Mcp.exe&quot;,
       &quot;args&quot;: [&quot;--data-root&quot;, &quot;C:\\Users\\&lt;owner&gt;\\AppData\\Local\\MetaBrain\\Data&quot;]
     }
   }
@@ -348,6 +367,117 @@ cli\MetaBrain.Cli.exe owner request-approve --control-pipe &lt;pipe&gt; --reques
 - `--expires-at-utc` requires an explicit UTC instant (`Z` or `+00:00`). `--handoff-file` must be a
   new path; the typed `APPROVE` mints the single-use token into that DPAPI-protected file. Give
   the path to the agent, which redeems it with `metabrain_redeem` into its own session file.
+
+### 3.2.3 Owner-selected folder source enrollment (S11-T2)
+
+This section describes 1.1.0 (S11-T2) folder enrollment, released 2026-11-01; an installed 1.0.0
+binary keeps its earlier fail-closed behavior and does not offer this surface.
+
+Use the owner CLI only with an unlocked vault. Select one absolute folder and declare recursion and include/exclude globs explicitly; `--exclude-globs none` means no exclusions. The preview is bounded and metadata-only. Type `ENROLL` once to confirm the exact preview; any other input or end-of-input cancels without changing membership.
+
+```text
+cli\MetaBrain.Cli.exe owner source-folder-enroll --control-pipe &quot;&lt;pipe&gt;&quot; --folder &quot;&lt;absolute-folder&gt;&quot; --zone-id &lt;zone&gt; --format &lt;format&gt; --format-version &lt;N&gt; --recursive true|false --include-globs &quot;&lt;glob[,glob...]&gt;&quot; --exclude-globs &quot;&lt;glob[,glob...]|none&gt;&quot;
+```
+
+Include globs are required. Each include/exclude list allows at most 16 unique relative patterns of at most 256 characters; patterns cannot contain absolute paths, drive/colon syntax, `.` or `..` segments. `*`, `?` and `**` are supported. Enumeration stops at 512 visited entries, and every included locator must fit the source registry&#39;s 512-character limit.
+
+Only the selected root is examined; Meta Brain does not scan home/profile folders. A selected root is refused if any component from its volume root through the selected folder is a reparse point. Reparse entries found below the selected root are excluded, and their targets are never admitted. Confirmation re-enumerates the preview and reads selected files only through the existing bounded source reader to record anchors; it registers encrypted source metadata, not source bodies. A duplicate is idempotent only when the confirmed selection and membership still match. Later matching files require explicit folder-level refresh consent; `ENROLL` confirmation is not refresh consent and folder refresh is default off.
+
+Before creating canonical source records, enrollment writes their opaque IDs to the existing encrypted source-enrollment state. If enrollment is interrupted, unlock removes any still-uncommitted records before granting vault operations. If a storage failure prevents in-process cleanup and the command reports `source_folder_recovery_pending`, further vault operations remain refused in that unlocked epoch; resolve the storage failure, then run `owner lock` followed by `owner unlock` so recovery can retry. The recovery marker contains IDs only, not source content or paths.
+
+Enumeration and source reading are separate filesystem operations. The reader&#39;s final-path/handle checks narrow the race and fail closed when the path changes, but do not eliminate every time-of-check/time-of-use window.
+
+### 3.2.4 Codex/OMP source ingestion and raw preservation (S11-T3)
+
+This section describes the 1.1.0 (S11-T3) source implementation, released 2026-11-01; an installed
+1.0.0 binary keeps its earlier fail-closed behavior and does not offer these surfaces.
+
+Ingestion is owner-only and runs while the vault is unlocked. `source-status`/`source-list`
+report four separate facets: current availability, whether exact bytes are stored (`preserved` or
+`reference_only`), achieved interpretation, and derivation (`not_indexed`). Reference-only sources
+remain source-dependent; if an unsupported complete record or invalid UTF-8 is encountered without
+preservation consent, the checkpoint stops at its byte offset and status reports the diagnostic,
+unprocessed bytes and source dependency. No unknown record becomes an event or gains attribution.
+
+```text
+cli\MetaBrain.Cli.exe owner source-status --control-pipe &quot;&lt;pipe&gt;&quot; --source-id &lt;id&gt;
+cli\MetaBrain.Cli.exe owner source-ingest --control-pipe &quot;&lt;pipe&gt;&quot; --source-id &lt;id&gt;
+cli\MetaBrain.Cli.exe owner source-raw-preservation-optin --control-pipe &quot;&lt;pipe&gt;&quot; --source-id &lt;id&gt; --retain-until-utc &lt;UTC-instant&gt;
+cli\MetaBrain.Cli.exe owner source-raw-preservation-optout --control-pipe &quot;&lt;pipe&gt;&quot; --source-id &lt;id&gt;
+cli\MetaBrain.Cli.exe owner source-preserved-record-read --control-pipe &quot;&lt;pipe&gt;&quot; --source-id &lt;id&gt; --offset &lt;byte-offset&gt; --output-file &quot;&lt;new-file&gt;&quot;
+```
+
+The opt-in is a distinct owner act, not an interpretation setting; it requires a future UTC
+retention deadline. `source-folder-enroll` also accepts `--raw-preservation-until-utc &lt;UTC-instant&gt;`
+to explicitly apply that consent to members of the confirmed folder selection. Without the flag,
+members remain reference-only. Opting out stops preserving future records; already preserved spans
+remain owner-readable through their own stored retention deadlines. Each preserved span keeps the
+`retainUntilUtc` it was written with, and that deadline is an expiry for read-back, not a purge:
+once it passes, `source-preserved-record-read` for that offset is refused with
+`source_preserved_record_expired`, while the encrypted bytes stay in the journal, `source-status`
+keeps listing the span with its deadline, and the four status facets do not change; expiry removes
+nothing by itself and an explicit owner action (a purge) is still required to delete the span.
+Opting out before the deadline therefore does not shorten the
+stored retention and does not delete the span.
+
+With active consent, complete unsupported records (including invalidly encoded input) are copied
+byte-for-byte into the encrypted generation journal in the same atomic write as the checkpoint;
+ordinary unknown records may then be passed, but an OMP newer-version barrier keeps the checkpoint
+at the barrier and stores the entire remaining tail without interpreting it. Exact offsets and
+digests are retained; diagnostics contain only a code and offset. OMP parent references are
+accepted only from independently validated envelopes. No lossy transcode is attempted.
+
+The read command requires an unlocked owner vault and a new output path; it verifies the stored
+digest and writes the exact span without sending source bytes to stdout. These operations are not
+available on an agent/MCP surface. Fully supported reference-only sources continue using journal
+v1; v2 is written only when a real v2-only element (preserved bytes or a preserved version barrier)
+is present. Existing v1 journals are not rewritten merely because consent is enabled; an existing
+v2 journal is never automatically downgraded.
+
+### 3.2.5 Folder membership refresh (S11-T4)
+
+This section describes the 1.1.0 (S11-T4) owner behavior, released 2026-11-01; an installed 1.0.0
+binary keeps its earlier fail-closed behavior and does not offer this surface.
+
+Enrollment confirmation adds only the exact previewed member metadata. To let the shared manual
+and background refresh pass discover current or future matching regular files, explicitly opt in
+the persisted folder ID printed by `source-folder-enroll`:
+
+```text
+cli\MetaBrain.Cli.exe owner source-folder-refresh-optin --control-pipe &quot;&lt;pipe&gt;&quot; --folder-id &lt;folder-id&gt;
+cli\MetaBrain.Cli.exe owner source-refresh --control-pipe &quot;&lt;pipe&gt;&quot;
+cli\MetaBrain.Cli.exe owner source-folder-refresh-optout --control-pipe &quot;&lt;pipe&gt;&quot; --folder-id &lt;folder-id&gt;
+cli\MetaBrain.Cli.exe owner source-list --control-pipe &quot;&lt;pipe&gt;&quot;
+```
+
+Folder refresh is off by default. Opt-in covers only files beneath that stored root which satisfy
+its saved include/exclude rules; reparse points, excluded paths and paths outside the root are
+never read or admitted. A new matching file is added to the existing encrypted folder membership
+and canonical source registry, then goes through the same incremental source reader and journal
+checkpoint as an existing member. `source-list` and `source-status` report `folderId` and
+`folderRefreshOptIn` beside each member.
+
+Folder opt-out stops reads and future membership discovery without revoking a member, deleting
+canonical/history data or purging a journal. A deleted member stays enrolled and reports missing.
+Per-source refresh opt-out, pause and revoke remain vetoes after folder consent; folder opt-out and
+vault lock cancel an active refresh at its read boundary, zero any partial snapshot, and do not
+advance the checkpoint. Raw-byte preservation remains separate consent with its own retention
+deadline; folder refresh consent alone does not enable it. The background pass is the same shared
+coordinator and does not scan outside an opted-in folder selection.
+
+### 3.2.6 Owner console folder ingestion surface (S11-T5)
+
+This section describes the 1.1.0 (S11-T5) owner console behavior, released 2026-11-01; an installed 1.0.0 binary keeps its earlier fail-closed behavior and does not offer this surface.
+
+In **Sources**, choose one folder, enter the zone and format, explicitly choose recursion and include/exclude globs, then request a bounded metadata-only preview. The list shows included relative paths and exclusion reasons without opening transcript content. Type `ENROLL` exactly to confirm the active preview; any other value changes nothing. The owner may discard a preview and choose another folder.
+
+The optional **Explicitly preserve unsupported raw bytes** checkbox is independent of enrollment confirmation and defaults off. It requires a future UTC retention deadline and stores only exact unsupported source bytes in the encrypted journal when the coordinator later reaches them. Without this separate consent, those bytes remain source-dependent; neither enrollment nor folder refresh enables preservation.
+
+After reading sources, select a current folder member to inspect the service-reported folder ID, member status and folder refresh consent. **Opt selected folder into refresh** is a separate owner act; it covers current and future matching regular files inside the stored root/include/exclude and reparse/final-path boundaries. A member&#39;s pause, revoke or explicit source refresh opt-out remains a veto. Folder opt-out and vault lock stop reads without changing saved canonical/history; deletion remains a missing member rather than an automatic revoke or purge. Use **Run refresh pass** to run the shared owner refresh path.
+
+Open a source to read its status. The view reports availability, saved canonical-event/preserved-byte counts, preservation, interpretation, derivation/indexing, the exact diagnostic code and byte offset, pending/unprocessed counts, consent and retention, and metadata-only preserved spans. Enrollment by itself is shown as metadata only—not as a saved event or indexed content. The console does not render transcript or preserved bytes. To export one exact preserved span after unlock, use the existing owner CLI command `source-preserved-record-read` with the source ID and offset and a new output file. Lock, disconnect or ending the owner session clears the folder root draft, preview, source details and in-flight answers; the console remains an owner-pipe client and does not open or write vault files.
+
+State-action answers that omit a complete ingestion report show those facets as `not reported`, never as zero. When the same source ID and generation already has a complete status, the console retains its saved/index/interpretation/preservation details while applying the latest membership, pause and veto state.
 
 ### 3.3 The owner console (S9-T4)
 
@@ -639,6 +769,16 @@ source snapshots, backups and recovery material are never deleted by the install
 
 Uninstall refuses with an actionable error if the shared host could not drain cleanly; it does not
 claim removal succeeded or replace live binaries.
+
+### 8.1 Partial-source states and troubleshooting (1.1.0 candidate)
+
+When a folder member shows `interpreted=partially_interpreted` (or `uninterpreted`) with a `last_diagnostic {code, offset}`, the source is not broken: the checkpoint stopped at the first complete record the build cannot interpret yet (or the tail is still a partial line). Remediation by exact offset: (a) enable explicit raw preservation (`source-raw-preservation-optin` with a future `--retain-until-utc`, or the folder checkbox for future members) and re-run `source-ingest` so the exact record bytes are preserved and the checkpoint can pass; (b) leave the source reference-only and wait for a newer adapter; or (c) export one exact already-preserved span with `source-preserved-record-read --source-id &lt;id&gt; --offset &lt;byte-offset&gt; --output-file &lt;new-file&gt;` after unlock. Reference-only suffixes stay source-dependent: `unprocessed_bytes` is an honest not-yet-read suffix, not a coverage violation or silent loss, and diagnostics carry only the code and byte offset — never transcript bytes.
+
+An OMP newer-version barrier keeps the checkpoint at the barrier even with preservation on: the entire tail is preserved and owner-readable, but nothing past the barrier is interpreted. A `journal v2` source opened by an older 1.0.0 binary fails closed at the validator (no silent rebuild or partial read); 1.1.0 never downgrades a v2 journal back to v1, even after preservation is turned off. Downgrade note: a reference-only source keeps journal v1 and keeps 1.0 behavior; only a source that already wrote a v2-only element (preserved span or preserved version barrier) requires 1.1.0 to read. Upgrade 1.0 to 1.1 never rewrites existing journals or migrates the vault; fully supported sources keep identical events, spans and digests.
+
+The retention deadline is not a purge trigger. A span whose `retainUntilUtc` has passed is refused read-back by the service with `source_preserved_record_expired`: `owner source-status` and the owner console&#39;s Sources view still list that span and its deadline, and the source&#39;s availability, preservation, interpretation and derivation facets do not change (the journal revision does not move either). Expiry alone deletes nothing and does not rewrite the journal; deleting a preserved span still requires an explicit owner action such as a purge. `source-raw-preservation-optout` stops future preservation only; it neither shortens the stored retention of an existing span nor removes it, and a new opt-in must name a future UTC deadline (a past one is refused), so an expired deadline is not re-opened by consent alone.
+
+Install/upgrade/coexist/uninstall contract is unchanged from the shared release contract: one complete candidate release upgrades the application files, keeps the selected data root, settings and endpoints, refuses a live shared host or a mismatched shared candidate/version instead of reporting false success, and never deletes the vault, snapshots, backups or recovery material. Host-mutating install, upgrade, coexistence and uninstall proofs remain an explicit owner-executed prerequisite and are not claimed from a repository-local run.
 
 ## 9. Diagnostics
 
