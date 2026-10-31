@@ -831,3 +831,10 @@ the assignment can fail before the sentinel check or any child starts.
 **Fix / workaround:** Use Pillow's native `ImageGrab.grab(window=hwnd)` for the identified owner window and inspect only synthetic fixture content.
 **Watch out for:** A target window can be covered even when its bounds are correct. Never treat a bounding-box crop as a process-bounded capture when private desktop windows might overlap.
 
+
+## [2026-11-01] A candidate sourceTreeSha256 cannot be recomputed from a changed worktree
+
+**Symptom:** Recomputing the 1.1.0 candidate's recorded `sourceTreeSha256` from today's worktree produced a different value, and the recorded value also differs from `git rev-parse <base>^{tree}`. The mismatch reads like drift or tampering.
+**Root cause:** `scripts/release/assemble-candidate.ps1` hashes the `git ls-files --cached --others --exclude-standard` population after fixed exclusions (per-file SHA-256 lines joined by newline, SHA-256 over the UTF-8 bytes). It is a content digest of the assembly-instant worktree (tracked plus untracked non-ignored files), not a Git tree object, so any later edit — even a docs-only one — changes the recomputed value while the recorded value stays bound to that instant.
+**Fix / workaround:** Read the field as an assembly-instant worktree digest. Verify it only against a preserved snapshot, describe it that way in docs, and rely on the recorded `head` plus `workingTreeIncluded` instead of recomputing it post-hoc.
+**Watch out for:** Never widen the exclusion set, rebuild a candidate, or report a defect just to make a recomputation match; the algorithm, manifest and immutable assets need owner approval to change.

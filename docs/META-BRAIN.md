@@ -293,6 +293,14 @@ không plaintext scratch/log/temp. Preserved span gắn `(source, generation, of
 và không đi qua MCP/catalog hay cấp quyền agent mới. Không bật preservation thì phải nói rõ khả năng đọc
 lại phụ thuộc nguồn.
 
+Retention deadline là hạn đọc lại, không phải purge trigger. Sau deadline, `source-preserved-record-read`
+từ chối đúng span đó bằng `source_preserved_record_expired`, trong khi ciphertext đã preserve vẫn nằm
+trong journal encrypted, `source-status` vẫn liệt kê span kèm `retainUntilUtc`, và journal revision cùng
+bốn facet trạng thái không đổi; expiry không tự purge hay rewrite, nên xoá span vẫn cần owner action
+tường minh (purge). Opt-out (`source-raw-preservation-optout`) chỉ dừng preserve record mới: không rút
+ngắn retention đã lưu của span cũ và không xoá span. Opt-in mới bắt buộc deadline UTC tương lai (deadline
+đã qua bị từ chối), nên không có đường đọc lại quá hạn bằng consent mới.
+
 **Checkpoint, crash, thay đổi nguồn.** Journal + checkpoint vẫn là một resource write nguyên tử.
 Retry không tạo event trùng; preserved span idempotent theo `(offset, length, digest)`. Crash trước
 commit giữ revision cũ; append giữ anchor cũ; truncation/replacement vẫn quarantine (`generation_truncated`

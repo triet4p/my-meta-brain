@@ -140,16 +140,34 @@ To recheck an existing candidate's asset hashes and file sets:
 powershell.exe -NoProfile -File scripts\release\assemble-candidate.ps1 -VerifyOnly -CandidateDirectory <candidate-directory>
 ```
 
-Candidate identity records Git HEAD and a SHA-256 of the tracked source/working
-tree contents used by assembly; uncommitted source therefore does not masquerade
-as the HEAD revision. The CLI and graphical Owner UI setups embed their exact
-staged component/shared-runtime payloads and store the same candidate identity
-with shared install state. A different candidate or runtime version is refused
-when another frontend is registered; install the matching complete candidate
-or remove the other frontend before replacing the shared runtime. Rebuilds
-receive new IDs and never overwrite a candidate. Candidate manifests record
-both setup assets and embedded payload hashes, dependency inventories, licenses
-and unsigned status; SHA-256 does not authenticate the publisher. Public
+Candidate identity records two different things. `source.head` is the Git HEAD the
+assembly ran from. `source.sourceTreeSha256` is a **SHA-256 content digest of the
+source population the assembler read from the worktree**, not a Git tree object and
+not the commit's tree ID. The assembler enumerates
+`git ls-files --cached --others --exclude-standard`, drops the fixed excluded roots
+(`artifacts/`, `runtime/`, `dist/`, `build/`, `out/`, `.git/`, `docs/PLAN.md`,
+`docs/sprint-plans/sprint-10.md`, `scripts/sprint-6/__pycache__/`), sorts the
+remaining paths, and hashes the UTF-8 text of one line per file in the form
+`<file SHA-256><two spaces><relative/path>`, joined by newlines. The population is
+therefore the tracked files at HEAD **plus every untracked file Git does not ignore
+at that instant**: uncommitted edits to tracked files and untracked non-ignored
+files both contribute, and the candidate manifest records
+`source.workingTreeIncluded=true` for that. For the frozen 1.1.0 candidate the
+population included uncommitted planning documents (`docs/ROADMAP-2.0.md`,
+`docs/POST-1.0-DIRECTION.md`, `docs/sprint-plans/sprint-11.md` through
+`sprint-18.md`) and a Python bytecode cache under `scripts/sprint-11/__pycache__/`.
+The value binds the assembly base HEAD plus that dirty worktree snapshot, not the
+separately approved source checkpoint commit, and it cannot be recomputed once any
+population file changes; it is not a Git object ID at all. Uncommitted source
+therefore does not masquerade as the HEAD revision, and a matching digest is not a
+signature: the candidate is unsigned. The CLI and graphical Owner UI setups embed
+their exact staged component/shared-runtime payloads and store the same candidate
+identity with shared install state. A different candidate or runtime version is
+refused when another frontend is registered; install the matching complete
+candidate or remove the other frontend before replacing the shared runtime.
+Rebuilds receive new IDs and never overwrite a candidate. Candidate manifests
+record both setup assets and embedded payload hashes, dependency inventories,
+licenses and unsigned status; SHA-256 does not authenticate the publisher. Public
 release remains owner-controlled and is not authorized.
 
 An unpacked developer bundle can still be passed to the shared installer's
@@ -393,7 +411,14 @@ The opt-in is a distinct owner act, not an interpretation setting; it requires a
 retention deadline. `source-folder-enroll` also accepts `--raw-preservation-until-utc <UTC-instant>`
 to explicitly apply that consent to members of the confirmed folder selection. Without the flag,
 members remain reference-only. Opting out stops preserving future records; already preserved spans
-remain owner-readable through their own stored retention deadlines.
+remain owner-readable through their own stored retention deadlines. Each preserved span keeps the
+`retainUntilUtc` it was written with, and that deadline is an expiry for read-back, not a purge:
+once it passes, `source-preserved-record-read` for that offset is refused with
+`source_preserved_record_expired`, while the encrypted bytes stay in the journal, `source-status`
+keeps listing the span with its deadline, and the four status facets do not change; expiry removes
+nothing by itself and an explicit owner action (a purge) is still required to delete the span.
+Opting out before the deadline therefore does not shorten the
+stored retention and does not delete the span.
 
 With active consent, complete unsupported records (including invalidly encoded input) are copied
 byte-for-byte into the encrypted generation journal in the same atomic write as the checkpoint;
@@ -750,6 +775,8 @@ claim removal succeeded or replace live binaries.
 When a folder member shows `interpreted=partially_interpreted` (or `uninterpreted`) with a `last_diagnostic {code, offset}`, the source is not broken: the checkpoint stopped at the first complete record the build cannot interpret yet (or the tail is still a partial line). Remediation by exact offset: (a) enable explicit raw preservation (`source-raw-preservation-optin` with a future `--retain-until-utc`, or the folder checkbox for future members) and re-run `source-ingest` so the exact record bytes are preserved and the checkpoint can pass; (b) leave the source reference-only and wait for a newer adapter; or (c) export one exact already-preserved span with `source-preserved-record-read --source-id <id> --offset <byte-offset> --output-file <new-file>` after unlock. Reference-only suffixes stay source-dependent: `unprocessed_bytes` is an honest not-yet-read suffix, not a coverage violation or silent loss, and diagnostics carry only the code and byte offset — never transcript bytes.
 
 An OMP newer-version barrier keeps the checkpoint at the barrier even with preservation on: the entire tail is preserved and owner-readable, but nothing past the barrier is interpreted. A `journal v2` source opened by an older 1.0.0 binary fails closed at the validator (no silent rebuild or partial read); 1.1.0 never downgrades a v2 journal back to v1, even after preservation is turned off. Downgrade note: a reference-only source keeps journal v1 and keeps 1.0 behavior; only a source that already wrote a v2-only element (preserved span or preserved version barrier) requires 1.1.0 to read. Upgrade 1.0 to 1.1 never rewrites existing journals or migrates the vault; fully supported sources keep identical events, spans and digests.
+
+The retention deadline is not a purge trigger. A span whose `retainUntilUtc` has passed is refused read-back by the service with `source_preserved_record_expired`: `owner source-status` and the owner console's Sources view still list that span and its deadline, and the source's availability, preservation, interpretation and derivation facets do not change (the journal revision does not move either). Expiry alone deletes nothing and does not rewrite the journal; deleting a preserved span still requires an explicit owner action such as a purge. `source-raw-preservation-optout` stops future preservation only; it neither shortens the stored retention of an existing span nor removes it, and a new opt-in must name a future UTC deadline (a past one is refused), so an expired deadline is not re-opened by consent alone.
 
 Install/upgrade/coexist/uninstall contract is unchanged from the shared release contract: one complete candidate release upgrades the application files, keeps the selected data root, settings and endpoints, refuses a live shared host or a mismatched shared candidate/version instead of reporting false success, and never deletes the vault, snapshots, backups or recovery material. Host-mutating install, upgrade, coexistence and uninstall proofs remain an explicit owner-executed prerequisite and are not claimed from a repository-local run.
 
