@@ -85,7 +85,10 @@ public sealed record ServiceRequest(
     string[]? SourceFolderIncludePatterns = null,
     string[]? SourceFolderExcludePatterns = null,
     string? SourceFolderPreviewId = null,
-    string? SourceFolderConfirmation = null);
+    string? SourceFolderConfirmation = null,
+    DateTimeOffset? SourceFolderRawPreservationRetainUntilUtc = null,
+    DateTimeOffset? RawPreservationRetainUntilUtc = null,
+    long? SourceRecordOffset = null);
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
     ScopeResourceRevision[] Resources,
@@ -783,7 +786,35 @@ public sealed record SourceEnrollmentWire(
     bool RefreshOptIn = false,
     long JournalCiphertextBytes = 0,
     long SnapshotCiphertextBytes = 0,
-    long SnapshotRevision = 0);
+    long SnapshotRevision = 0,
+    bool RawPreservationOptIn = false,
+    DateTimeOffset? RawPreservationRetainUntilUtc = null,
+    string Preservation = "reference_only",
+    string Interpretation = "uninterpreted",
+    string Derivation = "not_indexed",
+    long PendingTailBytes = 0,
+    long PreservedBytes = 0,
+    int UninterpretedRecords = 0,
+    long UnprocessedBytes = 0,
+    long PreservedPendingBytes = 0,
+    SourceRecordDiagnosticWire? LastDiagnostic = null,
+    SourcePreservedRecordDescriptorWire[]? PreservedRecords = null);
+
+public sealed record SourceRecordDiagnosticWire(string Code, long Offset);
+
+public sealed record SourcePreservedRecordDescriptorWire(
+    long Offset,
+    int Length,
+    string Digest,
+    DateTimeOffset RetainUntilUtc);
+
+public sealed record SourcePreservedRecordWire(
+    string SourceId,
+    long Offset,
+    int Length,
+    string Digest,
+    DateTimeOffset RetainUntilUtc,
+    string ContentBase64);
 
 public sealed record SourceQuarantineWire(string Reason, string Detail, DateTimeOffset RecordedAtUtc);
 
@@ -824,7 +855,8 @@ public sealed record SourceFolderPreviewWire(
     string[] IncludePatterns,
     string[] ExcludePatterns,
     SourceFolderEntryWire[] Entries,
-    DateTimeOffset ExpiresAtUtc);
+    DateTimeOffset ExpiresAtUtc,
+    DateTimeOffset? RawPreservationRetainUntilUtc = null);
 
 public sealed record SourceFolderEnrollmentWire(
     string FolderId,
@@ -835,7 +867,8 @@ public sealed record SourceFolderEnrollmentWire(
     int MemberCount,
     string[] MemberSourceIds,
     DateTimeOffset EnrolledAtUtc,
-    bool AlreadyEnrolled);
+    bool AlreadyEnrolled,
+    DateTimeOffset? RawPreservationRetainUntilUtc = null);
 
 
 public sealed record SourceSnapshotWire(
@@ -991,6 +1024,7 @@ public sealed record ServiceReply(
     SourceEnrollmentWire[]? SourceEnrollments = null,
     SourceRefreshWire[]? SourceRefresh = null,
     SourceSnapshotWire? SourceSnapshot = null,
+    SourcePreservedRecordWire? SourcePreservedRecord = null,
     SourceSnapshotDescriptorWire[]? SourceSnapshots = null,
     RelationWire[]? Relations = null,
     RelationEndpointCandidateWire[]? RelationCandidates = null,
@@ -1171,6 +1205,9 @@ public sealed class ServiceRequestHandler
     public const string SourceRefreshOperation = "source.refresh";
     public const string SourceMappingSubmitOperation = "source.mapping.submit";
     public const string SourceMappingResolveOperation = "source.mapping.resolve";
+    public const string SourceRawPreservationOptInOperation = "source.raw-preservation.optin";
+    public const string SourceRawPreservationOptOutOperation = "source.raw-preservation.optout";
+    public const string SourcePreservedRecordReadOperation = "source.preserved-record.read";
     public const string SourceSnapshotPreserveOperation = "source.snapshot.preserve";
     public const string SourceSnapshotListOperation = "source.snapshot.list";
     public const string SourceSnapshotRetainOperation = "source.snapshot.retain";
@@ -1272,7 +1309,16 @@ public sealed class ServiceRequestHandler
         ServiceReply reply;
         try
         {
-            reply = await HandleRequestAsync(context, request, operation, cancellationToken).ConfigureAwait(false);
+            var rawPreservationFieldsMatchOperation =
+                (request.RawPreservationRetainUntilUtc is null ||
+                 string.Equals(request.Operation, SourceRawPreservationOptInOperation, StringComparison.Ordinal)) &&
+                (request.SourceRecordOffset is null ||
+                 string.Equals(request.Operation, SourcePreservedRecordReadOperation, StringComparison.Ordinal)) &&
+                (request.SourceFolderRawPreservationRetainUntilUtc is null ||
+                 string.Equals(request.Operation, SourceFolderPreviewOperation, StringComparison.Ordinal));
+            reply = rawPreservationFieldsMatchOperation
+                ? await HandleRequestAsync(context, request, operation, cancellationToken).ConfigureAwait(false)
+                : Error("invalid_request");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -1406,6 +1452,7 @@ public sealed class ServiceRequestHandler
         SourceStatusOperation,
         SourceSnapshotListOperation,
         SourceSnapshotReadOperation,
+        SourcePreservedRecordReadOperation,
         AgentSessionInspectOperation,
         AgentCollectionViewOperation,
         AgentMemoryReadOperation,
@@ -1845,6 +1892,9 @@ public sealed class ServiceRequestHandler
             string.Equals(request.Operation, SourceResumeOperation, StringComparison.Ordinal) ||
             string.Equals(request.Operation, SourceRefreshOptInOperation, StringComparison.Ordinal) ||
             string.Equals(request.Operation, SourceRefreshOptOutOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceRawPreservationOptInOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceRawPreservationOptOutOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourcePreservedRecordReadOperation, StringComparison.Ordinal) ||
             string.Equals(request.Operation, SourceListOperation, StringComparison.Ordinal) ||
             string.Equals(request.Operation, SourceRefreshOperation, StringComparison.Ordinal) ||
             string.Equals(request.Operation, SourceMappingSubmitOperation, StringComparison.Ordinal) ||
@@ -3708,7 +3758,8 @@ public sealed class ServiceRequestHandler
                         folderFormatVersion,
                         recursive,
                         includePatterns,
-                        request.SourceFolderExcludePatterns),
+                        request.SourceFolderExcludePatterns,
+                        request.SourceFolderRawPreservationRetainUntilUtc),
                     operation,
                     cancellationToken);
                 return new ServiceReply(CurrentProtocolVersion, "source_folder_previewed", "owner", null,
@@ -3723,7 +3774,8 @@ public sealed class ServiceRequestHandler
                         preview.Selection.ExcludePatterns,
                         preview.Enumeration.Entries.Select(entry => new SourceFolderEntryWire(
                             entry.RelativePath, entry.Included, entry.ExclusionReason)).ToArray(),
-                        preview.ExpiresAtUtc));
+                        preview.ExpiresAtUtc,
+                        preview.Selection.RawPreservationRetainUntilUtc));
             }
             catch (ArgumentException)
             {
@@ -3776,10 +3828,11 @@ public sealed class ServiceRequestHandler
                         enrolled.Folder.Format,
                         enrolled.Folder.FormatVersion,
                         enrolled.Folder.Recursive,
-                        enrolled.Members.Length,
+                        enrolled.Folder.MemberSourceIds.Length,
                         enrolled.Folder.MemberSourceIds,
                         enrolled.Folder.EnrolledAtUtc,
-                        enrolled.AlreadyEnrolled));
+                        enrolled.AlreadyEnrolled,
+                        enrolled.Folder.RawPreservationRetainUntilUtc));
             }
             catch (ArgumentException)
             {
@@ -3868,6 +3921,106 @@ public sealed class ServiceRequestHandler
             }
         }
 
+        if (string.Equals(request.Operation, SourcePreservedRecordReadOperation, StringComparison.Ordinal))
+        {
+            if (operation is null)
+            {
+                return Error("vault_locked");
+            }
+
+            if (HasSourceCommandExtras(request, allowSourceRecordOffset: true) ||
+                string.IsNullOrEmpty(request.ResourceId) ||
+                request.SourceRecordOffset is not { } offset ||
+                offset < 0)
+            {
+                return Error("invalid_request");
+            }
+
+            try
+            {
+                var preserved = _sourceIngestion.ReadPreservedRecord(context, request.ResourceId, offset, operation);
+                try
+                {
+                    return new ServiceReply(CurrentProtocolVersion, "source_preserved_record", "owner", null,
+                        SourcePreservedRecord: new SourcePreservedRecordWire(
+                            request.ResourceId,
+                            preserved.Descriptor.Offset,
+                            preserved.Descriptor.Length,
+                            preserved.Descriptor.Digest,
+                            preserved.Descriptor.RetainUntilUtc,
+                            Convert.ToBase64String(preserved.Content)));
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(preserved.Content);
+                }
+            }
+            catch (ArgumentException)
+            {
+                return Error("invalid_request");
+            }
+            catch (SourceOperationException ex)
+            {
+                return Error(ex.Code);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Error("forbidden");
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException)
+            {
+                return Error("source_state_unavailable");
+            }
+        }
+
+        if (string.Equals(request.Operation, SourceRawPreservationOptInOperation, StringComparison.Ordinal) ||
+            string.Equals(request.Operation, SourceRawPreservationOptOutOperation, StringComparison.Ordinal))
+        {
+            var optIn = string.Equals(request.Operation, SourceRawPreservationOptInOperation, StringComparison.Ordinal);
+            if (HasSourceCommandExtras(request, allowRawPreservationRetention: optIn) ||
+                string.IsNullOrEmpty(request.ResourceId) ||
+                (optIn && request.RawPreservationRetainUntilUtc is null) ||
+                (!optIn && request.RawPreservationRetainUntilUtc is not null))
+            {
+                return Error("invalid_request");
+            }
+
+            try
+            {
+                _sourceIngestion.SetRawPreservationOptIn(
+                    context, request.ResourceId, optIn, request.RawPreservationRetainUntilUtc, operation);
+                var status = _sourceIngestion.Status(context, request.ResourceId, operation);
+                return new ServiceReply(
+                    CurrentProtocolVersion,
+                    optIn ? "source_raw_preservation_opted_in" : "source_raw_preservation_opted_out",
+                    "owner",
+                    null,
+                    SourceEnrollment: ToSourceEnrollmentWire(status),
+                    SourceIngestion: new SourceIngestionWire(
+                        status.SourceId,
+                        status.JournalRevision,
+                        status.ConsumedOffset,
+                        status.EventCount,
+                        status.DiagnosticCount,
+                        status.LastIngestAtUtc));
+            }
+            catch (ArgumentException)
+            {
+                return Error("invalid_request");
+            }
+            catch (SourceOperationException ex)
+            {
+                return Error(ex.Code);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Error("forbidden");
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException)
+            {
+                return Error("source_state_unavailable");
+            }
+        }
         if (string.Equals(request.Operation, SourceRevokeOperation, StringComparison.Ordinal) ||
             string.Equals(request.Operation, SourceStatusOperation, StringComparison.Ordinal) ||
             string.Equals(request.Operation, SourceIngestOperation, StringComparison.Ordinal))
@@ -3901,12 +4054,13 @@ public sealed class ServiceRequestHandler
                 }
 
                 var outcome = _sourceIngestion.Ingest(context, request.ResourceId, operation, cancellationToken);
-                // Completed runs (advanced/idle/partial/unsupported diagnostics)
+                // Completed runs (advanced/idle/partial/empty/unsupported diagnostics)
                 // reply with a status; refusals and failure modes reply with an
                 // explicit error code, matching the service's error convention.
                 var outcomeStatus = outcome.Kind switch
                 {
                     SourceIngestionOutcomeKind.Advanced => "ingest_advanced",
+                    SourceIngestionOutcomeKind.Empty => "ingest_empty",
                     SourceIngestionOutcomeKind.Idle => "ingest_idle",
                     SourceIngestionOutcomeKind.PartialPending => "ingest_partial_pending",
                     SourceIngestionOutcomeKind.UnsupportedFormat => "ingest_unsupported_format",
@@ -4173,43 +4327,64 @@ public sealed class ServiceRequestHandler
         return Error("invalid_request");
     }
 
-    private static SourceEnrollmentWire ToSourceEnrollmentWire(SourceEnrollmentStatus status) => new(
-        status.SourceId,
-        status.ZoneId,
-        status.Format,
-        status.FormatVersion,
-        status.Generation,
-        status.Life switch
-        {
-            SourceEnrollmentLife.Revoked => "revoked",
-            SourceEnrollmentLife.Quarantined => "quarantined",
-            SourceEnrollmentLife.Paused => "paused",
-            _ => "enrolled"
-        },
-        status.AnchorLength,
-        status.EnrolledAtUtc,
-        status.RevokedAtUtc,
-        status.Quarantine is { } quarantine
-            ? new SourceQuarantineWire(
-                quarantine.Reason switch
-                {
-                    SourceQuarantineReason.GenerationTruncated => "generation_truncated",
-                    SourceQuarantineReason.GenerationReplaced => "generation_replaced",
-                    SourceQuarantineReason.MappingUnknown => "mapping_unknown",
-                    _ => "mixed_locator"
-                },
-                quarantine.Detail,
-                quarantine.RecordedAtUtc)
-            : null,
-        ToWireToken(status.Availability.ToString()),
-        status.AvailabilityObservedAtUtc,
-        status.RelocatedAtUtc,
-        status.SourceReferenceRevision,
-        status.PausedAtUtc,
-        status.RefreshOptIn,
-        status.JournalCiphertextBytes,
-        status.SnapshotCiphertextBytes,
-        status.SnapshotRevision);
+    private static SourceEnrollmentWire ToSourceEnrollmentWire(SourceEnrollmentStatus status)
+    {
+        var ingestion = status.Ingestion;
+        return new SourceEnrollmentWire(
+            status.SourceId,
+            status.ZoneId,
+            status.Format,
+            status.FormatVersion,
+            status.Generation,
+            status.Life switch
+            {
+                SourceEnrollmentLife.Revoked => "revoked",
+                SourceEnrollmentLife.Quarantined => "quarantined",
+                SourceEnrollmentLife.Paused => "paused",
+                _ => "enrolled"
+            },
+            status.AnchorLength,
+            status.EnrolledAtUtc,
+            status.RevokedAtUtc,
+            status.Quarantine is { } quarantine
+                ? new SourceQuarantineWire(
+                    quarantine.Reason switch
+                    {
+                        SourceQuarantineReason.GenerationTruncated => "generation_truncated",
+                        SourceQuarantineReason.GenerationReplaced => "generation_replaced",
+                        SourceQuarantineReason.MappingUnknown => "mapping_unknown",
+                        _ => "mixed_locator"
+                    },
+                    quarantine.Detail,
+                    quarantine.RecordedAtUtc)
+                : null,
+            ToWireToken(status.Availability.ToString()),
+            status.AvailabilityObservedAtUtc,
+            status.RelocatedAtUtc,
+            status.SourceReferenceRevision,
+            status.PausedAtUtc,
+            status.RefreshOptIn,
+            status.JournalCiphertextBytes,
+            status.SnapshotCiphertextBytes,
+            status.SnapshotRevision,
+            status.RawPreservationOptIn,
+            status.RawPreservationRetainUntilUtc,
+            ingestion?.Preservation ?? "reference_only",
+            ingestion?.Interpretation ?? "uninterpreted",
+            ingestion?.Derivation ?? "not_indexed",
+            ingestion?.PendingTailBytes ?? 0,
+            ingestion?.PreservedBytes ?? 0,
+            ingestion?.UninterpretedRecords ?? 0,
+            ingestion?.UnprocessedBytes ?? 0,
+            ingestion?.PreservedPendingBytes ?? 0,
+            ingestion?.LastDiagnostic is { } diagnostic
+                ? new SourceRecordDiagnosticWire(diagnostic.Code, diagnostic.Offset)
+                : null,
+            ingestion is null
+                ? null
+                : ingestion.PreservedRecords.Select(record => new SourcePreservedRecordDescriptorWire(
+                    record.Offset, record.Length, record.Digest, record.RetainUntilUtc)).ToArray());
+    }
 
     private static SourceEnrollmentWire ToSourceEnrollmentWire(
         EnrolledSource enrolled,
@@ -4247,7 +4422,9 @@ public sealed class ServiceRequestHandler
         enrolled.RelocatedAtUtc,
         null,
         enrolled.PausedAtUtc,
-        enrolled.RefreshOptIn);
+        enrolled.RefreshOptIn,
+        RawPreservationOptIn: enrolled.RawPreservationOptIn,
+        RawPreservationRetainUntilUtc: enrolled.RawPreservationRetainUntilUtc);
 
     private ServiceReply HandleSourceSnapshotCommand(
         AuthenticatedContext context,
@@ -10207,6 +10384,7 @@ public sealed class ServiceRequestHandler
         request.RequestId is not null || request.SourceTitle is not null ||
         request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
         request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null ||
+        (!allowFolderSelection && request.SourceFolderRawPreservationRetainUntilUtc is not null) ||
         (!allowFolderSelection && (request.SourceFolderRoot is not null ||
             request.SourceFolderRecursive is not null || request.SourceFolderIncludePatterns is not null ||
             request.SourceFolderExcludePatterns is not null)) ||
@@ -10218,7 +10396,11 @@ public sealed class ServiceRequestHandler
     /// locator, format and version come from the encrypted enrollment state,
     /// so a request body can never re-map or re-point a source.
     /// </summary>
-    private static bool HasSourceCommandExtras(ServiceRequest request, bool allowRelocationFields = false) =>
+    private static bool HasSourceCommandExtras(
+        ServiceRequest request,
+        bool allowRelocationFields = false,
+        bool allowRawPreservationRetention = false,
+        bool allowSourceRecordOffset = false) =>
         request.ZoneId is not null || request.Passphrase is not null ||
         request.RecoveryCode is not null || request.ContentBase64 is not null ||
         request.ResourceIds is not null || request.Operations is not null ||
@@ -10240,9 +10422,12 @@ public sealed class ServiceRequestHandler
         request.SourceFormat is not null || request.SourceFormatVersion is not null ||
         request.SourceTitle is not null || request.SourceAuthor is not null ||
         request.SourceCapturedAtUtc is not null || request.SnapshotRetainUntilUtc is not null ||
+        (!allowRawPreservationRetention && request.RawPreservationRetainUntilUtc is not null) ||
+        (!allowSourceRecordOffset && request.SourceRecordOffset is not null) ||
         request.SourceFolderRoot is not null || request.SourceFolderRecursive is not null ||
         request.SourceFolderIncludePatterns is not null || request.SourceFolderExcludePatterns is not null ||
-        request.SourceFolderPreviewId is not null || request.SourceFolderConfirmation is not null;
+        request.SourceFolderPreviewId is not null || request.SourceFolderConfirmation is not null ||
+        request.SourceFolderRawPreservationRetainUntilUtc is not null;
     /// <summary>
     /// S5-T7 mapping review submission carries only the source ID, the
     /// submitted locator, the optional unresolved zone/format/version the

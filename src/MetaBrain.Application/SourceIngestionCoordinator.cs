@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Security.Cryptography;
+using System.Text;
 using MetaBrain.Core.Domain;
 using MetaBrain.Core.Security;
 
@@ -20,7 +22,8 @@ public enum SourceIngestionOutcomeKind
     JournalLimit = 12,
     JournalConflict = 13,
     SourceMissing = 14,
-    Paused = 15
+    Paused = 15,
+    Empty = 16
 }
 
 /// <summary>
@@ -90,7 +93,10 @@ public sealed record SourceEnrollmentStatus(
     bool RefreshOptIn = false,
     long JournalCiphertextBytes = 0,
     long SnapshotCiphertextBytes = 0,
-    long SnapshotRevision = 0);
+    long SnapshotRevision = 0,
+    bool RawPreservationOptIn = false,
+    DateTimeOffset? RawPreservationRetainUntilUtc = null,
+    SourceIngestionSummary? Ingestion = null);
 public sealed record SourceFolderPreviewResult(
     string PreviewId,
     SourceFolderEnrollmentDraft Selection,
@@ -167,7 +173,7 @@ public sealed class SourceIngestionCoordinator
         // transcript interpretation: no record is framed or normalized here,
         // and the bytes are zeroed as soon as the anchor is computed.
         var snapshot = _reader.TryReadSnapshot(normalizedLocator);
-        if (snapshot.Status != SourceSnapshotStatus.Snapshot || snapshot.Content is not { Length: > 0 })
+        if (snapshot.Status != SourceSnapshotStatus.Snapshot || snapshot.Content is not { } content)
         {
             throw new SourceOperationException(
                 snapshot.Status switch
@@ -176,8 +182,8 @@ public sealed class SourceIngestionCoordinator
                     SourceSnapshotStatus.Missing => "source_missing",
                     _ => "source_locator_unreadable"
                 });
-
         }
+
 
         try
         {
@@ -211,6 +217,10 @@ public sealed class SourceIngestionCoordinator
 
         var enumerator = _folderEnumerator ?? throw new SourceOperationException("source_folder_unavailable");
         var normalizedSelection = SourceFolderEnrollmentGrammar.NormalizeDraft(selection);
+        if (normalizedSelection.RawPreservationRetainUntilUtc is { } retention && retention <= DateTimeOffset.UtcNow)
+        {
+            throw new ArgumentException("Folder raw preservation requires a future UTC retention time.");
+        }
         // Fail closed on corrupt enrollment metadata before showing a preview.
         _ = _enrollments.List(owner, persistence);
         var enumeration = enumerator.Enumerate(
@@ -274,6 +284,10 @@ public sealed class SourceIngestionCoordinator
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+        if (pending.Selection.RawPreservationRetainUntilUtc is { } retention && retention <= DateTimeOffset.UtcNow)
+        {
+            throw new ArgumentException("Folder raw preservation requires a future UTC retention time.");
+        }
         var enumerator = _folderEnumerator ?? throw new SourceOperationException("source_folder_unavailable");
         var currentEnumeration = enumerator.Enumerate(
             pending.Selection.RootLocator,
@@ -560,7 +574,8 @@ public sealed class SourceIngestionCoordinator
         folder.FormatVersion == selection.FormatVersion &&
         folder.Recursive == selection.Recursive &&
         folder.IncludePatterns.SequenceEqual(selection.IncludePatterns, StringComparer.Ordinal) &&
-        folder.ExcludePatterns.SequenceEqual(selection.ExcludePatterns, StringComparer.Ordinal);
+        folder.ExcludePatterns.SequenceEqual(selection.ExcludePatterns, StringComparer.Ordinal) &&
+        folder.RawPreservationRetainUntilUtc == selection.RawPreservationRetainUntilUtc;
     public EnrolledSource Relocate(
         AuthenticatedContext owner,
         string sourceId,
@@ -644,9 +659,6 @@ public sealed class SourceIngestionCoordinator
         if (held is not null && held.Reason == SourceQuarantineReason.MappingUnknown &&
             SourceEnrollmentAuthority.FindEnrollment(fullState, sourceId) is null)
         {
-            // A held mapping-unknown submission is reported with its quarantine
-            // record, no mapping, no checkpoint and no availability probe: the
-            // held transcript is never opened to resolve the mapping.
             return new SourceEnrollmentStatus(
                 held.SourceId,
                 "(unresolved)",
@@ -678,52 +690,62 @@ public sealed class SourceIngestionCoordinator
         var quarantine = SourceEnrollmentAuthority.FindQuarantine(
             SourceEnrollmentAuthority.ValidateAndNormalizeState(operation.LoadSourceEnrollmentState()), sourceId);
         var (revision, journal) = ReadJournal(operation, enrollment);
-        var life = enrollment.RevokedAtUtc is not null
-            ? SourceEnrollmentLife.Revoked
-            : quarantine is not null
-                ? SourceEnrollmentLife.Quarantined
-                : enrollment.PausedAtUtc is not null
-                    ? SourceEnrollmentLife.Paused
-                    : SourceEnrollmentLife.Enrolled;
-        var observedAt = life == SourceEnrollmentLife.Enrolled ? DateTimeOffset.UtcNow : (DateTimeOffset?)null;
-        var availability = observedAt is null
-            ? SourceAvailabilityObservation.NotChecked
-            : ObserveAvailability(enrollment);
-        var sourceReferenceRevision = observedAt is null
-            ? (long?)null
-            : UpdateRegisteredAvailability(owner, enrollment, availability, operation);
-        var (journalBytes, snapshotBytes, snapshotRevision) = ReadCacheScope(operation, enrollment);
-        return new SourceEnrollmentStatus(
-            enrollment.SourceId,
-            enrollment.ZoneId,
-            enrollment.Format,
-            enrollment.FormatVersion,
-            enrollment.Generation,
-            life,
-            enrollment.AnchorLength,
-            enrollment.EnrolledAtUtc,
-            enrollment.RevokedAtUtc,
-            quarantine,
-            revision,
-            journal?.ConsumedOffset ?? 0,
-            journal?.Events.Length ?? 0,
-            journal?.Diagnostics.Length ?? 0,
-            journal?.LastIngestAtUtc,
-            availability,
-            observedAt,
-            enrollment.RelocatedAtUtc,
-            sourceReferenceRevision,
-            enrollment.PausedAtUtc,
-            enrollment.RefreshOptIn,
-            journalBytes,
-            snapshotBytes,
-            snapshotRevision);
+        try
+        {
+            var life = enrollment.RevokedAtUtc is not null
+                ? SourceEnrollmentLife.Revoked
+                : quarantine is not null
+                    ? SourceEnrollmentLife.Quarantined
+                    : enrollment.PausedAtUtc is not null
+                        ? SourceEnrollmentLife.Paused
+                        : SourceEnrollmentLife.Enrolled;
+            var observedAt = life == SourceEnrollmentLife.Enrolled ? DateTimeOffset.UtcNow : (DateTimeOffset?)null;
+            var availability = observedAt is null
+                ? SourceAvailabilityObservation.NotChecked
+                : ObserveAvailability(enrollment);
+            var sourceReferenceRevision = observedAt is null
+                ? (long?)null
+                : UpdateRegisteredAvailability(owner, enrollment, availability, operation);
+            var (journalBytes, snapshotBytes, snapshotRevision) = ReadCacheScope(operation, enrollment);
+            return new SourceEnrollmentStatus(
+                enrollment.SourceId,
+                enrollment.ZoneId,
+                enrollment.Format,
+                enrollment.FormatVersion,
+                enrollment.Generation,
+                life,
+                enrollment.AnchorLength,
+                enrollment.EnrolledAtUtc,
+                enrollment.RevokedAtUtc,
+                quarantine,
+                revision,
+                journal?.ConsumedOffset ?? 0,
+                journal?.Events.Length ?? 0,
+                journal?.Diagnostics.Length ?? 0,
+                journal?.LastIngestAtUtc,
+                availability,
+                observedAt,
+                enrollment.RelocatedAtUtc,
+                sourceReferenceRevision,
+                enrollment.PausedAtUtc,
+                enrollment.RefreshOptIn,
+                journalBytes,
+                snapshotBytes,
+                snapshotRevision,
+                enrollment.RawPreservationOptIn,
+                enrollment.RawPreservationRetainUntilUtc,
+                CreateSummary(enrollment, journal));
+        }
+        finally
+        {
+            ClearJournalPreservedBytes(journal);
+        }
     }
 
     private SourceAvailabilityObservation ObserveAvailability(EnrolledSource enrollment)
     {
         var snapshot = _reader.TryReadSnapshot(enrollment.Locator);
-        if (snapshot.Status != SourceSnapshotStatus.Snapshot || snapshot.Content is not { Length: > 0 } content)
+        if (snapshot.Status != SourceSnapshotStatus.Snapshot || snapshot.Content is not { } content)
         {
             return snapshot.Status switch
             {
@@ -735,6 +757,13 @@ public sealed class SourceIngestionCoordinator
 
         try
         {
+            if (content.Length == 0)
+            {
+                return enrollment.AnchorLength == 0
+                    ? SourceAvailabilityObservation.Empty
+                    : SourceAvailabilityObservation.Changed;
+            }
+
             return content.Length == enrollment.AnchorLength &&
                 SourceFingerprint.Matches(enrollment.AnchorDigest, content)
                 ? SourceAvailabilityObservation.Available
@@ -792,7 +821,7 @@ public sealed class SourceIngestionCoordinator
 
         var availability = observation switch
         {
-            SourceAvailabilityObservation.Available => SourceAvailability.Available,
+            SourceAvailabilityObservation.Available or SourceAvailabilityObservation.Empty => SourceAvailability.Available,
             SourceAvailabilityObservation.Changed or SourceAvailabilityObservation.Missing => SourceAvailability.Unavailable,
             SourceAvailabilityObservation.Unreadable or SourceAvailabilityObservation.TooLarge => SourceAvailability.Unknown,
             _ => source.Availability
@@ -835,8 +864,6 @@ public sealed class SourceIngestionCoordinator
         ArgumentNullException.ThrowIfNull(owner);
         ArgumentNullException.ThrowIfNull(operation);
 
-        // State gates resolve from encrypted state only; the locator is not
-        // touched for an unknown, revoked, paused or quarantined source.
         var state = SourceEnrollmentAuthority.ValidateAndNormalizeState(operation.LoadSourceEnrollmentState());
         var enrollment = SourceEnrollmentAuthority.FindEnrollment(state, sourceId);
         if (enrollment is null)
@@ -859,9 +886,6 @@ public sealed class SourceIngestionCoordinator
             return new SourceIngestionOutcome(SourceIngestionOutcomeKind.MixedQuarantined, 0, 0, 0);
         }
 
-        // Version dispatch happens before the transcript is opened: an
-        // unsupported format or version is an explicit diagnostic, never a
-        // best-effort read of bytes nobody can interpret.
         if (!_normalizers.TryResolve(enrollment.Format, enrollment.FormatVersion, out var normalizer) ||
             normalizer is null)
         {
@@ -871,86 +895,213 @@ public sealed class SourceIngestionCoordinator
         var journalId = SourceIngestionIds.JournalIdFor(sourceId, enrollment.Generation);
         var (liveRevision, journal) = ReadJournal(operation, enrollment);
         var offset = journal?.ConsumedOffset ?? 0;
-        if ((journal?.Events.Length ?? 0) >= SourceIngestionLimits.MaximumJournalEvents)
-        {
-            return new SourceIngestionOutcome(SourceIngestionOutcomeKind.JournalLimit, offset, 0, 0);
-        }
-
-        var events = journal is null ? new List<NormalizedSourceEvent>() : journal.Events.ToList();
-        var diagnostics = journal is null
-            ? new List<SourceIngestionDiagnostic>()
-            : journal.Diagnostics.ToList();
-        var snapshot = _reader.TryReadSnapshot(enrollment.Locator, cancellationToken);
-
-        if (snapshot.Status != SourceSnapshotStatus.Snapshot || snapshot.Content is not { Length: > 0 } content)
-        {
-            return new SourceIngestionOutcome(
-                snapshot.Status switch
-                {
-                    SourceSnapshotStatus.Missing => SourceIngestionOutcomeKind.SourceMissing,
-                    SourceSnapshotStatus.TooLarge => SourceIngestionOutcomeKind.SourceTooLarge,
-                    _ => SourceIngestionOutcomeKind.SourceUnreadable
-                },
-                offset, 0, 0);
-        }
-
         try
         {
-            // Generation gate: the consumed prefix must still be exactly the
-            // bytes the checkpoint was taken over, and the live source must
-            // not be shorter than it. Truncation and replacement are refused
-            // instead of spliced into the prior generation.
-            var anchorLength = journal?.AnchorLength ?? enrollment.AnchorLength;
-            var anchorDigest = journal?.AnchorDigest ?? enrollment.AnchorDigest;
-            if (content.Length < anchorLength)
+            if ((journal?.Events.Length ?? 0) >= SourceIngestionLimits.MaximumJournalEvents)
             {
-                RecordQuarantine(owner, enrollment, SourceQuarantineReason.GenerationTruncated, "generation_truncated", operation);
-                return new SourceIngestionOutcome(SourceIngestionOutcomeKind.GenerationChanged, offset, 0, 0,
-                    "generation_truncated");
+                return new SourceIngestionOutcome(SourceIngestionOutcomeKind.JournalLimit, offset, 0, 0);
             }
 
-            if (!SourceFingerprint.Matches(anchorDigest, content.AsSpan(0, (int)anchorLength)))
+            var snapshot = _reader.TryReadSnapshot(enrollment.Locator, cancellationToken);
+            if (snapshot.Status != SourceSnapshotStatus.Snapshot || snapshot.Content is not { } content)
             {
-                RecordQuarantine(owner, enrollment, SourceQuarantineReason.GenerationReplaced, "generation_replaced", operation);
-                return new SourceIngestionOutcome(SourceIngestionOutcomeKind.GenerationChanged, offset, 0, 0,
-                    "generation_replaced");
+                return new SourceIngestionOutcome(
+                    snapshot.Status switch
+                    {
+                        SourceSnapshotStatus.Missing => SourceIngestionOutcomeKind.SourceMissing,
+                        SourceSnapshotStatus.TooLarge => SourceIngestionOutcomeKind.SourceTooLarge,
+                        _ => SourceIngestionOutcomeKind.SourceUnreadable
+                    },
+                    offset, 0, 0);
             }
 
-            // Bounded incremental framing and normalization of the unconsumed
-            // tail. Only complete records are consumed; a trailing partial
-            // record stays unconsumed so it can never be committed as done,
-            // and an unsupported record stops the run instead of being
-            // skipped over.
-            var buffer = content.AsSpan((int)offset);
-            var position = 0;
-            var eventsAdded = 0;
-            string? stopDiagnostic = null;
-            while (position < buffer.Length)
+            List<PreservedSourceRecord>? preservedRecords = null;
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var decode = normalizer.Decode(
-                    buffer.Slice(position),
-                    new SourceRecordContext(sourceId, enrollment.Generation, offset + position));
-                switch (decode.Kind)
+                var anchorLength = journal?.AnchorLength ?? enrollment.AnchorLength;
+                var anchorDigest = journal?.AnchorDigest ?? enrollment.AnchorDigest;
+                if (content.Length < anchorLength)
                 {
-                    case SourceRecordDecodeKind.NeedMoreBytes:
-                        // The trailing bytes are an incomplete record: they
-                        // stay unconsumed so the checkpoint cannot advance
-                        // past them.
-                        goto FramingDone;
-                    case SourceRecordDecodeKind.Unsupported:
-                        stopDiagnostic = decode.Diagnostic is { Length: > 0 } diagnostic && IsDiagnostic(diagnostic)
-                            ? diagnostic
-                            : "unsupported_record";
-                        goto FramingDone;
-                    case SourceRecordDecodeKind.Consumed:
-                        if (decode.ConsumedBytes <= 0 || decode.Event is not { } draft)
-                        {
-                            stopDiagnostic = "normalizer_no_progress";
-                            goto FramingDone;
-                        }
+                    RecordQuarantine(owner, enrollment, SourceQuarantineReason.GenerationTruncated, "generation_truncated", operation);
+                    return new SourceIngestionOutcome(SourceIngestionOutcomeKind.GenerationChanged, offset, 0, 0,
+                        "generation_truncated");
+                }
 
-                        var span = new SourceSpan(offset + position, offset + position + decode.ConsumedBytes);
+                if (!SourceFingerprint.Matches(anchorDigest, content.AsSpan(0, (int)anchorLength)))
+                {
+                    RecordQuarantine(owner, enrollment, SourceQuarantineReason.GenerationReplaced, "generation_replaced", operation);
+                    return new SourceIngestionOutcome(SourceIngestionOutcomeKind.GenerationChanged, offset, 0, 0,
+                        "generation_replaced");
+                }
+
+                if (content.Length == 0)
+                {
+                    return new SourceIngestionOutcome(SourceIngestionOutcomeKind.Empty, 0, 0, 0);
+                }
+
+                var preserveUntil = enrollment.RawPreservationRetainUntilUtc;
+                var preservationEnabled = enrollment.RawPreservationOptIn &&
+                    preserveUntil is { } retainUntilUtc &&
+                    retainUntilUtc > DateTimeOffset.UtcNow;
+                var existingBarrier = journal?.Version2?.VersionBarrierOffset;
+                if (existingBarrier is { } priorBarrier &&
+                    content.Length == journal!.AnchorLength &&
+                    SourceFingerprint.Matches(journal.AnchorDigest, content))
+                {
+                    var diagnostic = journal.Diagnostics.FirstOrDefault(item => item.Offset == priorBarrier);
+                    return new SourceIngestionOutcome(
+                        SourceIngestionOutcomeKind.UnsupportedRecord,
+                        priorBarrier,
+                        0,
+                        0,
+                        diagnostic?.Code ?? "version_barrier");
+                }
+
+                if (existingBarrier is { } pendingBarrier &&
+                    content.Length > journal!.AnchorLength &&
+                    !preservationEnabled)
+                {
+                    var diagnostic = journal.Diagnostics.FirstOrDefault(item => item.Offset == pendingBarrier);
+                    return new SourceIngestionOutcome(
+                        SourceIngestionOutcomeKind.UnsupportedRecord,
+                        pendingBarrier,
+                        0,
+                        0,
+                        diagnostic?.Code ?? "version_barrier");
+                }
+
+                var events = journal is null
+                    ? new List<NormalizedSourceEvent>()
+                    : journal.Events.ToList();
+                var diagnostics = journal is null
+                    ? new List<SourceIngestionDiagnostic>()
+                    : journal.Diagnostics.ToList();
+                preservedRecords = journal?.Version2?.PreservedRecords.ToList() ?? new List<PreservedSourceRecord>();
+                var versionBarrierOffset = existingBarrier;
+                var knownChainIds = BuildOmpChainIdentities(sourceId, normalizer, events, preservedRecords);
+                var buffer = content.AsSpan((int)offset);
+                var position = 0;
+                var eventsAdded = 0;
+                var diagnosticsAdded = 0;
+                var diagnosticsChanged = false;
+                var preservedChanged = false;
+                string? stopDiagnostic = null;
+
+                void RecordDiagnostic(long recordOffset, string code)
+                {
+                    var existingIndex = diagnostics.FindIndex(item => item.Offset == recordOffset);
+                    if (existingIndex >= 0 &&
+                        string.Equals(diagnostics[existingIndex].Code, code, StringComparison.Ordinal))
+                    {
+                        return;
+                    }
+
+                    if (existingIndex >= 0)
+                    {
+                        diagnostics.RemoveAt(existingIndex);
+                    }
+
+                    diagnostics.Add(new SourceIngestionDiagnostic(recordOffset, code, DateTimeOffset.UtcNow));
+                    diagnosticsAdded++;
+                    diagnosticsChanged = true;
+                }
+
+                void PreserveBytes(int length, long absoluteOffset, string? chainIdentity)
+                {
+                    var bytes = content.AsSpan(checked((int)absoluteOffset), length).ToArray();
+                    var record = new PreservedSourceRecord(
+                        absoluteOffset,
+                        length,
+                        SourceFingerprint.Compute(bytes),
+                        preserveUntil!.Value,
+                        bytes,
+                        chainIdentity);
+                    preservedRecords.RemoveAll(existing => existing.Offset == absoluteOffset);
+                    preservedRecords.Add(record);
+                    preservedChanged = true;
+                }
+
+                while (position < buffer.Length)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var remaining = buffer[position..];
+                    var newline = remaining.IndexOf((byte)'\n');
+                    if (newline < 0)
+                    {
+                        break;
+                    }
+
+                    var recordLength = newline + 1;
+                    var line = remaining[..newline];
+                    SourceRecordDecode decode;
+                    if (HasInvalidRecordEncoding(line))
+                    {
+                        decode = new SourceRecordDecode(
+                            SourceRecordDecodeKind.Unsupported,
+                            recordLength,
+                            null,
+                            "source_record_encoding_invalid");
+                    }
+                    else
+                    {
+                        decode = normalizer.Decode(
+                            remaining,
+                            new SourceRecordContext(sourceId, enrollment.Generation, offset + position));
+                    }
+
+                    if (decode.Kind == SourceRecordDecodeKind.NeedMoreBytes)
+                    {
+                        decode = decode with
+                        {
+                            Kind = SourceRecordDecodeKind.Unsupported,
+                            ConsumedBytes = recordLength,
+                            Event = null,
+                            Diagnostic = "normalizer_incomplete_record",
+                            ChainIdentity = null,
+                            ChainParentId = null,
+                            IsVersionBarrier = false
+                        };
+                    }
+                    else if (decode.Kind == SourceRecordDecodeKind.Consumed &&
+                             (decode.ConsumedBytes != recordLength || decode.Event is null))
+                    {
+                        decode = decode with
+                        {
+                            Kind = SourceRecordDecodeKind.Unsupported,
+                            ConsumedBytes = recordLength,
+                            Event = null,
+                            Diagnostic = "normalizer_no_progress"
+                        };
+                    }
+                    else if (decode.Kind == SourceRecordDecodeKind.Unsupported &&
+                             decode.ConsumedBytes != recordLength)
+                    {
+                        decode = decode with
+                        {
+                            ConsumedBytes = recordLength,
+                            ChainIdentity = null,
+                            ChainParentId = null,
+                            IsVersionBarrier = false
+                        };
+                    }
+
+                    if (string.Equals(normalizer.Format, OmpSessionNormalizer.FormatName, StringComparison.Ordinal) &&
+                        decode.ChainIdentity is { } chainIdentity &&
+                        decode.ChainParentId is { } parentId &&
+                        !knownChainIds.Contains(parentId))
+                    {
+                        // D7 refuses this event; retain its independently validated envelope identity for D5 admission after preservation.
+                        decode = decode with
+                        {
+                            Kind = SourceRecordDecodeKind.Unsupported,
+                            Event = null,
+                            Diagnostic = "omp_chain_reference_unresolved"
+                        };
+                    }
+
+                    if (decode.Kind == SourceRecordDecodeKind.Consumed && decode.Event is { } draft)
+                    {
+                        var span = new SourceSpan(offset + position, offset + position + recordLength);
                         var normalized = new NormalizedSourceEvent(
                             draft.EventId, draft.Author, draft.OccurredAtUtc, draft.PayloadKind, draft.PayloadDigest, span);
                         bool valid;
@@ -964,112 +1115,166 @@ public sealed class SourceIngestionCoordinator
                             valid = false;
                         }
 
-                        if (!valid)
+                        if (valid)
                         {
-                            stopDiagnostic = "normalizer_invalid_event";
-                            goto FramingDone;
+                            events.Add(normalized);
+                            eventsAdded++;
+                            if (decode.ChainIdentity is { } acceptedIdentity)
+                            {
+                                knownChainIds.Add(acceptedIdentity);
+                            }
+
+                            position += recordLength;
+                            continue;
                         }
 
-                        events.Add(normalized);
-                        eventsAdded++;
-                        position += decode.ConsumedBytes;
-                        break;
-                    default:
+                        decode = decode with
+                        {
+                            Kind = SourceRecordDecodeKind.Unsupported,
+                            ConsumedBytes = recordLength,
+                            Event = null,
+                            Diagnostic = "normalizer_invalid_event"
+                        };
+                    }
+
+                    if (decode.Kind != SourceRecordDecodeKind.Unsupported)
+                    {
                         stopDiagnostic = "normalizer_unknown_decode";
-                        goto FramingDone;
+                        break;
+                    }
+
+                    var diagnosticCode = decode.Diagnostic is { Length: > 0 } candidate && IsDiagnostic(candidate)
+                        ? candidate
+                        : "unsupported_record";
+                    var absoluteOffset = offset + position;
+                    RecordDiagnostic(absoluteOffset, diagnosticCode);
+
+                    if (decode.IsVersionBarrier)
+                    {
+                        stopDiagnostic = diagnosticCode;
+                        if (preservationEnabled)
+                        {
+                            versionBarrierOffset = absoluteOffset;
+                            PreserveBytes(buffer.Length - position, absoluteOffset, null);
+                        }
+
+                        break;
+                    }
+
+                    if (!preservationEnabled)
+                    {
+                        stopDiagnostic = diagnosticCode;
+                        break;
+                    }
+
+                    PreserveBytes(recordLength, absoluteOffset, decode.ChainIdentity);
+                    if (decode.ChainIdentity is { } preservedIdentity)
+                    {
+                        knownChainIds.Add(preservedIdentity);
+                    }
+
+                    position += recordLength;
                 }
-            }
 
-            FramingDone:
-            var consumed = offset + position;
-
-            if (eventsAdded == 0 && stopDiagnostic is null)
-            {
-                // Nothing new completed: a fully consumed generation reports
-                // idle, and an incomplete tail reports partial pending. Neither
-                // rewrites the checkpoint, so re-import is a no-op.
-                return new SourceIngestionOutcome(
-                    position < buffer.Length ? SourceIngestionOutcomeKind.PartialPending : SourceIngestionOutcomeKind.Idle,
-                    consumed, 0, 0);
-            }
-
-            if (events.Count > SourceIngestionLimits.MaximumJournalEvents)
-            {
-                return new SourceIngestionOutcome(SourceIngestionOutcomeKind.JournalLimit, offset, 0, 0);
-            }
-
-            if (stopDiagnostic is not null)
-            {
-                var stopOffset = consumed;
-                diagnostics.RemoveAll(existing => existing.Offset == stopOffset);
-                diagnostics.Add(new SourceIngestionDiagnostic(stopOffset, stopDiagnostic, DateTimeOffset.UtcNow));
-                if (diagnostics.Count > SourceIngestionLimits.MaximumJournalDiagnostics)
+                var consumed = offset + position;
+                if (events.Count > SourceIngestionLimits.MaximumJournalEvents ||
+                    diagnostics.Count > SourceIngestionLimits.MaximumJournalDiagnostics)
                 {
                     return new SourceIngestionOutcome(SourceIngestionOutcomeKind.JournalLimit, offset, 0, 0);
                 }
-            }
 
-            // Canonical accepted output and checkpoint are one encrypted
-            // resource write: the journal commits atomically with the
-            // advanced offset, so a crash or cancelled retry can neither lose
-            // committed events nor duplicate them (the source prefix and the
-            // checkpoint move together, and a retry re-derives only the
-            // unconsumed tail).
-            var nextJournal = new SourceIngestionJournal(
-                SourceIngestionJournal.CurrentSchemaVersion,
-                sourceId,
-                enrollment.ZoneId,
-                enrollment.Generation,
-                content.Length,
-                SourceFingerprint.Compute(content),
-                consumed,
-                events.ToArray(),
-                diagnostics.ToArray(),
-                DateTimeOffset.UtcNow);
-            byte[]? encoded = null;
-            try
-            {
-                encoded = SourceIngestionJournalCodec.Encode(nextJournal);
+                if (eventsAdded == 0 && !preservedChanged && stopDiagnostic is null &&
+                    journal is not null && content.Length == journal.AnchorLength &&
+                    SourceFingerprint.Matches(journal.AnchorDigest, content))
+                {
+                    return new SourceIngestionOutcome(
+                        position < buffer.Length
+                            ? SourceIngestionOutcomeKind.PartialPending
+                            : SourceIngestionOutcomeKind.Idle,
+                        consumed,
+                        0,
+                        0);
+                }
+
+                if (stopDiagnostic is not null && !diagnosticsChanged && !preservedChanged &&
+                    eventsAdded == 0 && content.Length == anchorLength &&
+                    SourceFingerprint.Matches(anchorDigest, content))
+                {
+                    return new SourceIngestionOutcome(
+                        SourceIngestionOutcomeKind.UnsupportedRecord,
+                        consumed,
+                        0,
+                        0,
+                        stopDiagnostic);
+                }
+
+                var journalVersion2 = preservedRecords.Count > 0 || versionBarrierOffset is not null
+                    ? new SourceIngestionJournalV2(preservedRecords.ToArray(), versionBarrierOffset)
+                    : null;
+                var schemaVersion = journalVersion2 is not null
+                    ? SourceIngestionJournal.PreservationSchemaVersion
+                    : journal?.SchemaVersion ?? SourceIngestionJournal.CurrentSchemaVersion;
+                var nextJournal = new SourceIngestionJournal(
+                    schemaVersion,
+                    sourceId,
+                    enrollment.ZoneId,
+                    enrollment.Generation,
+                    content.Length,
+                    SourceFingerprint.Compute(content),
+                    consumed,
+                    events.ToArray(),
+                    diagnostics.ToArray(),
+                    DateTimeOffset.UtcNow,
+                    journalVersion2);
+                byte[]? encoded = null;
                 try
                 {
-                    operation.WriteContent(journalId, enrollment.ZoneId, encoded, liveRevision);
+                    encoded = SourceIngestionJournalCodec.Encode(nextJournal);
+                    try
+                    {
+                        operation.WriteContent(journalId, enrollment.ZoneId, encoded, liveRevision);
+                    }
+                    catch (ManagedResourceUnavailableException)
+                    {
+                        return new SourceIngestionOutcome(SourceIngestionOutcomeKind.JournalConflict, offset, 0, 0);
+                    }
                 }
-                catch (ManagedResourceUnavailableException)
+                catch (ArgumentException)
                 {
-                    // A concurrent writer published this generation's journal
-                    // first: the run commits nothing and reports the conflict
-                    // instead of overwriting the winner.
-                    return new SourceIngestionOutcome(SourceIngestionOutcomeKind.JournalConflict, offset, 0, 0);
+                    return new SourceIngestionOutcome(SourceIngestionOutcomeKind.JournalLimit, offset, 0, 0);
                 }
-            }
-            catch (ArgumentException)
-            {
-                // The encoded journal exceeds the storage bound; the
-                // checkpoint stays where it was so no event is lost.
-                return new SourceIngestionOutcome(SourceIngestionOutcomeKind.JournalLimit, offset, 0, 0);
+                finally
+                {
+                    if (encoded is { Length: > 0 })
+                    {
+                        CryptographicOperations.ZeroMemory(encoded);
+                    }
+                }
+
+                return new SourceIngestionOutcome(
+                    stopDiagnostic is not null
+                        ? SourceIngestionOutcomeKind.UnsupportedRecord
+                        : position < buffer.Length
+                            ? SourceIngestionOutcomeKind.PartialPending
+                            : SourceIngestionOutcomeKind.Advanced,
+                    consumed,
+                    eventsAdded,
+                    diagnosticsAdded,
+                    stopDiagnostic);
             }
             finally
             {
-                if (encoded is { Length: > 0 })
+                if (preservedRecords is not null)
                 {
-                    CryptographicOperations.ZeroMemory(encoded);
+                    ClearPreservedSourceRecords(preservedRecords);
                 }
-            }
 
-            return new SourceIngestionOutcome(
-                stopDiagnostic is not null
-                    ? SourceIngestionOutcomeKind.UnsupportedRecord
-                    : position < buffer.Length
-                        ? SourceIngestionOutcomeKind.PartialPending
-                        : SourceIngestionOutcomeKind.Advanced,
-                consumed,
-                eventsAdded,
-                stopDiagnostic is not null ? 1 : 0,
-                stopDiagnostic);
+                CryptographicOperations.ZeroMemory(content);
+            }
         }
         finally
         {
-            CryptographicOperations.ZeroMemory(content);
+            ClearJournalPreservedBytes(journal);
         }
     }
 
@@ -1091,6 +1296,59 @@ public sealed class SourceIngestionCoordinator
         bool optIn,
         ISourceEnrollmentPersistence persistence) =>
         _enrollments.SetRefreshOptIn(owner, sourceId, optIn, persistence);
+    public EnrolledSource SetRawPreservationOptIn(
+        AuthenticatedContext owner,
+        string sourceId,
+        bool optIn,
+        DateTimeOffset? retainUntilUtc,
+        ISourceEnrollmentPersistence persistence) =>
+        _enrollments.SetRawPreservationOptIn(owner, sourceId, optIn, retainUntilUtc, persistence);
+    
+    /// <summary>
+    /// Reads one owner-preserved record by its absolute byte offset. This path
+    /// consults only the encrypted journal; it never reopens the source.
+    /// </summary>
+    public SourcePreservedRecordRead ReadPreservedRecord(
+        AuthenticatedContext owner,
+        string sourceId,
+        long offset,
+        IVaultOperation operation)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        ArgumentNullException.ThrowIfNull(operation);
+        if (owner.Kind != PrincipalKind.Owner)
+        {
+            throw new UnauthorizedAccessException("Only the owner may read preserved source records.");
+        }
+
+        if (!DomainIdentifiers.IsDomainIdentifier(sourceId) || offset < 0)
+        {
+            throw new ArgumentException("The preserved source record identity is invalid.");
+        }
+
+        var state = SourceEnrollmentAuthority.ValidateAndNormalizeState(operation.LoadSourceEnrollmentState());
+        var enrollment = SourceEnrollmentAuthority.FindEnrollment(state, sourceId)
+            ?? throw new SourceOperationException("source_not_enrolled");
+        var (_, journal) = ReadJournal(operation, enrollment);
+        try
+        {
+            var record = journal?.Version2?.PreservedRecords.FirstOrDefault(candidate => candidate.Offset == offset)
+                ?? throw new SourceOperationException("source_record_not_preserved");
+            if (record.RetainUntilUtc <= DateTimeOffset.UtcNow)
+            {
+                throw new SourceOperationException("source_preserved_record_expired");
+            }
+
+            return new SourcePreservedRecordRead(
+                new SourcePreservedRecordDescriptor(record.Offset, record.Length, record.Digest, record.RetainUntilUtc),
+                record.Bytes.ToArray());
+        }
+        finally
+        {
+            ClearJournalPreservedBytes(journal);
+        }
+    }
+
     /// <summary>
     /// S5-T7 owner mapping review submission: holds one source whose
     /// zone/format mapping is unresolved in the private quarantine with no
@@ -1139,39 +1397,43 @@ public sealed class SourceIngestionCoordinator
                     : enrollment.PausedAtUtc is not null
                         ? SourceEnrollmentLife.Paused
                         : SourceEnrollmentLife.Enrolled;
-            // S3-T6 allowlist listing never opens a transcript: it reports
-            // only encrypted enrollment metadata plus the persisted
-            // checkpoint summary for each source. S3-T6-A2 adds the actual
-            // encrypted cache scope (journal/snapshot ciphertext sizes and
-            // snapshot revision) resolved from the live manifest; listing still
-            // opens no transcript.
             var (revision, journal) = ReadJournal(operation, enrollment);
-            var (journalBytes, snapshotBytes, snapshotRevision) = ReadCacheScope(operation, enrollment);
-            result.Add(new SourceEnrollmentStatus(
-                enrollment.SourceId,
-                enrollment.ZoneId,
-                enrollment.Format,
-                enrollment.FormatVersion,
-                enrollment.Generation,
-                life,
-                enrollment.AnchorLength,
-                enrollment.EnrolledAtUtc,
-                enrollment.RevokedAtUtc,
-                quarantine,
-                revision,
-                journal?.ConsumedOffset ?? 0,
-                journal?.Events.Length ?? 0,
-                journal?.Diagnostics.Length ?? 0,
-                journal?.LastIngestAtUtc,
-                SourceAvailabilityObservation.NotChecked,
-                null,
-                enrollment.RelocatedAtUtc,
-                null,
-                enrollment.PausedAtUtc,
-                enrollment.RefreshOptIn,
-                journalBytes,
-                snapshotBytes,
-                snapshotRevision));
+            try
+            {
+                var (journalBytes, snapshotBytes, snapshotRevision) = ReadCacheScope(operation, enrollment);
+                result.Add(new SourceEnrollmentStatus(
+                    enrollment.SourceId,
+                    enrollment.ZoneId,
+                    enrollment.Format,
+                    enrollment.FormatVersion,
+                    enrollment.Generation,
+                    life,
+                    enrollment.AnchorLength,
+                    enrollment.EnrolledAtUtc,
+                    enrollment.RevokedAtUtc,
+                    quarantine,
+                    revision,
+                    journal?.ConsumedOffset ?? 0,
+                    journal?.Events.Length ?? 0,
+                    journal?.Diagnostics.Length ?? 0,
+                    journal?.LastIngestAtUtc,
+                    SourceAvailabilityObservation.NotChecked,
+                    null,
+                    enrollment.RelocatedAtUtc,
+                    null,
+                    enrollment.PausedAtUtc,
+                    enrollment.RefreshOptIn,
+                    journalBytes,
+                    snapshotBytes,
+                    snapshotRevision,
+                    enrollment.RawPreservationOptIn,
+                    enrollment.RawPreservationRetainUntilUtc,
+                    CreateSummary(enrollment, journal)));
+            }
+            finally
+            {
+                ClearJournalPreservedBytes(journal);
+            }
         }
 
         // S5-T7 mapping review: held mapping-unknown submissions are reported
@@ -1274,6 +1536,7 @@ public sealed class SourceIngestionCoordinator
             var status = outcome.Kind switch
             {
                 SourceIngestionOutcomeKind.Advanced => "ingest_advanced",
+                SourceIngestionOutcomeKind.Empty => "ingest_empty",
                 SourceIngestionOutcomeKind.Idle => "ingest_idle",
                 SourceIngestionOutcomeKind.PartialPending => "ingest_partial_pending",
                 SourceIngestionOutcomeKind.UnsupportedFormat => "ingest_unsupported_format",
@@ -1429,6 +1692,140 @@ public sealed class SourceIngestionCoordinator
             if (raw is { Length: > 0 })
             {
                 CryptographicOperations.ZeroMemory(raw);
+            }
+        }
+    }
+    private static SourceIngestionSummary CreateSummary(EnrolledSource enrollment, SourceIngestionJournal? journal)
+    {
+        var records = journal?.Version2?.PreservedRecords ?? Array.Empty<PreservedSourceRecord>();
+        var diagnostics = journal?.Diagnostics ?? Array.Empty<SourceIngestionDiagnostic>();
+        var anchorLength = journal?.AnchorLength ?? enrollment.AnchorLength;
+        var consumed = journal?.ConsumedOffset ?? 0;
+        var suffixBytes = Math.Max(0, anchorLength - consumed);
+        var barrierOffset = journal?.Version2?.VersionBarrierOffset;
+        var preservedBytes = records.Sum(record => (long)record.Length);
+        var preservedPendingBytes = barrierOffset is null
+            ? 0
+            : records.Sum(record => Math.Max(0, record.End - Math.Max(record.Offset, consumed)));
+        var stoppedAtCheckpoint = diagnostics.Any(diagnostic => diagnostic.Offset == consumed);
+        var pendingTailBytes = journal is not null && barrierOffset is null && !stoppedAtCheckpoint
+            ? suffixBytes
+            : 0;
+        var unprocessedBytes = journal is null
+            ? anchorLength
+            : barrierOffset is not null
+                ? Math.Max(0, suffixBytes - preservedPendingBytes)
+                : stoppedAtCheckpoint
+                    ? suffixBytes
+                    : 0;
+
+        var interpretation = anchorLength == 0
+            ? "empty"
+            : journal is null || journal.Events.Length == 0 && consumed == 0
+                ? "uninterpreted"
+                : diagnostics.Length > 0 || records.Length > 0 || unprocessedBytes > 0
+                    ? "partially_interpreted"
+                    : "fully_supported";
+        var lastDiagnostic = diagnostics
+            .OrderByDescending(diagnostic => diagnostic.Offset)
+            .FirstOrDefault();
+        var descriptors = records
+            .OrderBy(record => record.Offset)
+            .Select(record => new SourcePreservedRecordDescriptor(
+                record.Offset, record.Length, record.Digest, record.RetainUntilUtc))
+            .ToArray();
+
+        return new SourceIngestionSummary(
+            records.Length == 0 ? "reference_only" : "preserved",
+            interpretation,
+            "not_indexed",
+            pendingTailBytes,
+            preservedBytes,
+            diagnostics.Length,
+            unprocessedBytes,
+            preservedPendingBytes,
+            lastDiagnostic is null ? null : new SourceRecordDiagnostic(lastDiagnostic.Code, lastDiagnostic.Offset),
+            descriptors);
+    }
+
+    private static HashSet<string> BuildOmpChainIdentities(
+        string sourceId,
+        ISourceRecordNormalizer normalizer,
+        IReadOnlyList<NormalizedSourceEvent> events,
+        IReadOnlyList<PreservedSourceRecord> preservedRecords)
+    {
+        var identities = new HashSet<string>(StringComparer.Ordinal);
+        if (!string.Equals(normalizer.Format, OmpSessionNormalizer.FormatName, StringComparison.Ordinal))
+        {
+            return identities;
+        }
+
+        var prefix = "omp-" + sourceId + "-";
+        foreach (var normalized in events)
+        {
+            if (!normalized.PayloadKind.StartsWith("omp.", StringComparison.Ordinal) ||
+                normalized.PayloadKind is "omp.session" or "omp.title" ||
+                !normalized.EventId.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var identity = normalized.EventId[prefix.Length..];
+            if (identity.Length > 0)
+            {
+                identities.Add(identity);
+            }
+        }
+
+        foreach (var preserved in preservedRecords)
+        {
+            if (preserved.ChainIdentity is { } identity)
+            {
+                identities.Add(identity);
+            }
+        }
+
+        return identities;
+    }
+
+    private static bool HasInvalidRecordEncoding(ReadOnlySpan<byte> line)
+    {
+        if (line.Length >= 3 && line[0] == 0xEF && line[1] == 0xBB && line[2] == 0xBF)
+        {
+            return true;
+        }
+
+        var offset = 0;
+        while (offset < line.Length)
+        {
+            if (Rune.DecodeFromUtf8(line[offset..], out _, out var bytesConsumed) != OperationStatus.Done)
+            {
+                return true;
+            }
+
+            offset += bytesConsumed;
+        }
+
+        return false;
+    }
+
+    private static void ClearJournalPreservedBytes(SourceIngestionJournal? journal)
+    {
+        if (journal?.Version2?.PreservedRecords is not { } records)
+        {
+            return;
+        }
+
+        ClearPreservedSourceRecords(records);
+    }
+
+    private static void ClearPreservedSourceRecords(IEnumerable<PreservedSourceRecord> records)
+    {
+        foreach (var record in records)
+        {
+            if (record.Bytes.Length > 0)
+            {
+                CryptographicOperations.ZeroMemory(record.Bytes);
             }
         }
     }

@@ -780,3 +780,25 @@ the assignment can fail before the sentinel check or any child starts.
 **Root cause:** Windows PowerShell's default `Get-Content` decoding used the active ANSI code page for a UTF-8 source file without a BOM, then re-encoded the already-corrupted string as UTF-8.
 **Fix / workaround:** Read the HTML template with `Get-Content -Encoding UTF8 -Raw` before substituting metadata and writing the generated page.
 **Watch out for:** Static site source written as UTF-8 without a BOM must be explicitly read as UTF-8 by Windows PowerShell; a UTF-8 output encoding alone does not preserve the source text.
+
+## [2026-10-30] DispatchProxy cannot derive from a sealed proxy base
+
+**Symptom:** The crash-boundary smoke worker exited before the encrypted journal write with `The base type ... cannot be sealed`.
+**Root cause:** `DispatchProxy.Create<T,TProxy>()` emits a runtime subclass of `TProxy` to intercept interface calls, so a sealed proxy base is invalid.
+**Fix / workaround:** Keep the `DispatchProxy` implementation class unsealed.
+**Watch out for:** Any `DispatchProxy` test double must be inheritable even if it is only instantiated through the generic factory.
+
+## [2026-10-30] Locked owner reads must preserve service errors
+
+**Symptom:** A locked preserved-record read failed closed without producing an output file, but the CLI reported `source_preserved_record_invalid` instead of `vault_locked`.
+**Root cause:** The service returns lock refusal in a successful transport reply; the handler lacked an explicit null-operation lock guard and the CLI validated payload shape before surfacing the service error.
+**Fix / workaround:** Return `vault_locked` when the handler has no vault operation, and have the CLI surface string-valued `error`/`errorCode` fields before validating the payload.
+**Watch out for:** Service replies may serialize null error properties on success; test their value kinds, not just property presence, to avoid rejecting successful replies.
+
+## [2026-10-31] Preserved OMP records lost valid identities after unresolved parents
+
+**Symptom:** The corrected `omp-v3-dangling-parent` fixture expected one unresolved record to be preserved, then the remaining valid chain to continue; the real service instead preserved ten records and emitted ten unresolved-parent diagnostics.
+**Root cause:** The coordinator replaced a valid OMP decode with an unresolved-parent refusal and also cleared its independently validated `ChainIdentity`, so the next record could not resolve its parent even after the original bytes were durably preserved.
+**Fix / workaround:** Keep the validated envelope identity on the refusal decode; the existing preserved branch records it and adds it to the known-chain set only after preserving the exact bytes. The smoke now checks the corrected baseline and asserts the preserved `e13` identity and `e14` user child independently.
+**Watch out for:** A valid envelope with a dangling parent refuses that record, but preserving the record can still admit its own validated identity for later children. Invalid JSON/encoding, missing or invalid envelope fields, and version barriers still provide no identity.
+

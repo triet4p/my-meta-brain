@@ -16,7 +16,8 @@ public enum SourceAvailabilityObservation
     Missing = 2,
     Changed = 3,
     Unreadable = 4,
-    TooLarge = 5
+    TooLarge = 5,
+    Empty = 6
 }
 
 /// <summary>

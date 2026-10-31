@@ -365,6 +365,46 @@ Before creating canonical source records, enrollment writes their opaque IDs to 
 
 Enumeration and source reading are separate filesystem operations. The reader's final-path/handle checks narrow the race and fail closed when the path changes, but do not eliminate every time-of-check/time-of-use window.
 
+### 3.2.4 Codex/OMP source ingestion and raw preservation (S11-T3)
+
+This section describes the unreleased S11-T3 source implementation; installed 1.0.0 remains
+unchanged until a separately authorized S11-T6 release.
+
+Ingestion is owner-only and runs while the vault is unlocked. `source-status`/`source-list`
+report four separate facets: current availability, whether exact bytes are stored (`preserved` or
+`reference_only`), achieved interpretation, and derivation (`not_indexed`). Reference-only sources
+remain source-dependent; if an unsupported complete record or invalid UTF-8 is encountered without
+preservation consent, the checkpoint stops at its byte offset and status reports the diagnostic,
+unprocessed bytes and source dependency. No unknown record becomes an event or gains attribution.
+
+```text
+cli\MetaBrain.Cli.exe owner source-status --control-pipe "<pipe>" --source-id <id>
+cli\MetaBrain.Cli.exe owner source-ingest --control-pipe "<pipe>" --source-id <id>
+cli\MetaBrain.Cli.exe owner source-raw-preservation-optin --control-pipe "<pipe>" --source-id <id> --retain-until-utc <UTC-instant>
+cli\MetaBrain.Cli.exe owner source-raw-preservation-optout --control-pipe "<pipe>" --source-id <id>
+cli\MetaBrain.Cli.exe owner source-preserved-record-read --control-pipe "<pipe>" --source-id <id> --offset <byte-offset> --output-file "<new-file>"
+```
+
+The opt-in is a distinct owner act, not an interpretation setting; it requires a future UTC
+retention deadline. `source-folder-enroll` also accepts `--raw-preservation-until-utc <UTC-instant>`
+to explicitly apply that consent to members of the confirmed folder selection. Without the flag,
+members remain reference-only. Opting out stops preserving future records; already preserved spans
+remain owner-readable through their own stored retention deadlines.
+
+With active consent, complete unsupported records (including invalidly encoded input) are copied
+byte-for-byte into the encrypted generation journal in the same atomic write as the checkpoint;
+ordinary unknown records may then be passed, but an OMP newer-version barrier keeps the checkpoint
+at the barrier and stores the entire remaining tail without interpreting it. Exact offsets and
+digests are retained; diagnostics contain only a code and offset. OMP parent references are
+accepted only from independently validated envelopes. No lossy transcode is attempted.
+
+The read command requires an unlocked owner vault and a new output path; it verifies the stored
+digest and writes the exact span without sending source bytes to stdout. These operations are not
+available on an agent/MCP surface. Fully supported reference-only sources continue using journal
+v1; v2 is written only when a real v2-only element (preserved bytes or a preserved version barrier)
+is present. Existing v1 journals are not rewritten merely because consent is enabled; an existing
+v2 journal is never automatically downgraded.
+
 ### 3.3 The owner console (S9-T4)
 
 The packaged console is `owner-ui/MetaBrain.OwnerUi.exe`. It opens on the **Owner session**

@@ -336,7 +336,7 @@ def _omp_payload_lines() -> list[bytes]:
             '"preserveData":{"fixtureCompaction":{"version":1,'
             '"provider":"fixture-provider","replacementHistory":[],"usedTokens":40,'
             '"usage":{"inputTokens":10,"outputTokens":5,"totalTokens":15,'
-            '"cachedInputTokens":0,"cacheWriteTokens":0,"reasoningTokens":0}}}}',
+            '"cachedInputTokens":0,"cacheWriteTokens":0,"reasoningTokens":0}}}',
         ),
     ]
 

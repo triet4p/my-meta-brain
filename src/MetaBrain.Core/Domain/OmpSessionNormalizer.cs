@@ -111,6 +111,9 @@ public sealed class OmpSessionNormalizer : ISourceRecordNormalizer
         }
 
         var recordEnd = newline + 1;
+        SourceRecordDecode UnsupportedRecord(string code) =>
+            new(SourceRecordDecodeKind.Unsupported, recordEnd, null, code);
+
         var line = buffer[..newline];
         if (line.Length > 0 && line[^1] == (byte)'\r')
         {
@@ -119,9 +122,7 @@ public sealed class OmpSessionNormalizer : ISourceRecordNormalizer
 
         if (line.IsEmpty)
         {
-            // A blank line is not a skip: it is a record nobody can interpret,
-            // so ingestion stops explicitly instead of quietly stepping over it.
-            return Unsupported("omp_record_blank");
+            return UnsupportedRecord("omp_record_blank");
         }
 
         JsonElement root;
@@ -131,48 +132,83 @@ public sealed class OmpSessionNormalizer : ISourceRecordNormalizer
         }
         catch (JsonException)
         {
-            return Unsupported("omp_record_json_invalid");
+            return UnsupportedRecord("omp_record_json_invalid");
         }
 
         if (root.ValueKind != JsonValueKind.Object)
         {
-            return Unsupported("omp_record_not_object");
+            return UnsupportedRecord("omp_record_not_object");
         }
 
         if (!TryReadString(root, "type", out var recordType) || recordType.Length == 0)
         {
-            return Unsupported("omp_envelope_type_missing");
+            return UnsupportedRecord("omp_envelope_type_missing");
         }
 
         // The digest covers the exact consumed bytes, terminator included, so a
         // stored event stays bound to bytes that still exist at its span.
         var digest = SourceFingerprint.Compute(buffer[..recordEnd]);
-
-        switch (recordType)
+        var decoded = recordType switch
         {
-            case "title":
-                return Title(root, context, recordEnd, digest);
-            case "session":
-                return Session(root, context, recordEnd, digest);
-            case "message":
-                return Message(root, context, recordEnd, digest);
-            case "custom":
-                return Custom(root, context, recordEnd, digest);
-            case "custom_message":
-                return CustomMessage(root, context, recordEnd, digest);
-            case "thinking_level_change":
-                return ThinkingLevelChange(root, context, recordEnd, digest);
-            case "service_tier_change":
-                return ServiceTierChange(root, context, recordEnd, digest);
-            case "credential_pin":
-                return CredentialPin(root, context, recordEnd, digest);
-            case "title_change":
-                return TitleChange(root, context, recordEnd, digest);
-            case "compaction":
-                return Compaction(root, context, recordEnd, digest);
-            default:
-                return Unsupported(Token("omp_type_unsupported.", recordType));
+            "title" => Title(root, context, recordEnd, digest),
+            "session" => Session(root, context, recordEnd, digest),
+            "message" => Message(root, context, recordEnd, digest),
+            "custom" => Custom(root, context, recordEnd, digest),
+            "custom_message" => CustomMessage(root, context, recordEnd, digest),
+            "thinking_level_change" => ThinkingLevelChange(root, context, recordEnd, digest),
+            "service_tier_change" => ServiceTierChange(root, context, recordEnd, digest),
+            "credential_pin" => CredentialPin(root, context, recordEnd, digest),
+            "title_change" => TitleChange(root, context, recordEnd, digest),
+            "compaction" => Compaction(root, context, recordEnd, digest),
+            _ => Unsupported(Token("omp_type_unsupported.", recordType))
+        };
+
+        if (decoded.Kind == SourceRecordDecodeKind.NeedMoreBytes)
+        {
+            return decoded;
         }
+
+        var hasValidatedEnvelope = TryReadValidatedChainEnvelope(root, out var chainIdentity, out var chainParentId);
+        var isVersionBarrier = string.Equals(recordType, "session", StringComparison.Ordinal) &&
+            root.TryGetProperty("version", out var version) &&
+            version.ValueKind == JsonValueKind.Number &&
+            version.TryGetInt32(out var sessionVersion) &&
+            sessionVersion != SupportedSessionVersion;
+
+        return decoded with
+        {
+            ConsumedBytes = recordEnd,
+            ChainIdentity = hasValidatedEnvelope ? chainIdentity : null,
+            ChainParentId = hasValidatedEnvelope ? chainParentId : null,
+            IsVersionBarrier = isVersionBarrier
+        };
+    }
+
+    private static bool TryReadValidatedChainEnvelope(
+        JsonElement root,
+        out string? chainIdentity,
+        out string? chainParentId)
+    {
+        chainIdentity = null;
+        chainParentId = null;
+        if (root.ValueKind != JsonValueKind.Object ||
+            !TryReadString(root, "type", out var recordType) || recordType.Length == 0 ||
+            !TryReadString(root, "id", out var id) || !IsEventToken(id) ||
+            !root.TryGetProperty("parentId", out var parent) ||
+            !TryReadTimestamp(root, "timestamp", out _))
+        {
+            return false;
+        }
+
+        if (parent.ValueKind != JsonValueKind.Null &&
+            (!TryReadString(root, "parentId", out var parentId) || !IsEventToken(parentId)))
+        {
+            return false;
+        }
+
+        chainIdentity = id;
+        chainParentId = parent.ValueKind == JsonValueKind.Null ? null : parent.GetString();
+        return true;
     }
 
     /// <summary>

@@ -128,7 +128,9 @@ public sealed record EnrolledSource(
     DateTimeOffset? RevokedAtUtc,
     DateTimeOffset? RelocatedAtUtc = null,
     DateTimeOffset? PausedAtUtc = null,
-    bool RefreshOptIn = false);
+    bool RefreshOptIn = false,
+    bool RawPreservationOptIn = false,
+    DateTimeOffset? RawPreservationRetainUntilUtc = null);
 
 public enum SourceQuarantineReason
 {
@@ -316,7 +318,7 @@ public sealed class SourceEnrollmentAuthority
             throw new ArgumentException("The source format and version must be declared explicitly.");
         }
 
-        if (anchorLength < 1 || !SourceEnrollmentGrammar.IsAnchorDigest(anchorDigest))
+        if (anchorLength < 0 || !SourceEnrollmentGrammar.IsAnchorDigest(anchorDigest))
         {
             throw new ArgumentException("The enrolled source anchor is invalid.");
         }
@@ -816,6 +818,68 @@ public sealed class SourceEnrollmentAuthority
             return (state with { Enrollments = enrollments }, updated);
         });
     }
+    /// <summary>
+    /// Raw preservation is a separate owner consent from parsing and automatic
+    /// refresh. The retention deadline is persisted with the encrypted source
+    /// enrollment and copied to each preserved record.
+    /// </summary>
+    public EnrolledSource SetRawPreservationOptIn(
+        AuthenticatedContext actor,
+        string sourceId,
+        bool optIn,
+        DateTimeOffset? retainUntilUtc,
+        ISourceEnrollmentPersistence persistence)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(persistence);
+        EnsureOwner(actor);
+        if (!DomainIdentifiers.IsDomainIdentifier(sourceId))
+        {
+            throw new ArgumentException("The source ID must be an opaque safe identifier.");
+        }
+
+        if (optIn &&
+            (retainUntilUtc is not { } retention ||
+             retention.Offset != TimeSpan.Zero ||
+             retention <= DateTimeOffset.UtcNow) ||
+            !optIn && retainUntilUtc is not null)
+        {
+            throw new ArgumentException("Raw preservation requires an explicit future UTC retention time.");
+        }
+
+        return persistence.UpdateSourceEnrollmentState(state =>
+        {
+            var validated = ValidateAndNormalizeState(state);
+            var index = Array.FindIndex(validated.Enrollments, candidate =>
+                string.Equals(candidate.SourceId, sourceId, StringComparison.Ordinal));
+            if (index < 0)
+            {
+                throw new SourceOperationException("source_not_enrolled");
+            }
+
+            var current = validated.Enrollments[index];
+            if (current.RevokedAtUtc is not null)
+            {
+                throw new SourceOperationException("source_revoked");
+            }
+
+            if (current.RawPreservationOptIn == optIn &&
+                current.RawPreservationRetainUntilUtc == retainUntilUtc)
+            {
+                return (state, current);
+            }
+
+            var updated = current with
+            {
+                RawPreservationOptIn = optIn,
+                RawPreservationRetainUntilUtc = retainUntilUtc
+            };
+            var enrollments = validated.Enrollments
+                .Select((candidate, position) => position == index ? updated : candidate)
+                .ToArray();
+            return (state with { Enrollments = enrollments }, updated);
+        });
+    }
 
 
     public SourceQuarantineRecord Quarantine(
@@ -971,10 +1035,13 @@ public sealed class SourceEnrollmentAuthority
             !SourceEnrollmentGrammar.IsFormat(enrollment.Format) ||
             enrollment.FormatVersion < 1 ||
             enrollment.Generation < 1 ||
-            enrollment.AnchorLength < 1 ||
+            enrollment.AnchorLength < 0 ||
             !SourceEnrollmentGrammar.IsAnchorDigest(enrollment.AnchorDigest) ||
             enrollment.EnrolledAtUtc.Offset != TimeSpan.Zero ||
-            enrollment.EnrolledAtUtc > DateTimeOffset.UtcNow.AddMinutes(5))
+            enrollment.EnrolledAtUtc > DateTimeOffset.UtcNow.AddMinutes(5) ||
+            enrollment.RawPreservationOptIn != (enrollment.RawPreservationRetainUntilUtc is not null) ||
+            enrollment.RawPreservationRetainUntilUtc is { Offset: var retentionOffset } &&
+            retentionOffset != TimeSpan.Zero)
         {
             throw new InvalidDataException("The source enrollment state is invalid.");
         }
@@ -996,7 +1063,6 @@ public sealed class SourceEnrollmentAuthority
         {
             throw new InvalidDataException("The source enrollment pause time is invalid.");
         }
-
     }
 
     private static EnrolledSource Clone(EnrolledSource enrollment) => enrollment with { };

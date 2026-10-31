@@ -85,6 +85,9 @@ internal static class OwnerControlCli
                 "source-pause" => await SourcePauseAsync(options).ConfigureAwait(false),
                 "source-resume" => await SourceResumeAsync(options).ConfigureAwait(false),
                 "source-refresh-optin" => await SourceRefreshOptInAsync(options, optIn: true).ConfigureAwait(false),
+                "source-raw-preservation-optin" => await SourceRawPreservationOptInAsync(options, optIn: true).ConfigureAwait(false),
+                "source-raw-preservation-optout" => await SourceRawPreservationOptInAsync(options, optIn: false).ConfigureAwait(false),
+                "source-preserved-record-read" => await SourcePreservedRecordReadAsync(options).ConfigureAwait(false),
                 "source-refresh-optout" => await SourceRefreshOptInAsync(options, optIn: false).ConfigureAwait(false),
                 "source-list" => await SourceListAsync(options).ConfigureAwait(false),
                 "source-refresh" => await SourceRefreshAsync(options).ConfigureAwait(false),
@@ -1727,7 +1730,7 @@ internal static class OwnerControlCli
     {
         options.RequireOnly(
             "--control-pipe", "--folder", "--zone-id", "--format", "--format-version",
-            "--recursive", "--include-globs", "--exclude-globs");
+            "--recursive", "--include-globs", "--exclude-globs", "--raw-preservation-until-utc");
         var controlPipe = ControlPipe(options);
         var root = options.Required("--folder");
         var zoneId = options.Required("--zone-id");
@@ -1741,6 +1744,16 @@ internal static class OwnerControlCli
             !bool.TryParse(options.Required("--recursive"), out var recursive))
         {
             return Usage();
+        }
+        DateTimeOffset? rawPreservationRetainUntilUtc = null;
+        if (options.Optional("--raw-preservation-until-utc") is { } retainUntilText)
+        {
+            if (!TryParseExplicitUtc(retainUntilText, out var retainUntil) || retainUntil <= DateTimeOffset.UtcNow)
+            {
+                return Usage();
+            }
+
+            rawPreservationRetainUntilUtc = retainUntil;
         }
 
         string[] includePatterns;
@@ -1767,7 +1780,8 @@ internal static class OwnerControlCli
                 SourceFolderRoot: root,
                 SourceFolderRecursive: recursive,
                 SourceFolderIncludePatterns: includePatterns,
-                SourceFolderExcludePatterns: excludePatterns)).ConfigureAwait(false);
+                SourceFolderExcludePatterns: excludePatterns,
+                SourceFolderRawPreservationRetainUntilUtc: rawPreservationRetainUntilUtc)).ConfigureAwait(false);
         if (!previewResult.Success || !HasStatus(previewResult.Reply, "source_folder_previewed") ||
             !previewResult.Reply.TryGetProperty("sourceFolderPreview", out var preview) ||
             preview.ValueKind != JsonValueKind.Object)
@@ -1809,7 +1823,8 @@ internal static class OwnerControlCli
         Console.WriteLine(
             $"SOURCE FOLDER {(alreadyEnrolled ? "already_enrolled" : "enrolled")} id={JsonValueText(enrollment, "folderId")} " +
             $"members={JsonValueText(enrollment, "memberCount")} format={JsonValueText(enrollment, "format")} " +
-            $"recursive={JsonFlagText(enrollment, "recursive")}");
+            $"recursive={JsonFlagText(enrollment, "recursive")} " +
+            $"rawPreservationRetainUntilUtc={JsonValueText(enrollment, "rawPreservationRetainUntilUtc")}");
         return 0;
     }
 
@@ -1831,10 +1846,15 @@ internal static class OwnerControlCli
 
     private static void PrintSourceFolderPreview(JsonElement preview)
     {
+        var rawRetentionSelected = preview.TryGetProperty("rawPreservationRetainUntilUtc", out var rawRetention) &&
+            rawRetention.ValueKind == JsonValueKind.String;
+        var rawRetentionText = rawRetentionSelected ? rawRetention.GetString()! : "none";
         Console.WriteLine(
             $"SOURCE FOLDER PREVIEW root={JsonSerializer.Serialize(JsonValueText(preview, "rootLocator"))} " +
             $"zone={JsonValueText(preview, "zoneId")} format={JsonValueText(preview, "format")} " +
-            $"version={JsonValueText(preview, "formatVersion")} recursive={JsonFlagText(preview, "recursive")}");
+            $"version={JsonValueText(preview, "formatVersion")} recursive={JsonFlagText(preview, "recursive")} " +
+            $"rawPreservation={(rawRetentionSelected ? "opt_in" : "reference_only")} " +
+            $"retainUntilUtc={rawRetentionText}");
         var entries = preview.GetProperty("entries");
         var includedCount = 0;
         foreach (var entry in entries.EnumerateArray())
@@ -2047,6 +2067,180 @@ internal static class OwnerControlCli
         PrintSourceEnrollment(result.Reply);
         PrintSourceIngestion(result.Reply);
         return 0;
+    }
+
+    private static async Task<int> SourceRawPreservationOptInAsync(CommandOptions options, bool optIn)
+    {
+        if (optIn)
+        {
+            options.RequireOnly("--control-pipe", "--source-id", "--retain-until-utc");
+        }
+        else
+        {
+            options.RequireOnly("--control-pipe", "--source-id");
+        }
+
+        var controlPipe = ControlPipe(options);
+        var sourceId = options.Required("--source-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(sourceId))
+        {
+            return Usage();
+        }
+
+        DateTimeOffset? retainUntilUtc = null;
+        if (optIn)
+        {
+            if (!TryParseExplicitUtc(options.Required("--retain-until-utc"), out var retainUntil) ||
+                retainUntil <= DateTimeOffset.UtcNow)
+            {
+                return Usage();
+            }
+
+            retainUntilUtc = retainUntil;
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                optIn
+                    ? ServiceRequestHandler.SourceRawPreservationOptInOperation
+                    : ServiceRequestHandler.SourceRawPreservationOptOutOperation,
+                ResourceId: sourceId,
+                RawPreservationRetainUntilUtc: retainUntilUtc)).ConfigureAwait(false);
+        var expected = optIn ? "source_raw_preservation_opted_in" : "source_raw_preservation_opted_out";
+        if (!result.Success || !HasStatus(result.Reply, expected))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        PrintSourceEnrollment(result.Reply);
+        PrintSourceIngestion(result.Reply);
+        return 0;
+    }
+
+    private static async Task<int> SourcePreservedRecordReadAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--source-id", "--offset", "--output-file");
+        var controlPipe = ControlPipe(options);
+        var sourceId = options.Required("--source-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(sourceId) ||
+            !long.TryParse(options.Required("--offset"), NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out var offset) || offset < 0)
+        {
+            return Usage();
+        }
+
+        var outputFile = options.Required("--output-file");
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourcePreservedRecordReadOperation,
+                ResourceId: sourceId,
+                SourceRecordOffset: offset)).ConfigureAwait(false);
+        var hasServiceError = result.Reply.ValueKind == JsonValueKind.Object &&
+            ((result.Reply.TryGetProperty("error", out var serviceError) &&
+              serviceError.ValueKind == JsonValueKind.String) ||
+             (result.Reply.TryGetProperty("errorCode", out var serviceErrorCode) &&
+              serviceErrorCode.ValueKind == JsonValueKind.String));
+        if (!result.Success || hasServiceError)
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        if (!HasStatus(result.Reply, "source_preserved_record") ||
+            !result.Reply.TryGetProperty("sourcePreservedRecord", out var record) ||
+            record.ValueKind != JsonValueKind.Object ||
+            !record.TryGetProperty("sourceId", out var returnedSourceId) ||
+            returnedSourceId.ValueKind != JsonValueKind.String ||
+            !string.Equals(returnedSourceId.GetString(), sourceId, StringComparison.Ordinal) ||
+            !record.TryGetProperty("offset", out var returnedOffset) ||
+            !returnedOffset.TryGetInt64(out var actualOffset) || actualOffset != offset ||
+            !record.TryGetProperty("length", out var returnedLength) ||
+            !returnedLength.TryGetInt32(out var length) || length <= 0 ||
+            !record.TryGetProperty("digest", out var returnedDigest) ||
+            returnedDigest.ValueKind != JsonValueKind.String ||
+            !record.TryGetProperty("retainUntilUtc", out var returnedRetention) ||
+            !returnedRetention.TryGetDateTimeOffset(out var retainUntilUtc) ||
+            retainUntilUtc.Offset != TimeSpan.Zero ||
+            !record.TryGetProperty("contentBase64", out var returnedContent) ||
+            returnedContent.ValueKind != JsonValueKind.String)
+        {
+            Console.Error.WriteLine("ERROR source_preserved_record_invalid");
+            return 4;
+        }
+
+
+        byte[] content;
+        try
+        {
+            content = Convert.FromBase64String(returnedContent.GetString()!);
+        }
+        catch (FormatException)
+        {
+            Console.Error.WriteLine("ERROR source_preserved_record_invalid");
+            return 4;
+        }
+
+        try
+        {
+            var digest = returnedDigest.GetString();
+            if (content.Length != length || !SourceFingerprint.Matches(digest, content))
+            {
+                Console.Error.WriteLine("ERROR source_preserved_record_invalid");
+                return 4;
+            }
+
+            string fullPath;
+            try
+            {
+                fullPath = Path.GetFullPath(outputFile);
+            }
+            catch (ArgumentException)
+            {
+                return Usage();
+            }
+
+            var created = false;
+            try
+            {
+                await using (var output = new FileStream(
+                    fullPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.None))
+                {
+                    created = true;
+                    await output.WriteAsync(content).ConfigureAwait(false);
+                    await output.FlushAsync().ConfigureAwait(false);
+                }
+            }
+            catch (Exception exportFailure) when (exportFailure is IOException or UnauthorizedAccessException)
+            {
+                if (created)
+                {
+                    try
+                    {
+                        File.Delete(fullPath);
+                    }
+                    catch (Exception cleanupFailure) when (cleanupFailure is IOException or UnauthorizedAccessException)
+                    {
+                        Console.Error.WriteLine("ERROR source_preserved_record_export_cleanup_failed");
+                        return 4;
+                    }
+                }
+
+                Console.Error.WriteLine("ERROR source_preserved_record_export_failed");
+                return 4;
+            }
+
+            Console.WriteLine(
+                $"PRESERVED SOURCE RECORD id={sourceId} offset={offset} bytes={length} " +
+                $"digest={digest} retainUntilUtc={retainUntilUtc:O} exportedFile={JsonSerializer.Serialize(fullPath)}");
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(content);
+        }
     }
 
     /// <summary>
@@ -2395,7 +2589,58 @@ internal static class OwnerControlCli
             return;
         }
 
-        Console.WriteLine($"SOURCE id={JsonValueText(enrollment, "sourceId")} zone={JsonValueText(enrollment, "zoneId")} format={JsonValueText(enrollment, "format")} version={JsonValueText(enrollment, "formatVersion")} generation={JsonValueText(enrollment, "generation")} life={JsonValueText(enrollment, "life")} availability={JsonValueText(enrollment, "availability")} observedUtc={JsonValueText(enrollment, "availabilityObservedAtUtc")} sourceReferenceRevision={JsonValueText(enrollment, "sourceReferenceRevision")} anchorLength={JsonValueText(enrollment, "anchorLength")} enrolledUtc={JsonValueText(enrollment, "enrolledAtUtc")} relocatedUtc={JsonValueText(enrollment, "relocatedAtUtc")} pausedUtc={JsonValueText(enrollment, "pausedAtUtc")} refreshOptIn={JsonFlagText(enrollment, "refreshOptIn")} journalCiphertextBytes={JsonValueText(enrollment, "journalCiphertextBytes")} snapshotCiphertextBytes={JsonValueText(enrollment, "snapshotCiphertextBytes")} snapshotRevision={JsonValueText(enrollment, "snapshotRevision")}");
+        Console.WriteLine(
+            $"SOURCE id={JsonValueText(enrollment, "sourceId")} zone={JsonValueText(enrollment, "zoneId")} " +
+            $"format={JsonValueText(enrollment, "format")} version={JsonValueText(enrollment, "formatVersion")} " +
+            $"generation={JsonValueText(enrollment, "generation")} life={JsonValueText(enrollment, "life")} " +
+            $"availability={JsonValueText(enrollment, "availability")} " +
+            $"observedUtc={JsonValueText(enrollment, "availabilityObservedAtUtc")} " +
+            $"sourceReferenceRevision={JsonValueText(enrollment, "sourceReferenceRevision")} " +
+            $"anchorLength={JsonValueText(enrollment, "anchorLength")} " +
+            $"enrolledUtc={JsonValueText(enrollment, "enrolledAtUtc")} " +
+            $"relocatedUtc={JsonValueText(enrollment, "relocatedAtUtc")} " +
+            $"pausedUtc={JsonValueText(enrollment, "pausedAtUtc")} " +
+            $"refreshOptIn={JsonFlagText(enrollment, "refreshOptIn")} " +
+            $"rawPreservationOptIn={JsonFlagText(enrollment, "rawPreservationOptIn")} " +
+            $"rawPreservationRetainUntilUtc={JsonValueText(enrollment, "rawPreservationRetainUntilUtc")} " +
+            $"journalCiphertextBytes={JsonValueText(enrollment, "journalCiphertextBytes")} " +
+            $"snapshotCiphertextBytes={JsonValueText(enrollment, "snapshotCiphertextBytes")} " +
+            $"snapshotRevision={JsonValueText(enrollment, "snapshotRevision")}");
+        Console.WriteLine(
+            $"SOURCE FACETS availability={JsonValueText(enrollment, "availability")} " +
+            $"preservation={JsonValueText(enrollment, "preservation")} " +
+            $"interpretation={JsonValueText(enrollment, "interpretation")} " +
+            $"derivation={JsonValueText(enrollment, "derivation")} " +
+            $"pendingTailBytes={JsonValueText(enrollment, "pendingTailBytes")} " +
+            $"preservedBytes={JsonValueText(enrollment, "preservedBytes")} " +
+            $"uninterpretedRecords={JsonValueText(enrollment, "uninterpretedRecords")} " +
+            $"unprocessedBytes={JsonValueText(enrollment, "unprocessedBytes")} " +
+            $"preservedPendingBytes={JsonValueText(enrollment, "preservedPendingBytes")}");
+        if (string.Equals(JsonValueText(enrollment, "preservation"), "reference_only", StringComparison.Ordinal))
+        {
+            Console.WriteLine("SOURCE BYTES source_dependent=true; exact original bytes are not stored in the vault.");
+        }
+
+        if (enrollment.TryGetProperty("lastDiagnostic", out var diagnostic) &&
+            diagnostic.ValueKind == JsonValueKind.Object)
+        {
+            Console.WriteLine(
+                $"SOURCE DIAGNOSTIC code={JsonValueText(diagnostic, "code")} " +
+                $"offset={JsonValueText(diagnostic, "offset")}");
+        }
+
+        if (enrollment.TryGetProperty("preservedRecords", out var records) &&
+            records.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var record in records.EnumerateArray())
+            {
+                Console.WriteLine(
+                    $"PRESERVED SOURCE RECORD offset={JsonValueText(record, "offset")} " +
+                    $"length={JsonValueText(record, "length")} digest={JsonValueText(record, "digest")} " +
+                    $"retainUntilUtc={JsonValueText(record, "retainUntilUtc")}");
+            }
+        }
+
         if (enrollment.TryGetProperty("quarantine", out var quarantine) && quarantine.ValueKind == JsonValueKind.Object)
         {
             Console.WriteLine($"quarantine={JsonValueText(quarantine, "reason")} detail={JsonValueText(quarantine, "detail")} recordedUtc={JsonValueText(quarantine, "recordedAtUtc")}");
@@ -2411,7 +2656,6 @@ internal static class OwnerControlCli
 
         Console.WriteLine($"checkpoint consumedOffset={JsonValueText(journal, "consumedOffset")} journalRevision={JsonValueText(journal, "journalRevision")} events={JsonValueText(journal, "eventCount")} diagnostics={JsonValueText(journal, "diagnosticCount")} lastIngestUtc={JsonValueText(journal, "lastIngestUtc")}");
     }
-
     private static async Task<int> RelationCreateAsync(CommandOptions options)
     {
         options.RequireOnly("--control-pipe", "--resource-id", "--zone-id", "--input-file",
@@ -7531,7 +7775,7 @@ internal static class OwnerControlCli
             Console.Error.WriteLine("  library: library|memory-read|source-read|research-read|relation-read|lifecycle-read|lifecycle-retained-read|recall-read|review-list|review-record|index-status|index-rebuild");
             Console.Error.WriteLine("  review: proposal-list|proposal-read|proposal-publish|proposal-reject|lifecycle-publish|lifecycle-reject|lifecycle-withdraw|lifecycle-repropose|lifecycle-question-resolve|lifecycle-question-reopen|relation-list|relation-read|relation-create|relation-accept|relation-reject|relation-unlink|relation-relink|declassify-preview|declassify-publish|declassify-proposal-publish");
             Console.Error.WriteLine("  sharing: catalog-preview|catalog-publish|catalog-list|catalog-withdraw|collections|collection-set|grants|grant|requests|request-preview|request-approve|request-reject|sessions|session|revoke-session|redeem (+ agent-mcp transport)");
-            Console.Error.WriteLine("  sources: collections|source-list|source-status|source-enroll|source-folder-enroll|source-relocate|source-revoke|source-ingest|source-pause|source-resume|source-refresh-optin|source-refresh-optout|source-refresh|source-mapping-submit|source-mapping-resolve|source-snapshot-list|source-snapshot-preserve|source-snapshot-read|source-snapshot-retain|source-snapshot-purge");
+            Console.Error.WriteLine("  sources: collections|source-list|source-status|source-enroll|source-folder-enroll|source-relocate|source-revoke|source-ingest|source-pause|source-resume|source-refresh-optin|source-refresh-optout|source-raw-preservation-optin|source-raw-preservation-optout|source-preserved-record-read|source-refresh|source-mapping-submit|source-mapping-resolve|source-snapshot-list|source-snapshot-preserve|source-snapshot-read|source-snapshot-retain|source-snapshot-purge");
             Console.Error.WriteLine("  planning: lifecycle-create|lifecycle-validity-set|lifecycle-retain|lifecycle-intention-complete|lifecycle-intention-cancel|lifecycle-intention-supersede|lifecycle-intention-notify|lifecycle-intention-acknowledge|intentions|intention-trigger-set|intention-trigger-clear|intention-context-set|intention-context-disable|intention-schedule-run|recall-apply|purge-preview|purge-confirm|purge-resume");
             Console.Error.WriteLine("  models: provider-config|provider-status|job-create|job-start|job-cancel|job-status|job-list|job-ledger|schedule-set|schedule-disable|schedule-status|schedule-run");
             Console.Error.WriteLine("Every owner command needs --control-pipe <pipe>; agent-scoped reads use --agent-pipe plus --session-file instead. Credentials are interactive prompts only, never options. Destructive or authority-minting acts print a frozen preview and require a typed confirmation.");
@@ -7558,7 +7802,12 @@ internal static class OwnerControlCli
         "source-create" => "owner source-create --control-pipe <pipe> --resource-id <id> --zone-id <zone> (--title T --locator L --version V --availability available|unavailable|unknown [--author role] [--method M]... | --input-file <draft.json>): register source metadata.",
         "source-revise" => "owner source-revise --control-pipe <pipe> --resource-id <id> --zone-id <zone> --expected-revision <live> (same inputs as source-create): revision-gated metadata edit.",
         "source-read" => "owner source-read --control-pipe <pipe> --resource-id <id> [--resource-revision N]: registered source metadata.",
-        "source-folder-enroll" => "owner source-folder-enroll --control-pipe <pipe> --folder <absolute-path> --zone-id <zone> --format <format> --format-version <N> --recursive true|false --include-globs <glob[,glob...]> --exclude-globs <glob[,glob...]|none>: preview one bounded folder enumeration, then type ENROLL once to add the exact member metadata to the canonical source registry and encrypted source allowlist. Included locator paths use the existing source-registry limit of 512 characters. The format mapping applies to every included file; later folder changes are not adopted.",
+        "source-folder-enroll" => "owner source-folder-enroll --control-pipe <pipe> --folder <absolute-path> --zone-id <zone> --format <format> --format-version <N> --recursive true|false --include-globs <glob[,glob...]> --exclude-globs <glob[,glob...]|none> [--raw-preservation-until-utc <UTC>]: preview one bounded folder enumeration, then type ENROLL once to add the exact member metadata to the canonical source registry and encrypted source allowlist. The optional retention explicitly opts every newly enrolled member into raw-byte preservation through that UTC deadline; omission stays reference-only. Included locator paths use the existing source-registry limit of 512 characters. The format mapping applies to every included file; later folder changes are not adopted.",
+        "source-status" => "owner source-status --control-pipe <pipe> --source-id <id>: reports availability, preservation, interpretation and derivation independently, plus offsets/diagnostics and preserved byte descriptors. Reference-only exact reads remain source-dependent.",
+        "source-ingest" => "owner source-ingest --control-pipe <pipe> --source-id <id>: interpret supported records, preserve complete unsupported records only after explicit preservation opt-in, and report checkpoint/facets.",
+        "source-raw-preservation-optin" => "owner source-raw-preservation-optin --control-pipe <pipe> --source-id <id> --retain-until-utc <UTC>: explicit owner consent to retain future unsupported original bytes encrypted in this source's journal through the deadline.",
+        "source-raw-preservation-optout" => "owner source-raw-preservation-optout --control-pipe <pipe> --source-id <id>: stop preserving future records; already preserved records remain subject to their stored retention deadlines.",
+        "source-preserved-record-read" => "owner source-preserved-record-read --control-pipe <pipe> --source-id <id> --offset <byte-offset> --output-file <new-file>: export one encrypted, owner-preserved exact byte span to a new file after the owner vault is unlocked. Never writes record bytes to stdout.",
         "research-capture" => "owner research-capture --control-pipe <pipe> --resource-id <id> --zone-id <zone> (--text text [--title T --source-url U --source-author A --source-date ISO] | --input-file <utf8.txt>): persist verbatim text encrypted before any structuring. Never fetches the URL.",
         "research-read" => "owner research-read --control-pipe <pipe> --resource-id <id> [--resource-revision N] [--output-file <new-file>]: exact captured text.",
         "feedback-create" => "owner feedback-create --control-pipe <pipe> --resource-id <fb-id> --zone-id <zone> --target <item-or-source-id@rev> --kind useful|wrong|stale [--note text] [--method M] | --input-file <draft.json>: append-only verdict on a seen target; never edits the target.",

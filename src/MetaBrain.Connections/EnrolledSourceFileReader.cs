@@ -83,10 +83,19 @@ internal sealed class EnrolledSourceFileReader : ISourceSnapshotReader
                     return new SourceSnapshotResult(SourceSnapshotStatus.Unreadable);
                 }
 
-                if (stream.Length <= 0)
+                if (stream.Length == 0)
                 {
-                    return new SourceSnapshotResult(SourceSnapshotStatus.Unreadable);
+                    if (!string.Equals(
+                            ManagedResourceFileReader.ResolveFinalPath(stream.SafeFileHandle),
+                            finalPath,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        return new SourceSnapshotResult(SourceSnapshotStatus.Unreadable);
+                    }
+
+                    return new SourceSnapshotResult(SourceSnapshotStatus.Snapshot, Array.Empty<byte>());
                 }
+
 
                 if (stream.Length > SourceIngestionLimits.MaximumSourceBytes)
                 {

@@ -49,7 +49,8 @@ uv run --script scripts/sprint-11/S11-T1-Corpus.py check
 - `generate` chỉ thay thế thư mục do chính nó tạo (marker `CORPUS-MARKER`); nó bỏ qua reparse point khi dọn và không đi theo junction.
 - Không chạy `generate` và `check` đồng thời trên cùng `--out`: `generate` thay thế cả cây nên `check` đọc giữa lúc ghi sẽ báo thiếu file/khớp sai. Chạy tuần tự.
 - `check` sinh lại corpus trong bộ nhớ, so bytes/digest/newline từng file, đối chiếu **toàn bộ manifest** với giá trị generator (case entries + expectation hai branch, diagnostics, query baseline, folder include/exclude, generator path/SHA-256, totals, reparse truth của host), kiểm tra accounting offset/preserved-span mức case và enumeration folder. Nó **không** thay coverage verification bằng event span của sản phẩm.
-- Corpus hiện tại: **20 case / 70.529 bytes**, schema `3`, digest nội dung `abfce3eb0d6eb4b26421849cfb9b4722ed3f0355eab76f46ce9a76c4b0592166`; `decision_pending_count = 0`. Schema 3 chỉ giải quyết metadata pending sau approval D5=A + D7=A; case bytes và digest không đổi.
+- Initial corpus finalized with schema 3 on 2026-10-29: **20 cases / 70,529 bytes**, digest `abfce3eb0d6eb4b26421849cfb9b4722ed3f0355eab76f46ce9a76c4b0592166`; `decision_pending_count = 0`.
+- Current corpus after the owner-approved S11-T3 fixture correction recorded in §10: **20 cases / 70,520 bytes**, schema `3`, digest `39c0e439625749712019d548987c0b48db164b40e80bb94c95b2d93dce546fa4`; `decision_pending_count = 0`. Acceptance outcomes are unchanged; affected OMP offsets and hashes are regenerated.
 - Corpus bytes nằm dưới `artifacts/` (Git-ignored); script định nghĩa corpus là file cần được đưa vào snapshot khi task được commit theo gate. Reviewer/fresh worker tái tạo bằng đúng hai lệnh trên.
 
 ### 3.2 Kỳ vọng theo case
@@ -68,15 +69,15 @@ Cột state/events/checkpoint là kỳ vọng **theo CR02 proposal**, không ph�
 | `codex-v1-invalid-utf8` | `codex.session.jsonl` | 3538 | partially_interpreted / 14 / 3344 | partially_interpreted / 14 / 3538 | source_record_encoding_invalid@3344 |
 | `codex-v1-bom-prefix` | `codex.session.jsonl` | 3347 | uninterpreted / 0 / 0 | partially_interpreted / 13 / 3347 | source_record_encoding_invalid@0 |
 | `codex-v1-multibyte-utf8` | `codex.session.jsonl` | 3719 | partially_interpreted / 15 / 3597 | partially_interpreted / 15 / 3719 | codex_type_unsupported.future_multibyte_envelope@3597 |
-| `omp-v3-clean` | `omp.session.jsonl` | 3809 | fully_supported / 14 / 3809 | fully_supported / 14 / 3809 | — |
-| `omp-v3-session-version-4` | `omp.session.jsonl` | 3809 | partially_interpreted / 1 / 131 | partially_interpreted / 1 / 131 | omp_session_version_unsupported.4@131 |
-| `omp-v3-unknown-record` | `omp.session.jsonl` | 3929 | partially_interpreted / 14 / 3809 | partially_interpreted / 14 / 3929 | omp_type_unsupported.checkpoint_v2@3809 |
-| `omp-v3-unknown-parent-link` (D5/D7=A) | `omp.session.jsonl` | 4202 | partially_interpreted / 14 / 3809 | partially_interpreted / 15 / 4202 | omp_type_unsupported.checkpoint_v2@3809 |
-| `omp-v3-invalid-envelope-parent-link` (D5/D7=A) | `omp.session.jsonl` | 4179 | partially_interpreted / 14 / 3809 | partially_interpreted / 14 / 4179 | omp_record_json_invalid@3809; omp_chain_reference_unresolved@3906 |
-| `omp-v3-unknown-message-part` | `omp.session.jsonl` | 4073 | partially_interpreted / 14 / 3809 | partially_interpreted / 14 / 4073 | omp_message_part_unsupported.audio@3809 |
-| `omp-v3-dangling-parent` (D7=A) | `omp.session.jsonl` | 3809 | partially_interpreted / 4 / 563 | partially_interpreted / 13 / 3809 | omp_chain_reference_unresolved@563 |
-| `omp-v3-partial-tail` | `omp.session.jsonl` | 4077 | fully_supported / 14 / 3809 | fully_supported / 14 / 3809 | — |
-| `omp-v3-invalid-utf8` | `omp.session.jsonl` | 4050 | partially_interpreted / 14 / 3809 | partially_interpreted / 14 / 4050 | source_record_encoding_invalid@3809 |
+| `omp-v3-clean` | `omp.session.jsonl` | 3808 | fully_supported / 14 / 3808 | fully_supported / 14 / 3808 | — |
+| `omp-v3-session-version-4` | `omp.session.jsonl` | 3808 | partially_interpreted / 1 / 131 | partially_interpreted / 1 / 131 | omp_session_version_unsupported.4@131 |
+| `omp-v3-unknown-record` | `omp.session.jsonl` | 3928 | partially_interpreted / 14 / 3808 | partially_interpreted / 14 / 3928 | omp_type_unsupported.checkpoint_v2@3808 |
+| `omp-v3-unknown-parent-link` (D5/D7=A) | `omp.session.jsonl` | 4201 | partially_interpreted / 14 / 3808 | partially_interpreted / 15 / 4201 | omp_type_unsupported.checkpoint_v2@3808 |
+| `omp-v3-invalid-envelope-parent-link` (D5/D7=A) | `omp.session.jsonl` | 4178 | partially_interpreted / 14 / 3808 | partially_interpreted / 14 / 4178 | omp_record_json_invalid@3808; omp_chain_reference_unresolved@3905 |
+| `omp-v3-unknown-message-part` | `omp.session.jsonl` | 4072 | partially_interpreted / 14 / 3808 | partially_interpreted / 14 / 4072 | omp_message_part_unsupported.audio@3808 |
+| `omp-v3-dangling-parent` (D7=A) | `omp.session.jsonl` | 3808 | partially_interpreted / 4 / 563 | partially_interpreted / 13 / 3808 | omp_chain_reference_unresolved@563 |
+| `omp-v3-partial-tail` | `omp.session.jsonl` | 4076 | fully_supported / 14 / 3808 | fully_supported / 14 / 3808 | — |
+| `omp-v3-invalid-utf8` | `omp.session.jsonl` | 4049 | partially_interpreted / 14 / 3808 | partially_interpreted / 14 / 4049 | source_record_encoding_invalid@3808 |
 | `empty-generation` | `codex.session.jsonl` | 0 | empty / 0 / 0 | empty / 0 / 0 | — |
 
 Owner đã duyệt **D5=A + D7=A** ngày 2026-10-29, nên cả ba case từng mang `decision_pending` giờ là kỳ vọng **binding** cho T3:
@@ -208,7 +209,8 @@ uv run --script scripts/sprint-11/S11-T1-Corpus.py check
 python -c "import json,pathlib; m=json.loads(pathlib.Path('artifacts/sprint-11/corpus/manifest.json').read_text(encoding='utf-8')); print(m['totals'])"
 ```
 
-Kỳ vọng quan sát 2026-10-29: `PASS corpus check`, `case_count = 20`, `case_bytes = 70529`, `decision_pending_count = 0`, digest `abfce3eb0d6eb4b26421849cfb9b4722ed3f0355eab76f46ce9a76c4b0592166`.
+- Initial T1 observation on 2026-10-29: `PASS corpus check`, `case_count = 20`, `case_bytes = 70529`, `decision_pending_count = 0`, digest `abfce3eb0d6eb4b26421849cfb9b4722ed3f0355eab76f46ce9a76c4b0592166`.
+- Current owner-approved corpus: `PASS corpus check`, `case_count = 20`, `case_bytes = 70520`, `decision_pending_count = 0`, digest `39c0e439625749712019d548987c0b48db164b40e80bb94c95b2d93dce546fa4`.
 
 ## 10. Change control cho baseline này
 
@@ -217,3 +219,5 @@ Kỳ vọng quan sát 2026-10-29: `PASS corpus check`, `case_count = 20`, `case_
 - Schema 3 (2026-10-29, attempt A3): owner duyệt CR02 với D1=B, D2–D8=A nên toàn bộ `decision_pending` được giải quyết (D5=A + D7=A); schema number và metadata pending đổi, case bytes/digest/expectation không đổi.
 - Query set và environment field chỉ đổi khi có owner approval hoặc task được giao rõ ràng.
 - Không dùng việc "cập nhật corpus" để né một FAIL của T2–T5.
+- Owner-approved S11-T3 fixture correction (2026-10-31): removed one surplus closing brace from the synthetic OMP `e12` compaction payload in `scripts/sprint-11/S11-T1-Corpus.py`. This closes the outer JSON object only after `_omp_event_line()` appends its envelope fields. The shared base changed from 3,809 to 3,808 bytes; all nine OMP corpus files were regenerated, reducing total corpus bytes by 9 to 70,520. Case count, schema 3, D5/D7 outcomes, attribution, parser semantics, and acceptance criteria are unchanged; dependent byte offsets, case hashes, generator hash, and corpus digest were regenerated. Current generator SHA-256 is `89b23072c794db5ba975f43c9bd552761adc8acc072e796b7f4f2dee63dcdeba`; current corpus digest is `39c0e439625749712019d548987c0b48db164b40e80bb94c95b2d93dce546fa4`. The original T1 corpus digest remains historical evidence above.
+

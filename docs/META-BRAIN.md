@@ -230,13 +230,15 @@ Adapter Codex session JSONL (S3-T2, read-only, coordinator S3-T1) hỗ trợ đ�
 
 Adapter OMP session JSONL (S3-T3, read-only, coordinator S3-T1) hỗ trợ đúng schema đã quan sát trong một session OMP hoàn chỉnh được owner cho phép của project này (session record `version` 3, title record `v` 1; writer là OMP runtime; không có upstream format definition đọc được trong consent nên không claim shape chưa quan sát): envelope một JSON object mỗi dòng; `title` (`v` 1, không có event id nên identity neo theo byte offset), `session` (version 3, branch root mang session identity và cwd context), `message` (role `user`/`assistant`/`toolResult`; user-role chỉ thành user statement khi chính record khai báo attribution `user`; tool result không bao giờ thành user statement), `custom` (envelope `{customType, data}`, data không bao giờ được diễn giải), `custom_message` (envelope `{customType, content, display, details, attribution}` với attribution `user`→user, `agent`→assistant), `thinking_level_change`, `service_tier_change`, `credential_pin`, `title_change`, `compaction` (giữ `firstKeptEntryId` boundary đã validate). Content parts hỗ trợ `text`, `thinking`, `toolCall`. Timestamp envelope là ISO-8601 UTC (`updatedAt` ở title record); message body mang `message.timestamp` dạng epoch-millis và đó là instant event giữ. Định dạng owner khai báo là `omp.session.jsonl` phiên bản 1. Chuỗi id/parentId được giữ nguyên qua event identity (null parent là chain root/branch origin); mỗi bản ghi chấp nhận tạo đúng một event reference-only (identity, attribution, thời gian UTC, digest và span chính xác), không copy body. Bất kỳ record/shape/role/part/stop-reason/attribution/version ngoài tập đã quan sát bị từ chối tường minh kèm diagnostic đặt tên tại đúng offset; checkpoint không bao giờ vượt qua byte chưa giải thích và không có silent drop. Giới hạn đã biết: mẫu thật chứa đúng một session (617 records) nên branch/fork đa nhánh chỉ được chứng minh trên fixture tổng hợp; session writer version khác 3 hoặc title `v` khác 1 bị từ chối thay vì stretch.
 
-### 8.1. Approved contract — folder enrollment và raw-preserved parsing (CR02/D088, 2026-10-29)
+### 8.1. Approved contract and S11-T3 implementation — folder enrollment and raw-preserved parsing (CR02/D088, 2026-10-29)
 
 Owner đã duyệt [CR02](CR02-PROPOSAL.md) với **D1=B, D2–D8=A**; quyết định tại
 [D088](../.agents/memory/decisions.md) và change record tại
-[REQUIREMENTS](REQUIREMENTS.md). Đây là contract đã duyệt cho
-S11-T2–T5, **chưa phải hành vi đã ship**: binary 1.0.0 vẫn fail-closed như mô tả ở trên, và các mục
-dưới đây chỉ trở thành product behavior khi task tương ứng có evidence/gate riêng.
+[REQUIREMENTS](REQUIREMENTS.md). Release 1.0.0 vẫn giữ fail-closed contract cũ. Source hiện tại đã
+triển khai owner folder enrollment (S11-T2) và raw-preservation/interpretation separation (S11-T3);
+runtime evidence cho T3 nằm tại `artifacts/sprint-11/task-3.md`. Đây là source chưa release, không
+phải tuyên bố phát hành 1.1.0. S11-T4 incremental refresh/recovery, S11-T5 owner UI và S11-T6 release
+không thuộc phạm vi hoặc evidence của T3.
 
 **Bốn facet trạng thái độc lập.** Surface owner không được gộp trạng thái thành một nhãn ok/error:
 

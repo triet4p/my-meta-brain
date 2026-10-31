@@ -12,7 +12,8 @@ public sealed record SourceFolderEnrollmentDraft(
     int FormatVersion,
     bool Recursive,
     string[] IncludePatterns,
-    string[] ExcludePatterns);
+    string[] ExcludePatterns,
+    DateTimeOffset? RawPreservationRetainUntilUtc = null);
 
 /// <summary>A filesystem entry observed without reading its contents.</summary>
 public sealed record SourceFolderEntry(
@@ -53,7 +54,8 @@ public sealed record SourceFolderEnrollment(
     string[] IncludePatterns,
     string[] ExcludePatterns,
     string[] MemberSourceIds,
-    DateTimeOffset EnrolledAtUtc);
+    DateTimeOffset EnrolledAtUtc,
+    DateTimeOffset? RawPreservationRetainUntilUtc = null);
 
 /// <summary>Anchor captured for one selected file after explicit confirmation.</summary>
 public sealed record SourceFolderMemberAnchor(
@@ -181,9 +183,11 @@ public static class SourceFolderEnrollmentGrammar
         ArgumentNullException.ThrowIfNull(draft);
         var root = NormalizeRoot(draft.RootLocator);
         if (!DomainIdentifiers.IsSafeIdentifier(draft.ZoneId) ||
-            !SourceEnrollmentGrammar.IsFormat(draft.Format) || draft.FormatVersion < 1)
+            !SourceEnrollmentGrammar.IsFormat(draft.Format) || draft.FormatVersion < 1 ||
+            draft.RawPreservationRetainUntilUtc is { Offset: var retentionOffset } &&
+            retentionOffset != TimeSpan.Zero)
         {
-            throw new ArgumentException("The folder source mapping must declare a valid zone, format and version.");
+            throw new ArgumentException("The folder source mapping or preservation retention is invalid.");
         }
 
         return draft with
@@ -220,6 +224,10 @@ public static class SourceFolderEnrollmentAuthority
         }
 
         var normalizedDraft = SourceFolderEnrollmentGrammar.NormalizeDraft(draft);
+        if (normalizedDraft.RawPreservationRetainUntilUtc is { } retention && retention <= DateTimeOffset.UtcNow)
+        {
+            throw new ArgumentException("Folder raw preservation requires a future UTC retention time.");
+        }
         if (members.Count == 0 || members.Count > SourceIngestionLimits.MaximumEnrollments)
         {
             throw new SourceOperationException("source_folder_empty_or_too_large");
@@ -319,6 +327,15 @@ public static class SourceFolderEnrollmentAuthority
                         throw new SourceOperationException("source_enrollment_conflict");
                     }
 
+                    if (normalizedDraft.RawPreservationRetainUntilUtc is { } retention)
+                    {
+                        nextEnrollments[member.SourceId] = current with
+                        {
+                            RawPreservationOptIn = true,
+                            RawPreservationRetainUntilUtc = retention
+                        };
+                    }
+
                     continue;
                 }
 
@@ -332,7 +349,9 @@ public static class SourceFolderEnrollmentAuthority
                     member.AnchorLength,
                     member.AnchorDigest,
                     now,
-                    null);
+                    null,
+                    RawPreservationOptIn: normalizedDraft.RawPreservationRetainUntilUtc is not null,
+                    RawPreservationRetainUntilUtc: normalizedDraft.RawPreservationRetainUntilUtc);
                 nextEnrollments[member.SourceId] = next;
             }
 
@@ -346,7 +365,8 @@ public static class SourceFolderEnrollmentAuthority
                 normalizedDraft.IncludePatterns,
                 normalizedDraft.ExcludePatterns,
                 normalizedMembers.Select(member => member.SourceId).ToArray(),
-                now);
+                now,
+                normalizedDraft.RawPreservationRetainUntilUtc);
             var nextState = validated with
             {
                 Enrollments = nextEnrollments.Values.OrderBy(enrollment => enrollment.SourceId, StringComparer.Ordinal).ToArray(),
@@ -388,7 +408,8 @@ public static class SourceFolderEnrollmentAuthority
             {
                 draft = SourceFolderEnrollmentGrammar.NormalizeDraft(new SourceFolderEnrollmentDraft(
                     folder.RootLocator, folder.ZoneId, folder.Format, folder.FormatVersion,
-                    folder.Recursive, folder.IncludePatterns, folder.ExcludePatterns));
+                    folder.Recursive, folder.IncludePatterns, folder.ExcludePatterns,
+                    folder.RawPreservationRetainUntilUtc));
             }
             catch (ArgumentException ex)
             {
@@ -432,5 +453,6 @@ public static class SourceFolderEnrollmentAuthority
         existing.Recursive == draft.Recursive &&
         existing.IncludePatterns.SequenceEqual(draft.IncludePatterns, StringComparer.Ordinal) &&
         existing.ExcludePatterns.SequenceEqual(draft.ExcludePatterns, StringComparer.Ordinal) &&
+        existing.RawPreservationRetainUntilUtc == draft.RawPreservationRetainUntilUtc &&
         existing.MemberSourceIds.SequenceEqual(members.Select(member => member.SourceId), StringComparer.Ordinal);
 }

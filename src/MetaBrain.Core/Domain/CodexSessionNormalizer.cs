@@ -88,6 +88,9 @@ public sealed class CodexSessionNormalizer : ISourceRecordNormalizer
         }
 
         var recordEnd = newline + 1;
+        SourceRecordDecode UnsupportedRecord(string code) =>
+            new(SourceRecordDecodeKind.Unsupported, recordEnd, null, code);
+
         var line = buffer[..newline];
         if (line.Length > 0 && line[^1] == (byte)'\r')
         {
@@ -96,9 +99,7 @@ public sealed class CodexSessionNormalizer : ISourceRecordNormalizer
 
         if (line.IsEmpty)
         {
-            // A blank line is not a skip: it is a record nobody can interpret,
-            // so ingestion stops explicitly instead of quietly stepping over it.
-            return Unsupported("codex_record_blank");
+            return UnsupportedRecord("codex_record_blank");
         }
 
         JsonElement root;
@@ -108,75 +109,65 @@ public sealed class CodexSessionNormalizer : ISourceRecordNormalizer
         }
         catch (JsonException)
         {
-            return Unsupported("codex_record_json_invalid");
+            return UnsupportedRecord("codex_record_json_invalid");
         }
 
+        if (root.ValueKind != JsonValueKind.Object)
         {
-            if (root.ValueKind != JsonValueKind.Object)
-            {
-                return Unsupported("codex_record_not_object");
-            }
-
-            if (!TryReadString(root, "type", out var recordType) || recordType.Length == 0)
-            {
-                return Unsupported("codex_envelope_type_missing");
-            }
-
-            if (!TryReadString(root, "timestamp", out var timestamp))
-            {
-                return Unsupported("codex_record_time_missing");
-            }
-
-            if (!TryParseTimestamp(timestamp, out var occurredAtUtc))
-            {
-                return Unsupported("codex_record_time_invalid");
-            }
-
-            long? ordinal = null;
-            if (root.TryGetProperty("ordinal", out var ordinalElement))
-            {
-                if (ordinalElement.ValueKind != JsonValueKind.Number ||
-                    !ordinalElement.TryGetInt64(out var parsedOrdinal) || parsedOrdinal < 0)
-                {
-                    return Unsupported("codex_record_ordinal_invalid");
-                }
-
-                ordinal = parsedOrdinal;
-            }
-
-            if (!root.TryGetProperty("payload", out var payload) || payload.ValueKind != JsonValueKind.Object)
-            {
-                return Unsupported("codex_payload_not_object");
-            }
-
-            // The digest covers the exact consumed bytes, terminator included,
-            // so a stored event stays bound to bytes that still exist at its span.
-            var digest = SourceFingerprint.Compute(buffer[..recordEnd]);
-            var defaultEventId = EventIdFor(context.SourceId, ordinal, context.RecordOffset);
-
-            switch (recordType)
-            {
-                case "session_meta":
-                    return SessionMeta(payload, recordEnd, digest, occurredAtUtc);
-                case "response_item":
-                    return ResponseItem(payload, defaultEventId, recordEnd, digest, occurredAtUtc);
-                case "event_msg":
-                    return EventMessage(payload, defaultEventId, recordEnd, digest, occurredAtUtc);
-                case "turn_context":
-                case "world_state":
-                case "token_usage_record":
-                case "compacted":
-                case "inter_agent_communication":
-                case "inter_agent_communication_metadata":
-                case "retained_context":
-                case "security_risk_score":
-                case "realtime_item":
-                    return Consumed(recordEnd, defaultEventId, SourceEventAuthor.System,
-                        "codex." + recordType, digest, occurredAtUtc);
-                default:
-                    return Unsupported(Token("codex_type_unsupported.", recordType));
-            }
+            return UnsupportedRecord("codex_record_not_object");
         }
+
+        if (!TryReadString(root, "type", out var recordType) || recordType.Length == 0)
+        {
+            return UnsupportedRecord("codex_envelope_type_missing");
+        }
+
+        if (!TryReadString(root, "timestamp", out var timestamp))
+        {
+            return UnsupportedRecord("codex_record_time_missing");
+        }
+
+        if (!TryParseTimestamp(timestamp, out var occurredAtUtc))
+        {
+            return UnsupportedRecord("codex_record_time_invalid");
+        }
+
+        long? ordinal = null;
+        if (root.TryGetProperty("ordinal", out var ordinalElement))
+        {
+            if (ordinalElement.ValueKind != JsonValueKind.Number ||
+                !ordinalElement.TryGetInt64(out var parsedOrdinal) || parsedOrdinal < 0)
+            {
+                return UnsupportedRecord("codex_record_ordinal_invalid");
+            }
+
+            ordinal = parsedOrdinal;
+        }
+
+        if (!root.TryGetProperty("payload", out var payload) || payload.ValueKind != JsonValueKind.Object)
+        {
+            return UnsupportedRecord("codex_payload_not_object");
+        }
+
+        // The digest covers the exact consumed bytes, terminator included,
+        // so a stored event stays bound to bytes that still exist at its span.
+        var digest = SourceFingerprint.Compute(buffer[..recordEnd]);
+        var defaultEventId = EventIdFor(context.SourceId, ordinal, context.RecordOffset);
+        var decoded = recordType switch
+        {
+            "session_meta" => SessionMeta(payload, recordEnd, digest, occurredAtUtc),
+            "response_item" => ResponseItem(payload, defaultEventId, recordEnd, digest, occurredAtUtc),
+            "event_msg" => EventMessage(payload, defaultEventId, recordEnd, digest, occurredAtUtc),
+            "turn_context" or "world_state" or "token_usage_record" or "compacted" or
+                "inter_agent_communication" or "inter_agent_communication_metadata" or
+                "retained_context" or "security_risk_score" or "realtime_item" =>
+                Consumed(recordEnd, defaultEventId, SourceEventAuthor.System,
+                    "codex." + recordType, digest, occurredAtUtc),
+            _ => Unsupported(Token("codex_type_unsupported.", recordType))
+        };
+        return decoded.Kind == SourceRecordDecodeKind.Unsupported
+            ? decoded with { ConsumedBytes = recordEnd }
+            : decoded;
     }
 
     /// <summary>

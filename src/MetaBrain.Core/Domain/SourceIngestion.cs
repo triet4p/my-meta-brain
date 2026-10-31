@@ -30,13 +30,15 @@ public static class SourceIngestionLimits
     /// Per-generation journal bounds. The journal is the durable pair of
     /// (checkpoint, accepted normalized events); hitting a bound stops
     /// ingestion with <c>journal_limit</c> instead of discarding events or
-    /// advancing the checkpoint past data that would be lost.
+    /// advancing the checkpoint past data that would be lost. Raw-preserved
+    /// records share this bound and never advance the checkpoint if they do not
+    /// fit.
     /// </summary>
+    public const int MaximumJournalBytes = 768 * 1024;
+
     public const int MaximumJournalEvents = 4096;
 
-    public const int MaximumJournalDiagnostics = 256;
-
-    public const int MaximumJournalBytes = 768 * 1024;
+    public const int MaximumJournalDiagnostics = MaximumJournalEvents;
 
     public const int MaximumSourceStateBytes = 1024 * 1024;
 
@@ -125,7 +127,10 @@ public sealed record SourceRecordDecode(
     SourceRecordDecodeKind Kind,
     int ConsumedBytes = 0,
     SourceEventDraft? Event = null,
-    string? Diagnostic = null);
+    string? Diagnostic = null,
+    string? ChainIdentity = null,
+    string? ChainParentId = null,
+    bool IsVersionBarrier = false);
 
 /// <summary>
 /// One accepted normalized event as persisted in the encrypted per-generation
@@ -148,6 +153,56 @@ public sealed record NormalizedSourceEvent(
 /// transcript content is ever recorded (R36).
 /// </summary>
 public sealed record SourceIngestionDiagnostic(long Offset, string Code, DateTimeOffset RecordedAtUtc);
+/// <summary>
+/// One owner-preserved complete source record, stored in the encrypted
+/// ingestion journal. These bytes do not represent an event and carry no
+/// attribution. ChainIdentity is present only when an OMP envelope passed its
+/// independent identity validation.
+/// </summary>
+public sealed record PreservedSourceRecord(
+    long Offset,
+    int Length,
+    string Digest,
+    DateTimeOffset RetainUntilUtc,
+    byte[] Bytes,
+    string? ChainIdentity = null)
+{
+    public long End => Offset + Length;
+}
+
+/// <summary>
+/// Elements present only in journal schema v2. The raw record bytes live in
+/// this same authenticated resource as the checkpoint, so a crash cannot
+/// publish continuation without its preservation.
+/// </summary>
+public sealed record SourceIngestionJournalV2(
+    PreservedSourceRecord[] PreservedRecords,
+    long? VersionBarrierOffset = null);
+
+public sealed record SourcePreservedRecordDescriptor(
+    long Offset,
+    int Length,
+    string Digest,
+    DateTimeOffset RetainUntilUtc);
+
+public sealed record SourcePreservedRecordRead(
+    SourcePreservedRecordDescriptor Descriptor,
+    byte[] Content);
+
+public sealed record SourceRecordDiagnostic(string Code, long Offset);
+
+public sealed record SourceIngestionSummary(
+    string Preservation,
+    string Interpretation,
+    string Derivation,
+    long PendingTailBytes,
+    long PreservedBytes,
+    int UninterpretedRecords,
+    long UnprocessedBytes,
+    long PreservedPendingBytes,
+    SourceRecordDiagnostic? LastDiagnostic,
+    SourcePreservedRecordDescriptor[] PreservedRecords);
+
 
 /// <summary>
 /// The durable per-source generation journal: the generation anchor, the
@@ -167,9 +222,16 @@ public sealed record SourceIngestionJournal(
     long ConsumedOffset,
     NormalizedSourceEvent[] Events,
     SourceIngestionDiagnostic[] Diagnostics,
-    DateTimeOffset LastIngestAtUtc)
+    DateTimeOffset LastIngestAtUtc,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    SourceIngestionJournalV2? Version2 = null)
 {
+    /// <summary>
+    /// Reference-only journals retain the original v1 shape. Schema v2 is
+    /// written only when it contains preserved bytes or a version barrier.
+    /// </summary>
     public const int CurrentSchemaVersion = 1;
+    public const int PreservationSchemaVersion = 2;
 }
 
 /// <summary>
@@ -240,7 +302,8 @@ public static class SourceIngestionJournalValidator
     public static void Validate(SourceIngestionJournal journal)
     {
         ArgumentNullException.ThrowIfNull(journal);
-        if (journal.SchemaVersion != SourceIngestionJournal.CurrentSchemaVersion)
+        if (journal.SchemaVersion is not (SourceIngestionJournal.CurrentSchemaVersion or
+            SourceIngestionJournal.PreservationSchemaVersion))
         {
             throw new ArgumentException("The source ingestion journal schema version is unsupported.");
         }
@@ -299,6 +362,49 @@ public static class SourceIngestionJournalValidator
         {
             throw new ArgumentException("The source ingestion journal time must use UTC.");
         }
+
+        var preserved = journal.Version2?.PreservedRecords;
+        if (journal.SchemaVersion == SourceIngestionJournal.CurrentSchemaVersion)
+        {
+            if (journal.Version2 is not null)
+            {
+                throw new ArgumentException("A v1 ingestion journal cannot contain v2-only state.");
+            }
+        }
+        else if (preserved is null || preserved.Length > SourceIngestionLimits.MaximumJournalDiagnostics ||
+                 preserved.Length == 0 && journal.Version2!.VersionBarrierOffset is null)
+        {
+            throw new ArgumentException("The v2 ingestion journal has no valid v2-only state.");
+        }
+
+        if (preserved is { Length: > 0 })
+        {
+            var ordered = preserved.OrderBy(record => record.Offset).ToArray();
+            long previousEnd = -1;
+            foreach (var record in ordered)
+            {
+                ValidatePreservedRecord(record, journal.AnchorLength);
+                if (record.Offset < previousEnd)
+                {
+                    throw new ArgumentException("The source ingestion journal preserved spans overlap.");
+                }
+
+                previousEnd = record.End;
+            }
+        }
+
+        if (journal.Version2?.VersionBarrierOffset is { } barrierOffset)
+        {
+            if (barrierOffset != journal.ConsumedOffset ||
+                preserved is null ||
+                !preserved.Any(record => record.Offset == barrierOffset &&
+                    record.Length == journal.AnchorLength - barrierOffset))
+            {
+                throw new ArgumentException("The source ingestion journal version barrier is invalid.");
+            }
+        }
+
+        ValidateCoverage(journal, preserved);
     }
 
     public static void ValidateEvent(NormalizedSourceEvent normalized, long anchorLength)
@@ -323,6 +429,52 @@ public static class SourceIngestionJournalValidator
             normalized.Span.End > anchorLength)
         {
             throw new ArgumentException("The source ingestion journal event span is invalid.");
+        }
+    }
+
+    private static void ValidatePreservedRecord(PreservedSourceRecord record, long anchorLength)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        if (record.Offset < 0 || record.Length <= 0 ||
+            record.End > anchorLength || record.Bytes is null ||
+            record.Bytes.Length != record.Length || !IsDigest(record.Digest) ||
+            !SourceFingerprint.Matches(record.Digest, record.Bytes) ||
+            record.RetainUntilUtc.Offset != TimeSpan.Zero ||
+            record.ChainIdentity is { } chainIdentity &&
+            (!DomainIdentifiers.IsSafeIdentifier(chainIdentity) || chainIdentity.Length > 64))
+        {
+            throw new ArgumentException("The source ingestion journal preserved record is invalid.");
+        }
+    }
+
+    private static void ValidateCoverage(
+        SourceIngestionJournal journal,
+        PreservedSourceRecord[]? preserved)
+    {
+        var spans = new List<(long Start, long End)>(journal.Events.Length + (preserved?.Length ?? 0));
+        spans.AddRange(journal.Events.Select(record => (record.Span.Start, record.Span.End)));
+        if (preserved is not null)
+        {
+            spans.AddRange(preserved
+                .Where(record => record.Offset < journal.ConsumedOffset)
+                .Select(record => (record.Offset, record.End)));
+        }
+
+        spans.Sort(static (left, right) => left.Start.CompareTo(right.Start));
+        var next = 0L;
+        foreach (var span in spans)
+        {
+            if (span.Start != next || span.End > journal.ConsumedOffset)
+            {
+                throw new ArgumentException("The source ingestion journal has a gap or overlap before its checkpoint.");
+            }
+
+            next = span.End;
+        }
+
+        if (next != journal.ConsumedOffset)
+        {
+            throw new ArgumentException("The source ingestion journal does not cover its checkpoint prefix.");
         }
     }
 
