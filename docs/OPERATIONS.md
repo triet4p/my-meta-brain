@@ -251,13 +251,14 @@ read-only source enrollment, scoped sharing, proposal/relation review, and data-
 lifecycle actions. Their client examples match this runbook's §3.2.1 contract; accepted Sprint 9
 evidence is inherited and no fresh client/product walkthrough is claimed.
 
-### 3.2.1 MCP client registration (standalone package 1.0.0)
+### 3.2.1 MCP client registration (standalone package 1.1.0 candidate; installed 1.0.0 unchanged)
 
 The candidate includes a standalone self-contained MCP ZIP. Extract the complete archive into
 a stable directory while preserving its folders; for example, choose
-`%LOCALAPPDATA%\MetaBrain\MCP\1.0.0\`. This package is separate from the CLI and Owner UI setup
-executables, and does not require either frontend to be installed, an SDK, a repository, an
-installed .NET runtime or PowerShell.
+`%LOCALAPPDATA%\MetaBrain\MCP\<version>\`, replacing `<version>` with the candidate under test
+(`1.1.0` here; use `1.0.0` only when addressing the installed public release). This package is
+separate from the CLI and Owner UI setup executables, and does not require either frontend to be
+installed, an SDK, a repository, an installed .NET runtime or PowerShell.
 
 ```text
 mcp\MetaBrain.Mcp.exe
@@ -297,7 +298,7 @@ This Codex CLI example uses documented process-scoped `-c` overrides and does no
 prompt:
 
 ```text
-codex -C "<isolated-workspace>" -c 'mcp_servers.metabrain.command="C:\\Users\\<owner>\\AppData\\Local\\MetaBrain\\MCP\\1.0.0\\mcp\\MetaBrain.Mcp.exe"' -c 'mcp_servers.metabrain.args=["--data-root","C:\\Users\\<owner>\\AppData\\Local\\MetaBrain\\Data"]'
+codex -C "<isolated-workspace>" -c 'mcp_servers.metabrain.command="C:\\Users\\<owner>\\AppData\\Local\\MetaBrain\\MCP\\<version>\\mcp\\MetaBrain.Mcp.exe"' -c 'mcp_servers.metabrain.args=["--data-root","C:\\Users\\<owner>\\AppData\\Local\\MetaBrain\\Data"]'
 ```
 
 For OMP, create `.omp/mcp.json` only inside an isolated workspace, not the product repository
@@ -308,7 +309,7 @@ or a user-level configuration directory, then start OMP with that workspace and 
   "mcpServers": {
     "metabrain": {
       "type": "stdio",
-      "command": "C:\\Users\\<owner>\\AppData\\Local\\MetaBrain\\MCP\\1.0.0\\mcp\\MetaBrain.Mcp.exe",
+      "command": "C:\\Users\\<owner>\\AppData\\Local\\MetaBrain\\MCP\\<version>\\mcp\\MetaBrain.Mcp.exe",
       "args": ["--data-root", "C:\\Users\\<owner>\\AppData\\Local\\MetaBrain\\Data"]
     }
   }
@@ -351,6 +352,9 @@ cli\MetaBrain.Cli.exe owner request-approve --control-pipe <pipe> --request-id <
 
 ### 3.2.3 Owner-selected folder source enrollment (S11-T2)
 
+This section describes the 1.1.0 candidate S11-T2 folder enrollment; installed 1.0.0 remains
+unchanged until a separately owner-authorized S11-T6 publication.
+
 Use the owner CLI only with an unlocked vault. Select one absolute folder and declare recursion and include/exclude globs explicitly; `--exclude-globs none` means no exclusions. The preview is bounded and metadata-only. Type `ENROLL` once to confirm the exact preview; any other input or end-of-input cancels without changing membership.
 
 ```text
@@ -367,8 +371,8 @@ Enumeration and source reading are separate filesystem operations. The reader's 
 
 ### 3.2.4 Codex/OMP source ingestion and raw preservation (S11-T3)
 
-This section describes the unreleased S11-T3 source implementation; installed 1.0.0 remains
-unchanged until a separately authorized S11-T6 release.
+This section describes the 1.1.0 candidate S11-T3 source implementation; installed 1.0.0 remains
+unchanged until a separately owner-authorized S11-T6 publication.
 
 Ingestion is owner-only and runs while the vault is unlocked. `source-status`/`source-list`
 report four separate facets: current availability, whether exact bytes are stored (`preserved` or
@@ -407,8 +411,8 @@ v2 journal is never automatically downgraded.
 
 ### 3.2.5 Folder membership refresh (S11-T4)
 
-This section describes the unreleased S11-T4 owner behavior; installed 1.0.0 remains unchanged
-until a separately authorized S11-T6 release.
+This section describes the 1.1.0 candidate S11-T4 owner behavior; installed 1.0.0 remains unchanged
+until a separately owner-authorized S11-T6 publication.
 
 Enrollment confirmation adds only the exact previewed member metadata. To let the shared manual
 and background refresh pass discover current or future matching regular files, explicitly opt in
@@ -438,7 +442,7 @@ coordinator and does not scan outside an opted-in folder selection.
 
 ### 3.2.6 Owner console folder ingestion surface (S11-T5)
 
-This section describes the unreleased S11-T5 owner console behavior; installed 1.0.0 remains unchanged until a separately authorized S11-T6 release.
+This section describes the 1.1.0 candidate S11-T5 owner console behavior; installed 1.0.0 remains unchanged until a separately owner-authorized S11-T6 publication.
 
 In **Sources**, choose one folder, enter the zone and format, explicitly choose recursion and include/exclude globs, then request a bounded metadata-only preview. The list shows included relative paths and exclusion reasons without opening transcript content. Type `ENROLL` exactly to confirm the active preview; any other value changes nothing. The owner may discard a preview and choose another folder.
 
@@ -740,6 +744,14 @@ source snapshots, backups and recovery material are never deleted by the install
 
 Uninstall refuses with an actionable error if the shared host could not drain cleanly; it does not
 claim removal succeeded or replace live binaries.
+
+### 8.1 Partial-source states and troubleshooting (1.1.0 candidate)
+
+When a folder member shows `interpreted=partially_interpreted` (or `uninterpreted`) with a `last_diagnostic {code, offset}`, the source is not broken: the checkpoint stopped at the first complete record the build cannot interpret yet (or the tail is still a partial line). Remediation by exact offset: (a) enable explicit raw preservation (`source-raw-preservation-optin` with a future `--retain-until-utc`, or the folder checkbox for future members) and re-run `source-ingest` so the exact record bytes are preserved and the checkpoint can pass; (b) leave the source reference-only and wait for a newer adapter; or (c) export one exact already-preserved span with `source-preserved-record-read --source-id <id> --offset <byte-offset> --output-file <new-file>` after unlock. Reference-only suffixes stay source-dependent: `unprocessed_bytes` is an honest not-yet-read suffix, not a coverage violation or silent loss, and diagnostics carry only the code and byte offset — never transcript bytes.
+
+An OMP newer-version barrier keeps the checkpoint at the barrier even with preservation on: the entire tail is preserved and owner-readable, but nothing past the barrier is interpreted. A `journal v2` source opened by an older 1.0.0 binary fails closed at the validator (no silent rebuild or partial read); 1.1.0 never downgrades a v2 journal back to v1, even after preservation is turned off. Downgrade note: a reference-only source keeps journal v1 and keeps 1.0 behavior; only a source that already wrote a v2-only element (preserved span or preserved version barrier) requires 1.1.0 to read. Upgrade 1.0 to 1.1 never rewrites existing journals or migrates the vault; fully supported sources keep identical events, spans and digests.
+
+Install/upgrade/coexist/uninstall contract is unchanged from the shared release contract: one complete candidate release upgrades the application files, keeps the selected data root, settings and endpoints, refuses a live shared host or a mismatched shared candidate/version instead of reporting false success, and never deletes the vault, snapshots, backups or recovery material. Host-mutating install, upgrade, coexistence and uninstall proofs remain an explicit owner-executed prerequisite and are not claimed from a repository-local run.
 
 ## 9. Diagnostics
 

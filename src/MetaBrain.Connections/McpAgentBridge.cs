@@ -96,8 +96,7 @@ internal static class McpAgentBridge
         {
             "initialize" => ResultEnvelope(id, new JsonObject
             {
-                ["protocolVersion"] = NegotiateProtocolVersion(rawParams),
-                ["serverInfo"] = new JsonObject { ["name"] = "metabrain-agent", ["version"] = "1.0.0" },
+                ["serverInfo"] = new JsonObject { ["name"] = "metabrain-agent", ["version"] = ProductInfo.Version },
                 ["capabilities"] = new JsonObject { ["tools"] = new JsonObject { ["listChanged"] = false } },
             }),
             "notifications/initialized" => string.Empty,

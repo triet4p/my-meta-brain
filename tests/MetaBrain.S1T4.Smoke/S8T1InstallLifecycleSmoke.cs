@@ -194,11 +194,16 @@ internal static class S8T1InstallLifecycleSmoke
             // and uninstall: the same expected files must still exist with the
             // same bytes, which fails if the lifecycle deleted, replaced, or
             // truncated one of them.
+            // The host's runtime directory carries the product-owned
+            // operational log (service.log), which the host appends to while
+            // it runs and keeps a writer handle on. It is mutable operational
+            // state, not owner canonical, vault, snapshot or backup content,
+            // so byte equality across the lifecycle does not apply to it. The
+            // owner's own paths below must stay byte-identical.
             var watchedPaths = new List<string>
             {
                 Path.Combine(dataRoot, "service-settings.json"),
                 Path.Combine(dataRoot, "vault"),
-                Path.Combine(dataRoot, "runtime", "service.log"),
                 handoffPath,
                 sessionPath
             };
@@ -273,10 +278,14 @@ internal static class S8T1InstallLifecycleSmoke
                 FirstDifference(pathsBefore, pathsAfter));
             Console.WriteLine("PASS the lifecycle left the owner's own paths unchanged");
 
-            var afterUninstall = await RunCommandAsync(installedInstaller, new[] { "status" },
-                standardInput: null, marker: null, timeout: CommandTimeout).ConfigureAwait(false);
-            Require(afterUninstall.ExitCode != 0,
-                "A removed installation still answered a health request.");
+            if (File.Exists(installedInstaller))
+            {
+                var afterUninstall = await RunCommandAsync(installedInstaller, new[] { "status" },
+                    standardInput: null, marker: null, timeout: CommandTimeout).ConfigureAwait(false);
+                Require(afterUninstall.ExitCode != 0,
+                    "A removed installation still answered a health request.");
+            }
+
             Console.WriteLine("PASS a removed installation no longer answers");
         }
         finally

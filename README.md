@@ -164,6 +164,8 @@ live; the approved in-place asset rename, refreshed deployment and public smoke 
 the website quick starts or the operations runbook for installation; do not treat the developer
 bundle below as the end-user download.
 
+Release 1.1.0 is a local prepublication candidate only: three candidate-bound assets (`MetaBrain-CLI-1.1.0.exe`, `MetaBrain-UI-1.1.0.exe`, `MetaBrain-MCP-1.1.0.zip` as public download names) are assembled under `runtime/release-candidates/` with per-asset SHA-256, manifests, source provenance, dependency/license inventories and unsigned status, and are not published, uploaded or advertised as live. They add owner folder enrollment, raw-preserved partial ingestion and folder refresh; installed 1.0.0 stays fail-closed until the owner separately authorizes publication, and a 1.1.0 journal v2 source fails closed on a 1.0.0 binary.
+
 ### Developer bundle: build the payload from a checkout
 
 ```powershell

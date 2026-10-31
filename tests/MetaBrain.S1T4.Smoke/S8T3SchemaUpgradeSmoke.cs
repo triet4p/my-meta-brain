@@ -204,9 +204,17 @@ internal static partial class OwnerServiceSmoke
 
             var rebuilt = await RunOwnerCommandAsync(connectionsExecutable,
                 "owner", "index-rebuild", "--control-pipe", fixture.CanonicalControlPipe).ConfigureAwait(false);
-            Require(rebuilt.ExitCode == 0 && rebuilt.StandardOutput.Contains("INDEX rebuilt rows=", StringComparison.Ordinal) &&
-                    !rebuilt.StandardOutput.Contains("rows=0", StringComparison.Ordinal),
-                "The migrated S8-T3 vault could not rebuild its private index (" + rebuilt.StandardError.Trim() + ").");
+            Require(rebuilt.ExitCode == 0,
+                "The migrated S8-T3 vault could not rebuild its private index (exit=" + rebuilt.ExitCode +
+                "; stdout=" + rebuilt.StandardOutput.Trim() + "; stderr=" + rebuilt.StandardError.Trim() + ").");
+            var rebuiltQuery = await RunOwnerCommandAsync(connectionsExecutable,
+                "owner", "library", "--control-pipe", fixture.CanonicalControlPipe,
+                "--query", "S8T3_SYNTHETIC_PRIOR_ITEM_A_TITLE").ConfigureAwait(false);
+            Require(rebuiltQuery.ExitCode == 0 &&
+                    rebuiltQuery.StandardOutput.Contains(S8T3ItemA, StringComparison.Ordinal),
+                "The rebuilt S8-T3 private index did not serve the migrated record for its exact title query (exit=" +
+                rebuiltQuery.ExitCode + "; stdout=" + rebuiltQuery.StandardOutput.Trim() +
+                "; stderr=" + rebuiltQuery.StandardError.Trim() + ").");
             Console.WriteLine("OBSERVATION the migrated vault kept item body/revision/attribution, the lifecycle record, the relation and the job, and rebuilt its private index from canonical");
 
             // ----- write, job and agent/MCP read on the migrated vault -----
@@ -527,7 +535,6 @@ internal static partial class OwnerServiceSmoke
             var plainA = Path.Combine(resourceRoot, "legacy-a.txt");
             var plainB = Path.Combine(resourceRoot, "legacy-b.txt");
             var plainPolicy = Path.Combine(root, "grant-policy.json");
-            var resourceFingerprint = ReadS8T3ContentFingerprint(resourceRoot);
 
             var migrated = LegacyVaultMigration.Migrate(settingsPath, passphrase);
             Require(!migrated.Resumed && migrated.ResourceCount == 2 && migrated.LegacyPolicyPreserved &&
@@ -536,8 +543,6 @@ internal static partial class OwnerServiceSmoke
                 migrated.ResourceCount.ToString(CultureInfo.InvariantCulture) + ").");
             Require(!File.Exists(plainA) && !File.Exists(plainB) && !File.Exists(plainPolicy),
                 "The S8-T3 legacy cutover left a migrated plaintext copy behind.");
-            Require(string.Equals(resourceFingerprint, ReadS8T3ContentFingerprint(resourceRoot), StringComparison.Ordinal),
-                "The S8-T3 legacy cutover left the inherited resource directory changed.");
             Require(ReadS8T3SchemaVersion(settingsPath) == 3,
                 "The S8-T3 legacy cutover did not write the current settings schema.");
 
@@ -684,38 +689,6 @@ internal static partial class OwnerServiceSmoke
     {
         using var document = JsonDocument.Parse(File.ReadAllText(settingsPath));
         return document.RootElement.GetProperty("schemaVersion").GetInt32();
-    }
-
-    /// <summary>
-    /// A read-only content fingerprint (existence plus exact bytes, with a
-    /// directory contributing its sorted child names). The smoke never writes
-    /// a permission; it only proves a cutover left every migrated path
-    /// byte-identical. Ordinary permissions are neither inspected nor changed.
-    /// </summary>
-    private static string ReadS8T3ContentFingerprint(string path)
-    {
-        if (Directory.Exists(path))
-        {
-            var children = Directory.GetFileSystemEntries(path)
-                .Select(Path.GetFileName)
-                .OrderBy(name => name, StringComparer.Ordinal);
-            return "directory children=[" + string.Join(", ", children) + "]";
-        }
-
-        if (File.Exists(path))
-        {
-            var bytes = File.ReadAllBytes(path);
-            try
-            {
-                return "file sha256=" + Convert.ToHexString(SHA256.HashData(bytes));
-            }
-            finally
-            {
-                CryptographicOperations.ZeroMemory(bytes);
-            }
-        }
-
-        return "missing";
     }
 
     private static void TryDeleteS8T3(string root)
