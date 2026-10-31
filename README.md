@@ -140,7 +140,7 @@ the owner approves or narrows requests in the CLI or the Owner console, never in
   release time and that can run the required desktop/WPF UI. The product is not verified on every
   supported Windows SKU; Linux, macOS, ARM, Server Core and Nano Server are out of scope for this
   release (uses Windows Named Pipes and DPAPI).
-- **Running the 1.0.0 release:** use the dedicated CLI setup executable, graphical Owner UI setup
+- **Running the 1.1.0 release:** use the dedicated CLI setup executable, graphical Owner UI setup
   executable or standalone MCP ZIP. They are self-contained `win-x64` distributions, so no .NET
   SDK, installed .NET runtime, source checkout or PowerShell is required. The repository payload
   bundle described below is developer tooling, not the end-user installation path.
@@ -153,18 +153,26 @@ the owner approves or narrows requests in the CLI or the Owner console, never in
 
 ## Getting Started
 
-Release 1.0.0 is published as three dedicated assets:
+Release 1.1.0 is published as three dedicated assets:
+[`MetaBrain-CLI-1.1.0.exe`](https://github.com/triet4p/my-meta-brain/releases/download/v1.1.0/MetaBrain-CLI-1.1.0.exe),
+[`MetaBrain-UI-1.1.0.exe`](https://github.com/triet4p/my-meta-brain/releases/download/v1.1.0/MetaBrain-UI-1.1.0.exe)
+and
+[`MetaBrain-MCP-1.1.0.zip`](https://github.com/triet4p/my-meta-brain/releases/download/v1.1.0/MetaBrain-MCP-1.1.0.zip).
+The [1.1.0 release record](docs/release-1.1.0.md) lists their frozen byte sizes, SHA-256 hashes,
+internal candidate provenance, dependency/license notices, unsigned status and known limits; the
+GitHub Release and Pages site are live. Use the website quick starts or the operations runbook for
+installation; do not treat the developer bundle below as the end-user download.
+
+Release 1.0.0 remains published and unchanged at
+[`v1.0.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.0.0):
 [`MetaBrain-CLI-1.0.0.exe`](https://github.com/triet4p/my-meta-brain/releases/download/v1.0.0/MetaBrain-CLI-1.0.0.exe),
 [`MetaBrain-UI-1.0.0.exe`](https://github.com/triet4p/my-meta-brain/releases/download/v1.0.0/MetaBrain-UI-1.0.0.exe)
 and
-[`MetaBrain-MCP-1.0.0.zip`](https://github.com/triet4p/my-meta-brain/releases/download/v1.0.0/MetaBrain-MCP-1.0.0.zip).
-The release record lists their frozen byte sizes, SHA-256 hashes, internal candidate provenance,
-dependency/license notices, signing status and known limits. The GitHub Release and Pages site are
-live; the approved in-place asset rename, refreshed deployment and public smoke are complete. Use
-the website quick starts or the operations runbook for installation; do not treat the developer
-bundle below as the end-user download.
-
-Release 1.1.0 is a local prepublication candidate only: three candidate-bound assets (`MetaBrain-CLI-1.1.0.exe`, `MetaBrain-UI-1.1.0.exe`, `MetaBrain-MCP-1.1.0.zip` as public download names) are assembled under `runtime/release-candidates/` with per-asset SHA-256, manifests, source provenance, dependency/license inventories and unsigned status, and are not published, uploaded or advertised as live. They add owner folder enrollment, raw-preserved partial ingestion and folder refresh; installed 1.0.0 stays fail-closed until the owner separately authorizes publication, and a 1.1.0 journal v2 source fails closed on a 1.0.0 binary.
+[`MetaBrain-MCP-1.0.0.zip`](https://github.com/triet4p/my-meta-brain/releases/download/v1.0.0/MetaBrain-MCP-1.0.0.zip),
+with its frozen hashes in the [1.0.0 release record](docs/release-1.0.0.md). 1.1.0 adds owner
+folder enrollment, raw-preserved partial ingestion and folder refresh; an installed 1.0.0 binary
+does not gain those surfaces, and a 1.1.0 journal v2 source fails closed on a 1.0.0 binary instead
+of being rewritten.
 
 ### Developer bundle: build the payload from a checkout
 

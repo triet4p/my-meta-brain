@@ -269,12 +269,12 @@ read-only source enrollment, scoped sharing, proposal/relation review, and data-
 lifecycle actions. Their client examples match this runbook's §3.2.1 contract; accepted Sprint 9
 evidence is inherited and no fresh client/product walkthrough is claimed.
 
-### 3.2.1 MCP client registration (standalone package 1.1.0 candidate; installed 1.0.0 unchanged)
+### 3.2.1 MCP client registration (standalone package 1.1.0; installed 1.0.0 unchanged)
 
-The candidate includes a standalone self-contained MCP ZIP. Extract the complete archive into
+The 1.1.0 release includes a standalone self-contained MCP ZIP. Extract the complete archive into
 a stable directory while preserving its folders; for example, choose
-`%LOCALAPPDATA%\MetaBrain\MCP\<version>\`, replacing `<version>` with the candidate under test
-(`1.1.0` here; use `1.0.0` only when addressing the installed public release). This package is
+`%LOCALAPPDATA%\MetaBrain\MCP\<version>\`, replacing `<version>` with the release you installed
+(`1.1.0` here; use `1.0.0` only for the earlier release). This package is
 separate from the CLI and Owner UI setup executables, and does not require either frontend to be
 installed, an SDK, a repository, an installed .NET runtime or PowerShell.
 
@@ -370,8 +370,8 @@ cli\MetaBrain.Cli.exe owner request-approve --control-pipe <pipe> --request-id <
 
 ### 3.2.3 Owner-selected folder source enrollment (S11-T2)
 
-This section describes the 1.1.0 candidate S11-T2 folder enrollment; installed 1.0.0 remains
-unchanged until a separately owner-authorized S11-T6 publication.
+This section describes 1.1.0 (S11-T2) folder enrollment, released 2026-11-01; an installed 1.0.0
+binary keeps its earlier fail-closed behavior and does not offer this surface.
 
 Use the owner CLI only with an unlocked vault. Select one absolute folder and declare recursion and include/exclude globs explicitly; `--exclude-globs none` means no exclusions. The preview is bounded and metadata-only. Type `ENROLL` once to confirm the exact preview; any other input or end-of-input cancels without changing membership.
 
@@ -389,8 +389,8 @@ Enumeration and source reading are separate filesystem operations. The reader's 
 
 ### 3.2.4 Codex/OMP source ingestion and raw preservation (S11-T3)
 
-This section describes the 1.1.0 candidate S11-T3 source implementation; installed 1.0.0 remains
-unchanged until a separately owner-authorized S11-T6 publication.
+This section describes the 1.1.0 (S11-T3) source implementation, released 2026-11-01; an installed
+1.0.0 binary keeps its earlier fail-closed behavior and does not offer these surfaces.
 
 Ingestion is owner-only and runs while the vault is unlocked. `source-status`/`source-list`
 report four separate facets: current availability, whether exact bytes are stored (`preserved` or
@@ -436,8 +436,8 @@ v2 journal is never automatically downgraded.
 
 ### 3.2.5 Folder membership refresh (S11-T4)
 
-This section describes the 1.1.0 candidate S11-T4 owner behavior; installed 1.0.0 remains unchanged
-until a separately owner-authorized S11-T6 publication.
+This section describes the 1.1.0 (S11-T4) owner behavior, released 2026-11-01; an installed 1.0.0
+binary keeps its earlier fail-closed behavior and does not offer this surface.
 
 Enrollment confirmation adds only the exact previewed member metadata. To let the shared manual
 and background refresh pass discover current or future matching regular files, explicitly opt in
@@ -467,7 +467,7 @@ coordinator and does not scan outside an opted-in folder selection.
 
 ### 3.2.6 Owner console folder ingestion surface (S11-T5)
 
-This section describes the 1.1.0 candidate S11-T5 owner console behavior; installed 1.0.0 remains unchanged until a separately owner-authorized S11-T6 publication.
+This section describes the 1.1.0 (S11-T5) owner console behavior, released 2026-11-01; an installed 1.0.0 binary keeps its earlier fail-closed behavior and does not offer this surface.
 
 In **Sources**, choose one folder, enter the zone and format, explicitly choose recursion and include/exclude globs, then request a bounded metadata-only preview. The list shows included relative paths and exclusion reasons without opening transcript content. Type `ENROLL` exactly to confirm the active preview; any other value changes nothing. The owner may discard a preview and choose another folder.
 

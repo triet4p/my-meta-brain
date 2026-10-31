@@ -237,9 +237,8 @@ Owner đã duyệt [CR02](CR02-PROPOSAL.md) với **D1=B, D2–D8=A**; quyết �
 [REQUIREMENTS](REQUIREMENTS.md). Installed 1.0.0 giữ fail-closed contract cũ; source hiện tại đã
 triển khai owner folder enrollment (S11-T2), raw-preservation/interpretation separation (S11-T3),
 folder refresh/recovery (S11-T4) và owner console ingestion surface (S11-T5). Các section S11-T2–T5
-dưới đây mô tả source chưa phát hành: chúng thuộc 1.1.0 candidate đang review, không phải tuyên bố
-phát hành 1.1.0 live. S11-T6 release là gate nộp candidate, review/checkpoint và chờ owner authorize
-publication riêng; public 1.0.0 links/URLs/assets giữ nguyên cho tới publication đó.
+dưới đây mô tả 1.1.0 đã phát hành ngày 2026-11-01; cài đặt 1.0.0 cũ không có các surface này và
+giữ fail-closed contract trước đó. Public 1.0.0 links/URLs/assets vẫn giữ nguyên bên cạnh 1.1.0.
 
 **Bốn facet trạng thái độc lập.** Surface owner không được gộp trạng thái thành một nhãn ok/error:
 
