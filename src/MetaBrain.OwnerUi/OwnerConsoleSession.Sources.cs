@@ -26,8 +26,8 @@ namespace MetaBrain.OwnerUi;
 /// missing source names its remediation (owner relocate with an explicitly
 /// supplied candidate, or revoke), never a scan.
 ///
-/// Private view state — the allowlist, the open status, the open ingest
-/// outcome, the refresh entries, the collections, the snapshots and the
+/// Private view state — the allowlist, folder preview/enrollment state, open
+/// status, ingest outcome, refresh entries, collections, snapshots and the
 /// owner's drafts — lives only in this process and is dropped with the
 /// private epoch it belonged to: the epoch moves whenever the vault leaves
 /// the unlocked state, and an asynchronous answer is applied only while the
@@ -39,6 +39,7 @@ namespace MetaBrain.OwnerUi;
 internal sealed partial class OwnerConsoleSession
 {
     private static readonly TimeSpan SourcesActTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan SourceFolderActTimeout = TimeSpan.FromMinutes(10);
     private long _sourcesFormVersion;
 
     /// <summary>Every enrolled source the service listed, in the order it served them, plus held mapping review.</summary>
@@ -47,6 +48,15 @@ internal sealed partial class OwnerConsoleSession
     /// <summary>Owner-facing outcome of the last source listing. Never private content or a locator.</summary>
     public string? SourcesMessage { get; private set; }
 
+
+    /// <summary>The active metadata-only folder preview, without its root locator.</summary>
+    public OwnerSourceFolderPreview? FolderPreview { get; private set; }
+
+    /// <summary>The last folder enrollment or consent state exactly as served by the service.</summary>
+    public OwnerSourceFolderEnrollment? FolderEnrollment { get; private set; }
+
+    /// <summary>Owner-facing outcome of the last folder act; never a locator or transcript.</summary>
+    public string? FolderMessage { get; private set; }
     /// <summary>The source status the owner opened, exactly as the service served it.</summary>
     public OwnerSourceEnrollment? OpenSource { get; private set; }
 
@@ -94,8 +104,8 @@ internal sealed partial class OwnerConsoleSession
 
     /// <summary>
     /// Increments whenever this session drops the owner's sources drafts (the
-    /// enrollment/mapping/collection/snapshot forms) of the epoch that ended.
-    /// The host clears its own sources controls when it observes a new value.
+    /// folder, single-source, mapping-review, collection and snapshot forms)
+    /// of the epoch that ended. The host clears its controls on the new value.
     /// </summary>
     public long SourcesFormVersion => _sourcesFormVersion;
 
@@ -120,6 +130,176 @@ internal sealed partial class OwnerConsoleSession
         ApplySourcesListAnswer(epoch, result);
         Append(DescribeSourcesActForLog("read sources", result.Outcome, result.ErrorCode));
         RaiseChanged();
+    }
+
+    /// <summary>
+    /// Requests a bounded metadata-only preview for the one folder the owner
+    /// selected. The client projects no root locator into session state.
+    /// </summary>
+    public async Task PreviewSourceFolderAsync(
+        string rootLocator,
+        string zoneId,
+        string format,
+        int formatVersion,
+        bool recursive,
+        string[] includePatterns,
+        string[] excludePatterns,
+        DateTimeOffset? rawPreservationRetainUntilUtc)
+    {
+        ArgumentNullException.ThrowIfNull(rootLocator);
+        ArgumentNullException.ThrowIfNull(zoneId);
+        ArgumentNullException.ThrowIfNull(format);
+        ArgumentNullException.ThrowIfNull(includePatterns);
+        ArgumentNullException.ThrowIfNull(excludePatterns);
+        if (TryBeginSourcesAct() is not { } epoch)
+        {
+            return;
+        }
+
+        FolderPreview = null;
+        FolderEnrollment = null;
+        FolderMessage = null;
+        var result = await ExecuteSourcesAsync(
+            token => OwnerChannelClient.PreviewSourceFolderAsync(
+                ControlPipe, rootLocator, zoneId, format, formatVersion, recursive,
+                includePatterns, excludePatterns, rawPreservationRetainUntilUtc, token),
+            code => new OwnerSourceFolderPreviewResult(OwnerCommandOutcome.Unavailable, code, null),
+            SourceFolderActTimeout).ConfigureAwait(true);
+
+        await ProbeAsync().ConfigureAwait(true);
+        if (epoch != _privateEpoch)
+        {
+            AppendIgnoredStaleSourcesAnswer("source-folder preview");
+            return;
+        }
+
+        if (result.Outcome == OwnerCommandOutcome.Completed && result.Preview is not null)
+        {
+            FolderPreview = result.Preview;
+            var included = result.Preview.Entries.Count(entry => entry.Included);
+            var excluded = result.Preview.Entries.Length - included;
+            FolderMessage = "The service previewed " + included.ToString(CultureInfo.InvariantCulture) +
+                " included and " + excluded.ToString(CultureInfo.InvariantCulture) +
+                " excluded entries (metadata only). Enrollment confirmation changes only this exact selection; " +
+                "it does not opt the folder into refresh. " +
+                (result.Preview.RawPreservationRetainUntilUtc is { } retainUntil
+                    ? "The separately selected raw-preservation consent would retain future unsupported bytes through " +
+                        retainUntil.ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture) + "."
+                    : "No raw-byte preservation consent was selected.");
+        }
+        else
+        {
+            FolderMessage = DescribeSourcesAnswer("folder preview", result.Outcome, result.ErrorCode);
+            ApplySourcesRefusal(result.Outcome, result.ErrorCode);
+        }
+
+        Append(DescribeSourcesActForLog("preview folder", result.Outcome, result.ErrorCode));
+        RaiseChanged();
+    }
+
+    /// <summary>Enrolls exactly the still-active preview after the owner types ENROLL.</summary>
+    public async Task EnrollSourceFolderAsync(string confirmation)
+    {
+        ArgumentNullException.ThrowIfNull(confirmation);
+        if (FolderPreview is not { } preview)
+        {
+            FolderMessage = "No current folder preview is available. Preview one selected folder before confirming.";
+            RaiseChanged();
+            return;
+        }
+
+        if (TryBeginSourcesAct() is not { } epoch)
+        {
+            return;
+        }
+
+        FolderMessage = null;
+        var result = await ExecuteSourcesAsync(
+            token => OwnerChannelClient.EnrollSourceFolderAsync(
+                ControlPipe, preview.PreviewId, confirmation, token),
+            code => new OwnerSourceFolderResult(OwnerCommandOutcome.Unavailable, code, null),
+            SourceFolderActTimeout).ConfigureAwait(true);
+
+        await ProbeAsync().ConfigureAwait(true);
+        if (epoch != _privateEpoch)
+        {
+            AppendIgnoredStaleSourcesAnswer("source-folder enrollment");
+            return;
+        }
+
+        if (result.Outcome == OwnerCommandOutcome.Completed && result.Folder is not null)
+        {
+            FolderEnrollment = result.Folder;
+            FolderPreview = null;
+            FolderMessage = "The service " + (result.Folder.AlreadyEnrolled ? "confirmed existing folder " : "enrolled folder ") +
+                result.Folder.FolderId + " with " + result.Folder.MemberCount.ToString(CultureInfo.InvariantCulture) +
+                " member(s). Folder refresh remains " + (result.Folder.RefreshOptIn ? "opted in" : "off") +
+                " until a separate owner act. Raw-preservation retention=" +
+                (result.Folder.RawPreservationRetainUntilUtc?.ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture) ?? "none") + ".";
+        }
+        else
+        {
+            FolderMessage = DescribeSourcesAnswer("folder enrollment", result.Outcome, result.ErrorCode);
+            ApplySourcesRefusal(result.Outcome, result.ErrorCode);
+        }
+
+        Append(DescribeSourcesActForLog("enroll folder", result.Outcome, result.ErrorCode));
+        RaiseChanged();
+        if (result.Outcome == OwnerCommandOutcome.Completed && result.Folder is not null)
+        {
+            await RefreshSourcesAsync().ConfigureAwait(true);
+        }
+    }
+
+    /// <summary>Changes refresh consent for the selected member's stored folder only.</summary>
+    public async Task SetFolderRefreshOptInAsync(OwnerSourceEnrollment source, bool optIn)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (string.IsNullOrWhiteSpace(source.FolderId))
+        {
+            FolderMessage = "The selected source is not a current member of an enrolled folder. Nothing changed.";
+            RaiseChanged();
+            return;
+        }
+
+        if (TryBeginSourcesAct() is not { } epoch)
+        {
+            return;
+        }
+
+        FolderMessage = null;
+        var result = await ExecuteSourcesAsync(
+            token => OwnerChannelClient.SetFolderRefreshOptInAsync(ControlPipe, source.FolderId, optIn, token),
+            code => new OwnerSourceFolderResult(OwnerCommandOutcome.Unavailable, code, null),
+            SourceFolderActTimeout).ConfigureAwait(true);
+
+        await ProbeAsync().ConfigureAwait(true);
+        if (epoch != _privateEpoch)
+        {
+            AppendIgnoredStaleSourcesAnswer("folder refresh consent");
+            return;
+        }
+
+        if (result.Outcome == OwnerCommandOutcome.Completed && result.Folder is not null)
+        {
+            FolderEnrollment = result.Folder;
+            FolderMessage = "The service opted folder " +
+                result.Folder.FolderId + (optIn
+                    ? " into refresh for current and future matching files within its stored root, include/exclude and reparse/final-path boundaries. A source-level pause, revoke or explicit opt-out remains a veto."
+                    : " out of refresh. Per-source consent, folder membership and saved canonical/history records were not changed.");
+        }
+        else
+        {
+            FolderMessage = DescribeSourcesAnswer(optIn ? "folder refresh opt-in" : "folder refresh opt-out", result.Outcome, result.ErrorCode);
+            ApplySourcesRefusal(result.Outcome, result.ErrorCode);
+        }
+
+        Append(DescribeSourcesActForLog(optIn ? "opt folder into refresh" : "opt folder out of refresh", result.Outcome, result.ErrorCode));
+        RaiseChanged();
+        if (result.Outcome == OwnerCommandOutcome.Completed)
+        {
+            await RefreshSourcesAsync().ConfigureAwait(true);
+        }
     }
 
     /// <summary>
@@ -393,6 +573,43 @@ internal sealed partial class OwnerConsoleSession
         await ProbeAsync().ConfigureAwait(true);
         var applied = ApplySourceStatusAnswer(epoch, result);
         Append(DescribeSourcesActForLog(optIn ? "opt source into refresh" : "opt source out of refresh", result.Outcome, result.ErrorCode));
+        RaiseChanged();
+        if (applied && result.Outcome == OwnerCommandOutcome.Completed)
+        {
+            await RefreshSourcesAsync().ConfigureAwait(true);
+        }
+    }
+
+    /// <summary>Changes raw-byte preservation consent for one selected source.</summary>
+    public async Task SetSourceRawPreservationOptInAsync(
+        OwnerSourceEnrollment source,
+        bool optIn,
+        DateTimeOffset? retainUntilUtc)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (optIn && retainUntilUtc is null)
+        {
+            ReportSourcesFormProblem("Raw-byte preservation needs an explicit future UTC retention deadline. Nothing changed.");
+            return;
+        }
+
+        if (TryBeginSourcesAct() is not { } epoch)
+        {
+            return;
+        }
+
+        SourceMessage = null;
+        var result = await ExecuteSourcesAsync(
+            token => OwnerChannelClient.SetSourceRawPreservationOptInAsync(
+                ControlPipe, source.SourceId, optIn, retainUntilUtc, token),
+            code => new OwnerSourceStatusResult(OwnerCommandOutcome.Unavailable, code, null)).ConfigureAwait(true);
+
+        await ProbeAsync().ConfigureAwait(true);
+        var applied = ApplySourceStatusAnswer(epoch, result);
+        Append(DescribeSourcesActForLog(
+            optIn ? "opt source into raw preservation" : "opt source out of raw preservation",
+            result.Outcome,
+            result.ErrorCode));
         RaiseChanged();
         if (applied && result.Outcome == OwnerCommandOutcome.Completed)
         {
@@ -682,6 +899,21 @@ internal sealed partial class OwnerConsoleSession
         RaiseChanged();
     }
 
+    /// <summary>Reports a folder form value this console refuses to send.</summary>
+    public void ReportFolderFormProblem(string message)
+    {
+        FolderMessage = message;
+        RaiseChanged();
+    }
+
+    /// <summary>Discards the active preview without changing folder membership.</summary>
+    public void DiscardSourceFolderPreview()
+    {
+        FolderPreview = null;
+        FolderMessage = "The folder preview was discarded. No membership or consent changed.";
+        RaiseChanged();
+    }
+
     /// <summary>
     /// Reports a snapshot-form value this console refuses to send. Never
     /// snapshot content.
@@ -705,6 +937,24 @@ internal sealed partial class OwnerConsoleSession
         if (result.Outcome == OwnerCommandOutcome.Completed && result.Sources is not null)
         {
             Sources = result.Sources;
+            if (OpenSource is { } openSource)
+            {
+                var listedSource = result.Sources.FirstOrDefault(source =>
+                    string.Equals(source.SourceId, openSource.SourceId, StringComparison.Ordinal) &&
+                    source.Generation == openSource.Generation);
+                if (listedSource is not null)
+                {
+                    OpenSource = openSource with
+                    {
+                        Life = listedSource.Life,
+                        SourceReferenceRevision = listedSource.SourceReferenceRevision ?? openSource.SourceReferenceRevision,
+                        PausedAtUtc = listedSource.PausedAtUtc,
+                        RefreshOptOut = listedSource.RefreshOptOut,
+                        FolderId = listedSource.FolderId,
+                        FolderRefreshOptIn = listedSource.FolderRefreshOptIn
+                    };
+                }
+            }
             SourcesMessage = DescribeSourcesListAnswer(result.Sources);
         }
         else
@@ -726,10 +976,44 @@ internal sealed partial class OwnerConsoleSession
             return false;
         }
 
-        if (result.Outcome == OwnerCommandOutcome.Completed && result.Source is not null)
+        if (result.Outcome == OwnerCommandOutcome.Completed && result.Source is { } source)
         {
-            OpenSource = result.Source;
-            SourceMessage = DescribeSourceStatusAnswer(result.Source);
+            if (!source.HasIngestionReport &&
+                OpenSource is { HasIngestionReport: true } previous &&
+                string.Equals(previous.SourceId, source.SourceId, StringComparison.Ordinal) &&
+                previous.Generation == source.Generation)
+            {
+                source = source with
+                {
+                    Availability = source.AvailabilityObservedAtUtc is null && source.Availability == "notChecked"
+                        ? previous.Availability
+                        : source.Availability,
+                    AvailabilityObservedAtUtc = source.AvailabilityObservedAtUtc ?? previous.AvailabilityObservedAtUtc,
+                    SourceReferenceRevision = source.SourceReferenceRevision ?? previous.SourceReferenceRevision,
+                    JournalCiphertextBytes = previous.JournalCiphertextBytes,
+                    SnapshotCiphertextBytes = previous.SnapshotCiphertextBytes,
+                    SnapshotRevision = previous.SnapshotRevision,
+                    JournalRevision = previous.JournalRevision,
+                    ConsumedOffset = previous.ConsumedOffset,
+                    EventCount = previous.EventCount,
+                    DiagnosticCount = previous.DiagnosticCount,
+                    LastIngestAtUtc = previous.LastIngestAtUtc,
+                    Preservation = previous.Preservation,
+                    Interpretation = previous.Interpretation,
+                    Derivation = previous.Derivation,
+                    PendingTailBytes = previous.PendingTailBytes,
+                    PreservedBytes = previous.PreservedBytes,
+                    UninterpretedRecords = previous.UninterpretedRecords,
+                    UnprocessedBytes = previous.UnprocessedBytes,
+                    PreservedPendingBytes = previous.PreservedPendingBytes,
+                    LastDiagnostic = previous.LastDiagnostic,
+                    PreservedRecords = previous.PreservedRecords,
+                    HasIngestionReport = true
+                };
+            }
+
+            OpenSource = source;
+            SourceMessage = DescribeSourceStatusAnswer(source);
         }
         else
         {
@@ -942,9 +1226,9 @@ internal sealed partial class OwnerConsoleSession
     }
 
     /// <summary>
-    /// Drops the sources, collection and snapshot views plus the owner's
-    /// sources drafts of the epoch that just ended, and moves the private
-    /// epoch so an answer already in flight cannot restore any of them.
+    /// Drops the sources, folder preview, collection and snapshot views plus
+    /// the owner's sources drafts of the epoch that just ended, and moves the
+    /// private epoch so an answer already in flight cannot restore any of them.
     /// </summary>
     private void ClearPrivateSourcesState()
     {
@@ -956,6 +1240,9 @@ internal sealed partial class OwnerConsoleSession
         LastIngest = null;
         RefreshEntries = Array.Empty<OwnerSourceRefreshEntry>();
         RefreshMessage = null;
+        FolderPreview = null;
+        FolderEnrollment = null;
+        FolderMessage = null;
         Collections = Array.Empty<OwnerCollectionMapping>();
         CollectionsMessage = null;
         CollectionCandidates = Array.Empty<OwnerLibraryHit>();
@@ -991,12 +1278,15 @@ internal sealed partial class OwnerConsoleSession
         return _privateEpoch;
     }
 
-    private async Task<T> ExecuteSourcesAsync<T>(Func<CancellationToken, Task<T>> call, Func<string, T> onFailure)
+    private async Task<T> ExecuteSourcesAsync<T>(
+        Func<CancellationToken, Task<T>> call,
+        Func<string, T> onFailure,
+        TimeSpan? timeout = null)
     {
         try
         {
-            using var timeout = new CancellationTokenSource(SourcesActTimeout);
-            return await call(timeout.Token).ConfigureAwait(true);
+            using var timeoutSource = new CancellationTokenSource(timeout ?? SourcesActTimeout);
+            return await call(timeoutSource.Token).ConfigureAwait(true);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {

@@ -809,3 +809,25 @@ the assignment can fail before the sentinel check or any child starts.
 **Root cause:** `OperationCanceledException` propagated outside the reader's existing I/O failure handler, which was the only path clearing the allocated buffer.
 **Fix / workaround:** Read in bounded 64 KiB chunks, check cancellation between chunks and before returning a complete snapshot, and clear the buffer in a dedicated cancellation catch before rethrowing. The coordinator's existing `finally` still clears a snapshot after ownership transfers to ingestion.
 **Watch out for:** Lock, folder opt-out, source pause, or source opt-out can cancel an active exact-file snapshot; every pre-publication cancellation path must clear temporary source bytes and leave the journal checkpoint unchanged.
+
+## [2026-10-31] Paused source replies rendered omitted ingestion as zero
+
+**Symptom:** After pausing a folder source that had 14 saved events, the actual owner detail showed `saved=none`, zero checkpoint/cache fields and `folderId=none`.
+**Root cause:** The state-action reply omitted its separate ingestion report and folder metadata. The client projection defaulted missing journal values to zero, and the UI treated that partial reply as a complete status.
+**Fix / workaround:** Track whether the reply carries an ingestion report; preserve the last full status only for the same source ID and generation, merge current membership/pause/veto fields from the latest source list, and render absent facets as `not reported`.
+**Watch out for:** State-changing source replies can carry enrollment metadata without journal/facet status. Omitted fields are not zero and do not prove that a source lacks folder membership.
+
+## [2026-10-31] OpenFolderDialog address field lacked a UIA value pattern
+
+**Symptom:** The native folder picker exposed its folder edit as a `Pane`/`Edit` control but did not provide a UI Automation `ValuePattern`; setting that field directly did not reliably navigate to a different folder.
+**Root cause:** The Windows common folder dialog exposes its address navigation through native keyboard interaction rather than the UIA value provider used by WPF text boxes.
+**Fix / workaround:** Focus the actual picker, use `Ctrl+L`, type the synthetic absolute path, press Enter, then activate its real **Select Folder** button; verify the returned root by equality without printing it.
+**Watch out for:** A native picker edit with class `Edit` is not necessarily a UIA value control. Confirm the application received the exact chosen folder before previewing or enrolling.
+
+## [2026-10-31] A screen-coordinate screenshot includes the foreground window
+
+**Symptom:** A screenshot cropped to the owner window's screen bounds showed the foreground automation terminal instead of the WPF surface.
+**Root cause:** `ImageGrab.grab(bbox=...)` captures desktop pixels at those coordinates; it does not isolate the window that owns the rectangle.
+**Fix / workaround:** Use Pillow's native `ImageGrab.grab(window=hwnd)` for the identified owner window and inspect only synthetic fixture content.
+**Watch out for:** A target window can be covered even when its bounds are correct. Never treat a bounding-box crop as a process-bounded capture when private desktop windows might overlap.
+

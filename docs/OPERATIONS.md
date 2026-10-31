@@ -436,6 +436,20 @@ advance the checkpoint. Raw-byte preservation remains separate consent with its 
 deadline; folder refresh consent alone does not enable it. The background pass is the same shared
 coordinator and does not scan outside an opted-in folder selection.
 
+### 3.2.6 Owner console folder ingestion surface (S11-T5)
+
+This section describes the unreleased S11-T5 owner console behavior; installed 1.0.0 remains unchanged until a separately authorized S11-T6 release.
+
+In **Sources**, choose one folder, enter the zone and format, explicitly choose recursion and include/exclude globs, then request a bounded metadata-only preview. The list shows included relative paths and exclusion reasons without opening transcript content. Type `ENROLL` exactly to confirm the active preview; any other value changes nothing. The owner may discard a preview and choose another folder.
+
+The optional **Explicitly preserve unsupported raw bytes** checkbox is independent of enrollment confirmation and defaults off. It requires a future UTC retention deadline and stores only exact unsupported source bytes in the encrypted journal when the coordinator later reaches them. Without this separate consent, those bytes remain source-dependent; neither enrollment nor folder refresh enables preservation.
+
+After reading sources, select a current folder member to inspect the service-reported folder ID, member status and folder refresh consent. **Opt selected folder into refresh** is a separate owner act; it covers current and future matching regular files inside the stored root/include/exclude and reparse/final-path boundaries. A member's pause, revoke or explicit source refresh opt-out remains a veto. Folder opt-out and vault lock stop reads without changing saved canonical/history; deletion remains a missing member rather than an automatic revoke or purge. Use **Run refresh pass** to run the shared owner refresh path.
+
+Open a source to read its status. The view reports availability, saved canonical-event/preserved-byte counts, preservation, interpretation, derivation/indexing, the exact diagnostic code and byte offset, pending/unprocessed counts, consent and retention, and metadata-only preserved spans. Enrollment by itself is shown as metadata only—not as a saved event or indexed content. The console does not render transcript or preserved bytes. To export one exact preserved span after unlock, use the existing owner CLI command `source-preserved-record-read` with the source ID and offset and a new output file. Lock, disconnect or ending the owner session clears the folder root draft, preview, source details and in-flight answers; the console remains an owner-pipe client and does not open or write vault files.
+
+State-action answers that omit a complete ingestion report show those facets as `not reported`, never as zero. When the same source ID and generation already has a complete status, the console retains its saved/index/interpretation/preservation details while applying the latest membership, pause and veto state.
+
 ### 3.3 The owner console (S9-T4)
 
 The packaged console is `owner-ui/MetaBrain.OwnerUi.exe`. It opens on the **Owner session**

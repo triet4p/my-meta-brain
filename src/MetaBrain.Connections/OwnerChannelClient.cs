@@ -963,14 +963,25 @@ public sealed record OwnerSourceQuarantine(
     DateTimeOffset RecordedAtUtc);
 
 /// <summary>
-/// One enrolled source of the owner allowlist: its explicit mapping, its
-/// enrollment/quarantine/pause life state, its persisted checkpoint summary,
-/// the exact-locator availability observation (for a status read) and the
-/// actual encrypted cache scope (journal/snapshot ciphertext sizes and the
-/// snapshot revision, resolved from the live manifest). A list answer carries
-/// no availability probe; a status answer carries the probe of the exact
-/// enrolled locator only.
+/// One enrolled source of the owner allowlist: its explicit mapping,
+/// enrollment/quarantine/pause life state, persisted checkpoint summary,
+/// exact-locator availability observation, four ingestion facets and
+/// offset-only diagnostics, raw-preservation descriptors, per-source consent
+/// and folder membership/consent, plus actual encrypted cache scope. A list
+/// answer carries no availability probe; a status answer probes only the exact
+/// enrolled locator. No locator or transcript content is projected.
+/// Whether this answer carries the separate ingestion report is explicit: a list or state act without it does not mean zero saved data.
 /// </summary>
+/// <summary>An exact source diagnostic code and byte offset; never its body.</summary>
+public sealed record OwnerSourceRecordDiagnostic(string Code, long Offset);
+
+/// <summary>Metadata for one exact preserved span, including its own retention deadline.</summary>
+public sealed record OwnerSourcePreservedRecord(
+    long Offset,
+    int Length,
+    string Digest,
+    DateTimeOffset RetainUntilUtc);
+
 public sealed record OwnerSourceEnrollment(
     string SourceId,
     string ZoneId,
@@ -995,7 +1006,60 @@ public sealed record OwnerSourceEnrollment(
     long ConsumedOffset,
     int EventCount,
     int DiagnosticCount,
-    DateTimeOffset? LastIngestAtUtc);
+    DateTimeOffset? LastIngestAtUtc,
+    bool RawPreservationOptIn = false,
+    DateTimeOffset? RawPreservationRetainUntilUtc = null,
+    string Preservation = "reference_only",
+    string Interpretation = "uninterpreted",
+    string Derivation = "not_indexed",
+    long PendingTailBytes = 0,
+    long PreservedBytes = 0,
+    int UninterpretedRecords = 0,
+    long UnprocessedBytes = 0,
+    long PreservedPendingBytes = 0,
+    OwnerSourceRecordDiagnostic? LastDiagnostic = null,
+    OwnerSourcePreservedRecord[]? PreservedRecords = null,
+    bool RefreshOptOut = false,
+    string? FolderId = null,
+    bool? FolderRefreshOptIn = null,
+    bool HasIngestionReport = false);
+
+public sealed record OwnerSourceFolderEntry(string RelativePath, bool Included, string? ExclusionReason);
+
+public sealed record OwnerSourceFolderPreview(
+    string PreviewId,
+    string ZoneId,
+    string Format,
+    int FormatVersion,
+    bool Recursive,
+    string[] IncludePatterns,
+    string[] ExcludePatterns,
+    OwnerSourceFolderEntry[] Entries,
+    DateTimeOffset ExpiresAtUtc,
+    DateTimeOffset? RawPreservationRetainUntilUtc);
+
+public sealed record OwnerSourceFolderEnrollment(
+    string FolderId,
+    string ZoneId,
+    string Format,
+    int FormatVersion,
+    bool Recursive,
+    int MemberCount,
+    string[] MemberSourceIds,
+    DateTimeOffset EnrolledAtUtc,
+    bool AlreadyEnrolled,
+    DateTimeOffset? RawPreservationRetainUntilUtc,
+    bool RefreshOptIn);
+
+public sealed record OwnerSourceFolderPreviewResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerSourceFolderPreview? Preview);
+
+public sealed record OwnerSourceFolderResult(
+    OwnerCommandOutcome Outcome,
+    string? ErrorCode,
+    OwnerSourceFolderEnrollment? Folder);
 
 public sealed record OwnerSourceListResult(
     OwnerCommandOutcome Outcome,
@@ -3021,6 +3085,95 @@ public static partial class OwnerChannelClient
     }
 
     /// <summary>
+    /// Previews one owner-selected folder using the service's bounded,
+    /// metadata-only enumeration. The locator is sent only in this request and
+    /// is deliberately omitted from the projected preview.
+    /// </summary>
+    public static async Task<OwnerSourceFolderPreviewResult> PreviewSourceFolderAsync(
+        string controlPipe,
+        string rootLocator,
+        string zoneId,
+        string format,
+        int formatVersion,
+        bool recursive,
+        string[] includePatterns,
+        string[] excludePatterns,
+        DateTimeOffset? rawPreservationRetainUntilUtc,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(rootLocator);
+        ArgumentNullException.ThrowIfNull(zoneId);
+        ArgumentNullException.ThrowIfNull(format);
+        ArgumentNullException.ThrowIfNull(includePatterns);
+        ArgumentNullException.ThrowIfNull(excludePatterns);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceFolderPreviewOperation,
+                ZoneId: zoneId,
+                SourceFormat: format,
+                SourceFormatVersion: formatVersion,
+                SourceFolderRoot: rootLocator,
+                SourceFolderRecursive: recursive,
+                SourceFolderIncludePatterns: includePatterns,
+                SourceFolderExcludePatterns: excludePatterns,
+                SourceFolderRawPreservationRetainUntilUtc: rawPreservationRetainUntilUtc),
+            "source_folder_previewed",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerSourceFolderPreviewResult(reply.Outcome, reply.ErrorCode, ProjectSourceFolderPreview(reply));
+    }
+
+    /// <summary>
+    /// Confirms the exact service preview with the owner's typed confirmation.
+    /// </summary>
+    public static async Task<OwnerSourceFolderResult> EnrollSourceFolderAsync(
+        string controlPipe,
+        string previewId,
+        string confirmation,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(previewId);
+        ArgumentNullException.ThrowIfNull(confirmation);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.SourceFolderEnrollOperation,
+                SourceFolderPreviewId: previewId,
+                SourceFolderConfirmation: confirmation),
+            new[] { "source_folder_enrolled", "source_folder_already_enrolled" },
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerSourceFolderResult(reply.Outcome, reply.ErrorCode, ProjectSourceFolderEnrollment(reply));
+    }
+
+    /// <summary>
+    /// Records explicit folder refresh consent; it is separate from enrollment
+    /// confirmation and applies only through the service's stored boundaries.
+    /// </summary>
+    public static async Task<OwnerSourceFolderResult> SetFolderRefreshOptInAsync(
+        string controlPipe,
+        string folderId,
+        bool optIn,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(folderId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                optIn
+                    ? ServiceRequestHandler.SourceFolderRefreshOptInOperation
+                    : ServiceRequestHandler.SourceFolderRefreshOptOutOperation,
+                ResourceId: folderId),
+            optIn ? "source_folder_refresh_opted_in" : "source_folder_refresh_opted_out",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerSourceFolderResult(reply.Outcome, reply.ErrorCode, ProjectSourceFolderEnrollment(reply));
+    }
+    /// <summary>
     /// Revokes one enrolled source explicitly. The transcript stays untouched;
     /// only the enrollment ends.
     /// </summary>
@@ -3215,6 +3368,32 @@ public static partial class OwnerChannelClient
         return new OwnerSourceStatusResult(reply.Outcome, reply.ErrorCode, ProjectSourceEnrollment(reply));
     }
 
+    /// <summary>
+    /// Records explicit per-source consent for retaining future unsupported
+    /// bytes in the encrypted journal until the owner's UTC deadline.
+    /// </summary>
+    public static async Task<OwnerSourceStatusResult> SetSourceRawPreservationOptInAsync(
+        string controlPipe,
+        string sourceId,
+        bool optIn,
+        DateTimeOffset? retainUntilUtc,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(sourceId);
+        var reply = await ReadReplyAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                optIn
+                    ? ServiceRequestHandler.SourceRawPreservationOptInOperation
+                    : ServiceRequestHandler.SourceRawPreservationOptOutOperation,
+                ResourceId: sourceId,
+                RawPreservationRetainUntilUtc: optIn ? retainUntilUtc : null),
+            optIn ? "source_raw_preservation_opted_in" : "source_raw_preservation_opted_out",
+            cancellationToken).ConfigureAwait(false);
+
+        return new OwnerSourceStatusResult(reply.Outcome, reply.ErrorCode, ProjectSourceEnrollment(reply));
+    }
     /// <summary>
     /// Runs one explicit idempotent refresh pass over the owner allowlist.
     /// Only opted-in active sources are ingested; every other source names
@@ -5674,6 +5853,39 @@ public static partial class OwnerChannelClient
                     recordedAt.Value);
             }
         }
+        OwnerSourceRecordDiagnostic? lastDiagnostic = null;
+        if (enrollment.TryGetProperty("lastDiagnostic", out var diagnostic) &&
+            diagnostic.ValueKind == JsonValueKind.Object &&
+            Text(diagnostic, "code") is { } diagnosticCode &&
+            diagnostic.TryGetProperty("offset", out var diagnosticOffset) &&
+            diagnosticOffset.ValueKind == JsonValueKind.Number)
+        {
+            lastDiagnostic = new OwnerSourceRecordDiagnostic(diagnosticCode, diagnosticOffset.GetInt64());
+        }
+
+        OwnerSourcePreservedRecord[]? preservedRecords = null;
+        if (enrollment.TryGetProperty("preservedRecords", out var records) &&
+            records.ValueKind == JsonValueKind.Array)
+        {
+            preservedRecords = records.EnumerateArray()
+                .Where(record =>
+                    record.ValueKind == JsonValueKind.Object &&
+                    record.TryGetProperty("offset", out var offset) && offset.ValueKind == JsonValueKind.Number &&
+                    record.TryGetProperty("length", out var length) && length.ValueKind == JsonValueKind.Number &&
+                    Text(record, "digest") is not null &&
+                    Timestamp(record, "retainUntilUtc") is not null)
+                .Select(record => new OwnerSourcePreservedRecord(
+                    Int64(record, "offset"),
+                    Int32(record, "length"),
+                    Text(record, "digest")!,
+                    Timestamp(record, "retainUntilUtc")!.Value))
+                .ToArray();
+        }
+
+        bool? folderRefreshOptIn = enrollment.TryGetProperty("folderRefreshOptIn", out var folderOptIn) &&
+            folderOptIn.ValueKind is JsonValueKind.True or JsonValueKind.False
+                ? folderOptIn.GetBoolean()
+                : null;
 
         return new OwnerSourceEnrollment(
             id.GetString() ?? string.Empty,
@@ -5700,7 +5912,82 @@ public static partial class OwnerChannelClient
             journal is { } journalValue2 ? Int64(journalValue2, "consumedOffset") : 0,
             journal is { } journalValue3 ? Int32(journalValue3, "eventCount") : 0,
             journal is { } journalValue4 ? Int32(journalValue4, "diagnosticCount") : 0,
-            journal is { } journalValue5 ? Timestamp(journalValue5, "lastIngestUtc") : null);
+            journal is { } journalValue5 ? Timestamp(journalValue5, "lastIngestUtc") : null,
+            Flag(enrollment, "rawPreservationOptIn"),
+            Timestamp(enrollment, "rawPreservationRetainUntilUtc"),
+            Text(enrollment, "preservation") ?? "reference_only",
+            Text(enrollment, "interpretation") ?? "uninterpreted",
+            Text(enrollment, "derivation") ?? "not_indexed",
+            Int64(enrollment, "pendingTailBytes"),
+            Int64(enrollment, "preservedBytes"),
+            Int32(enrollment, "uninterpretedRecords"),
+            Int64(enrollment, "unprocessedBytes"),
+            Int64(enrollment, "preservedPendingBytes"),
+            lastDiagnostic,
+            preservedRecords,
+            Flag(enrollment, "refreshOptOut"),
+            Text(enrollment, "folderId"),
+            folderRefreshOptIn,
+            journal is not null);
+    }
+
+    private static OwnerSourceFolderPreview? ProjectSourceFolderPreview(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            reply.Payload.ValueKind != JsonValueKind.Object ||
+            !reply.Payload.TryGetProperty("sourceFolderPreview", out var preview) ||
+            preview.ValueKind != JsonValueKind.Object ||
+            Text(preview, "previewId") is not { } previewId)
+        {
+            return null;
+        }
+
+        var entries = preview.TryGetProperty("entries", out var value) && value.ValueKind == JsonValueKind.Array
+            ? value.EnumerateArray()
+                .Where(entry => entry.ValueKind == JsonValueKind.Object && Text(entry, "relativePath") is not null)
+                .Select(entry => new OwnerSourceFolderEntry(
+                    Text(entry, "relativePath")!,
+                    Flag(entry, "included"),
+                    Text(entry, "exclusionReason")))
+                .ToArray()
+            : Array.Empty<OwnerSourceFolderEntry>();
+
+        return new OwnerSourceFolderPreview(
+            previewId,
+            Text(preview, "zoneId") ?? string.Empty,
+            Text(preview, "format") ?? string.Empty,
+            Int32(preview, "formatVersion"),
+            Flag(preview, "recursive"),
+            Strings(preview, "includePatterns"),
+            Strings(preview, "excludePatterns"),
+            entries,
+            Timestamp(preview, "expiresAtUtc") ?? DateTimeOffset.MinValue,
+            Timestamp(preview, "rawPreservationRetainUntilUtc"));
+    }
+
+    private static OwnerSourceFolderEnrollment? ProjectSourceFolderEnrollment(OwnerReply reply)
+    {
+        if (reply.Outcome != OwnerCommandOutcome.Completed ||
+            reply.Payload.ValueKind != JsonValueKind.Object ||
+            !reply.Payload.TryGetProperty("sourceFolderEnrollment", out var folder) ||
+            folder.ValueKind != JsonValueKind.Object ||
+            Text(folder, "folderId") is not { } folderId)
+        {
+            return null;
+        }
+
+        return new OwnerSourceFolderEnrollment(
+            folderId,
+            Text(folder, "zoneId") ?? string.Empty,
+            Text(folder, "format") ?? string.Empty,
+            Int32(folder, "formatVersion"),
+            Flag(folder, "recursive"),
+            Int32(folder, "memberCount"),
+            Strings(folder, "memberSourceIds"),
+            Timestamp(folder, "enrolledAtUtc") ?? DateTimeOffset.MinValue,
+            Flag(folder, "alreadyEnrolled"),
+            Timestamp(folder, "rawPreservationRetainUntilUtc"),
+            Flag(folder, "refreshOptIn"));
     }
 
     private static OwnerSourceIngestResult ProjectSourceIngest(OwnerReply reply)

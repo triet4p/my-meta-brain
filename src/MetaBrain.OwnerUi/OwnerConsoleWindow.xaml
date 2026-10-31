@@ -51,7 +51,7 @@
                 </DockPanel>
             </Border>
 
-            <ScrollViewer x:Name="ContentScrollViewer" Grid.Column="1" VerticalScrollBarVisibility="Auto" Padding="18,16,18,16">
+            <ScrollViewer x:Name="ContentScrollViewer" Grid.Column="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="18,16,18,16">
                 <Grid>
                     <StackPanel x:Name="OwnerSessionPanel">
                         <TextBlock Text="Owner session" FontSize="19" FontWeight="SemiBold" />
@@ -1172,6 +1172,85 @@
                             </ListBox.ItemTemplate>
                         </ListBox>
                         <TextBlock x:Name="SourceDetailText" TextWrapping="Wrap" Margin="0,8,0,0" FontFamily="Consolas" />
+                        <TextBlock Text="Enroll one owner-selected folder" FontWeight="SemiBold" Margin="0,22,0,0" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
+                                   Text="Choose one root, declare recursion and include/exclude globs, then inspect the bounded metadata-only preview. Type ENROLL only to confirm that exact selection. That confirmation alone does not opt into refresh or raw-byte preservation: folder refresh is a separate owner act, and raw preservation needs its own checked consent plus a future UTC retention deadline. Reparse points and targets outside the selected root are never admitted." />
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Selected root" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="2" x:Name="FolderRootInput" IsReadOnly="True" Margin="0,0,10,6"
+                                     AutomationProperties.AutomationId="FolderRootInput" />
+                            <Button Grid.Row="0" Grid.Column="3" x:Name="FolderBrowseButton" Content="Choose folder…" Padding="14,5" Click="OnFolderBrowseClicked" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Zone" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <ComboBox Grid.Row="1" Grid.Column="1" x:Name="FolderZoneInput" IsEditable="True" Margin="0,0,10,6"
+                                      AutomationProperties.AutomationId="FolderZoneInput" />
+                            <TextBlock Grid.Row="1" Grid.Column="2" Text="Format" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <ComboBox Grid.Row="1" Grid.Column="3" x:Name="FolderFormatInput" IsEditable="True" Margin="0,0,0,6"
+                                      AutomationProperties.AutomationId="FolderFormatInput" />
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Format version" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="2" Grid.Column="1" x:Name="FolderFormatVersionInput" Text="1" Margin="0,0,10,6"
+                                     AutomationProperties.AutomationId="FolderFormatVersionInput" />
+                            <CheckBox Grid.Row="2" Grid.Column="2" Grid.ColumnSpan="2" x:Name="FolderRecursiveCheck"
+                                      Content="Include subfolders" VerticalAlignment="Center" Margin="0,0,0,6"
+                                      AutomationProperties.AutomationId="FolderRecursiveCheck" />
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Include globs (required)" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="3" x:Name="FolderIncludeGlobsInput" Margin="0,0,0,6"
+                                     AutomationProperties.AutomationId="FolderIncludeGlobsInput" />
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="Exclude globs (optional)" Foreground="#FF6B7280" Margin="0,0,0,6" />
+                            <TextBox Grid.Row="4" Grid.Column="1" Grid.ColumnSpan="3" x:Name="FolderExcludeGlobsInput" Margin="0,0,0,6"
+                                     AutomationProperties.AutomationId="FolderExcludeGlobsInput" />
+                            <CheckBox Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="2" x:Name="FolderRawPreservationCheck"
+                                      Content="Explicitly preserve unsupported raw bytes" VerticalAlignment="Center"
+                                      AutomationProperties.AutomationId="FolderRawPreservationCheck" />
+                            <TextBlock Grid.Row="5" Grid.Column="2" Text="Retain until UTC" Foreground="#FF6B7280" VerticalAlignment="Center" />
+                            <TextBox Grid.Row="5" Grid.Column="3" x:Name="FolderRawPreservationUntilInput" Margin="0,2,0,2"
+                                     AutomationProperties.AutomationId="FolderRawPreservationUntilInput" />
+                        </Grid>
+                        <TextBlock Text="Enter a future ISO-8601 UTC instant ending in Z or +00:00 for preservation. Blank and unchecked means no raw bytes are retained." TextWrapping="Wrap" Margin="0,2,0,0" Foreground="#FF6B7280" />
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <Button x:Name="FolderPreviewButton" Content="Preview exact folder selection" Padding="14,7" Click="OnFolderPreviewClicked"
+                                    AutomationProperties.AutomationId="FolderPreviewButton" />
+                            <Button x:Name="FolderDiscardPreviewButton" Content="Discard preview" Padding="14,7" Margin="8,0,0,0" Click="OnFolderDiscardPreviewClicked"
+                                    AutomationProperties.AutomationId="FolderDiscardPreviewButton" />
+                            <TextBlock Text="Type ENROLL" VerticalAlignment="Center" Margin="14,0,6,0" />
+                            <TextBox x:Name="FolderConfirmationInput" Width="110" AutomationProperties.AutomationId="FolderConfirmationInput" />
+                            <Button x:Name="FolderEnrollConfirmButton" Content="Enroll this preview" Padding="14,7" Margin="8,0,0,0" Click="OnFolderEnrollConfirmClicked"
+                                    AutomationProperties.AutomationId="FolderEnrollConfirmButton" />
+                        </StackPanel>
+                        <TextBlock x:Name="FolderMessageText" TextWrapping="Wrap" Margin="0,8,0,0" FontWeight="SemiBold" />
+                        <TextBlock x:Name="FolderPreviewSummaryText" TextWrapping="Wrap" Margin="0,6,0,0" FontFamily="Consolas" />
+                        <ListBox x:Name="FolderPreviewList" Height="120" Margin="0,6,0,0" Background="White" BorderBrush="#FFD5D8DC"
+                                 AutomationProperties.AutomationId="FolderPreviewList"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                        <TextBlock Text="Folder refresh consent (separate from selection confirmation)" FontWeight="SemiBold" Margin="0,18,0,0" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
+                                   Text="The explicit opt-in covers current and future matching regular files inside the stored root and include/exclude rules. Per-source pause, revoke or refresh opt-out remains a veto; lock or folder opt-out stops reads. Deleting a file does not revoke it or erase canonical/history. Select a current folder member below to inspect or change that folder's consent." />
+                        <TextBlock x:Name="FolderStateText" TextWrapping="Wrap" Margin="0,6,0,0" FontFamily="Consolas" />
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <Button x:Name="FolderRefreshOptInButton" Content="Opt selected folder into refresh" Padding="14,7" Click="OnFolderRefreshOptInClicked"
+                                    AutomationProperties.AutomationId="FolderRefreshOptInButton" />
+                            <Button x:Name="FolderRefreshOptOutButton" Content="Opt selected folder out of refresh" Padding="14,7" Margin="8,0,0,0" Click="OnFolderRefreshOptOutClicked"
+                                    AutomationProperties.AutomationId="FolderRefreshOptOutButton" />
+                        </StackPanel>
                         <TextBlock Text="Enroll a source (explicit mapping — nothing enrolls by itself)" FontWeight="SemiBold" Margin="0,22,0,0" />
                         <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
                                    Text="Name the source ID, the permission zone it belongs to, the exact file on this machine, and the format that file speaks. The service reads exactly that file and refuses an unregistered format explicitly instead of guessing. A zone is a permission boundary; a file outside this machine cannot be enrolled." />
@@ -1221,6 +1300,19 @@
                             <Button x:Name="SourceOptOutButton" Content="Opt selected out of refresh" Padding="14,7" Margin="8,0,0,0" Click="OnSourceOptOutClicked" />
                             <Button x:Name="SourceSnapshotsButton" Content="List snapshots of selected" Padding="14,7" Margin="8,0,0,0" Click="OnSourceSnapshotsClicked" />
                         </StackPanel>
+                        <TextBlock Text="Per-source raw-byte consent (separate owner act)" FontWeight="SemiBold" Margin="0,18,0,0" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
+                                   Text="Reference-only bytes remain source-dependent. Opt-in preserves future unsupported complete records exactly in the encrypted journal through the stated retention; it does not interpret or index them. Existing preserved spans remain readable only while their own retention is active." />
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBlock Text="Retain until UTC" VerticalAlignment="Center" Margin="0,0,6,0" />
+                            <TextBox x:Name="SourceRawPreservationUntilInput" Width="220" AutomationProperties.AutomationId="SourceRawPreservationUntilInput" />
+                            <Button x:Name="SourceRawPreservationOptInButton" Content="Opt selected source into preservation" Padding="14,7" Margin="8,0,0,0" Click="OnSourceRawPreservationOptInClicked"
+                                    AutomationProperties.AutomationId="SourceRawPreservationOptInButton" />
+                            <Button x:Name="SourceRawPreservationOptOutButton" Content="Stop future preservation" Padding="14,7" Margin="8,0,0,0" Click="OnSourceRawPreservationOptOutClicked"
+                                    AutomationProperties.AutomationId="SourceRawPreservationOptOutButton" />
+                        </StackPanel>
+                        <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"
+                                   Text="The UI shows only exact span metadata. To read bytes back, use owner source-preserved-record-read with the displayed source ID and offset and choose a new output file; the command never writes transcript bytes to standard output." />
 
                         <TextBlock Text="Hold an uncertain mapping for review (no transcript read, no guessed zone)" FontWeight="SemiBold" Margin="0,22,0,0" />
                         <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#FF6B7280"

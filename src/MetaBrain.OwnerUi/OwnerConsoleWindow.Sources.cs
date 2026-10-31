@@ -7,22 +7,22 @@ using MetaBrain.Connections;
 namespace MetaBrain.OwnerUi;
 
 /// <summary>
-/// Sources and organization view of the owner console (S5-T7): the enrolled
-/// allowlist with life/checkpoint/quarantine/availability/cache scope, the
-/// held mapping review with explicit resolution, pause/resume, refresh
-/// consent and passes, owner collections, and explicit snapshot preservation
-/// with retention. Every act is one request to the running service; no
-/// locator is ever echoed.
+/// Sources and organization view of the owner console (S5-T7/S11-T5): the
+/// enrolled allowlist, owner-selected folder preview/enrollment and consent,
+/// held mapping review, pause/resume, source status, refresh, collections and
+/// explicit snapshot preservation with retention. Every act is one request to
+/// the running service; no locator or transcript is echoed.
 /// </summary>
 public partial class OwnerConsoleWindow : System.Windows.Window
 {
     private readonly List<CollectionMember> _collectionMembers = new();
+    private OwnerSourceFolderPreview? _renderedFolderPreview;
     private OwnerLibraryHit[]? _renderedCollectionCandidates;
 
     /// <summary>
-    /// Empties the sources drafts: the mapping-review form, the collection
-    /// form and the snapshot form. Always the whole draft, so no part of a
-    /// finished epoch can be sent as if it belonged to this one.
+    /// Empties the sources drafts: folder selection/confirmation, mapping
+    /// review, collection and snapshot forms. Always the whole draft, so no
+    /// part of a finished epoch can be sent as if it belonged to this one.
     /// </summary>
     private void SyncSourcesForm()
     {
@@ -46,6 +46,22 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         SnapshotSourceRevisionInput.Text = string.Empty;
         SnapshotReferenceLocatorInput.Text = string.Empty;
         SnapshotRetainInput.Text = string.Empty;
+        FolderRootInput.Clear();
+        FolderZoneInput.Text = string.Empty;
+        FolderFormatInput.Text = string.Empty;
+        FolderFormatVersionInput.Text = "1";
+        FolderRecursiveCheck.IsChecked = false;
+        FolderIncludeGlobsInput.Clear();
+        FolderExcludeGlobsInput.Clear();
+        FolderRawPreservationCheck.IsChecked = false;
+        FolderRawPreservationUntilInput.Clear();
+        FolderConfirmationInput.Clear();
+        FolderPreviewList.ItemsSource = null;
+        FolderPreviewSummaryText.Text = string.Empty;
+        FolderMessageText.Text = string.Empty;
+        FolderStateText.Text = string.Empty;
+        SourceRawPreservationUntilInput.Clear();
+        _renderedFolderPreview = null;
     }
     /// <summary>
     /// The source formats the shipped service understands. Anything else is the
@@ -62,11 +78,14 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         foreach (var format in KnownSourceFormats)
         {
             EnrollFormatInput.Items.Add(format);
+            FolderFormatInput.Items.Add(format);
         }
 
         EnrollFormatVersionInput.Text = "1";
         InitializeSnapshotControls();
+        FolderFormatVersionInput.Text = "1";
         RefreshCollectionMemberList();
+        FolderConfirmationInput.TextChanged += OnFolderConfirmationChanged;
     }
     private void RefreshEnrollPickerOptions()
     {
@@ -78,6 +97,14 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         }
 
         EnrollZoneInput.Text = zoneText;
+        var folderZoneText = FolderZoneInput.Text;
+        FolderZoneInput.Items.Clear();
+        foreach (var zone in _session.KnownZones())
+        {
+            FolderZoneInput.Items.Add(zone);
+        }
+
+        FolderZoneInput.Text = folderZoneText;
         RefreshSnapshotPickerOptions();
     }
 
@@ -95,6 +122,155 @@ public partial class OwnerConsoleWindow : System.Windows.Window
         }
 
         Render();
+    }
+
+    private void OnFolderBrowseClicked(object sender, RoutedEventArgs e)
+    {
+        if (_filePicker.PickFolder("Choose the one folder to preview for source enrollment") is { } folder &&
+            folder.Length > 0)
+        {
+            FolderRootInput.Text = folder;
+        }
+
+        Render();
+    }
+
+    private async void OnFolderPreviewClicked(object sender, RoutedEventArgs e)
+    {
+        var root = FolderRootInput.Text.Trim();
+        var zone = FolderZoneInput.Text.Trim();
+        var format = FolderFormatInput.Text.Trim();
+        if (root.Length == 0 || !Path.IsPathRooted(root) || zone.Length == 0 || format.Length == 0)
+        {
+            _session.ReportFolderFormProblem(
+                "Preview needs one selected absolute folder, an explicit zone and a declared format. Nothing was enrolled or read.");
+            return;
+        }
+
+        if (!int.TryParse(FolderFormatVersionInput.Text.Trim(), NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out var formatVersion) || formatVersion < 1)
+        {
+            _session.ReportFolderFormProblem("Folder preview needs a positive format version. Nothing was enrolled or read.");
+            return;
+        }
+
+        if (!TryParseFolderPatterns(FolderIncludeGlobsInput.Text, required: true, out var includes) ||
+            !TryParseFolderPatterns(FolderExcludeGlobsInput.Text, required: false, out var excludes))
+        {
+            _session.ReportFolderFormProblem(
+                "Include globs are required and include/exclude lists must be comma-separated non-empty relative patterns. Nothing was enrolled or read.");
+            return;
+        }
+
+        DateTimeOffset? rawPreservationRetainUntilUtc = null;
+        if (FolderRawPreservationCheck.IsChecked == true)
+        {
+            if (!TryParseExplicitUtc(FolderRawPreservationUntilInput.Text.Trim(), out var retainUntil))
+            {
+                _session.ReportFolderFormProblem(
+                    "Raw-byte preservation consent needs a future ISO-8601 UTC deadline ending in Z or +00:00. Nothing was enrolled or preserved.");
+                return;
+            }
+
+            rawPreservationRetainUntilUtc = retainUntil;
+        }
+
+        var previewTask = _session.PreviewSourceFolderAsync(
+            root, zone, format, formatVersion, FolderRecursiveCheck.IsChecked == true,
+            includes, excludes, rawPreservationRetainUntilUtc);
+        FolderRootInput.Clear();
+        FolderConfirmationInput.Clear();
+        await previewTask;
+    }
+
+    private void OnFolderDiscardPreviewClicked(object sender, RoutedEventArgs e)
+    {
+        FolderConfirmationInput.Clear();
+        _session.DiscardSourceFolderPreview();
+    }
+
+    private async void OnFolderEnrollConfirmClicked(object sender, RoutedEventArgs e)
+    {
+        var confirmation = FolderConfirmationInput.Text;
+        if (!string.Equals(confirmation, "ENROLL", StringComparison.Ordinal))
+        {
+            _session.ReportFolderFormProblem(
+                "Type ENROLL exactly to confirm the active folder preview. Nothing changed.");
+            return;
+        }
+
+        await _session.EnrollSourceFolderAsync(confirmation);
+        FolderConfirmationInput.Clear();
+        if (_session.FolderPreview is null && _session.FolderEnrollment is not null)
+        {
+            FolderRawPreservationCheck.IsChecked = false;
+            FolderRawPreservationUntilInput.Clear();
+        }
+    }
+
+    private void OnFolderConfirmationChanged(object sender, TextChangedEventArgs e)
+    {
+        FolderEnrollConfirmButton.IsEnabled =
+            _session.ReportedVaultState == OwnerVaultState.Unlocked &&
+            !_session.SourcesActInFlight &&
+            _session.FolderPreview is not null &&
+            string.Equals(FolderConfirmationInput.Text, "ENROLL", StringComparison.Ordinal);
+    }
+
+    private async void OnFolderRefreshOptInClicked(object sender, RoutedEventArgs e)
+    {
+        if (SourcesList.SelectedItem is SourceRow row)
+        {
+            await _session.SetFolderRefreshOptInAsync(row.Source, optIn: true);
+        }
+    }
+
+    private async void OnFolderRefreshOptOutClicked(object sender, RoutedEventArgs e)
+    {
+        if (SourcesList.SelectedItem is SourceRow row)
+        {
+            await _session.SetFolderRefreshOptInAsync(row.Source, optIn: false);
+        }
+    }
+
+    private async void OnSourceRawPreservationOptInClicked(object sender, RoutedEventArgs e)
+    {
+        if (SourcesList.SelectedItem is not SourceRow row)
+        {
+            return;
+        }
+
+        if (!TryParseExplicitUtc(SourceRawPreservationUntilInput.Text.Trim(), out var retainUntil))
+        {
+            _session.ReportSourcesFormProblem(
+                "Raw-byte preservation consent needs a future ISO-8601 UTC deadline ending in Z or +00:00. Nothing changed.");
+            return;
+        }
+
+        await _session.SetSourceRawPreservationOptInAsync(
+            row.Source, optIn: true, retainUntilUtc: retainUntil);
+        SourceRawPreservationUntilInput.Clear();
+    }
+
+    private async void OnSourceRawPreservationOptOutClicked(object sender, RoutedEventArgs e)
+    {
+        if (SourcesList.SelectedItem is SourceRow row)
+        {
+            await _session.SetSourceRawPreservationOptInAsync(row.Source, optIn: false, retainUntilUtc: null);
+            SourceRawPreservationUntilInput.Clear();
+        }
+    }
+
+    private static bool TryParseFolderPatterns(string value, bool required, out string[] patterns)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            patterns = Array.Empty<string>();
+            return !required;
+        }
+
+        patterns = value.Split(',', StringSplitOptions.TrimEntries);
+        return patterns.Length > 0 && patterns.All(pattern => !string.IsNullOrWhiteSpace(pattern));
     }
 
     private async void OnEnrollClicked(object sender, RoutedEventArgs e)
@@ -693,11 +869,10 @@ public partial class OwnerConsoleWindow : System.Windows.Window
     }
 
     /// <summary>
-    /// Renders the sources console from the service's answers only: the
-    /// allowlist with life/checkpoint/quarantine/availability/cache scope,
-    /// the held mapping review, the refresh entries, the collections and the
-    /// snapshots. When the vault is not unlocked no sources content is shown
-    /// at all, and no locator is ever shown: the wire carries none.
+    /// Renders the sources console from the service's answers only: allowlist,
+    /// source status, folder consent/preview, refresh entries, collections and
+    /// snapshots. When the vault is not unlocked no sources content is shown;
+    /// no locator, transcript or preserved bytes are rendered.
     /// </summary>
     private void RenderSources(bool attached)
     {
@@ -749,8 +924,58 @@ public partial class OwnerConsoleWindow : System.Windows.Window
                 (string.IsNullOrEmpty(ingest.DiagnosticCode) ? string.Empty : "  diagnostic=" + ingest.DiagnosticCode);
 
         var selectedSource = SourcesList.SelectedItem as SourceRow;
+        var folderPreview = _session.FolderPreview;
+        if (!ReferenceEquals(_renderedFolderPreview, folderPreview))
+        {
+            _renderedFolderPreview = folderPreview;
+            FolderPreviewList.ItemsSource = folderPreview?.Entries
+                .Select(entry => new FolderPreviewRow(entry))
+                .ToArray();
+        }
+
+        FolderPreviewSummaryText.Text = folderPreview is null
+            ? "No active folder preview. Selection confirmation alone never opts into refresh or preservation."
+            : "zone=" + folderPreview.ZoneId + "  format=" + folderPreview.Format + " v" +
+                folderPreview.FormatVersion.ToString(CultureInfo.InvariantCulture) +
+                "  recursive=" + (folderPreview.Recursive ? "true" : "false") +
+                "\ninclude=" + (folderPreview.IncludePatterns.Length == 0 ? "(none)" : string.Join(", ", folderPreview.IncludePatterns)) +
+                "  exclude=" + (folderPreview.ExcludePatterns.Length == 0 ? "(none)" : string.Join(", ", folderPreview.ExcludePatterns)) +
+                "\nexpires=" + folderPreview.ExpiresAtUtc.ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture) +
+                "  rawPreservationRetainUntilUtc=" +
+                (folderPreview.RawPreservationRetainUntilUtc?.ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture) ?? "none");
+        RenderOutcome(FolderMessageText, _session.FolderMessage ?? (unlocked
+            ? "No folder preview or consent act has run in this session."
+            : "No private folder preview or consent act is offered while the service does not report the vault unlocked."));
+        FolderStateText.Text = DescribeFolderState(selectedSource?.Source);
+
         var selectedHeld = selectedSource is not null && IsMappingUnknownRow(selectedSource);
         RefreshEnrollPickerOptions();
+        var folderDraftEnabled = unlocked && !inFlight && folderPreview is null;
+        FolderRootInput.IsEnabled = folderDraftEnabled;
+        FolderBrowseButton.IsEnabled = folderDraftEnabled;
+        FolderZoneInput.IsEnabled = folderDraftEnabled;
+        FolderFormatInput.IsEnabled = folderDraftEnabled;
+        FolderFormatVersionInput.IsEnabled = folderDraftEnabled;
+        FolderRecursiveCheck.IsEnabled = folderDraftEnabled;
+        FolderIncludeGlobsInput.IsEnabled = folderDraftEnabled;
+        FolderExcludeGlobsInput.IsEnabled = folderDraftEnabled;
+        FolderRawPreservationCheck.IsEnabled = folderDraftEnabled;
+        FolderRawPreservationUntilInput.IsEnabled = folderDraftEnabled;
+        FolderPreviewButton.IsEnabled = folderDraftEnabled;
+        FolderDiscardPreviewButton.IsEnabled = unlocked && !inFlight && folderPreview is not null;
+        FolderConfirmationInput.IsEnabled = unlocked && !inFlight && folderPreview is not null;
+        FolderEnrollConfirmButton.IsEnabled = unlocked && !inFlight && folderPreview is not null &&
+            string.Equals(FolderConfirmationInput.Text, "ENROLL", StringComparison.Ordinal);
+        FolderPreviewList.IsEnabled = unlocked && !inFlight;
+        FolderRefreshOptInButton.IsEnabled = unlocked && !inFlight && selectedSource is not null &&
+            selectedSource.Source.FolderId is not null && selectedSource.Source.FolderRefreshOptIn != true;
+        FolderRefreshOptOutButton.IsEnabled = unlocked && !inFlight && selectedSource is not null &&
+            selectedSource.Source.FolderId is not null && selectedSource.Source.FolderRefreshOptIn == true;
+        SourceRawPreservationUntilInput.IsEnabled = unlocked && !inFlight && selectedSource is not null && !selectedHeld;
+        SourceRawPreservationOptInButton.IsEnabled = unlocked && !inFlight && selectedSource is not null &&
+            !selectedHeld && !selectedSource.Source.RawPreservationOptIn;
+        SourceRawPreservationOptOutButton.IsEnabled = unlocked && !inFlight && selectedSource is not null &&
+            !selectedHeld && selectedSource.Source.RawPreservationOptIn;
         SourcesRefreshButton.IsEnabled = unlocked && !inFlight;
         SourceOpenButton.IsEnabled = unlocked && !inFlight && selectedSource is not null;
         SourcesRefreshPassButton.IsEnabled = unlocked && !inFlight;
@@ -886,24 +1111,87 @@ public partial class OwnerConsoleWindow : System.Windows.Window
                 "\n(mapping unresolved — its transcript was never opened and no zone was defaulted; enroll it once known or withdraw the submission)";
         }
 
+        var hasIngestionReport = source.HasIngestionReport;
+        var saved = !hasIngestionReport
+            ? "not reported"
+            : source.EventCount == 0 && source.PreservedBytes == 0
+                ? "none (enrollment is metadata only)"
+                : "canonical_events=" + source.EventCount.ToString(CultureInfo.InvariantCulture) +
+                    " preserved_bytes=" + source.PreservedBytes.ToString(CultureInfo.InvariantCulture);
+        var diagnostic = source.LastDiagnostic is { } lastDiagnostic
+            ? lastDiagnostic.Code + "@" + lastDiagnostic.Offset.ToString(CultureInfo.InvariantCulture)
+            : hasIngestionReport ? "none" : "not reported";
+        var preserved = source.PreservedRecords is { Length: > 0 } records
+            ? string.Join("\n", records.Select(record =>
+                "offset=" + record.Offset.ToString(CultureInfo.InvariantCulture) +
+                " length=" + record.Length.ToString(CultureInfo.InvariantCulture) +
+                " digest=" + record.Digest +
+                " retainUntilUtc=" + record.RetainUntilUtc.ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture) +
+                "  read back one span with owner source-preserved-record-read --source-id " + source.SourceId +
+                " --offset " + record.Offset.ToString(CultureInfo.InvariantCulture) + " --output-file <new-file>"))
+            : hasIngestionReport ? "(none)" : "not reported";
+        var remediation = hasIngestionReport &&
+            source.LastDiagnostic is { } detailDiagnostic && source.PreservedBytes == 0
+            ? "\nremediation: code=" + detailDiagnostic.Code + " at byte offset " +
+                detailDiagnostic.Offset.ToString(CultureInfo.InvariantCulture) +
+                "; exact bytes remain source-dependent. Explicitly opt into raw preservation, then ingest again, or keep the barrier pending for an adapter."
+            : string.Empty;
+
         return "source=" + source.SourceId + "  zone=" + source.ZoneId +
             "  format=" + source.Format + " v" + source.FormatVersion.ToString(CultureInfo.InvariantCulture) +
             "  generation=" + source.Generation.ToString(CultureInfo.InvariantCulture) + "  life=" + source.Life +
+            "\nsourceReferenceRevision=" + (source.SourceReferenceRevision?.ToString(CultureInfo.InvariantCulture) ?? "not reported") +
             "\navailability=" + source.Availability +
             (source.AvailabilityObservedAtUtc is null ? string.Empty : "  observed=" + source.AvailabilityObservedAtUtc.Value.ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture)) +
-            "\ncheckpoint=" + source.ConsumedOffset.ToString(CultureInfo.InvariantCulture) +
-            "  events=" + source.EventCount.ToString(CultureInfo.InvariantCulture) +
-            "  diagnostics=" + source.DiagnosticCount.ToString(CultureInfo.InvariantCulture) +
-            "  journalRev=" + source.JournalRevision.ToString(CultureInfo.InvariantCulture) +
+            "\nsaved=" + saved +
+            "  indexed=" + (hasIngestionReport ? source.Derivation : "not reported") +
+            "  interpreted=" + (hasIngestionReport ? source.Interpretation : "not reported") +
+            "  error=" + diagnostic +
+            "\npreservation=" + (hasIngestionReport ? source.Preservation : "not reported") +
+            "  rawPreservationOptIn=" + (source.RawPreservationOptIn ? "true" : "false") +
+            "  retainUntilUtc=" + (source.RawPreservationRetainUntilUtc?.ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture) ?? "none") +
+            "\ncheckpoint=" + (hasIngestionReport ? source.ConsumedOffset.ToString(CultureInfo.InvariantCulture) : "not reported") +
+            "  pendingTailBytes=" + (hasIngestionReport ? source.PendingTailBytes.ToString(CultureInfo.InvariantCulture) : "not reported") +
+            "  unprocessedBytes=" + (hasIngestionReport ? source.UnprocessedBytes.ToString(CultureInfo.InvariantCulture) : "not reported") +
+            "  uninterpretedRecords=" + (hasIngestionReport ? source.UninterpretedRecords.ToString(CultureInfo.InvariantCulture) : "not reported") +
+            "  preservedPendingBytes=" + (hasIngestionReport ? source.PreservedPendingBytes.ToString(CultureInfo.InvariantCulture) : "not reported") +
+            "\nevents=" + (hasIngestionReport ? source.EventCount.ToString(CultureInfo.InvariantCulture) : "not reported") +
+            "  diagnostics=" + (hasIngestionReport ? source.DiagnosticCount.ToString(CultureInfo.InvariantCulture) : "not reported") +
+            "  journalRev=" + (hasIngestionReport ? source.JournalRevision.ToString(CultureInfo.InvariantCulture) : "not reported") +
             "\nrefreshOptIn=" + (source.RefreshOptIn ? "true" : "false") +
+            "  refreshOptOutVeto=" + (source.RefreshOptOut ? "true" : "false") +
+            "  folderId=" + (source.FolderId ?? "none") +
+            "  folderRefreshOptIn=" + (source.FolderRefreshOptIn?.ToString().ToLowerInvariant() ?? "not_reported") +
             (source.PausedAtUtc is null ? string.Empty : "  paused=" + source.PausedAtUtc.Value.ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture)) +
-            "\ncache journalBytes=" + source.JournalCiphertextBytes.ToString(CultureInfo.InvariantCulture) +
-            "  snapshotBytes=" + source.SnapshotCiphertextBytes.ToString(CultureInfo.InvariantCulture) +
-            "  snapshotRev=" + source.SnapshotRevision.ToString(CultureInfo.InvariantCulture) +
+            "\ncache journalBytes=" + (hasIngestionReport ? source.JournalCiphertextBytes.ToString(CultureInfo.InvariantCulture) : "not reported") +
+            "  snapshotBytes=" + (hasIngestionReport ? source.SnapshotCiphertextBytes.ToString(CultureInfo.InvariantCulture) : "not reported") +
+            "  snapshotRev=" + (hasIngestionReport ? source.SnapshotRevision.ToString(CultureInfo.InvariantCulture) : "not reported") +
+            "\npreserved spans (metadata only):\n" + preserved +
+            remediation +
             (source.Quarantine is null ? "\n(no quarantine)" :
                 "\nquarantine=" + source.Quarantine.Reason + "  detail=" + source.Quarantine.Detail +
                 "  recorded=" + source.Quarantine.RecordedAtUtc.ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture));
     }
+
+    private string DescribeFolderState(OwnerSourceEnrollment? source)
+    {
+        if (source?.FolderId is not { } folderId)
+        {
+            return "No folder member is selected. Folder consent remains separate from per-source refresh consent.";
+        }
+
+        var members = _session.Sources
+            .Where(member => string.Equals(member.FolderId, folderId, StringComparison.Ordinal))
+            .ToArray();
+        return "folderId=" + folderId +
+            "  refreshOptIn=" + (source.FolderRefreshOptIn?.ToString().ToLowerInvariant() ?? "not_reported") +
+            "  listedMembers=" + members.Length.ToString(CultureInfo.InvariantCulture) +
+            "  sourceOptOutVetoes=" + members.Count(member => member.RefreshOptOut).ToString(CultureInfo.InvariantCulture) +
+            "  paused=" + members.Count(member => string.Equals(member.Life, "paused", StringComparison.Ordinal)).ToString(CultureInfo.InvariantCulture) +
+            "  missing=" + members.Count(member => string.Equals(member.Availability, "missing", StringComparison.OrdinalIgnoreCase)).ToString(CultureInfo.InvariantCulture) +
+            "\nThe folder refresh setting is service-owned; the member's source pause/revoke/opt-out remains an independent veto.";
+    }
+
 
     /// <summary>One source exactly as the service listed it, rendered as one line. Never a locator.</summary>
     private sealed record SourceRow(OwnerSourceEnrollment Source)
@@ -912,7 +1200,22 @@ public partial class OwnerConsoleWindow : System.Windows.Window
             (Source.Quarantine is not null && string.Equals(Source.Quarantine.Reason, "mapping_unknown", StringComparison.Ordinal)
                 ? "held " + Source.SourceId + "  mapping_unknown/" + Source.Quarantine.Detail
                 : "source " + Source.SourceId + "  zone=" + Source.ZoneId + "  gen=" + Source.Generation.ToString(CultureInfo.InvariantCulture) +
-                    "  life=" + Source.Life + "  availability=" + Source.Availability);
+                    "  life=" + Source.Life + "  availability=" + Source.Availability +
+                    (Source.FolderId is null
+                        ? string.Empty
+                        : "  folder=" + Source.FolderId + "  folderRefreshOptIn=" +
+                            (Source.FolderRefreshOptIn?.ToString().ToLowerInvariant() ?? "not_reported")));
+    }
+
+    /// <summary>One bounded metadata-only folder entry, without a root locator or transcript.</summary>
+    private sealed record FolderPreviewRow(OwnerSourceFolderEntry Entry)
+    {
+        public override string ToString() =>
+            (Entry.Included ? "INCLUDED " : "EXCLUDED ") +
+            Entry.RelativePath +
+            (Entry.Included || string.IsNullOrWhiteSpace(Entry.ExclusionReason)
+                ? string.Empty
+                : "  reason=" + Entry.ExclusionReason);
     }
 
     /// <summary>One refresh entry exactly as the service reported it, rendered as one line.</summary>
