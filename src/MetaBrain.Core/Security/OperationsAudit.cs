@@ -698,8 +698,14 @@ public static class OwnerGuidance
                 "The plaintext export could not be written, and everything this act created was removed, so the destination has no partial copy from it. The vault is unchanged. Check the destination path and free space, then preview and export again.",
             ["workspace_export_incomplete"] =
                 "The plaintext export could not be written and this act could not remove everything it created, so the destination may hold a partial plaintext copy. Inspect that destination before retrying; the vault itself is unchanged.",
+            ["workspace_purge_confirmation"] =
+                "A workspace purge needs the exact PURGE confirmation and the preview token, so nothing was removed. Run workspace-purge-preview, read the disclosed tombstone group and backup limit, then repeat with its token and the typed confirmation.",
+            ["unsupported_protocol"] =
+                "The service on this endpoint speaks a different control protocol revision, so it refused the request before any private operation. Nothing was unlocked, read or written. Stop that host and use the build that matches it, or install this release beside it with its own install root, data root and endpoints; do not point two builds at one data root.",
             ["purge_target_moved"] =
                 "The purge target moved after the preview, so nothing was deleted. Preview the purge again against the current revision.",
+            ["restore_requires_unlock"] =
+                "This backup belongs to the live vault and the live vault is locked, so the restore could not re-apply the encrypted purge ledger and refused before writing anything. Nothing was restored. Unlock the live vault with its passphrase or recovery key, then restore again; a backup of a different vault is not affected.",
             ["internal_failure"] =
                 "The service hit an unexpected internal failure and served no private answer. Read the Operations diagnostics for the exact code, then retry.",
         };

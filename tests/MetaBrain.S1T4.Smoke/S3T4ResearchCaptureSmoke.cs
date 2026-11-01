@@ -222,7 +222,7 @@ internal static partial class OwnerServiceSmoke
             // The agent channel cannot reach capture or read at all.
             var agentCapture = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "research.capture",
                 resourceId = "s3t4-note-agent",
                 zoneId,
@@ -232,7 +232,7 @@ internal static partial class OwnerServiceSmoke
                 "The agent channel reached a research capture operation.");
             var agentRead = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "research.read",
                 resourceId = noteId
             }).ConfigureAwait(false);
@@ -343,7 +343,7 @@ internal static partial class OwnerServiceSmoke
             // saving a note can never depend on (or trigger) a provider call.
             var providerAttempt = await S3T4InvokeOwnerRawAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "research.capture",
                 resourceId = "s3t4-note-provider",
                 zoneId,

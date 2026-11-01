@@ -211,7 +211,7 @@ internal static partial class OwnerServiceSmoke
             knownBearers.Add(tokenB);
             var malformed = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.session.redeem",
                 token = "malformed-token"
             }).ConfigureAwait(false);
@@ -221,7 +221,7 @@ internal static partial class OwnerServiceSmoke
             knownBearers.Add(unknownToken);
             var unknown = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.session.redeem",
                 token = unknownToken
             }).ConfigureAwait(false);
@@ -230,7 +230,7 @@ internal static partial class OwnerServiceSmoke
 
             var ownerPipeAgentOperation = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.session.redeem",
                 token = tokenA
             }).ConfigureAwait(false);
@@ -238,7 +238,7 @@ internal static partial class OwnerServiceSmoke
                 "The owner control pipe accepted an agent-channel token redemption operation.");
             var ownerPipeInspect = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.session.inspect",
                 sessionToken = tokenA
             }).ConfigureAwait(false);
@@ -262,7 +262,7 @@ internal static partial class OwnerServiceSmoke
             {
                 var denied = await InvokeAgentRequestAsync(fixture.AgentPipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = ownerOnlyOperation,
                     isOwner = true,
                     localSid = "S-1-5-21-100-200-300-4000",
@@ -283,7 +283,7 @@ internal static partial class OwnerServiceSmoke
 
             var spoofedRedeem = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.session.redeem",
                 token = tokenA,
                 sessionToken = tokenA,
@@ -309,7 +309,7 @@ internal static partial class OwnerServiceSmoke
                 "Denied agent-channel or spoofed-body requests changed the owner-approved collection.");
             var replayPreview = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.scope.preview",
                 resourceIds = new[] { SmokeFixture.ResourceB },
                 operations = new[] { "resource.read" },
@@ -321,7 +321,7 @@ internal static partial class OwnerServiceSmoke
                 ?? throw new InvalidOperationException("The owner preview omitted its server-generated ID.");
             var firstPreviewIssue = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.scope.issue",
                 previewId = approvedPreviewId
             }).ConfigureAwait(false);
@@ -341,7 +341,7 @@ internal static partial class OwnerServiceSmoke
 
             var repeatedPreviewIssue = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.scope.issue",
                 previewId = approvedPreviewId
             }).ConfigureAwait(false);
@@ -385,13 +385,13 @@ internal static partial class OwnerServiceSmoke
             var raceReplies = await Task.WhenAll(
                 InvokeAgentRequestAsync(fixture.AgentPipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = "agent.session.redeem",
                     token = tokenB
                 }),
                 InvokeAgentRequestAsync(fixture.AgentPipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = "agent.session.redeem",
                     token = tokenB
                 })).ConfigureAwait(false);
@@ -406,7 +406,7 @@ internal static partial class OwnerServiceSmoke
             knownBearers.Add(raceWinnerSessionBearer);
             var winnerInspect = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.session.inspect",
                 sessionToken = raceWinnerSessionBearer
             }).ConfigureAwait(false);
@@ -418,13 +418,13 @@ internal static partial class OwnerServiceSmoke
 
             var consumedTokenAReplay = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.session.redeem",
                 token = tokenA
             }).ConfigureAwait(false);
             var consumedTokenBReplay = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.session.redeem",
                 token = tokenB
             }).ConfigureAwait(false);
@@ -436,7 +436,7 @@ internal static partial class OwnerServiceSmoke
                 "--resource-ids", SmokeFixture.ResourceA, "--operations", "resource.read").ConfigureAwait(false);
             var expiringSessionReply = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.session.redeem",
                 token = Encoding.ASCII.GetString(expiringSessionGrant.Token),
                 isOwner = true,
@@ -470,14 +470,14 @@ internal static partial class OwnerServiceSmoke
 
             var expiredReply = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.session.redeem",
                 token = Encoding.ASCII.GetString(expiredGrant.Token)
             }).ConfigureAwait(false);
             Require(ReplyCode(expiredReply) == "token_expired", "An expired one-use grant was not rejected by the agent redemption boundary.");
             var expiredSession = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.session.inspect",
                 sessionToken = expiringSessionBearer
             }).ConfigureAwait(false);
@@ -492,7 +492,7 @@ internal static partial class OwnerServiceSmoke
             Require(changedCollection.ExitCode == 0, "An owner collection policy change did not complete.");
             var revokedTokenReply = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.session.redeem",
                 token = Encoding.ASCII.GetString(revokedGrant.Token)
             }).ConfigureAwait(false);
@@ -503,7 +503,7 @@ internal static partial class OwnerServiceSmoke
                 "An active session was not invalidated by a persisted owner policy-generation change.");
             var revokedRaceSession = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.session.inspect",
                 sessionToken = raceWinnerSessionBearer
             }).ConfigureAwait(false);
@@ -516,7 +516,7 @@ internal static partial class OwnerServiceSmoke
             Require(lockResult.ExitCode == 0, "The owner could not explicitly lock the vault after revocation.");
             var lockedRedeem = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.session.redeem",
                 token = Encoding.ASCII.GetString(pendingLockGrant.Token)
             }).ConfigureAwait(false);
@@ -526,7 +526,7 @@ internal static partial class OwnerServiceSmoke
             Require(unlockAfterLock.ExitCode == 0, "The owner could not unlock after the explicit lock.");
             var supersededByLock = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.session.redeem",
                 token = Encoding.ASCII.GetString(pendingLockGrant.Token)
             }).ConfigureAwait(false);
@@ -543,7 +543,7 @@ internal static partial class OwnerServiceSmoke
             var beforeAbandonedRedeem = await File.ReadAllBytesAsync(schemaTwoStatePath).ConfigureAwait(false);
             var abandonedRequest = JsonSerializer.Serialize(new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.session.redeem",
                 token = Encoding.ASCII.GetString(interruptedGrant.Token)
             });
@@ -561,13 +561,13 @@ internal static partial class OwnerServiceSmoke
             Require(restartUnlock.ExitCode == 0, "The owner could not unlock after service-process restart.");
             var abandonedReplay = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.session.redeem",
                 token = Encoding.ASCII.GetString(interruptedGrant.Token)
             }).ConfigureAwait(false);
             var pendingAfterRestart = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.session.redeem",
                 token = Encoding.ASCII.GetString(afterRestartGrant.Token)
             }).ConfigureAwait(false);

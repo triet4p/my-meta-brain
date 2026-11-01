@@ -99,14 +99,14 @@ internal static partial class OwnerServiceSmoke
             async Task<JsonElement> DiscoveryListAsync(string pipe) =>
                 await InvokeAgentRequestAsync(pipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = "catalog.list",
                 }).ConfigureAwait(false);
 
             async Task<JsonElement> DiscoveryQueryAsync(string pipe, string query) =>
                 await InvokeAgentRequestAsync(pipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = "catalog.query",
                     query,
                 }).ConfigureAwait(false);
@@ -143,14 +143,14 @@ internal static partial class OwnerServiceSmoke
             // Owner spoof through discovery extras is denied with generic no-match.
             var spoofedList = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "catalog.list",
                 catalogId = "owner-spoof-field",
             }).ConfigureAwait(false);
             Require(ReplyCode(spoofedList) == "no_match", "Owner/identity body fields altered catalog discovery.");
             var spoofedQuery = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "catalog.query",
                 query = "Approved",
                 sessionToken = "mbs1_spoofed-bearer-value-for-tests-only-0000",
@@ -160,7 +160,7 @@ internal static partial class OwnerServiceSmoke
             // Unauthorized publication through the agent pipe is denied at the channel boundary.
             var agentPublish = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.catalog.publish",
                 catalogId = "agent-spoofed-entry",
                 label = CatalogLabelA,
@@ -208,7 +208,7 @@ internal static partial class OwnerServiceSmoke
             Require(ReplyCode(guessedPrivate) == "no_match", "A guessed private resource ID matched public discovery.");
             var bodyProbe = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.resource.read",
                 accessOperation = "resource.read",
                 resourceId = CatalogA,
@@ -420,7 +420,7 @@ internal static partial class OwnerServiceSmoke
             await File.WriteAllTextAsync(projectionPath, "{invalid json", Encoding.UTF8).ConfigureAwait(false);
             var malformedDiscovery = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "catalog.list",
             }).ConfigureAwait(false);
             Require(ReplyCode(malformedDiscovery) == "no_match",
@@ -428,7 +428,7 @@ internal static partial class OwnerServiceSmoke
             await File.WriteAllBytesAsync(projectionPath, originalProjection).ConfigureAwait(false);
             var restoredDiscovery = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "catalog.list",
             }).ConfigureAwait(false);
             Require(ReplyCode(restoredDiscovery) == "catalog", "Restoring the projection did not restore discovery.");

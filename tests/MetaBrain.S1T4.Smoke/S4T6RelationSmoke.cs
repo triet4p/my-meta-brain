@@ -234,7 +234,7 @@ internal static partial class OwnerServiceSmoke
             var relationDraftPath = await WriteS4T6DraftAsync(fixture, relationDraft).ConfigureAwait(false);
             var createDecision = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.access.authorize",
                 sessionToken = ReadSessionBearer(fullSession.SessionFile),
                 accessOperation = "link.create",
@@ -248,7 +248,7 @@ internal static partial class OwnerServiceSmoke
                 "The exact link.create source/destination pair was not authorized before relation creation.");
             var subjectReadDecision = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.access.authorize",
                 sessionToken = ReadSessionBearer(fullSession.SessionFile),
                 accessOperation = "memory.read",
@@ -317,7 +317,7 @@ internal static partial class OwnerServiceSmoke
             {
                 apiCreated = await InvokeAgentRequestAsync(fixture.AgentPipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = "agent.relation.create",
                     sessionToken = ReadSessionBearer(fullSession.SessionFile),
                     accessOperation = "link.create",
@@ -344,7 +344,7 @@ internal static partial class OwnerServiceSmoke
 
             var apiResolve = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.relation.resolve",
                 sessionToken = ReadSessionBearer(fullSession.SessionFile),
                 accessOperation = "relation.list",
@@ -355,7 +355,7 @@ internal static partial class OwnerServiceSmoke
                 "The direct agent API did not resolve the authorized unique endpoint.");
             var apiList = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.relation.list",
                 sessionToken = ReadSessionBearer(fullSession.SessionFile),
                 accessOperation = "relation.list"
@@ -382,7 +382,7 @@ internal static partial class OwnerServiceSmoke
                 "Cross-zone relation attempt must not disclose the endpoint.", "Synthetic explicit cross-zone request.", now);
             var crossDenied = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.relation.create",
                 sessionToken = ReadSessionBearer(crossZoneSession.SessionFile),
                 accessOperation = "link.create",

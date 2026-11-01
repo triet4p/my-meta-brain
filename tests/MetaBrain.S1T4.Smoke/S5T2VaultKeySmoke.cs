@@ -201,7 +201,7 @@ internal static partial class OwnerServiceSmoke
                 // agent channel, even in a denial probe.
                 var denied = await InvokeAgentRequestAsync(fixture.AgentPipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = ownerOperation,
                     isOwner = true,
                     consent = "owner-console",

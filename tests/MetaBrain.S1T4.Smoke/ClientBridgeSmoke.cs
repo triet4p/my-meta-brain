@@ -287,7 +287,7 @@ internal static partial class OwnerServiceSmoke
     {
         var preview = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
         {
-            protocolVersion = 1,
+            protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
             operation = "owner.access.request.preview",
             requestId,
         }).ConfigureAwait(false);

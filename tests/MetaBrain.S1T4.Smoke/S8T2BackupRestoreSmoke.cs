@@ -118,7 +118,7 @@ internal static partial class OwnerServiceSmoke
                     });
                     var reply = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
                     {
-                        protocolVersion = 1,
+                        protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                         operation = "memory.create",
                         resourceId = "s8t2-concurrent-" + index.ToString(CultureInfo.InvariantCulture),
                         zoneId = S8T2Zone,

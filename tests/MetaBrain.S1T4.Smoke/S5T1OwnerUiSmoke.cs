@@ -121,7 +121,7 @@ internal static partial class OwnerServiceSmoke
             {
                 var denied = await InvokeAgentRequestAsync(fixture.AgentPipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = ownerOnlyOperation,
                     isOwner = true,
                     consent = "owner-console",
@@ -169,7 +169,7 @@ internal static partial class OwnerServiceSmoke
 
             var unlockedRead = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.memory.read",
                 sessionToken = "mbs1_synthetic-not-a-real-bearer",
                 accessOperation = "memory.read",
@@ -248,7 +248,7 @@ internal static partial class OwnerServiceSmoke
 
     private static object SpoofedAgentSessionInspect() => new
     {
-        protocolVersion = 1,
+        protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
         operation = "agent.session.inspect",
         sessionToken = "mbs1_synthetic-not-a-real-bearer",
         isOwner = true,

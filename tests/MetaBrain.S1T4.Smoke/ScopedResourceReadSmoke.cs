@@ -163,7 +163,7 @@ internal static partial class OwnerServiceSmoke
             {
                 var deniedAbsolute = await InvokeAgentRequestAsync(fixture.AgentPipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = "agent.resource.read",
                     sessionToken = bearerA,
                     accessOperation = "resource.read",
@@ -173,7 +173,7 @@ internal static partial class OwnerServiceSmoke
                 Require(ReplyCode(deniedAbsolute) == "denied", "An absolute-path resource read was not denied.");
                 var deniedExtras = await InvokeAgentRequestAsync(fixture.AgentPipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = "agent.resource.read",
                     sessionToken = bearerA,
                     accessOperation = "resource.read",
@@ -185,7 +185,7 @@ internal static partial class OwnerServiceSmoke
 
                 var deniedExistingBody = await InvokeAgentRequestAsync(fixture.AgentPipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = "agent.resource.read",
                     sessionToken = bearerA,
                     accessOperation = "resource.read",
@@ -194,7 +194,7 @@ internal static partial class OwnerServiceSmoke
                 }).ConfigureAwait(false);
                 var deniedUnknownBody = await InvokeAgentRequestAsync(fixture.AgentPipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = "agent.resource.read",
                     sessionToken = bearerA,
                     accessOperation = "resource.read",
@@ -206,7 +206,7 @@ internal static partial class OwnerServiceSmoke
 
                 var deniedSummaryExpansion = await InvokeAgentRequestAsync(fixture.AgentPipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = "agent.resource.read",
                     sessionToken = bearerA,
                     accessOperation = "source.read",
@@ -361,7 +361,7 @@ internal static partial class OwnerServiceSmoke
             {
                 var deniedReparseBody = await InvokeAgentRequestAsync(fixture.AgentPipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = "agent.resource.read",
                     sessionToken = reparseBearerA,
                     accessOperation = "resource.read",
@@ -370,7 +370,7 @@ internal static partial class OwnerServiceSmoke
                 }).ConfigureAwait(false);
                 var deniedReparseUnknownBody = await InvokeAgentRequestAsync(fixture.AgentPipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = "agent.resource.read",
                     sessionToken = reparseBearerA,
                     accessOperation = "resource.read",
@@ -411,7 +411,7 @@ internal static partial class OwnerServiceSmoke
             {
                 var leaseRequest = JsonSerializer.Serialize(new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = "agent.resource.read",
                     sessionToken = leaseBearer,
                     accessOperation = "resource.read",
@@ -475,7 +475,7 @@ internal static partial class OwnerServiceSmoke
                 Require(staleRevoke.ExitCode == 0, "The owner could not revoke the stale-scope boundary session.");
                 var staleDenied = await InvokeAgentRequestAsync(fixture.AgentPipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = "agent.resource.read",
                     sessionToken = staleBearer,
                     accessOperation = "resource.read",
@@ -485,7 +485,7 @@ internal static partial class OwnerServiceSmoke
                 Require(ReplyCode(staleDenied) == "denied", "A revoked session reached the serve boundary.");
                 Require(JsonSerializer.Serialize(staleDenied) == JsonSerializer.Serialize(await InvokeAgentRequestAsync(fixture.AgentPipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = "agent.resource.read",
                     sessionToken = staleBearer,
                     accessOperation = "resource.read",

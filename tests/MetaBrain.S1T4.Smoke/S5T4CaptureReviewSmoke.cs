@@ -464,7 +464,7 @@ internal static partial class OwnerServiceSmoke
             {
                 var denied = await InvokeAgentRequestAsync(fixture.AgentPipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = ownerOperation,
                     isOwner = true,
                     sessionToken = ReadSessionBearer(createSession.SessionFile),
@@ -478,7 +478,7 @@ internal static partial class OwnerServiceSmoke
 
             var extras = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = ServiceRequestHandler.OwnerProposalPublishOperation,
                 resourceId = createProposalId,
                 resourceRevision = 1,
@@ -489,7 +489,7 @@ internal static partial class OwnerServiceSmoke
                 "A review request carrying a field its contract does not name was accepted (" + ReplyCode(extras) + ").");
             var movedProposal = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = ServiceRequestHandler.OwnerProposalPublishOperation,
                 resourceId = createProposalId,
                 resourceRevision = 9,

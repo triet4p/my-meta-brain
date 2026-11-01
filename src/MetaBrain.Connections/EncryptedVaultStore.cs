@@ -1755,6 +1755,40 @@ internal sealed class EncryptedVaultStore
     }
 
     /// <summary>
+    /// S12-T5 the vault identity the header publishes, readable without the
+    /// data key. A restore uses it to tell an unrelated backup from one of
+    /// this live vault: the latter cannot be re-applied while the vault is
+    /// locked, because its encrypted purge ledger is unreadable. A missing or
+    /// unreadable header answers false rather than inventing an identity.
+    /// </summary>
+    internal bool TryReadVaultId(out string? vaultId)
+    {
+        vaultId = null;
+        if (!File.Exists(_headerPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            var text = PrivateFile.Read(_headerPath, 64 * 1024).Text;
+            var header = JsonSerializer.Deserialize<VaultHeader>(text, JsonOptions);
+            if (header is null)
+            {
+                return false;
+            }
+
+            ValidateHeader(header);
+            vaultId = header.VaultId;
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// S8-T2 unwraps the data key from a key envelope with the owner's
     /// passphrase or recovery code. A wrong or missing credential fails closed
     /// with no key, no fallback and no new key material.

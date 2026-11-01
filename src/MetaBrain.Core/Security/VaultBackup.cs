@@ -21,8 +21,19 @@ namespace MetaBrain.Core.Security;
 /// </summary>
 public static class VaultBackupFormat
 {
-    /// <summary>The container format version this build writes and reads.</summary>
-    public const int CurrentVersion = 1;
+    /// <summary>The container format version this build writes.</summary>
+    public const int CurrentVersion = 2;
+
+    /// <summary>
+    /// The container format versions this build reads. Version 1 is the
+    /// pre-workspace snapshot format; it restores canonical records and owner
+    /// states and truthfully restores no workspace because it never held one.
+    /// Version 2 carries the workspace state, retained originals, tombstones
+    /// and tombstones. A version this build does not know is refused
+    /// before anything is written rather than silently dropping part of the
+    /// snapshot.
+    /// </summary>
+    public static bool IsSupportedVersion(int version) => version is 1 or 2;
 
     /// <summary>The file extension the owner sees for a backup file.</summary>
     public const string FileExtension = ".mbbackup";
@@ -51,7 +62,10 @@ public sealed record VaultBackupSummary(
     int RecordCount,
     int StateCount,
     long ManifestRevision,
-    DateTimeOffset CreatedAtUtc);
+    DateTimeOffset CreatedAtUtc,
+    int WorkspaceNodeCount = 0,
+    int WorkspaceContentRevisionCount = 0,
+    int WorkspaceTombstoneCount = 0);
 
 /// <summary>
 /// What the owner learns from one completed restore. It names the restored
@@ -65,7 +79,12 @@ public sealed record VaultRestoreSummary(
     long ManifestRevision,
     DateTimeOffset CreatedAtUtc,
     int LiveGrantsRestored,
-    int ConsumedTokensPreserved);
+    int ConsumedTokensPreserved,
+    int WorkspaceNodeCount = 0,
+    int WorkspaceContentRevisionCount = 0,
+    int PurgedRecordsWithheld = 0,
+    int PurgedWorkspaceNodesWithheld = 0,
+    int PurgedCatalogEntriesWithheld = 0);
 
 /// <summary>
 /// S8-T2 the restore policy: what a restored vault may and may not become.
@@ -96,6 +115,78 @@ public static class VaultRestorePolicy
             UnlockEpoch = 0
         };
     }
+
+    /// <summary>
+    /// The scope-grant state a restored vault starts from when the live
+    /// installation of the same vault is still unlocked. It drops every live
+    /// grant and restarts the unlock epoch exactly like
+    /// <see cref="RestoreScopeGrantState(OwnerScopeGrantState)"/>, and it
+    /// carries the union of the backup's consumed-token verifiers and the live
+    /// ones. Restoring a backup taken before a token was redeemed therefore
+    /// cannot make that token redeemable again.
+    /// </summary>
+    public static OwnerScopeGrantState RestoreScopeGrantState(
+        OwnerScopeGrantState state,
+        OwnerScopeGrantState? liveState)
+    {
+        var restored = RestoreScopeGrantState(state);
+        if (liveState is null)
+        {
+            return restored;
+        }
+
+        var consumed = (restored.ConsumedTokenVerifiers ?? Array.Empty<string>())
+            .Concat(liveState.ConsumedTokenVerifiers ?? Array.Empty<string>())
+            .Where(verifier => !string.IsNullOrEmpty(verifier))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(verifier => verifier, StringComparer.Ordinal)
+            .ToArray();
+        return restored with { ConsumedTokenVerifiers = consumed };
+    }
+
+    /// <summary>
+    /// The ledger a restore re-applies: the backup's durable deletion record
+    /// unioned with the live installation's record of the same vault. A backup
+    /// taken before a purge carries no entry for it, while the live ledger
+    /// does; unioning them means restoring an older backup cannot resurrect an
+    /// identity this installation already purged. Both sides are validated, so
+    /// a corrupt record refuses the restore rather than being silently
+    /// repaired or dropped.
+    /// </summary>
+    public static OwnerPurgeLedgerState MergePurgeLedgerState(
+        OwnerPurgeLedgerState state,
+        OwnerPurgeLedgerState? liveState)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        var restored = OwnerPurgeLedgerAuthority.ValidateAndNormalizeState(state);
+        if (liveState is null)
+        {
+            return restored;
+        }
+
+        var live = OwnerPurgeLedgerAuthority.ValidateAndNormalizeState(liveState);
+        var byId = new Dictionary<string, OwnerPurgeIntent>(StringComparer.Ordinal);
+        foreach (var intent in restored.Intents)
+        {
+            byId[intent.PurgeId] = intent;
+        }
+
+        foreach (var intent in live.Intents)
+        {
+            // The live record is the newer authority for an ID both sides
+            // know; a backup never un-applies a deletion.
+            byId[intent.PurgeId] = intent;
+        }
+
+        var merged = byId.Values.OrderBy(intent => intent.PurgeId, StringComparer.Ordinal).ToArray();
+        if (merged.Length > OwnerPurgeLedgerAuthority.MaximumIntents)
+        {
+            throw new InvalidDataException("The purge ledger exceeds its bounds.");
+        }
+
+        return OwnerPurgeLedgerAuthority.ValidateAndNormalizeState(
+            restored with { Intents = merged });
+    }
 }
 
 /// <summary>
@@ -111,6 +202,26 @@ public sealed class VaultBackupDeniedException : Exception
     }
 
     public VaultBackupDeniedException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+/// <summary>
+/// S12-T5 the restore would materialize a backup of the live vault while that
+/// vault is locked. The live installation's purge ledger is encrypted, so the
+/// restore cannot prove it re-applies every deletion made after the backup was
+/// taken. It refuses before writing anything; the owner unlocks the live vault
+/// and retries, and the normal restore then unions the two ledgers.
+/// </summary>
+public sealed class VaultRestoreRequiresUnlockException : Exception
+{
+    public VaultRestoreRequiresUnlockException(string message)
+        : base(message)
+    {
+    }
+
+    public VaultRestoreRequiresUnlockException(string message, Exception innerException)
         : base(message, innerException)
     {
     }

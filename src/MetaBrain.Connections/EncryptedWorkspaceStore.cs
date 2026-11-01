@@ -80,6 +80,30 @@ internal sealed record WorkspaceEnvelopeRecord(int FormatVersion, string Nonce, 
 internal sealed record WorkspaceOpenResult(WorkspaceStateRecord? State, string? ErrorCode);
 
 /// <summary>
+/// One retained original-byte revision captured for the encrypted backup. The
+/// bytes are plaintext only inside the backup capture and are sealed into the
+/// backup container before anything is written; the caller zeroizes them.
+/// </summary>
+internal sealed record WorkspaceBackupContent(
+    string FileId,
+    long Revision,
+    long Length,
+    string Sha256,
+    byte[] Content);
+
+/// <summary>
+/// The whole workspace state plus every retained revision of every live file
+/// and every tombstone, captured at one committed point. The state keeps its
+/// exact workspace/root/node identities, names, parent links, revisions and
+/// anchors, so a restore reproduces the owner's workspace rather than
+/// importing its bytes as new documents. Purged identities live in the
+/// vault's one durable purge ledger, which travels in the same backup.
+/// </summary>
+internal sealed record WorkspaceBackupSnapshot(
+    WorkspaceStateRecord State,
+    WorkspaceBackupContent[] Contents);
+
+/// <summary>
 /// One content revision to stage before the state commit. Either the exact
 /// bytes are supplied, or an existing retained revision is named and the store
 /// streams it through decrypt and a fresh encrypt under the new subject, so a
@@ -410,6 +434,122 @@ internal sealed class EncryptedWorkspaceStore
     }
 
     /// <summary>
+    /// S12-T5 captures every retained revision of every node, live or
+    /// tombstoned, as a plaintext copy for the encrypted backup. The vault is
+    /// sealed as a whole; these buffers exist only until the backup container
+    /// is written and the caller zeroizes them. A revision that cannot be
+    /// authenticated refuses the whole capture instead of producing a backup
+    /// that silently omits the owner's bytes.
+    /// </summary>
+    public WorkspaceBackupSnapshot CaptureBackup(
+        string vaultId,
+        ReadOnlySpan<byte> dataKey,
+        WorkspaceStateRecord state)
+    {
+        ValidateState(state);
+        var contents = new List<WorkspaceBackupContent>();
+        try
+        {
+            foreach (var node in state.Nodes)
+            {
+                foreach (var revision in node.Revisions)
+                {
+                    var content = ReadRevisionContent(vaultId, dataKey, node, revision);
+                    contents.Add(new WorkspaceBackupContent(
+                        node.Id, revision.Revision, revision.Length, revision.Sha256, content.Content));
+                }
+            }
+
+            return new WorkspaceBackupSnapshot(state, contents.ToArray());
+        }
+        catch
+        {
+            foreach (var item in contents)
+            {
+                Clear(item.Content);
+            }
+
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// S12-T5 materializes one captured workspace into a clean vault: the same
+    /// workspace identity, tree revision, node ids, names, parents, retained
+    /// revision numbers, anchors and tombstones, with the exact authenticated
+    /// original bytes. Identities the backup's purge ledger reserved are
+    /// filtered by the caller, so a restore never revives them. Only the opaque storage name of
+    /// each ciphertext is fresh; identity and metadata are never renumbered.
+    /// The capture must name exactly every retained revision once, so a
+    /// truncated or padded backup refuses before anything is committed.
+    /// </summary>
+    public WorkspaceStateRecord RestoreBackup(
+        string vaultId,
+        ReadOnlySpan<byte> dataKey,
+        WorkspaceStateRecord state,
+        IReadOnlyList<WorkspaceBackupContent> contents)
+    {
+        ArgumentNullException.ThrowIfNull(contents);
+        var normalized = NormalizeState(state);
+        ValidateState(normalized);
+
+        var supplied = new Dictionary<(string FileId, long Revision), WorkspaceBackupContent>();
+        foreach (var item in contents)
+        {
+            if (item is null || !IsIdentifier(item.FileId) || item.Revision < 1 ||
+                item.Length < 0 || item.Length > MaximumContentBytes ||
+                !IsSha256Hex(item.Sha256) || item.Content is null ||
+                item.Content.LongLength != item.Length ||
+                !string.Equals(Digest(item.Content), item.Sha256, StringComparison.Ordinal) ||
+                !supplied.TryAdd((item.FileId, item.Revision), item))
+            {
+                throw new InvalidDataException("The backup workspace content is invalid.");
+            }
+        }
+
+        var nodes = new WorkspaceNodeRecord[normalized.Nodes.Length];
+        var staged = new List<StagedWorkspaceBlob>();
+        var matched = 0;
+        for (var index = 0; index < normalized.Nodes.Length; index++)
+        {
+            var node = normalized.Nodes[index];
+            if (node.Revisions.Length == 0)
+            {
+                nodes[index] = node;
+                continue;
+            }
+
+            var revisions = new WorkspaceRevisionRecord[node.Revisions.Length];
+            for (var revisionIndex = 0; revisionIndex < node.Revisions.Length; revisionIndex++)
+            {
+                var revision = node.Revisions[revisionIndex];
+                if (!supplied.TryGetValue((node.Id, revision.Revision), out var captured) ||
+                    captured.Length != revision.Length ||
+                    !string.Equals(captured.Sha256, revision.Sha256, StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException("The backup workspace content does not match its metadata.");
+                }
+
+                var restored = revision with { StorageName = NewStorageName() };
+                revisions[revisionIndex] = restored;
+                staged.Add(new StagedWorkspaceBlob(node.Id, restored, captured.Content, null, null));
+                matched++;
+            }
+
+            nodes[index] = node with { Revisions = revisions };
+        }
+
+        if (matched != supplied.Count)
+        {
+            throw new InvalidDataException("The backup workspace content names a revision no node retains.");
+        }
+
+        var restoredState = normalized with { Nodes = nodes };
+        Commit(vaultId, dataKey, restoredState, staged);
+        return restoredState;
+    }
+
+    /// <summary>
     /// Reads the exact original bytes of one retained revision. A revision of 0
     /// selects the latest; a positive revision selects that retained revision
     /// even after newer ones exist.
@@ -431,6 +571,15 @@ internal sealed class EncryptedWorkspaceStore
         var target = revision <= 0 ? node.ContentRevision : revision;
         var entry = node.Revisions.FirstOrDefault(candidate => candidate.Revision == target)
             ?? throw new WorkspaceRefusalException(WorkspaceErrorCodes.NotFound);
+        return ReadRevisionContent(vaultId, dataKey, node, entry);
+    }
+
+    private WorkspaceFileContent ReadRevisionContent(
+        string vaultId,
+        ReadOnlySpan<byte> dataKey,
+        WorkspaceNodeRecord node,
+        WorkspaceRevisionRecord entry)
+    {
         try
         {
             var raw = PrivateFile.ReadBytes(Path.Combine(_blobDirectory, entry.StorageName), MaximumBlobEnvelopeBytes);
@@ -1599,6 +1748,187 @@ internal sealed class EncryptedWorkspaceStore
     }
 
     /// <summary>
+    /// S12-T5 reports exactly what a purge of the selected encrypted tombstone
+    /// would erase: the whole deletion group, every retained original-byte
+    /// revision, the citation anchors naming its files, and the token binding
+    /// the act to this tree revision. A live node is refused because purge is
+    /// the separate, irreversible act that follows a tombstone; it is never a
+    /// second delete. Nothing is written.
+    /// </summary>
+    public static WorkspacePurgePreviewInfo PreviewPurge(WorkspaceStateRecord state, string nodeId)
+    {
+        var node = FindNode(state, nodeId)
+            ?? throw new WorkspaceRefusalException(WorkspaceErrorCodes.NotFound);
+        if (IsLive(node))
+        {
+            throw new WorkspaceRefusalException(WorkspaceErrorCodes.NotDeleted);
+        }
+
+        EnsureNotRoot(state, node);
+        var group = CollectPurgeGroup(state, node);
+        var nodes = new WorkspacePurgeNodeInfo[group.Count];
+        var revisions = 0;
+        var bytes = 0L;
+        for (var index = 0; index < group.Count; index++)
+        {
+            var member = group[index];
+            nodes[index] = new WorkspacePurgeNodeInfo(
+                member.Id, KindOf(member), member.ParentId, member.Name, member.Revision, member.ContentRevision);
+            revisions += member.Revisions.Length;
+            foreach (var revision in member.Revisions)
+            {
+                bytes = checked(bytes + revision.Length);
+            }
+        }
+
+        var anchors = 0;
+        foreach (var anchor in AnchorsOf(state))
+        {
+            if (group.Any(member => string.Equals(member.Id, anchor.FileId, StringComparison.Ordinal)))
+            {
+                anchors++;
+            }
+        }
+
+        return new WorkspacePurgePreviewInfo(
+            node.Id,
+            node.DeletionId ?? string.Empty,
+            state.Revision,
+            ComputePurgeToken(state, node, group),
+            nodes,
+            revisions,
+            bytes,
+            anchors);
+    }
+
+    /// <summary>
+    /// S12-T5 permanently removes one confirmed tombstone deletion group: its
+    /// canonical nodes and anchors leave the state, so its retained ciphertext
+    /// is unreachable and reclaimed by the commit. The vault's one durable
+    /// purge ledger — the same encrypted ledger canonical records and sessions
+    /// use — records the owner's reason and every purged identity before this
+    /// commit, and every later backup carries it; a restore re-applies it, so
+    /// no backup taken afterwards can resurrect the purged identities.
+    /// Backups taken before the purge are disclosed as irrevocable copies,
+    /// never claimed recalled.
+    /// </summary>
+    public WorkspaceStateRecord PurgeNode(
+        string vaultId,
+        ReadOnlySpan<byte> dataKey,
+        WorkspaceStateRecord state,
+        string nodeId,
+        string purgeId,
+        long expectedTreeRevision,
+        string previewToken,
+        out WorkspacePurgeInfo info)
+    {
+        if (string.IsNullOrEmpty(previewToken))
+        {
+            throw new WorkspaceRefusalException(WorkspaceErrorCodes.PurgeConfirmation);
+        }
+
+        ValidateExpectedTreeRevision(state, expectedTreeRevision);
+        var preview = PreviewPurge(state, nodeId);
+        if (!string.Equals(preview.Preview, previewToken, StringComparison.Ordinal))
+        {
+            throw new WorkspaceRefusalException(WorkspaceErrorCodes.Conflict);
+        }
+
+        var node = FindNode(state, nodeId)
+            ?? throw new WorkspaceRefusalException(WorkspaceErrorCodes.NotFound);
+        var group = CollectPurgeGroup(state, node);
+        var groupIds = new HashSet<string>(group.Count, StringComparer.Ordinal);
+        foreach (var member in group)
+        {
+            groupIds.Add(member.Id);
+        }
+
+        var nodes = new List<WorkspaceNodeRecord>(state.Nodes.Length - group.Count);
+        foreach (var candidate in state.Nodes)
+        {
+            if (!groupIds.Contains(candidate.Id))
+            {
+                nodes.Add(candidate);
+            }
+        }
+
+        var anchors = AnchorsOf(state);
+        var keptAnchors = new List<WorkspaceAnchorRecord>(anchors.Length);
+        foreach (var anchor in anchors)
+        {
+            if (!groupIds.Contains(anchor.FileId))
+            {
+                keptAnchors.Add(anchor);
+            }
+        }
+
+        var next = Committed(state, nodes.ToArray(), keptAnchors.ToArray());
+        Commit(vaultId, dataKey, next, Array.Empty<StagedWorkspaceBlob>());
+        info = new WorkspacePurgeInfo(
+            purgeId,
+            node.Id,
+            preview.DeletionId,
+            next.Revision,
+            group.Count,
+            preview.ContentRevisionCount,
+            preview.TotalBytes,
+            preview.AnchorCount);
+        return next;
+    }
+
+    /// <summary>
+    /// Removes the nodes and anchors whose identities the durable purge ledger
+    /// reserved, without needing a preview token. It is how a commit that was
+    /// confirmed in the ledger but interrupted before its workspace commit
+    /// finishes on the next unlock, and how a restored workspace is scrubbed
+    /// before it is materialized. A state with no reserved identity is returned
+    /// unchanged and nothing is written.
+    /// </summary>
+    public WorkspaceStateRecord ApplyPurgedIdentifiers(
+        string vaultId,
+        ReadOnlySpan<byte> dataKey,
+        WorkspaceStateRecord state,
+        IReadOnlySet<string> purgedIds)
+    {
+        ArgumentNullException.ThrowIfNull(purgedIds);
+        var filtered = FilterPurgedState(state, purgedIds);
+        if (ReferenceEquals(filtered, state))
+        {
+            return state;
+        }
+
+        Commit(vaultId, dataKey, filtered, Array.Empty<StagedWorkspaceBlob>());
+        return filtered;
+    }
+
+    /// <summary>
+    /// Drops every node the durable ledger reserved, and every anchor that
+    /// named one of those nodes. It is a pure projection over one state: the
+    /// retained ciphertext of a dropped node is simply not referenced by the
+    /// returned state.
+    /// </summary>
+    public static WorkspaceStateRecord FilterPurgedState(
+        WorkspaceStateRecord state,
+        IReadOnlySet<string> purgedIds)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(purgedIds);
+        if (purgedIds.Count == 0)
+        {
+            return state;
+        }
+
+        var nodes = state.Nodes.Where(node => !purgedIds.Contains(node.Id)).ToArray();
+        var anchors = AnchorsOf(state).Where(anchor => !purgedIds.Contains(anchor.FileId)).ToArray();
+        if (nodes.Length == state.Nodes.Length && anchors.Length == AnchorsOf(state).Length)
+        {
+            return state;
+        }
+
+        return state with { Nodes = nodes, Anchors = anchors };
+    }
+
+    /// <summary>
     /// Pins a citation anchor to the live file's current content revision. The
     /// digest covers exactly the selected byte range of that revision, so the
     /// anchor identifies content rather than a position in a mutable path. A
@@ -2654,6 +2984,76 @@ internal sealed class EncryptedWorkspaceStore
             text.Append('|')
                 .Append(descendant.Id).Append(':')
                 .Append(descendant.Revision.ToString(CultureInfo.InvariantCulture));
+        }
+
+        return Digest(Encoding.UTF8.GetBytes(text.ToString()));
+    }
+
+    /// <summary>
+    /// The tombstone group one purge erases: every node that shares the
+    /// selected tombstone's deletion identity, ordered by identity. Restoring
+    /// created them as one unit, so purging one erases exactly that unit.
+    /// </summary>
+    private static List<WorkspaceNodeRecord> CollectPurgeGroup(WorkspaceStateRecord state, WorkspaceNodeRecord node)
+    {
+        var deletionId = node.DeletionId;
+        if (!IsIdentifier(deletionId))
+        {
+            throw new InvalidDataException("Invalid workspace tombstone.");
+        }
+
+        var group = new List<WorkspaceNodeRecord>();
+        foreach (var candidate in state.Nodes)
+        {
+            if (!IsLive(candidate) && string.Equals(candidate.DeletionId, deletionId, StringComparison.Ordinal))
+            {
+                group.Add(candidate);
+            }
+        }
+
+        if (group.Count == 0 || !group.Any(member => string.Equals(member.Id, node.Id, StringComparison.Ordinal)))
+        {
+            throw new InvalidDataException("Invalid workspace tombstone group.");
+        }
+
+        group.Sort((left, right) => string.CompareOrdinal(left.Id, right.Id));
+        return group;
+    }
+
+    /// <summary>
+    /// The token that binds a purge confirmation to the exact previewed state:
+    /// the workspace and format identities, the tree revision, the selected
+    /// tombstone and its deletion identity, and every group member's node
+    /// revision plus each retained content revision descriptor. A later
+    /// mutation, a different group or different retained bytes changes it.
+    /// </summary>
+    private static string ComputePurgeToken(
+        WorkspaceStateRecord state,
+        WorkspaceNodeRecord node,
+        IReadOnlyList<WorkspaceNodeRecord> group)
+    {
+        var text = new StringBuilder(192 + (group.Count * 96));
+        text.Append("MetaBrain|workspace-purge-preview|1|")
+            .Append(state.WorkspaceId).Append('|')
+            .Append(state.FormatVersion.ToString(CultureInfo.InvariantCulture)).Append('|')
+            .Append(state.MetadataSchemaVersion.ToString(CultureInfo.InvariantCulture)).Append('|')
+            .Append(state.Revision.ToString(CultureInfo.InvariantCulture)).Append('|')
+            .Append(node.Id).Append('|')
+            .Append(node.DeletionId).Append('|')
+            .Append(node.Revision.ToString(CultureInfo.InvariantCulture));
+        foreach (var member in group)
+        {
+            text.Append('|')
+                .Append(member.Id).Append(':')
+                .Append(member.Revision.ToString(CultureInfo.InvariantCulture)).Append(':')
+                .Append(member.ContentRevision.ToString(CultureInfo.InvariantCulture));
+            foreach (var revision in member.Revisions)
+            {
+                text.Append(',')
+                    .Append(revision.Revision.ToString(CultureInfo.InvariantCulture)).Append(':')
+                    .Append(revision.Length.ToString(CultureInfo.InvariantCulture)).Append(':')
+                    .Append(revision.Sha256);
+            }
         }
 
         return Digest(Encoding.UTF8.GetBytes(text.ToString()));

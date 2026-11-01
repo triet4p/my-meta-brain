@@ -233,7 +233,7 @@ internal static partial class OwnerServiceSmoke
             var itemSession = await IssueS2T3AgentSessionAsync(connectionsExecutable, fixture, itemId, "memory.read").ConfigureAwait(false);
             var itemGranted = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.memory.read",
                 sessionToken = ReadSessionBearer(itemSession),
                 accessOperation = "memory.read",
@@ -258,7 +258,7 @@ internal static partial class OwnerServiceSmoke
 
             var sourceViaItemGrant = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.source.read",
                 sessionToken = ReadSessionBearer(itemSession),
                 accessOperation = "source.read",
@@ -273,7 +273,7 @@ internal static partial class OwnerServiceSmoke
             var sourceSession = await IssueS2T3AgentSessionAsync(connectionsExecutable, fixture, sourceId, "source.read").ConfigureAwait(false);
             var sourceGranted = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.source.read",
                 sessionToken = ReadSessionBearer(sourceSession),
                 accessOperation = "source.read",
@@ -289,7 +289,7 @@ internal static partial class OwnerServiceSmoke
                 "The explicit source grant did not open the live registered source revision.");
             var wrongRevision = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.source.read",
                 sessionToken = ReadSessionBearer(sourceSession),
                 accessOperation = "source.read",
@@ -300,7 +300,7 @@ internal static partial class OwnerServiceSmoke
                 "A source read outside the granted revision was allowed.");
             var itemViaSourceGrant = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.memory.read",
                 sessionToken = ReadSessionBearer(sourceSession),
                 accessOperation = "memory.read",
@@ -323,7 +323,7 @@ internal static partial class OwnerServiceSmoke
                 "A locked source write was accepted.");
             var lockedExpansion = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.source.read",
                 sessionToken = ReadSessionBearer(sourceSession),
                 accessOperation = "source.read",

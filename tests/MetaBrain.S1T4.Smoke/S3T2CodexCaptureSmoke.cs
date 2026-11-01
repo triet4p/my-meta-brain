@@ -83,7 +83,7 @@ internal static partial class OwnerServiceSmoke
             // The agent channel still cannot reach ingestion.
             var agentIngest = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "source.ingest",
                 resourceId = sourceId
             }).ConfigureAwait(false);

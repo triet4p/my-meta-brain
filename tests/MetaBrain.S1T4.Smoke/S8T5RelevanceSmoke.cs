@@ -127,7 +127,7 @@ internal static partial class OwnerServiceSmoke
                 "The synthetic S8-T5 owner-corpus vault did not unlock (" + unlocked.StandardError.Trim() + ").");
             var rebuilt = await InvokeOwnerRequestWithTimeoutAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.index.rebuild",
             }, TimeSpan.FromMinutes(25)).ConfigureAwait(false);
             Require(ReplyCode(rebuilt) == "index_rebuilt",
@@ -141,7 +141,7 @@ internal static partial class OwnerServiceSmoke
                 var watch = Stopwatch.StartNew();
                 var reply = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = "owner.library.search",
                     query,
                     searchOffset = 0,

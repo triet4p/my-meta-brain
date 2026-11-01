@@ -780,12 +780,13 @@ internal static partial class OwnerServiceSmoke
             Require(registerSource.ExitCode == 0, "Failed to register S6-T2 coding session source note.");
             File.Delete(noteFile);
 
-            // Configure real DeepSeek provider securely from .env
-            var configFromEnv = await RunOwnerCommandAsync(connectionsExecutable,
+            // Configure the real provider through redirected standard input.
+            var configFromEnv = await RunOwnerCommandWithInputAsync(connectionsExecutable,
+                S6LiveProviderKey() + Environment.NewLine,
                 "owner", "provider-config", "--control-pipe", fixture.ControlPipe,
                 "--provider", "deepseek", "--model", "deepseek-flash",
-                "--from-env", "true").ConfigureAwait(false);
-            Require(configFromEnv.ExitCode == 0, "Failed to configure provider from .env.");
+                "--api-key-stdin", "true").ConfigureAwait(false);
+            Require(configFromEnv.ExitCode == 0, "Failed to configure the provider through the secure stdin handoff.");
 
             // Create job with profile=coding-session
             var createJob = await RunOwnerCommandAsync(connectionsExecutable,

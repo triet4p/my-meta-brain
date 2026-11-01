@@ -118,7 +118,7 @@ internal static partial class OwnerServiceSmoke
             var rebuild = Stopwatch.StartNew();
             var rebuilt = await InvokeOwnerRequestWithTimeoutAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.index.rebuild",
             }, TimeSpan.FromMinutes(25)).ConfigureAwait(false);
             rebuild.Stop();
@@ -162,7 +162,7 @@ internal static partial class OwnerServiceSmoke
             // ----- the provider budget -----
             var health = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.operations.health",
             }).ConfigureAwait(false);
             Require(health.TryGetProperty("operationsHealth", out var healthWire),
@@ -184,7 +184,7 @@ internal static partial class OwnerServiceSmoke
             // is add an entry: the ledger itself is read to prove that.
             var ledger = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.job.ledger",
             }).ConfigureAwait(false);
             var ledgerWire = ledger.TryGetProperty("spendLedger", out var ledgerValue) ? ledgerValue : ledger;
@@ -335,7 +335,7 @@ internal static partial class OwnerServiceSmoke
             var single = Stopwatch.StartNew();
             var reply = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "memory.create",
                 resourceId = id,
                 zoneId = S8T5ZoneAlpha,
@@ -379,7 +379,7 @@ internal static partial class OwnerServiceSmoke
         {
             var warmup = await InvokeOwnerRequestWithTimeoutAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.library.search",
                 query = corpus.Queries[index % corpus.Queries.Count].Text,
                 searchOffset = 0,
@@ -401,7 +401,7 @@ internal static partial class OwnerServiceSmoke
             var watch = Stopwatch.StartNew();
             var reply = await InvokeOwnerRequestWithTimeoutAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.library.search",
                 query = query.Text,
                 searchOffset = 0,

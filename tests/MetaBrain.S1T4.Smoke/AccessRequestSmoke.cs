@@ -199,7 +199,7 @@ internal static partial class OwnerServiceSmoke
 
             var unknownRequest = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.access.request",
                 catalogIds = new[] { "fixture-not-present" },
                 purpose = "synthetic unknown catalog probe",
@@ -209,7 +209,7 @@ internal static partial class OwnerServiceSmoke
                 "An unknown catalog ID request did not fail closed without an existence oracle.");
             var privateRequest = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.access.request",
                 catalogIds = new[] { SmokeFixture.ResourceA },
                 purpose = "synthetic private ID probe",
@@ -221,7 +221,7 @@ internal static partial class OwnerServiceSmoke
                 "Unknown and private catalog requests returned distinguishable wire bodies.");
             var spoofedRequest = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.access.request",
                 catalogIds = new[] { RequestCatalogA },
                 purpose = "synthetic spoofed approval probe",
@@ -234,7 +234,7 @@ internal static partial class OwnerServiceSmoke
 
             var ownerDirect = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.access.request",
                 catalogIds = new[] { RequestCatalogA },
                 purpose = "synthetic owner-channel request probe",
@@ -445,7 +445,7 @@ internal static partial class OwnerServiceSmoke
                 "A narrowed/excluded resource read was served.");
             var deniedSourceProbe = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.resource.read",
                 sessionToken = ReadSessionBearer(sessionB.SessionFile),
                 accessOperation = "source.read",
@@ -458,7 +458,7 @@ internal static partial class OwnerServiceSmoke
 
             var agentConfirm = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.access.request.approve",
                 previewId = previewAId,
                 requestId = requestA,
@@ -468,7 +468,7 @@ internal static partial class OwnerServiceSmoke
             Require(ReplyCode(agentConfirm) == "forbidden", "The agent channel minted through an approval operation.");
             var agentReadSpoof = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.access.requests",
             }).ConfigureAwait(false);
             Require(ReplyCode(agentReadSpoof) == "forbidden", "The agent channel listed private access requests.");
@@ -515,7 +515,7 @@ internal static partial class OwnerServiceSmoke
                 "A locked vault exposed encrypted access requests.");
             var lockedRequest = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.access.request",
                 catalogIds = new[] { RequestCatalogA },
                 purpose = "synthetic locked request probe",

@@ -542,7 +542,7 @@ internal static partial class OwnerServiceSmoke
             {
                 rawRelation = await InvokeAgentRequestAsync(fixture.AgentPipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = "agent.relation.create",
                     sessionToken = ReadSessionBearer(relationSession.SessionFile),
                     accessOperation = "link.create",
@@ -778,7 +778,7 @@ internal static partial class OwnerServiceSmoke
             // ---- Group 6: hostile direct API calls over the raw agent pipe.
             var forgedKnown = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.memory.read",
                 sessionToken = "mbs1_forgedsynthetictokenvalue",
                 accessOperation = "memory.read",
@@ -787,7 +787,7 @@ internal static partial class OwnerServiceSmoke
             }).ConfigureAwait(false);
             var forgedGuessed = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.memory.read",
                 sessionToken = "mbs1_forgedsynthetictokenvalue",
                 accessOperation = "memory.read",
@@ -808,14 +808,14 @@ internal static partial class OwnerServiceSmoke
                 "A forged session token leaked memory content (reply=" + forgedKnown.GetRawText() + ").");
             var ownerOnAgentPipe = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.grant"
             }).ConfigureAwait(false);
             Require(ReplyCode(ownerOnAgentPipe) == "forbidden",
                 "The agent channel accepted an owner-only operation (reply=" + ownerOnAgentPipe.GetRawText() + ").");
             var injectedIdentity = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.memory.read",
                 sessionToken = "mbs1_forgedsynthetictokenvalue",
                 accessOperation = "memory.read",
@@ -1211,7 +1211,7 @@ internal static partial class OwnerServiceSmoke
     {
         var preview = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
         {
-            protocolVersion = 1,
+            protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
             operation = "owner.access.request.preview",
             requestId,
         }).ConfigureAwait(false);

@@ -67,9 +67,64 @@ internal static class InstallCommand
             throw new InvalidOperationException("The selected data root differs from the existing shared installation. Re-run setup with its recorded data root: " + existing.DataRoot);
         }
 
+        // D090/D6: the installed transition is refused by default before the
+        // running host is stopped or any file changes. A 1.1 WPF installation,
+        // an unknown component set and an in-place upgrade from a release
+        // before 1.2.0 are all mixed candidates; the owner installs 1.2 beside
+        // them with its own install root, data root and endpoints.
+        if (existing is null && HasLegacyWpfMarkers(installRoot))
+        {
+            throw new InvalidOperationException(LegacyInstallRefusal(installRoot, dataRoot));
+        }
+
+        if (existing is not null)
+        {
+            var unknownComponents = (existing.Components ?? System.Array.Empty<string>())
+                .Where(component => component is not ("cli" or "owner-ui" or "mcp"))
+                .ToArray();
+            if (unknownComponents.Length != 0)
+            {
+                throw new InvalidOperationException(
+                    "The install root registers an unknown or mixed candidate (" +
+                    string.Join(",", unknownComponents) + "). This build refuses to change that installation. " +
+                    LegacyRemediation(installRoot, dataRoot));
+            }
+
+            if (!string.Equals(existing.ProductVersion, ProductInfo.Version, StringComparison.Ordinal) &&
+                IsOlderThan12(existing.ProductVersion))
+            {
+                throw new InvalidOperationException(
+                    "The install root holds a " + existing.ProductVersion +
+                    " installation. This build refuses to upgrade a 1.1 WPF installation or an unknown/mixed candidate in place; it stopped nothing and changed no files. " +
+                    LegacyRemediation(installRoot, dataRoot));
+            }
+        }
+
+        var dataRootOwnerPath = Path.Combine(dataRoot, InstallLayout.DataRootMarkerFileName);
+        var dataRootOwner = DataRootOwner.Read(dataRootOwnerPath);
+        if (dataRootOwner is not null &&
+            !string.Equals(Path.GetFullPath(dataRootOwner.InstallRoot).TrimEnd(Path.DirectorySeparatorChar),
+                installRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "The selected data root already belongs to the installation at " + dataRootOwner.InstallRoot +
+                ". This build refuses to share one live data root between two installations; it stopped nothing and changed no files. " +
+                LegacyRemediation(installRoot, dataRoot));
+        }
+
+        var existingOwnsDataRoot = existing is not null && string.Equals(
+            Path.GetFullPath(existing.DataRoot).TrimEnd(Path.DirectorySeparatorChar), dataRoot, StringComparison.OrdinalIgnoreCase);
+        if (dataRootOwner is null && !existingOwnsDataRoot && HasMetaBrainData(dataRoot))
+        {
+            throw new InvalidOperationException(
+                "The selected data root already contains Meta Brain data from an installation this installer does not manage. " +
+                "It was not opened, migrated or changed. " + LegacyRemediation(installRoot, dataRoot));
+        }
+
         if (existing is not null && File.Exists(Path.Combine(installRoot, InstallLayout.ServiceDirectoryName, "MetaBrain.Connections.exe")))
         {
             var previous = InstallLayout.Create(installRoot, existing.DataRoot);
+            await RefuseForeignOrOldEndpointAsync(previous).ConfigureAwait(false);
             var stop = await ServiceHost.StopAsync(previous).ConfigureAwait(false);
             if (stop is ServiceStopOutcome.Failed or ServiceStopOutcome.Forced)
             {
@@ -78,6 +133,12 @@ internal static class InstallCommand
         }
 
         Directory.CreateDirectory(dataRoot);
+        new DataRootOwner(
+            DataRootOwner.CurrentSchemaVersion,
+            installRoot,
+            candidateIdentity,
+            ProductInfo.Version,
+            DateTime.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture)).Write(dataRootOwnerPath);
         var settings = EnsureSettings(dataRoot, ownerSid, requestedControlPipe, requestedAgentPipe);
         CopyPayload(payload, installRoot, component);
         var components = existing?.Components?.ToHashSet(StringComparer.Ordinal) ?? new HashSet<string>(StringComparer.Ordinal);
@@ -216,6 +277,99 @@ internal static class InstallCommand
                 : "UNINSTALL SCHEDULED (application files only; data root preserved)"
             : "COMPONENT UNINSTALLED (shared runtime preserved)");
         return 0;
+    }
+
+    /// <summary>
+    /// Root-level Owner UI artifacts identify a legacy (1.1) WPF installation
+    /// whose layout this shared installer does not manage. It is refused before
+    /// anything is copied, stopped or removed.
+    /// </summary>
+    private static readonly string[] LegacyWpfMarkers =
+    {
+        "MetaBrain.OwnerUi.exe",
+        "MetaBrain.OwnerUi.dll",
+        "MetaBrain.OwnerUi.Setup.exe",
+        "MetaBrain.OwnerUi.Setup.dll"
+    };
+
+    private static bool HasLegacyWpfMarkers(string installRoot) =>
+        LegacyWpfMarkers.Any(name => File.Exists(Path.Combine(installRoot, name)));
+
+    private static string LegacyInstallRefusal(string installRoot, string dataRoot) =>
+        "The install root contains a 1.1 WPF application this build does not manage. " +
+        "It stopped nothing and changed no files. " + LegacyRemediation(installRoot, dataRoot);
+
+    /// <summary>
+    /// Truthful, non-destructive remediation: a second installation beside the
+    /// existing one, never a replacement, uninstall or shared data root.
+    /// </summary>
+    private static string LegacyRemediation(string installRoot, string dataRoot) =>
+        "Install 1.2 into a separate install root and a distinct data root with distinct control/agent endpoints (for example a new root outside " +
+        installRoot + " and a new data root instead of " + dataRoot +
+        "); the existing 1.1 installation and data stay untouched. " +
+        "This build does not replace, uninstall or edit the old installation.";
+
+    private static bool IsOlderThan12(string version) =>
+        Version.TryParse(version, out var parsed) && parsed < new Version(1, 2, 0);
+
+    private static bool HasMetaBrainData(string dataRoot)
+    {
+        if (!Directory.Exists(dataRoot))
+        {
+            return false;
+        }
+
+        if (File.Exists(Path.Combine(dataRoot, "service-settings.json")))
+        {
+            return true;
+        }
+
+        return new[] { "vault", "private-index", "backups", "workspace", "runtime" }
+            .Any(directory => Directory.Exists(Path.Combine(dataRoot, directory)));
+    }
+
+    /// <summary>
+    /// Before an in-place upgrade stops anything, prove the endpoint belongs to
+    /// this installation and speaks this build's protocol. A manually mixed
+    /// binary or a pre-existing endpoint is refused rather than stopped.
+    /// </summary>
+    private static async Task RefuseForeignOrOldEndpointAsync(InstallLayout layout)
+    {
+        if (!File.Exists(layout.SettingsPath))
+        {
+            return;
+        }
+
+        string controlPipe;
+        try
+        {
+            controlPipe = ServiceHost.ReadControlPipe(layout);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or ArgumentException)
+        {
+            return;
+        }
+
+        var status = await OwnerChannelClient.ReadStatusAsync(controlPipe, CancellationToken.None).ConfigureAwait(false);
+        if (status.Availability == OwnerChannelAvailability.ProtocolMismatch)
+        {
+            throw new InvalidOperationException(
+                "The host on endpoint '" + controlPipe +
+                "' speaks a different protocol revision. It was not stopped and no files were changed. " +
+                "Stop that host with its own build, or install this release beside it with distinct endpoints.");
+        }
+
+        if (status.Availability == OwnerChannelAvailability.Reachable)
+        {
+            var identity = ServiceRuntime.ReadIdentity(layout.RuntimeDirectory);
+            if (!ServiceRuntime.IsProcessRunning(identity))
+            {
+                throw new InvalidOperationException(
+                    "The owner endpoint '" + controlPipe +
+                    "' is answered by a host this installation did not start. It was not stopped and no files were changed. " +
+                    "Give this installation distinct endpoints or stop the other host explicitly.");
+            }
+        }
     }
 
     internal static string CurrentOwnerSid()

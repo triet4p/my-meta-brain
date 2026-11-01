@@ -356,7 +356,7 @@ internal static partial class OwnerServiceSmoke
             {
                 var spoofed = await InvokeAgentRequestAsync(fixture.AgentPipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = ownerOperation,
                     isOwner = true,
                     resourceId = S5T7AllowedSession,

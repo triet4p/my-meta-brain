@@ -6,6 +6,20 @@ using MetaBrain.Core.Security;
 
 namespace MetaBrain.Connections;
 
+/// <summary>
+/// S12-T5 what this live installation can contribute to one restore. A
+/// restore of a backup of this same vault is refused while the live vault is
+/// locked, because the encrypted purge ledger cannot be read without the data
+/// key; an unrelated backup or a not-yet-created live vault contributes no
+/// guard. The unlocked same-vault case carries the ledger and consumed-token
+/// state the restore unions.
+/// </summary>
+internal sealed record VaultRestoreGuards(
+    bool SameVault,
+    bool Locked,
+    OwnerPurgeLedgerState? PurgeLedger,
+    OwnerScopeGrantState? ScopeGrants);
+
 internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateIndexKeyProvider
 {
     private static readonly byte[] IndexKeyInfo = Encoding.UTF8.GetBytes("MetaBrain|private-index|v1");
@@ -292,6 +306,42 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
     public void Dispose()
     {
         LockAsync().GetAwaiter().GetResult();
+    }
+
+    /// <summary>
+    /// S12-T5 reads the anti-resurrection state a restore must not roll back:
+    /// the durable purge ledger and the consumed-token verifiers of the live
+    /// installation. An unlocked vault answers only for the same vault id, so
+    /// a backup of one installation is never governed by another
+    /// installation's deletions. A locked vault cannot decrypt its own ledger;
+    /// it still names the same vault through the public header, so the restore
+    /// refuses instead of materializing data the live installation has purged
+    /// since the backup was taken.
+    /// </summary>
+    internal VaultRestoreGuards ReadRestoreGuards(string vaultId)
+    {
+        lock (_contentGate)
+        {
+            if (_manifest is null || _dataKey is null)
+            {
+                var sameLockedVault = _store.TryReadVaultId(out var lockedVaultId) &&
+                    string.Equals(lockedVaultId, vaultId, StringComparison.Ordinal);
+                return new VaultRestoreGuards(sameLockedVault, sameLockedVault, null, null);
+            }
+
+            if (!string.Equals(_manifest.VaultId, vaultId, StringComparison.Ordinal))
+            {
+                return new VaultRestoreGuards(false, false, null, null);
+            }
+
+            return new VaultRestoreGuards(
+                true,
+                false,
+                OwnerPurgeLedgerAuthority.ValidateAndNormalizeState(
+                    _store.LoadPurgeLedgerState(_manifest, _dataKey)),
+                OwnerScopeGrantAuthority.ValidateAndMigrateState(
+                    _store.LoadScopeGrantState(_manifest, _dataKey)));
+        }
     }
 
     private bool TryGetZone(string resourceId, out string? zoneId)
@@ -714,6 +764,35 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
         var result = _workspaceStore.Open(_manifest.VaultId, _dataKey);
         _workspace = result.State;
         _workspaceUnavailableCode = result.ErrorCode;
+        if (_workspace is null || result.ErrorCode is not null)
+        {
+            return;
+        }
+
+        // The purge ledger is the one authority for purged identities. A
+        // confirmed workspace purge writes it before the workspace commit, so
+        // an interrupted commit leaves a reservation the next unlock finishes:
+        // the reserved nodes and their anchors leave the served state and their
+        // ciphertext is reclaimed by this commit. A ledger that cannot be
+        // validated refuses workspace acts instead of serving a state whose
+        // deletion record is unknown; the vault itself still unlocks.
+        try
+        {
+            var reserved = OwnerPurgeLedgerAuthority.ReservedWorkspaceIdentifiers(
+                OwnerPurgeLedgerAuthority.ValidateAndNormalizeState(
+                    _store.LoadPurgeLedgerState(_manifest, _dataKey)));
+            if (reserved.Count != 0)
+            {
+                _workspace = _workspaceStore.ApplyPurgedIdentifiers(
+                    _manifest.VaultId, _dataKey, _workspace, reserved);
+            }
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException or
+            WorkspaceRefusalException)
+        {
+            _workspace = null;
+            _workspaceUnavailableCode = WorkspaceErrorCodes.Unavailable;
+        }
     }
 
     private void EnsureWorkspaceAvailableLocked()
@@ -789,7 +868,8 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
                 folders,
                 files,
                 revisions,
-                deleted);
+                deleted,
+                CountReservedWorkspaceIdentifiersLocked());
         }
     }
 
@@ -1084,6 +1164,190 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
             return _workspace is null
                 ? Array.Empty<WorkspaceTombstoneInfo>()
                 : EncryptedWorkspaceStore.ListTombstones(_workspace);
+        }
+    }
+
+    /// <summary>
+    /// S12-T5 previews one irreversible purge of an encrypted tombstone's
+    /// whole deletion group under the current committed tree revision. It reads
+    /// only; the token it returns binds the confirmation to exactly this state,
+    /// its retained byte descriptors and its anchors.
+    /// </summary>
+    private WorkspacePurgePreviewInfo PreviewWorkspacePurge(string nodeId)
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            if (_workspace is null)
+            {
+                throw new WorkspaceRefusalException(WorkspaceErrorCodes.NotFound);
+            }
+
+            return EncryptedWorkspaceStore.PreviewPurge(_workspace, nodeId);
+        }
+    }
+
+    /// <summary>
+    /// S12-T5 commits one previewed purge: the tombstone group leaves the
+    /// canonical state and its ciphertext becomes unreachable. The owner's
+    /// reason and every purged identity are first written to the vault's one
+    /// durable purge ledger — the same encrypted ledger canonical records and
+    /// sessions use — so the reservation, the backup that carries it and the
+    /// restore that re-applies it are a single mechanism instead of a second
+    /// workspace-only watermark.
+    /// </summary>
+    private WorkspacePurgeInfo PurgeWorkspaceNode(
+        string nodeId,
+        string reason,
+        long expectedTreeRevision,
+        string previewToken)
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            if (_workspace is null)
+            {
+                throw new WorkspaceRefusalException(WorkspaceErrorCodes.NotFound);
+            }
+
+            if (_manifest is null || _dataKey is null)
+            {
+                throw new ManagedResourceUnavailableException();
+            }
+
+            var preview = EncryptedWorkspaceStore.PreviewPurge(_workspace, nodeId);
+            if (!string.Equals(preview.Preview, previewToken, StringComparison.Ordinal) ||
+                preview.TreeRevision != expectedTreeRevision)
+            {
+                throw new WorkspaceRefusalException(WorkspaceErrorCodes.Conflict);
+            }
+
+            string purgeId;
+            try
+            {
+                purgeId = ReserveWorkspacePurgeLocked(preview, reason);
+            }
+            catch (InvalidDataException)
+            {
+                throw new WorkspaceRefusalException(WorkspaceErrorCodes.PurgeConfirmation);
+            }
+
+            try
+            {
+                var next = _workspaceStore.PurgeNode(
+                    _manifest.VaultId,
+                    _dataKey,
+                    _workspace,
+                    nodeId,
+                    purgeId,
+                    expectedTreeRevision,
+                    previewToken,
+                    out var purged);
+                _workspace = next;
+                return purged;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // The ledger entry is already durable, so the identity can
+                // never be resurrected. The next unlock re-applies it and
+                // removes whatever this failed commit left behind.
+                throw new WorkspaceRefusalException(WorkspaceErrorCodes.Unavailable);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Appends the canonical deletion record for one confirmed workspace purge
+    /// before any workspace bytes are removed. A group larger than the ledger's
+    /// per-intent bound is recorded as several intents with fresh IDs; every
+    /// node identity is reserved exactly once either way. A group whose
+    /// identities are already reserved by an interrupted act returns the
+    /// existing reservation instead of inventing a second one.
+    /// </summary>
+    private string ReserveWorkspacePurgeLocked(WorkspacePurgePreviewInfo preview, string reason)
+    {
+        var validatedReason = OwnerPurgeLedgerAuthority.NormalizeReason(reason);
+        var target = preview.Nodes.First(node =>
+            string.Equals(node.NodeId, preview.NodeId, StringComparison.Ordinal));
+        var purgeId = Guid.NewGuid().ToString("N");
+        UpdatePurgeLedgerState(state =>
+        {
+            var validated = OwnerPurgeLedgerAuthority.ValidateAndNormalizeState(state);
+            var reserved = OwnerPurgeLedgerAuthority.ReservedWorkspaceIdentifiers(validated);
+            if (preview.Nodes.All(node => reserved.Contains(node.NodeId)))
+            {
+                return (validated, true);
+            }
+
+            var refs = preview.Nodes
+                .Select(node => new PurgedResourceRef(node.NodeId, node.Revision))
+                .ToArray();
+            var now = DateTimeOffset.UtcNow;
+            var next = validated;
+            for (var offset = 0; offset < refs.Length; offset += OwnerPurgeLedgerAuthority.MaximumImpactedPerPurge)
+            {
+                var chunk = refs
+                    .Skip(offset)
+                    .Take(OwnerPurgeLedgerAuthority.MaximumImpactedPerPurge)
+                    .ToArray();
+                var intent = OwnerPurgeLedgerAuthority.CreateWorkspaceIntent(
+                    offset == 0 ? purgeId : Guid.NewGuid().ToString("N"),
+                    target.NodeId,
+                    target.Revision,
+                    target.Kind == WorkspaceNodeKind.Folder ? EncryptedWorkspaceStore.FolderKind : EncryptedWorkspaceStore.FileKind,
+                    chunk,
+                    validatedReason,
+                    now,
+                    preview.TreeRevision);
+                next = OwnerPurgeLedgerAuthority.Append(next, intent);
+            }
+
+            return (next, true);
+        });
+
+        return purgeId;
+    }
+
+    /// <summary>
+    /// The count of workspace identities the durable ledger reserved, for the
+    /// owner status line. It reads the same ledger a purge writes and a restore
+    /// re-applies, so the reported number never comes from a second watermark.
+    /// </summary>
+    private int CountReservedWorkspaceIdentifiersLocked()
+    {
+        if (_manifest is null || _dataKey is null)
+        {
+            return 0;
+        }
+
+        return OwnerPurgeLedgerAuthority.ReservedWorkspaceIdentifiers(
+            OwnerPurgeLedgerAuthority.ValidateAndNormalizeState(
+                _store.LoadPurgeLedgerState(_manifest, _dataKey))).Count;
+    }
+
+    /// <summary>
+    /// S12-T5 captures the committed workspace, its tombstones, every retained
+    /// original-byte revision and its anchors as one point-in-time plaintext
+    /// copy for the encrypted backup. It must run inside
+    /// <see cref="CaptureSnapshot{T}"/>; a workspace that cannot be
+    /// authenticated refuses the backup instead of being silently omitted.
+    /// The durable purge ledger travels in the same snapshot, so a restore sees
+    /// exactly which identities this point in time had already purged.
+    /// A vault that has never committed a workspace returns null.
+    /// </summary>
+    internal WorkspaceBackupSnapshot? CaptureWorkspaceBackup()
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            if (_manifest is null || _dataKey is null)
+            {
+                throw new ManagedResourceUnavailableException();
+            }
+
+            return _workspace is null
+                ? null
+                : _workspaceStore.CaptureBackup(_manifest.VaultId, _dataKey, _workspace);
         }
     }
 
@@ -1556,6 +1820,10 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
         public WorkspaceRestoreInfo RestoreWorkspaceNode(string nodeId, long expectedTreeRevision) =>
             GetOwner().RestoreWorkspaceNode(nodeId, expectedTreeRevision);
         public WorkspaceTombstoneInfo[] ReadWorkspaceTombstones() => GetOwner().ReadWorkspaceTombstones();
+        public WorkspacePurgePreviewInfo PreviewWorkspacePurge(string nodeId) =>
+            GetOwner().PreviewWorkspacePurge(nodeId);
+        public WorkspacePurgeInfo PurgeWorkspaceNode(string nodeId, string reason, long expectedTreeRevision, string previewToken) =>
+            GetOwner().PurgeWorkspaceNode(nodeId, reason, expectedTreeRevision, previewToken);
         public WorkspaceAnchorInfo CreateWorkspaceAnchor(string fileId, long expectedContentRevision, long offset, long length, long expectedTreeRevision) =>
             GetOwner().CreateWorkspaceAnchor(fileId, expectedContentRevision, offset, length, expectedTreeRevision);
         public WorkspaceAnchorInfo[] ReadWorkspaceAnchors(string fileId) => GetOwner().ReadWorkspaceAnchors(fileId);

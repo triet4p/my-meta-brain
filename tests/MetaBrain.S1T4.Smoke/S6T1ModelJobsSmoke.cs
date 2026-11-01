@@ -1388,13 +1388,15 @@ internal static partial class OwnerServiceSmoke
                 "Failed to capture live synthetic note.");
             File.Delete(noteInput);
 
-            // Configure provider from .env safely without argv secrets or environment exports
-            var config = await RunOwnerCommandAsync(connectionsExecutable,
+            // The live operator key reaches the product only through redirected
+            // standard input: never argv, a product environment read or a file.
+            var config = await RunOwnerCommandWithInputAsync(connectionsExecutable,
+                S6LiveProviderKey() + Environment.NewLine,
                 "owner", "provider-config", "--control-pipe", fixture.ControlPipe,
                 "--provider", "deepseek", "--model", "deepseek-flash",
-                "--from-env", "true").ConfigureAwait(false);
+                "--api-key-stdin", "true").ConfigureAwait(false);
             Require(config.ExitCode == 0 && config.StandardOutput.Contains("PROVIDER configured", StringComparison.Ordinal),
-                "Failed to configure live provider from .env.");
+                "Failed to configure live provider through the secure stdin handoff.");
 
             // Create job
             var createJob = await RunOwnerCommandAsync(connectionsExecutable,
@@ -1609,6 +1611,8 @@ internal static partial class OwnerServiceSmoke
         public WorkspaceDeleteInfo DeleteWorkspaceNode(string nodeId, long expectedTreeRevision, long expectedNodeRevision, string previewToken) => _inner.DeleteWorkspaceNode(nodeId, expectedTreeRevision, expectedNodeRevision, previewToken);
         public WorkspaceRestoreInfo RestoreWorkspaceNode(string nodeId, long expectedTreeRevision) => _inner.RestoreWorkspaceNode(nodeId, expectedTreeRevision);
         public WorkspaceTombstoneInfo[] ReadWorkspaceTombstones() => _inner.ReadWorkspaceTombstones();
+        public WorkspacePurgePreviewInfo PreviewWorkspacePurge(string nodeId) => _inner.PreviewWorkspacePurge(nodeId);
+        public WorkspacePurgeInfo PurgeWorkspaceNode(string nodeId, string reason, long expectedTreeRevision, string previewToken) => _inner.PurgeWorkspaceNode(nodeId, reason, expectedTreeRevision, previewToken);
         public WorkspaceAnchorInfo CreateWorkspaceAnchor(string fileId, long expectedContentRevision, long offset, long length, long expectedTreeRevision) => _inner.CreateWorkspaceAnchor(fileId, expectedContentRevision, offset, length, expectedTreeRevision);
         public WorkspaceAnchorInfo[] ReadWorkspaceAnchors(string fileId) => _inner.ReadWorkspaceAnchors(fileId);
         public WorkspaceExportPreviewInfo PreviewWorkspaceExport(string nodeId, long contentRevision, string destination) => _inner.PreviewWorkspaceExport(nodeId, contentRevision, destination);

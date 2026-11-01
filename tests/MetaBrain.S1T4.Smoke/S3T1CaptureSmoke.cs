@@ -84,7 +84,7 @@ internal static partial class OwnerServiceSmoke
 
             var agentEnroll = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "source.enroll",
                 resourceId = sourceId
             }).ConfigureAwait(false);
@@ -92,7 +92,7 @@ internal static partial class OwnerServiceSmoke
                 "The agent channel reached a source enrollment operation.");
             var agentIngest = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "source.ingest",
                 resourceId = sourceId
             }).ConfigureAwait(false);
@@ -100,7 +100,7 @@ internal static partial class OwnerServiceSmoke
                 "The agent channel reached a source ingestion operation.");
             var agentStatus = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "source.status",
                 resourceId = sourceId
             }).ConfigureAwait(false);

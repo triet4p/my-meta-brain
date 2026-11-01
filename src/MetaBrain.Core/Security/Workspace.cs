@@ -109,7 +109,8 @@ public sealed record WorkspaceStatusInfo(
     int FolderCount,
     int FileCount,
     int ContentRevisionCount,
-    int DeletedNodeCount);
+    int DeletedNodeCount,
+    int PurgedNodeCount = 0);
 
 /// <summary>
 /// The outcome of one committed workspace mutation: the node it addressed and
@@ -210,6 +211,47 @@ public sealed record WorkspaceAnchorInfo(
     long Length,
     string Sha256,
     string State);
+
+/// <summary>One tombstone member of a pending workspace purge.</summary>
+public sealed record WorkspacePurgeNodeInfo(
+    string NodeId,
+    WorkspaceNodeKind Kind,
+    string? ParentId,
+    string Name,
+    long Revision,
+    long ContentRevision);
+
+/// <summary>
+/// The exact scope one pending workspace purge would erase: the whole
+/// tombstone deletion group, every retained original-byte revision it still
+/// holds, the citation anchors that name its files, and the token that binds
+/// the act to this preview. Producing it writes nothing.
+/// </summary>
+public sealed record WorkspacePurgePreviewInfo(
+    string NodeId,
+    string DeletionId,
+    long TreeRevision,
+    string Preview,
+    WorkspacePurgeNodeInfo[] Nodes,
+    int ContentRevisionCount,
+    long TotalBytes,
+    int AnchorCount);
+
+/// <summary>
+/// The outcome of one committed workspace purge: the tombstone group is gone
+/// from the canonical state, its retained ciphertext is unreferenced (and
+/// reclaimed), and its identities stay reserved in the vault's single durable
+/// purge ledger, which every later backup carries and a restore re-applies.
+/// </summary>
+public sealed record WorkspacePurgeInfo(
+    string PurgeId,
+    string NodeId,
+    string DeletionId,
+    long WorkspaceRevision,
+    int NodesPurged,
+    int ContentRevisionsPurged,
+    long BytesPurged,
+    int AnchorsPurged);
 
 /// <summary>
 /// The exact original bytes of one retained file revision, together with the
@@ -388,6 +430,9 @@ public static class WorkspaceErrorCodes
     /// </summary>
     public const string ExportRevision = "workspace_export_revision";
 
+    /// <summary>The purge act did not name the typed purge confirmation token.</summary>
+    public const string PurgeConfirmation = "workspace_purge_confirmation";
+
     /// <summary>The plaintext export could not be written; everything the act created was removed.</summary>
     public const string ExportFailed = "workspace_export_failed";
 
@@ -563,6 +608,33 @@ public interface IWorkspacePersistence
     /// file refuses because its relations are unavailable.
     /// </summary>
     WorkspaceAnchorInfo[] ReadWorkspaceAnchors(string fileId);
+
+    /// <summary>
+    /// Reports exactly what a purge of the selected encrypted tombstone would
+    /// erase: the whole deletion group it belongs to, every retained
+    /// original-byte revision, the citation anchors naming those files, and the
+    /// token binding the act to this tree revision. A live node is refused
+    /// because purge is separate from delete and always follows a tombstone.
+    /// Nothing is written.
+    /// </summary>
+    WorkspacePurgePreviewInfo PreviewWorkspacePurge(string nodeId);
+
+    /// <summary>
+    /// Purges the whole deletion group of the selected tombstone, but only for
+    /// exactly the preview the owner confirmed. The canonical nodes and their
+    /// anchors are removed, their retained ciphertext becomes unreachable, and
+    /// the owner's reason and every purged identity are written into the one
+    /// durable purge ledger the vault already keeps for canonical records and
+    /// sessions. A later backup carries that ledger and a restore re-applies
+    /// it, so no backup taken afterwards can resurrect the purged identities.
+    /// Backups and exports taken before the purge are disclosed, never
+    /// recalled.
+    /// </summary>
+    WorkspacePurgeInfo PurgeWorkspaceNode(
+        string nodeId,
+        string reason,
+        long expectedTreeRevision,
+        string previewToken);
 
     /// <summary>
     /// Reports the exact plaintext scope one export of the selected live file

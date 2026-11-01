@@ -80,7 +80,7 @@ internal static partial class OwnerServiceSmoke
             // ---- discovery knows nothing before publication ----
             var emptyDiscovery = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "catalog.list",
             }).ConfigureAwait(false);
             Require(ReplyCode(emptyDiscovery) == "catalog" &&
@@ -100,7 +100,7 @@ internal static partial class OwnerServiceSmoke
                 "The console did not preview the exact owner-typed metadata with the live revision (" + session.CatalogWriteMessage + ").");
             var stillEmpty = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "catalog.list",
             }).ConfigureAwait(false);
             Require(ReplyCode(stillEmpty) == "catalog" &&
@@ -118,7 +118,7 @@ internal static partial class OwnerServiceSmoke
                 "The console did not republish the private mapping after the write (" + session.CatalogWriteMessage + ").");
             var listedAlpha = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "catalog.list",
             }).ConfigureAwait(false);
             var listedText = listedAlpha.GetRawText();
@@ -321,7 +321,7 @@ internal static partial class OwnerServiceSmoke
                 "A superseded revision read was served (" + deniedRevision.Trim() + ").");
             var deniedRaw = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.access.authorize",
                 sessionToken = ReadSessionBearer(sessionFile),
                 accessOperation = "source.read",
@@ -334,7 +334,7 @@ internal static partial class OwnerServiceSmoke
                 "An unapproved source expansion was authorized (" + deniedRaw.GetRawText() + ").");
             var deniedProvider = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.access.authorize",
                 sessionToken = ReadSessionBearer(sessionFile),
                 accessOperation = "provider.egress",
@@ -352,7 +352,7 @@ internal static partial class OwnerServiceSmoke
             await session.PublishCatalogAsync(S5T6CatalogBeta, S5T6LabelBeta, S5T6DescriptionBeta, S5T6ItemBeta).ConfigureAwait(false);
             var bothListed = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "catalog.list",
             }).ConfigureAwait(false);
             Require(ReplyCode(bothListed) == "catalog" &&
@@ -363,7 +363,7 @@ internal static partial class OwnerServiceSmoke
             await session.WithdrawCatalogAsync(S5T6CatalogBeta).ConfigureAwait(false);
             var afterWithdraw = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "catalog.list",
             }).ConfigureAwait(false);
             var afterWithdrawText = afterWithdraw.GetRawText();
@@ -373,7 +373,7 @@ internal static partial class OwnerServiceSmoke
                 "Withdrawal did not converge discovery to no-match for the entry (" + ReplyCode(afterWithdraw) + ").");
             var withdrawnQuery = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "catalog.query",
                 query = "S5-T6 beta",
             }).ConfigureAwait(false);
@@ -458,7 +458,7 @@ internal static partial class OwnerServiceSmoke
             {
                 var spoofed = await InvokeAgentRequestAsync(fixture.AgentPipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = ownerOperation,
                     isOwner = true,
                     requestId = rejectedId,
@@ -506,7 +506,7 @@ internal static partial class OwnerServiceSmoke
             // ---- locked discovery still serves the surviving approved triplet ----
             var lockedDiscovery = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "catalog.list",
             }).ConfigureAwait(false);
             Require(ReplyCode(lockedDiscovery) == "catalog" &&

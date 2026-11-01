@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -375,7 +375,7 @@ internal static partial class OwnerServiceSmoke
         // inert transport text, never authorization.
         var forged = await InvokeAgentRequestAsync(fixture.AgentPipe, new
         {
-            protocolVersion = 1,
+            protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
             operation = "agent.memory.read",
             sessionToken = "mbs1_forgedsynthetictokenvalue",
             accessOperation = "memory.read",

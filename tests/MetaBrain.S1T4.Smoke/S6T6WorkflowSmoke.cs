@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
@@ -169,7 +169,7 @@ internal static partial class OwnerServiceSmoke
             var serviceLog = transcripts.ToString();
             Require(serviceLog.Contains("SCHEDULE outcome=ran", StringComparison.Ordinal),
                 "The service transcript did not record a scheduled run performed by its background pass.");
-            Require(serviceLog.Contains("READY protocol=1 channel=owner+agent", StringComparison.Ordinal),
+            Require(serviceLog.Contains("READY protocol=" + MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion + " channel=owner+agent", StringComparison.Ordinal),
                 "The service transcript is missing the ready line.");
             Require(serviceLog.Split("SCHEDULE pass started").Length - 1 == 2,
                 "The schedule pass did not start in both service instances (starts=" +
@@ -181,7 +181,7 @@ internal static partial class OwnerServiceSmoke
             Console.WriteLine("PASS service transcript: the background pass recorded its own scheduled runs (" +
                 serviceLog.Split('\n').Count(line => line.Contains("SCHEDULE outcome=", StringComparison.Ordinal))
                     .ToString(CultureInfo.InvariantCulture) + " pass line(s) across " +
-                (serviceLog.Split("READY protocol=1 channel=owner+agent").Length - 1).ToString(CultureInfo.InvariantCulture) +
+                (serviceLog.Split("READY protocol=" + MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion + " channel=owner+agent").Length - 1).ToString(CultureInfo.InvariantCulture) +
                 " service start(s))");
 
             PersistS6T6Evidence(fixture);
@@ -988,11 +988,12 @@ internal static partial class OwnerServiceSmoke
             await WriteS6T6NoteAsync(connectionsExecutable, fixture, S6T6NoteA, S6T6NoteAText).ConfigureAwait(false);
             await WriteS6T6NoteAsync(connectionsExecutable, fixture, S6T6NoteB, S6T6NoteBText).ConfigureAwait(false);
 
-            var config = await RunOwnerCommandAsync(connectionsExecutable,
+            var config = await RunOwnerCommandWithInputAsync(connectionsExecutable,
+                S6LiveProviderKey() + Environment.NewLine,
                 "owner", "provider-config", "--control-pipe", fixture.ControlPipe,
-                "--provider", "deepseek", "--model", "deepseek-flash", "--from-env", "true").ConfigureAwait(false);
+                "--provider", "deepseek", "--model", "deepseek-flash", "--api-key-stdin", "true").ConfigureAwait(false);
             Require(config.ExitCode == 0 && config.StandardOutput.Contains("PROVIDER configured", StringComparison.Ordinal),
-                "The live provider configuration from .env failed.");
+                "The live provider configuration through the secure stdin handoff failed.");
             var providerStatus = await RunOwnerCommandAsync(connectionsExecutable,
                 "owner", "provider-status", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
             Require(providerStatus.ExitCode == 0 && providerStatus.StandardOutput.Contains("configured=True", StringComparison.Ordinal),

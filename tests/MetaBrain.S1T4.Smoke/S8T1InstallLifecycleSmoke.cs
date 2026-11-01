@@ -178,7 +178,7 @@ internal static class S8T1InstallLifecycleSmoke
             var sessionToken = AgentSessionFile.Read(sessionPath);
             var live = await InvokeAgentRequestAsync(agentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.session.inspect",
                 sessionToken
             }).ConfigureAwait(false);
@@ -250,7 +250,7 @@ internal static class S8T1InstallLifecycleSmoke
 
             var resurrected = await InvokeAgentRequestAsync(agentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.session.inspect",
                 sessionToken
             }).ConfigureAwait(false);

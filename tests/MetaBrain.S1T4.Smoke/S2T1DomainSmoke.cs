@@ -93,7 +93,7 @@ internal static partial class OwnerServiceSmoke
             Console.WriteLine("PASS owner creates tool observation envelope with unavailable source and unknown stays unknown");
             var discovery = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "catalog.list"
             }).ConfigureAwait(false);
             Require(discovery.TryGetProperty("status", out var discoveryStatus) &&
@@ -310,7 +310,7 @@ internal static partial class OwnerServiceSmoke
         Require(redeem.ExitCode == 0, "Agent redemption failed for the S2-T1 memory.read grant (stderr=" + redeem.StandardError.Trim() + ").");
         var allowed = await InvokeAgentRequestAsync(fixture.AgentPipe, new
         {
-            protocolVersion = 1,
+            protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
             operation = "agent.memory.read",
             sessionToken = ReadSessionBearer(sessionFile),
             accessOperation = "memory.read",
@@ -324,7 +324,7 @@ internal static partial class OwnerServiceSmoke
             "Scoped agent memory.read did not return the typed envelope inside the approved ID/revision.");
         var denied = await InvokeAgentRequestAsync(fixture.AgentPipe, new
         {
-            protocolVersion = 1,
+            protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
             operation = "agent.memory.read",
             sessionToken = ReadSessionBearer(sessionFile),
             accessOperation = "memory.read",

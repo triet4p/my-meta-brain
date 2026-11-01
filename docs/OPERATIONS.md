@@ -79,6 +79,15 @@ An install **never creates the vault**: the first start is locked and uninitiali
 creates the vault explicitly (§4). Installing over an existing install root is an upgrade of the
 application files; the data root, the vault and the pipe endpoints are kept.
 
+**A 1.1.0 installation is refused in place.** The current installer refuses an existing installation
+whose recorded product version is older than 1.2.0 — including a real 1.1.0 installation — before it
+stops that host or changes any file or data. It names the supported transition: install 1.2 into a
+separate install root with its own data root and distinct `--control-pipe` / `--agent-pipe`
+endpoints, and leave the 1.1 application and data untouched. The same refusal covers an unknown or
+mixed component registration, a data root owned by another installation, an unowned data root that
+already holds Meta Brain data, overlapping roots, and a live endpoint that speaks another protocol
+revision. No refusal replaces, uninstalls or edits the old installation.
+
 ### 2.1 The release bundle (S9-T6)
 
 The bundle is one self-contained Windows x64 package with a directory per product entrypoint and
@@ -481,7 +490,7 @@ Open a source to read its status. The view reports availability, saved canonical
 
 State-action answers that omit a complete ingestion report show those facets as `not reported`, never as zero. When the same source ID and generation already has a complete status, the console retains its saved/index/interpretation/preservation details while applying the latest membership, pause and veto state.
 
-### 3.2.7 The owner workspace (S12-T2/T3/T4)
+### 3.2.7 The owner workspace (S12-T2–T5)
 
 The workspace is a private logical tree stored inside the unlocked vault: folders and files with stable random IDs, exact names and retained original-byte revisions. It needs the running shared host and an unlocked vault; a locked vault refuses every workspace command with `vault_locked`. No agent or MCP client can reach it: the agent channel's operation set is an explicit allowlist, and the workspace operations are owner-only.
 
@@ -501,6 +510,8 @@ The workspace is a private logical tree stored inside the unlocked vault: folder
 - `owner workspace-anchor-create --control-pipe <pipe> --file-id <id> --expected-content-revision <live> --offset <n> --length <n> --expected-tree-revision <n>` pins one citation anchor to that exact byte range of the file's current content revision. The anchor records the document id, the content revision, the range and the digest of the anchored bytes; it stores no path and no display name. An out-of-range span refuses with `workspace_anchor_invalid` and a stale content revision with `workspace_conflict`.
 - `owner workspace-anchor-list --control-pipe <pipe> --file-id <id>` lists the anchors of one live file with their pinned `contentRevision`, range, digest and `live|stale` state. A deleted file refuses with `workspace_deleted` because its relations are unavailable until it is restored.
 
+- `owner workspace-purge-preview --control-pipe <pipe> --node-id <id>` writes nothing and reports the exact tombstone deletion group (one `TOMBSTONE` line per retained node), the retained content revisions, total bytes, anchors and the binding `token` an irreversible purge would erase, plus the disclosure that pre-existing backups and plaintext exports still hold their own copies. A live node is refused; this reads only.
+- `owner workspace-purge --control-pipe <pipe> --node-id <id> --expected-tree-revision <n> --preview <token> --confirm PURGE --reason <text>` permanently removes the previewed tombstone group and its retained bytes and anchors from this vault after re-deriving the preview, recording the owner's reason and every purged id in the vault's encrypted purge ledger before the workspace commit. A stale tree revision, group or token refuses with `workspace_conflict`; a missing reason or a confirmation other than `PURGE` refuses with `workspace_purge_confirmation`. The ledger is the same durable record canonical purges use, later backups carry it, and a restore re-applies it, so those identities are not resurrected here. Backups and exports made before the purge are disclosed, not recalled.
 - `owner workspace-export-preview --control-pipe <pipe> --node-id <id> [--content-revision N] --destination <new-absolute-path>` writes nothing and reports exactly what an export would write: every in-scope file pinned to its retained revision, every folder, the in-scope citation anchors, the new destination directory, the versioned metadata document and the binding token. For a file scope, `--content-revision N` pins one retained revision; for a folder scope it is refused with `workspace_export_revision` and every file pins its current content revision. Files outside the selected scope, citations of them and the selected node's parent identity are not included.
 - `owner workspace-export --control-pipe <pipe> --node-id <id> [--content-revision N] --destination <new-absolute-path> --preview <token> --confirm EXPORT` writes exactly the previewed scope as plaintext original bytes plus a separate versioned metadata document `metabrain-workspace-export.json` (`format: metabrain-workspace-export/1`, `metadataSchemaVersion: 1`) into one new destination directory. The destination must be an absolute path with no `.`/`..` segment, device namespace, reparse point in any existing ancestor, existing entry, or case-only collision with another in-scope name or the sidecar name; a logical name that is not a valid unchanged Windows component refuses with `workspace_export_name`. The token and the exact `EXPORT` confirmation are required and bind workspace identity and format, tree revision, selected node and revision, canonical destination and every in-scope node's id, node revision, pinned revision and exact path; any changed workspace, destination or scope refuses `workspace_conflict` before the first write. Each file is read from its authenticated retained revision, written create-only with a write-through flush and its buffer zeroized; the sidecar is written last. On cancellation, refusal or I/O failure the created files are deleted (deepest first, empty directories only, nothing followed) and the command refuses `workspace_export_failed`, or `workspace_export_incomplete` when removal could not complete. No temporary plaintext is staged in the vault or beside the destination. The copy lives outside the vault and cannot be revoked by a later lock, delete or purge.
 
@@ -633,12 +644,27 @@ passphrase or your recovery key** opens your data, which is exactly the same bou
 vault. Keep backups where you would keep the recovery key.
 
 **What a restore does.** It reproduces your data — every record, its exact revision, its relations,
-its sources, its lifecycle and intention states, its archive and retained revisions, and the fact
+its sources, its lifecycle and intention states, its archive and retained revisions, the workspace
+identity, tree, exact names, parents, retained original bytes, anchors, tombstones, and the fact
 that something was deleted — into a directory that must not exist yet. The restored vault opens with
 your own passphrase or your own recovery key, because the restore carries the owner's key envelope
 and never re-keys it. The restored vault carries **no live authority**: no scope grant, no agent
-session and no redeemable token comes back, and a token that was already used stays used. The
-private index is not restored either; the derivative is excluded from the backup, so the restored
+session and no redeemable token comes back, and a token that was already used stays used.
+
+**The purge ledger is re-applied.** The backup carries the vault's one durable purge ledger, which
+records canonical record purges and workspace tombstone purges. A restore re-applies it, and while
+the same vault is unlocked it merges the live installation's ledger and already-consumed token
+verifiers. Restoring an older backup taken before a purge therefore withholds the identities this
+installation already purged — the restore prints `purgedRecordsWithheld`,
+`purgedWorkspaceNodesWithheld` and `purgedCatalogEntriesWithheld` and says the ledger was re-applied
+— instead of resurrecting them. A restore of the live vault's own backup while that vault is locked
+refuses with `restore_requires_unlock`: the live encrypted purge ledger cannot be read without the
+data key, so the service fails closed before creating the target rather than materializing a snapshot
+that might hold identities purged after the backup was taken. Unlock the live vault and run the same
+restore again to apply the merged ledger and consumed-token state; a backup of a different vault is
+not affected.
+
+The private index is not restored either; the derivative is excluded from the backup, so the restored
 vault has no published generation and the first search asks for `owner index-rebuild`.
 
 **What fails closed.** A wrong passphrase, a wrong recovery key, a lost key, a tampered container
@@ -647,10 +673,13 @@ never reset, re-key or invent a recovery. A refused restore leaves no target dir
 is no fallback key and no "recovered" mode: if you have lost both the passphrase and the recovery
 key, the backup cannot be opened.
 
-**Compatibility.** The backup format is versioned (`metabrain/vault-backup` v1) and the restore
-reads the version it writes. A backup taken by this build restores with this build. A future format
-change must keep reading the older backups or state plainly that it does not; no backup is
-silently dropped.
+**Compatibility.** The backup container is versioned (`metabrain/vault-backup`). This build writes
+format 2 (canonical records, owner states, workspace tree, retained original revisions, anchors,
+tombstones and the purge ledger) and reads format 1 and format 2. A format-1 backup written by 1.1
+restores its canonical records and truthfully no workspace, because it never held one, and the
+container's authenticated associated data is bound to the container's own format version. An
+unknown or newer format is refused before anything is written rather than silently dropping part of
+the snapshot.
 
 **Retention.** The product does not delete your backups for you. A backup keeps its own ciphertext
 until you delete that file yourself, and a backup taken before a purge still holds the ciphertext

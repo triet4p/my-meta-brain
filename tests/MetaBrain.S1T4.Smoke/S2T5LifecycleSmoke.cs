@@ -443,7 +443,7 @@ internal static partial class OwnerServiceSmoke
                 "A lifecycle body declared an executor or a state and it was honoured (stdout=" + spoofedPublish.StandardOutput.Trim() + ").");
             var agentLifecycleRead = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "lifecycle.read",
                 resourceId = decision
             }).ConfigureAwait(false);
@@ -452,7 +452,7 @@ internal static partial class OwnerServiceSmoke
                 "The agent channel served an owner lifecycle operation (reply=" + agentLifecycleRead.GetRawText() + ").");
             var agentLifecycleTransition = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "lifecycle.publish",
                 resourceId = decision,
                 resourceRevision = 7L
@@ -503,7 +503,7 @@ internal static partial class OwnerServiceSmoke
             var archiveSession = await IssueS2T5ArchiveGrantAsync(connectionsExecutable, fixture, "s2t5-archive", "arc-s2t5-history-r1").ConfigureAwait(false);
             var archivedAgentRead = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.memory.read",
                 sessionToken = ReadSessionBearer(archiveSession.SessionFile),
                 accessOperation = "memory.read",
@@ -516,7 +516,7 @@ internal static partial class OwnerServiceSmoke
                 "A retained historical revision was not readable inside its own granted archive scope (reply=" + archivedAgentRead.GetRawText() + ").");
             var liveUnderArchiveGrant = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.memory.read",
                 sessionToken = ReadSessionBearer(archiveSession.SessionFile),
                 accessOperation = "memory.read",
@@ -547,7 +547,7 @@ internal static partial class OwnerServiceSmoke
                 "A locked retained revision read was served.");
             var lockedAgentArchiveRead = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.memory.read",
                 sessionToken = ReadSessionBearer(archiveSession.SessionFile),
                 accessOperation = "memory.read",

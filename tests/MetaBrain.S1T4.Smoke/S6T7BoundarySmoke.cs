@@ -447,10 +447,11 @@ internal static partial class OwnerServiceSmoke
             Require(knownPriorSettledUsd <= knownPriorReservationInclusiveUsd &&
                     knownPreSendCommittedUsd <= 5m && 0.0054m <= 0.25m,
                 "The reconciled cumulative budget or per-job reservation cap would be exceeded before the live send.");
-            var liveConfig = await RunOwnerCommandAsync(connectionsExecutable,
+            var liveConfig = await RunOwnerCommandWithInputAsync(connectionsExecutable,
+                S6LiveProviderKey() + Environment.NewLine,
                 "owner", "provider-config", "--control-pipe", fixture.ControlPipe,
                 "--provider", S6T7ProviderName, "--model", S6T7ModelName,
-                "--from-env", "true").ConfigureAwait(false);
+                "--api-key-stdin", "true").ConfigureAwait(false);
             Require(liveConfig.ExitCode == 0 && liveConfig.StandardOutput.Contains("PROVIDER configured", StringComparison.Ordinal),
                 "The existing owner provider configuration did not load into the isolated encrypted fixture.");
             var liveJobCreate = await RunOwnerCommandAsync(connectionsExecutable,

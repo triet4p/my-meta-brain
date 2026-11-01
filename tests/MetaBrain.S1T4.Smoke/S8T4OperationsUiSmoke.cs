@@ -68,7 +68,7 @@ internal static partial class OwnerServiceSmoke
             // the view has an owner action and a real failure to show.
             var created = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "memory.create",
                 resourceId = S8T4UiItem,
                 zoneId = S8T4UiZone,
@@ -84,7 +84,7 @@ internal static partial class OwnerServiceSmoke
                 "The synthetic S8-T4 console record carried no revision (reply=" + created.GetRawText() + ").");
             var redeem = await InvokeS8T4AgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.session.redeem",
                 token = invalidToken,
             }).ConfigureAwait(false);

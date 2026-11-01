@@ -195,14 +195,14 @@ internal static partial class OwnerServiceSmoke
 
             var agentRevokeAttempt = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.session.revoke",
                 sessionId = proposalSession.SessionId,
                 isOwner = true
             }).ConfigureAwait(false);
             var ownerAuthorizeAttempt = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.access.authorize",
                 sessionToken = "mbs1_synthetic-untrusted-token",
                 accessOperation = "resource.read",
@@ -251,7 +251,7 @@ internal static partial class OwnerServiceSmoke
             CryptographicOperations.ZeroMemory(unknownBytes);
             var unknownSession = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.access.authorize",
                 sessionToken = unknownSessionToken,
                 accessOperation = "resource.read",

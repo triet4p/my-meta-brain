@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -151,6 +151,8 @@ internal static class OwnerControlCli
                 "workspace-tombstones" => await WorkspaceTombstonesAsync(options).ConfigureAwait(false),
                 "workspace-anchor-create" => await WorkspaceAnchorCreateAsync(options).ConfigureAwait(false),
                 "workspace-anchor-list" => await WorkspaceAnchorListAsync(options).ConfigureAwait(false),
+                "workspace-purge-preview" => await WorkspacePurgePreviewAsync(options).ConfigureAwait(false),
+                "workspace-purge" => await WorkspacePurgeAsync(options).ConfigureAwait(false),
                 "workspace-export-preview" => await WorkspaceExportPreviewAsync(options).ConfigureAwait(false),
                 "workspace-export" => await WorkspaceExportAsync(options).ConfigureAwait(false),
                 "backup" => await BackupAsync(options).ConfigureAwait(false),
@@ -315,7 +317,7 @@ internal static class OwnerControlCli
             return 4;
         }
 
-        Console.WriteLine($"WORKSPACE state={DisplayText(status, "state")} format={DisplayText(status, "formatVersion")} schema={DisplayText(status, "metadataSchemaVersion")} revision={DisplayText(status, "revision")} root={DisplayText(status, "rootId")} folders={DisplayText(status, "folders")} files={DisplayText(status, "files")} revisions={DisplayText(status, "contentRevisions")} deleted={DisplayText(status, "deleted")}");
+        Console.WriteLine($"WORKSPACE state={DisplayText(status, "state")} format={DisplayText(status, "formatVersion")} schema={DisplayText(status, "metadataSchemaVersion")} revision={DisplayText(status, "revision")} root={DisplayText(status, "rootId")} folders={DisplayText(status, "folders")} files={DisplayText(status, "files")} revisions={DisplayText(status, "contentRevisions")} deleted={DisplayText(status, "deleted")} purged={DisplayText(status, "purged")}");
         return 0;
     }
 
@@ -980,6 +982,113 @@ internal static class OwnerControlCli
             $"files={JsonNumberText(export, "files")} folders={JsonNumberText(export, "folders")} " +
             $"bytes={JsonNumberText(export, "totalBytes")} sidecar={JsonSerializer.Serialize(DisplayText(export, "sidecarPath"))} " +
             $"sidecarSha256={DisplayText(export, "sidecarSha256")} revision={DisplayText(export, "treeRevision")}");
+        return 0;
+    }
+
+    /// <summary>
+    /// S12-T5 previews one irreversible purge of an encrypted tombstone's
+    /// deletion group. The disclosure names the tombstone group, its retained
+    /// revisions and bytes, the anchors it would erase, and the backup limit;
+    /// it writes nothing and returns the token the act needs.
+    /// </summary>
+    private static async Task<int> WorkspacePurgePreviewAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--node-id");
+        var controlPipe = ControlPipe(options);
+        var nodeId = options.Required("--node-id");
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceNodePurgePreviewOperation,
+                nodeId)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "workspace_purge_preview") ||
+            !TryWorkspaceObject(result.Reply, "workspacePurgePreview", out var preview))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        var nodes = 0;
+        if (preview.TryGetProperty("nodes", out var nodeList) && nodeList.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var node in nodeList.EnumerateArray())
+            {
+                nodes++;
+                Console.WriteLine(
+                    $"TOMBSTONE id={DisplayText(node, "nodeId")} kind={DisplayText(node, "kind")} " +
+                    $"parent={DisplayText(node, "parentId")} name={JsonSerializer.Serialize(GetWorkspaceName(node))} " +
+                    $"revision={DisplayText(node, "revision")} contentRevision={DisplayText(node, "contentRevision")}");
+            }
+        }
+
+        Console.WriteLine(
+            $"PURGE PREVIEW id={DisplayText(preview, "nodeId")} deletion={DisplayText(preview, "deletionId")} " +
+            $"revision={DisplayText(preview, "treeRevision")} nodes={nodes.ToString(CultureInfo.InvariantCulture)} " +
+            $"contentRevisions={JsonNumberText(preview, "contentRevisions")} bytes={JsonNumberText(preview, "totalBytes")} " +
+            $"anchors={JsonNumberText(preview, "anchors")} token={DisplayText(preview, "preview")}");
+        Console.WriteLine(
+            "PURGE DISCLOSURE this permanently removes the listed tombstones, their retained original bytes and their citation anchors " +
+            "from this vault, and nothing can restore them here. The owner's reason and every purged identity are written to this vault's " +
+            "encrypted purge ledger, the same durable record canonical purges use. Backups and plaintext exports taken before now still hold " +
+            "their own copies; this act does not recall, erase or rewrite them. A later encrypted backup carries that ledger and a restore " +
+            "re-applies it, so restoring such a backup cannot resurrect these ids. " +
+            "Repeat with --expected-tree-revision <revision> --preview <token> --confirm PURGE --reason <text> to erase exactly this group.");
+        return 0;
+    }
+
+    /// <summary>
+    /// S12-T5 confirms one previewed purge. The typed PURGE confirmation, the
+    /// owner's reason and the preview token are required before the request
+    /// leaves the client; the service re-derives the preview and refuses a stale
+    /// tree revision, group or retained-byte set.
+    /// </summary>
+    private static async Task<int> WorkspacePurgeAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--node-id", "--expected-tree-revision", "--preview", "--confirm", "--reason");
+        var controlPipe = ControlPipe(options);
+        var nodeId = options.Required("--node-id");
+        var previewToken = options.Required("--preview");
+        var confirmation = options.Required("--confirm");
+        var reason = options.Optional("--reason");
+        if (!string.Equals(confirmation, "PURGE", StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(reason))
+        {
+            Console.Error.WriteLine(
+                "ERROR " + WorkspaceErrorCodes.PurgeConfirmation +
+                ": an irreversible workspace purge needs the typed PURGE confirmation, the preview token and the owner's reason; nothing was removed.");
+            return 4;
+        }
+
+        if (!long.TryParse(options.Required("--expected-tree-revision"), NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out var treeRevision) || treeRevision < 0)
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceNodePurgeOperation,
+                nodeId,
+                WorkspaceTreeRevision: treeRevision,
+                WorkspacePurgeToken: previewToken,
+                WorkspacePurgeConfirmation: confirmation,
+                WorkspacePurgeReason: reason)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "workspace_purged") ||
+            !TryWorkspaceObject(result.Reply, "workspacePurge", out var purged))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        Console.WriteLine(
+            $"PURGED id={DisplayText(purged, "nodeId")} deletion={DisplayText(purged, "deletionId")} " +
+            $"purgeId={DisplayText(purged, "purgeId")} revision={DisplayText(purged, "workspaceRevision")} " +
+            $"nodes={JsonNumberText(purged, "nodes")} " +
+            $"contentRevisions={JsonNumberText(purged, "contentRevisions")} bytes={JsonNumberText(purged, "bytes")} " +
+            $"anchors={JsonNumberText(purged, "anchors")}");
+        Console.WriteLine(
+            "PURGE LEDGER written: those ids are reserved in the vault's encrypted purge ledger; later backups carry it and a restore re-applies it.");
         return 0;
     }
 
@@ -4264,7 +4373,10 @@ internal static class OwnerControlCli
         Console.WriteLine(
             $"BACKUP written id={JsonValueText(backup, "backupId")} path={JsonValueText(backup, "path")} " +
             $"bytes={JsonNumberText(backup, "bytes")} records={JsonNumberText(backup, "recordCount")} " +
-            $"manifestRevision={JsonNumberText(backup, "manifestRevision")}");
+            $"manifestRevision={JsonNumberText(backup, "manifestRevision")} " +
+            $"workspaceNodes={JsonNumberText(backup, "workspaceNodeCount")} " +
+            $"workspaceRevisions={JsonNumberText(backup, "workspaceContentRevisionCount")} " +
+            $"workspaceTombstones={JsonNumberText(backup, "workspaceTombstoneCount")}");
         return 0;
     }
 
@@ -4306,10 +4418,26 @@ internal static class OwnerControlCli
             return 3;
         }
 
+        var withheldRecords = JsonNumberText(restore, "purgedRecordsWithheld");
+        var withheldWorkspace = JsonNumberText(restore, "purgedWorkspaceNodesWithheld");
+        var withheldCatalog = JsonNumberText(restore, "purgedCatalogEntriesWithheld");
         Console.WriteLine(
             $"RESTORE written id={JsonValueText(restore, "backupId")} path={JsonValueText(restore, "path")} " +
             $"records={JsonNumberText(restore, "recordCount")} liveGrants={JsonNumberText(restore, "liveGrantsRestored")} " +
-            $"consumedTokens={JsonNumberText(restore, "consumedTokensPreserved")}");
+            $"consumedTokens={JsonNumberText(restore, "consumedTokensPreserved")} " +
+            $"workspaceNodes={JsonNumberText(restore, "workspaceNodeCount")} " +
+            $"workspaceRevisions={JsonNumberText(restore, "workspaceContentRevisionCount")} " +
+            $"purgedRecordsWithheld={withheldRecords} purgedWorkspaceNodesWithheld={withheldWorkspace} " +
+            $"purgedCatalogEntriesWithheld={withheldCatalog}");
+        if (!string.Equals(withheldRecords, "0", StringComparison.Ordinal) ||
+            !string.Equals(withheldWorkspace, "0", StringComparison.Ordinal) ||
+            !string.Equals(withheldCatalog, "0", StringComparison.Ordinal))
+        {
+            Console.WriteLine(
+                "RESTORE PURGE LEDGER re-applied: identities this installation already purged were withheld from the " +
+                "restored records, workspace and catalog; the restored vault keeps the merged encrypted purge ledger.");
+        }
+
         return 0;
     }
 
@@ -8287,22 +8415,20 @@ internal static class OwnerControlCli
 
     private static async Task<int> ProviderConfigAsync(CommandOptions options)
     {
-        options.RequireOnly("--control-pipe", "--provider", "--model", "--base-url", "--api-key-stdin", "--from-env");
+        options.RequireOnly("--control-pipe", "--provider", "--model", "--base-url", "--api-key-stdin");
         var controlPipe = ControlPipe(options);
         var provider = options.Required("--provider");
         var model = options.Required("--model");
         var baseUrl = options.Optional("--base-url") ?? "auto";
 
+        // The API key is a secret. It is read from the non-echo console prompt
+        // by default, or from one line of redirected standard input for an
+        // automated owner run; it is never a command-line value, an environment
+        // variable or a plaintext file read by this product. The S12-T5 cutover
+        // removed the old developer `--from-env` path entirely; there is no
+        // shim for it.
         string? apiKey = null;
-        if (string.Equals(options.Optional("--from-env"), "true", StringComparison.OrdinalIgnoreCase))
-        {
-            apiKey = LoadOpenAiKeyFromEnv();
-            if (baseUrl == "auto")
-            {
-                baseUrl = LoadOpenAiBaseUrlFromEnv() ?? "https://api.deepseek.com";
-            }
-        }
-        else if (string.Equals(options.Optional("--api-key-stdin"), "true", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(options.Optional("--api-key-stdin"), "true", StringComparison.OrdinalIgnoreCase))
         {
             apiKey = Console.In.ReadLine()?.Trim();
         }
@@ -8319,7 +8445,7 @@ internal static class OwnerControlCli
 
         if (baseUrl == "auto")
         {
-            baseUrl = LoadOpenAiBaseUrlFromEnv() ?? "https://api.deepseek.com";
+            baseUrl = "https://api.deepseek.com";
         }
 
         var result = await InvokeOwnerAsync(controlPipe,
@@ -8568,41 +8694,6 @@ internal static class OwnerControlCli
         return selection;
     }
 
-    private static string? LoadOpenAiKeyFromEnv()
-    {
-        var envPath = Path.Combine(Directory.GetCurrentDirectory(), ".env");
-        if (!File.Exists(envPath)) return null;
-
-        foreach (var line in File.ReadLines(envPath))
-        {
-            var trimmed = line.Trim();
-            if (trimmed.StartsWith("#", StringComparison.Ordinal) || !trimmed.Contains('=')) continue;
-            var parts = trimmed.Split('=', 2);
-            if (string.Equals(parts[0].Trim(), "OPENAI_API_KEY", StringComparison.Ordinal))
-            {
-                return parts[1].Trim().Trim('"', '\'');
-            }
-        }
-        return null;
-    }
-
-    private static string? LoadOpenAiBaseUrlFromEnv()
-    {
-        var envPath = Path.Combine(Directory.GetCurrentDirectory(), ".env");
-        if (!File.Exists(envPath)) return null;
-
-        foreach (var line in File.ReadLines(envPath))
-        {
-            var trimmed = line.Trim();
-            if (trimmed.StartsWith("#", StringComparison.Ordinal) || !trimmed.Contains('=')) continue;
-            var parts = trimmed.Split('=', 2);
-            if (string.Equals(parts[0].Trim(), "OPENAI_BASE_URL", StringComparison.Ordinal))
-            {
-                return parts[1].Trim().Trim('"', '\'');
-            }
-        }
-        return null;
-    }
     // S9-T3 contextual CLI help. `owner --help` names every workflow group;
     // `owner <verb> --help` names the exact options of one command. Help is
     // local text: it starts no host, unlocks nothing and mints no authority.
@@ -8625,7 +8716,7 @@ internal static class OwnerControlCli
         {
             Console.Error.WriteLine("Owner commands (run `owner <verb> --help` for one command; `owner help --command <verb>` is the same):");
             Console.Error.WriteLine("  vault: status|provision|unlock|recover|lock|upgrade|upgrade-with-recovery-code|rollback|rollback-with-recovery-code|health|audit|diagnostics|retention|backup|restore|restore-with-recovery-code|export");
-            Console.Error.WriteLine("  workspace: workspace-status|workspace-tree|workspace-mkdir|workspace-import|workspace-revise|workspace-read|workspace-rename|workspace-move|workspace-copy|workspace-delete-preview|workspace-delete|workspace-restore|workspace-tombstones|workspace-anchor-create|workspace-anchor-list|workspace-export-preview|workspace-export");
+            Console.Error.WriteLine("  workspace: workspace-status|workspace-tree|workspace-mkdir|workspace-import|workspace-revise|workspace-read|workspace-rename|workspace-move|workspace-copy|workspace-delete-preview|workspace-delete|workspace-restore|workspace-tombstones|workspace-anchor-create|workspace-anchor-list|workspace-purge-preview|workspace-purge|workspace-export-preview|workspace-export");
             Console.Error.WriteLine("  capture: memory-create|memory-revise|memory-import|memory-read|read|write|source-create|source-revise|source-read|research-capture|research-read|feedback-create|feedback-read");
             Console.Error.WriteLine("  library: library|memory-read|source-read|research-read|relation-read|lifecycle-read|lifecycle-retained-read|recall-read|review-list|review-record|index-status|index-rebuild");
             Console.Error.WriteLine("  review: proposal-list|proposal-read|proposal-publish|proposal-reject|lifecycle-publish|lifecycle-reject|lifecycle-withdraw|lifecycle-repropose|lifecycle-question-resolve|lifecycle-question-reopen|relation-list|relation-read|relation-create|relation-accept|relation-reject|relation-unlink|relation-relink|declassify-preview|declassify-publish|declassify-proposal-publish");
@@ -8727,7 +8818,7 @@ internal static class OwnerControlCli
         "purge-resume" => "owner purge-resume --control-pipe <pipe> --purge-id <N-hex>: resume a confirmed-but-incomplete purge.",
         "review-list" => "owner review-list --control-pipe <pipe>: items needing attention (due review-after, moved/missing/unavailable sources). Read-only.",
         "review-record" => "owner review-record --control-pipe <pipe> --resource-id <id> --reason text: record that the owner looked (content/evidence/citations/states unchanged).",
-        "provider-config" => "owner provider-config --control-pipe <pipe> --provider <p> --model <m> [--base-url <url>|auto] [--api-key-stdin true | --from-env true]: save egress settings. The key is a secure prompt by default (never an option value); --from-env reads OPENAI_API_KEY from .env in cwd (developer path, still never logged).",
+        "provider-config" => "owner provider-config --control-pipe <pipe> --provider <p> --model <m> [--base-url <url>|auto] [--api-key-stdin true]: save egress settings. The API key is a non-echo secure prompt by default (never an option value, argv, environment variable or plaintext file); --api-key-stdin true reads one line from redirected standard input for an automated owner run.",
         "provider-status" => "owner provider-status --control-pipe <pipe>: configured provider/model/endpoint + frozen caps. Never the key.",
         "job-create" => "owner job-create --control-pipe <pipe> --zone-id <zone> --destination-id <id> --destination-revision <rev> --provider <p> --model <m> [--max-cost-usd N] [--profile name] (--source-id <id> --source-revision <rev> | --input-file <selection.json>): bounded job with immutable scope snapshot (inputs pinned to revisions). The file form is the explicit selection draft (advanced, owner-owned).",
         "job-start" => "owner job-start --control-pipe <pipe> --job-id <id>: run to completed/failed/cancelled (exit 5 unless completed). No provider call without consent/budget.",
@@ -8743,8 +8834,8 @@ internal static class OwnerControlCli
         "audit" => "owner audit --control-pipe <pipe> [--limit N]: who acted, on what, how it ended, cost and error code (unlocked only).",
         "diagnostics" => "owner diagnostics --control-pipe <pipe> [--limit N]: recorded failures with the owner-facing next action (unlocked only).",
         "retention" => "owner retention --control-pipe <pipe> --retention-days N --max-records N [--purge-log true]: apply one retention choice (unlocked only).",
-        "backup" => "owner backup --control-pipe <pipe> --output-file <new-file>: one encrypted snapshot (never the data key/credential/token/session/readable content).",
-        "restore" => "owner restore --control-pipe <pipe> --backup-file <file> --target-directory <not-yet-existing-dir>: clean restore with the passphrase (secure prompt). Wrong key/tamper writes nothing. Restored vault carries no live authority; the index needs index-rebuild.",
+        "backup" => "owner backup --control-pipe <pipe> --output-file <new-file>: one encrypted snapshot of canonical records, owner states, the workspace tree, retained original bytes, tombstones and the durable purge ledger (never the data key/credential/token/session/readable content).",
+        "restore" => "owner restore --control-pipe <pipe> --backup-file <file> --target-directory <not-yet-existing-dir>: clean restore with the passphrase (secure prompt), including the workspace tree/ids/metadata/anchors/retained revisions/tombstones and the durable purge ledger, which is re-applied so an older backup cannot resurrect purged identities. A backup written before the workspace existed restores no workspace. Wrong key/tamper writes nothing. Restored vault carries no live authority; the index needs index-rebuild.",
         "restore-with-recovery-code" => "owner restore-with-recovery-code --control-pipe <pipe> --backup-file <file> --target-directory <not-yet-existing-dir>: same restore with the recovery key.",
         "export" => "owner export --control-pipe <pipe> --resource-ids <id,...> --output-file <new-file> [--include-relations true] [--include-lifecycle-states true]: explicit readable plaintext copy of exactly the selected records (create-only; cannot be revoked afterwards). Citations outside the scope are withheld whole.",
         "workspace-status" => "owner workspace-status --control-pipe <pipe>: committed workspace state (ready/uninitialized), format/schema versions, tree revision and counts. An unreadable or newer workspace is refused, never shown as empty.",
@@ -8762,6 +8853,8 @@ internal static class OwnerControlCli
         "workspace-tombstones" => "owner workspace-tombstones --control-pipe <pipe>: every retained encrypted tombstone with its id, kind, former parent/name, deletion group and revisions. Restoring the deleted path is not resurrected by a new file: a new file at that path has its own id.",
         "workspace-anchor-create" => "owner workspace-anchor-create --control-pipe <pipe> --file-id <id> --expected-content-revision <live> --offset <n> --length <n> --expected-tree-revision <n>: pin a citation anchor to that exact byte range of the file's current content revision, recording the range digest and no path. A later replacement marks it stale at its original revision instead of rebinding it.",
         "workspace-anchor-list" => "owner workspace-anchor-list --control-pipe <pipe> --file-id <id>: anchors of one live file with their pinned content revision, range, digest and state (live/stale). A deleted file's relations are unavailable until it is restored.",
+        "workspace-purge-preview" => "owner workspace-purge-preview --control-pipe <pipe> --node-id <id>: exact tombstone deletion group and retained bytes/anchors an irreversible purge would erase, its backup limit and the binding token. Lives-only nodes are refused; nothing is written.",
+        "workspace-purge" => "owner workspace-purge --control-pipe <pipe> --node-id <id> --expected-tree-revision <n> --preview <token> --confirm PURGE --reason <text>: permanently remove the previewed tombstone group from this vault, record the owner's reason and every purged id in the vault's encrypted purge ledger that later backups carry, and refuse a stale preview. Backups/exports from before the purge are disclosed, not recalled.",
         "workspace-export-preview" => "owner workspace-export-preview --control-pipe <pipe> --node-id <id> [--content-revision N] --destination <new-absolute-path>: exactly what a plaintext export would write outside the vault — every file at the retained revision it would pin, every folder, the in-scope anchors, the new destination directory, the versioned metadata document and the binding token. Files outside the selected scope, citations of them and the selected node's parent identity are not included. Changes nothing.",
         "workspace-export" => "owner workspace-export --control-pipe <pipe> --node-id <id> [--content-revision N] --destination <new-absolute-path> --preview <token> --confirm EXPORT: write exactly the previewed scope as plaintext original bytes plus a versioned metadata document, into one new destination directory. Create-only: an existing entry or unrelated file is never overwritten, and a stale preview, changed destination, tombstone, lock or unsupported logical name refuses with nothing written. The copy lives outside the vault and cannot be revoked by a later lock, delete or purge.",
         "upgrade" => "owner upgrade --control-pipe <pipe>: raise old content schemas while locked (secure passphrase prompt; keeps an encrypted rollback point; leaves the vault locked).",

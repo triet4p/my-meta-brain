@@ -49,7 +49,32 @@ internal sealed record VaultBackupStates(
 internal sealed record VaultBackupSnapshot(
     VaultBackupRecord[] Records,
     VaultBackupStates States,
-    long ManifestRevision);
+    long ManifestRevision,
+    WorkspaceBackupSnapshot? Workspace);
+
+/// <summary>
+/// One retained workspace original captured for the backup. The ciphertext
+/// stays in the workspace store; this is a plaintext copy that exists only
+/// until the backup container is sealed, and it is base64 in the container
+/// payload so the whole snapshot is authenticated and encrypted as one unit.
+/// </summary>
+internal sealed record VaultBackupWorkspaceBlob(
+    string FileId,
+    long Revision,
+    long Length,
+    string Sha256,
+    string ContentBase64);
+
+/// <summary>
+/// The workspace part of one snapshot: the authenticated tree, names, ids,
+/// anchors and tombstones, plus every retained revision. A
+/// null state means the vault never committed a workspace; the array is then
+/// empty. Its presence as an object distinguishes "no workspace" from a
+/// backup written before the workspace existed at all.
+/// </summary>
+internal sealed record VaultBackupWorkspace(
+    WorkspaceStateRecord? State,
+    VaultBackupWorkspaceBlob[] Blobs);
 
 /// <summary>
 /// The plaintext of one snapshot, before it is encrypted into the container.
@@ -61,7 +86,8 @@ internal sealed record VaultBackupPayload(
     string VaultId,
     long ManifestRevision,
     VaultBackupRecord[] Records,
-    VaultBackupStates States);
+    VaultBackupStates States,
+    VaultBackupWorkspace? Workspace = null);
 
 /// <summary>
 /// The container that is written to disk. The key envelope is the live vault
@@ -132,15 +158,17 @@ internal sealed class VaultBackupService : IVaultBackupService
             throw new ManagedResourceUnavailableException();
         }
 
+        VaultBackupSnapshot? snapshot = null;
         try
         {
             var keyEnvelope = _store.ReadKeyEnvelopeJson();
             var backupId = Guid.NewGuid().ToString("N");
             var createdAtUtc = DateTimeOffset.UtcNow;
-            var snapshot = _vault.CaptureSnapshot(() => CaptureSnapshot(operation));
+            snapshot = _vault.CaptureSnapshot(() => CaptureSnapshot(operation));
             var records = snapshot.Records;
             var manifestRevision = snapshot.ManifestRevision;
             var states = snapshot.States;
+            var workspace = ToBackupWorkspace(snapshot.Workspace);
             var payload = new VaultBackupPayload(
                 VaultBackupFormat.CurrentVersion,
                 backupId,
@@ -148,7 +176,8 @@ internal sealed class VaultBackupService : IVaultBackupService
                 _vault.CurrentVaultId,
                 manifestRevision,
                 records,
-                states);
+                states,
+                workspace);
             var payloadBytes = JsonSerializer.SerializeToUtf8Bytes(payload, JsonOptions);
             try
             {
@@ -178,7 +207,12 @@ internal sealed class VaultBackupService : IVaultBackupService
                         records.Length,
                         7,
                         manifestRevision,
-                        createdAtUtc);
+                        createdAtUtc,
+                        snapshot.Workspace?.State?.Nodes.Length ?? 0,
+                        snapshot.Workspace?.Contents.Length ?? 0,
+                        snapshot.Workspace?.State?.Nodes.Count(node =>
+                            !string.Equals(node.State, WorkspaceNodeStates.Live, StringComparison.Ordinal) &&
+                            node.State is not null) ?? 0);
                 }
                 finally
                 {
@@ -192,6 +226,14 @@ internal sealed class VaultBackupService : IVaultBackupService
         }
         finally
         {
+            if (snapshot?.Workspace is not null)
+            {
+                foreach (var item in snapshot.Workspace.Contents)
+                {
+                    CryptographicOperations.ZeroMemory(item.Content);
+                }
+            }
+
             CryptographicOperations.ZeroMemory(dataKey);
         }
     }
@@ -229,7 +271,7 @@ internal sealed class VaultBackupService : IVaultBackupService
             }
 
             if (container is null ||
-                container.FormatVersion != VaultBackupFormat.CurrentVersion ||
+                !VaultBackupFormat.IsSupportedVersion(container.FormatVersion) ||
                 string.IsNullOrEmpty(container.BackupId) ||
                 string.IsNullOrEmpty(container.VaultId) ||
                 container.KeyEnvelope.ValueKind != JsonValueKind.Object)
@@ -257,24 +299,35 @@ internal sealed class VaultBackupService : IVaultBackupService
                 {
                     var payload = JsonSerializer.Deserialize<VaultBackupPayload>(payloadBytes, JsonOptions)
                         ?? throw new VaultBackupCorruptedException("The encrypted backup payload is invalid.");
-                    if (payload.FormatVersion != VaultBackupFormat.CurrentVersion ||
+                    if (payload.FormatVersion != container.FormatVersion ||
+                        !VaultBackupFormat.IsSupportedVersion(payload.FormatVersion) ||
                         !string.Equals(payload.VaultId, container.VaultId, StringComparison.Ordinal) ||
                         !string.Equals(payload.BackupId, container.BackupId, StringComparison.Ordinal) ||
-                        payload.Records is null || payload.States is null)
+                        payload.Records is null || payload.States is null ||
+                        (payload.FormatVersion == 1 && payload.Workspace is not null) ||
+                        (payload.FormatVersion >= 2 && payload.Workspace?.Blobs is null))
                     {
                         throw new VaultBackupCorruptedException("The encrypted backup payload is invalid.");
                     }
 
-                    var written = MaterializeRestoredVault(fullTarget, container, payload, dataKey);
+                    var effective = ApplyRestorePolicy(payload);
+                    var written = MaterializeRestoredVault(fullTarget, container, effective.Payload, dataKey);
+                    var workspaceNodes = effective.Payload.Workspace?.State?.Nodes;
+                    var workspaceRevisions = workspaceNodes?.Sum(node => node.Revisions.Length) ?? 0;
                     return new VaultRestoreSummary(
                         container.BackupId,
                         written,
                         payload.VaultId,
-                        payload.Records.Length,
-                        payload.ManifestRevision,
-                        payload.CreatedAtUtc,
+                        effective.Payload.Records.Length,
+                        effective.Payload.ManifestRevision,
+                        effective.Payload.CreatedAtUtc,
                         0,
-                        payload.States.ScopeGrants.ConsumedTokenVerifiers?.Length ?? 0);
+                        effective.Payload.States.ScopeGrants.ConsumedTokenVerifiers?.Length ?? 0,
+                        workspaceNodes?.Length ?? 0,
+                        workspaceRevisions,
+                        effective.WithheldRecords,
+                        effective.WithheldWorkspaceNodes,
+                        effective.WithheldCatalogEntries);
                 }
                 finally
                 {
@@ -291,6 +344,88 @@ internal sealed class VaultBackupService : IVaultBackupService
             CryptographicOperations.ZeroMemory(containerBytes);
         }
     }
+
+    /// <summary>
+    /// The payload a restore actually materializes after re-applying the
+    /// durable deletion record. The backup's ledger is unioned with the live
+    /// installation's ledger of the same vault, so restoring a backup taken
+    /// before a purge cannot resurrect canonical records, catalog mappings or
+    /// workspace nodes that were purged afterwards. A locked live vault of the
+    /// same id cannot contribute that encrypted ledger, so the restore refuses
+    /// instead of materializing a snapshot that might hold identities the
+    /// installation already purged; an unrelated backup contributes no live
+    /// side and only its own ledger is re-applied.
+    /// </summary>
+    private RestorePolicyResult ApplyRestorePolicy(VaultBackupPayload payload)
+    {
+        var guards = _vault.ReadRestoreGuards(payload.VaultId);
+        if (guards.SameVault && guards.Locked)
+        {
+            throw new VaultRestoreRequiresUnlockException(
+                "This backup belongs to the live vault, which is locked. Its encrypted purge ledger cannot be re-applied, so the restore refused before writing anything. Unlock the live vault and retry.");
+        }
+
+        var ledger = VaultRestorePolicy.MergePurgeLedgerState(payload.States.PurgeLedger, guards.PurgeLedger);
+        var grants = VaultRestorePolicy.RestoreScopeGrantState(payload.States.ScopeGrants, guards.ScopeGrants);
+        var reserved = OwnerPurgeLedgerAuthority.ReservedIdentifiers(ledger);
+
+        var records = payload.Records;
+        var withheldRecords = 0;
+        if (reserved.Count != 0)
+        {
+            records = payload.Records
+                .Where(record => !reserved.Contains(record.ResourceId))
+                .ToArray();
+            withheldRecords = payload.Records.Length - records.Length;
+        }
+
+        var catalog = payload.States.Catalog;
+        var withheldCatalogEntries = 0;
+        if (reserved.Count != 0 && catalog.Entries is not null)
+        {
+            var entries = catalog.Entries
+                .Where(entry => !reserved.Contains(entry.ResourceId))
+                .ToArray();
+            withheldCatalogEntries = catalog.Entries.Length - entries.Length;
+            catalog = catalog with { Entries = entries };
+        }
+
+        var workspace = payload.Workspace;
+        var withheldWorkspaceNodes = 0;
+        if (reserved.Count != 0 && workspace?.State is not null)
+        {
+            var filtered = EncryptedWorkspaceStore.FilterPurgedState(workspace.State, reserved);
+            if (!ReferenceEquals(filtered, workspace.State))
+            {
+                withheldWorkspaceNodes = workspace.State.Nodes.Length - filtered.Nodes.Length;
+                workspace = new VaultBackupWorkspace(
+                    filtered,
+                    workspace.Blobs.Where(blob => !reserved.Contains(blob.FileId)).ToArray());
+            }
+        }
+
+        return new RestorePolicyResult(
+            payload with
+            {
+                Records = records,
+                States = payload.States with
+                {
+                    ScopeGrants = grants,
+                    Catalog = catalog,
+                    PurgeLedger = ledger
+                },
+                Workspace = workspace
+            },
+            withheldRecords,
+            withheldWorkspaceNodes,
+            withheldCatalogEntries);
+    }
+
+    private sealed record RestorePolicyResult(
+        VaultBackupPayload Payload,
+        int WithheldRecords,
+        int WithheldWorkspaceNodes,
+        int WithheldCatalogEntries);
 
     /// <summary>
     /// Captures the canonical records and the dedicated owner states as one
@@ -339,7 +474,12 @@ internal sealed class VaultBackupService : IVaultBackupService
             operation.LoadReviewState(),
             operation.LoadPurgeLedgerState(),
             operation.LoadOperationsAuditState());
-        return new VaultBackupSnapshot(records, states, _vault.CurrentManifestRevision);
+        // S12-T5: the workspace is captured under the same gate as the
+        // canonical records and dedicated states, so the backup is one point in
+        // time for both. A workspace that cannot be authenticated refuses the
+        // whole backup rather than being omitted.
+        var workspace = _vault.CaptureWorkspaceBackup();
+        return new VaultBackupSnapshot(records, states, _vault.CurrentManifestRevision, workspace);
     }
 
     /// <summary>
@@ -412,8 +552,10 @@ internal sealed class VaultBackupService : IVaultBackupService
             }
 
             store.WriteRestoredManifest(payload.VaultId, manifest, dataKey);
-            var restoredGrants = VaultRestorePolicy.RestoreScopeGrantState(payload.States.ScopeGrants);
-            store.SaveScopeGrantState(manifest, dataKey, restoredGrants);
+            // The caller applied VaultRestorePolicy once, merging the live
+            // consumed-token verifiers when the same vault is unlocked. Saving
+            // that state here keeps a restore from dropping the union.
+            store.SaveScopeGrantState(manifest, dataKey, payload.States.ScopeGrants);
             store.SaveCatalogState(manifest, dataKey, payload.States.Catalog);
             store.SaveSourceEnrollmentState(
                 manifest, dataKey, SourceEnrollmentAuthority.ValidateAndNormalizeState(payload.States.SourceEnrollment));
@@ -428,6 +570,7 @@ internal sealed class VaultBackupService : IVaultBackupService
                 manifest,
                 dataKey,
                 payload.States.OperationsAudit ?? OperationsAuditState.Empty);
+            RestoreWorkspace(staging, payload, dataKey);
             Directory.Move(staging, targetDirectory);
             return targetDirectory;
         }
@@ -445,6 +588,110 @@ internal sealed class VaultBackupService : IVaultBackupService
             }
 
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Turns the captured workspace into the authenticated payload member.
+    /// The base64 copy exists only inside the encrypted container; the
+    /// plaintext buffers are zeroized by the caller as soon as the container is
+    /// sealed. A workspace larger than the container bound refuses before a
+    /// huge plaintext copy is encoded.
+    /// </summary>
+    private static VaultBackupWorkspace ToBackupWorkspace(WorkspaceBackupSnapshot? snapshot)
+    {
+        if (snapshot is null)
+        {
+            return new VaultBackupWorkspace(null, Array.Empty<VaultBackupWorkspaceBlob>());
+        }
+
+        var blobs = new VaultBackupWorkspaceBlob[snapshot.Contents.Length];
+        var totalBytes = 0L;
+        for (var index = 0; index < snapshot.Contents.Length; index++)
+        {
+            var item = snapshot.Contents[index];
+            totalBytes = checked(totalBytes + item.Length);
+            if (totalBytes > VaultBackupFormat.MaximumContainerBytes)
+            {
+                throw new IOException("The workspace exceeds the backup size bound.");
+            }
+
+            blobs[index] = new VaultBackupWorkspaceBlob(
+                item.FileId, item.Revision, item.Length, item.Sha256, Convert.ToBase64String(item.Content));
+        }
+
+        return new VaultBackupWorkspace(snapshot.State, blobs);
+    }
+
+    /// <summary>
+    /// Writes the backup's workspace into the staging vault. It reproduces the
+    /// exact workspace identity, tree revision, node ids/names/parents,
+    /// retained revision numbers, anchors and tombstones, so a restore is the
+    /// same workspace rather than an import of its bytes as
+    /// new documents. A missing, extra or mismatched retained revision refuses
+    /// the whole restore, and the staging directory is removed by the caller.
+    /// </summary>
+    private static void RestoreWorkspace(string stagingRoot, VaultBackupPayload payload, byte[] dataKey)
+    {
+        var workspace = payload.Workspace;
+        if (workspace is null)
+        {
+            return;
+        }
+
+        if (workspace.State is null)
+        {
+            if (workspace.Blobs.Length != 0)
+            {
+                throw new VaultBackupCorruptedException("The encrypted backup workspace is invalid.");
+            }
+
+            return;
+        }
+
+        var contents = new List<WorkspaceBackupContent>(workspace.Blobs.Length);
+        try
+        {
+            foreach (var blob in workspace.Blobs)
+            {
+                byte[] decoded;
+                try
+                {
+                    decoded = Convert.FromBase64String(blob.ContentBase64);
+                }
+                catch (FormatException ex)
+                {
+                    throw new VaultBackupCorruptedException("The encrypted backup workspace is invalid.", ex);
+                }
+
+                if (decoded.LongLength != blob.Length)
+                {
+                    CryptographicOperations.ZeroMemory(decoded);
+                    throw new VaultBackupCorruptedException("The encrypted backup workspace is invalid.");
+                }
+
+                contents.Add(new WorkspaceBackupContent(
+                    blob.FileId, blob.Revision, blob.Length, blob.Sha256, decoded));
+            }
+
+            new EncryptedWorkspaceStore(stagingRoot).RestoreBackup(
+                payload.VaultId, dataKey, workspace.State, contents);
+        }
+        catch (VaultBackupCorruptedException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or WorkspaceRefusalException or
+            ArgumentException or CryptographicException or IOException or UnauthorizedAccessException)
+        {
+            throw new VaultBackupCorruptedException("The encrypted backup workspace is invalid.", ex);
+        }
+        finally
+        {
+            foreach (var item in contents)
+            {
+                CryptographicOperations.ZeroMemory(item.Content);
+            }
         }
     }
 
@@ -501,7 +748,7 @@ internal sealed class VaultBackupService : IVaultBackupService
         var nonce = RandomNumberGenerator.GetBytes(NonceBytes);
         var tag = new byte[TagBytes];
         var ciphertext = new byte[plaintext.Length];
-        var associatedData = BackupAssociatedData(backupId, vaultId);
+        var associatedData = BackupAssociatedData(backupId, vaultId, VaultBackupFormat.CurrentVersion);
         try
         {
             using var aes = new AesGcm(dataKey, TagBytes);
@@ -534,7 +781,7 @@ internal sealed class VaultBackupService : IVaultBackupService
                 throw new InvalidDataException("The encrypted backup container is invalid.");
             }
 
-            var associatedData = BackupAssociatedData(container.BackupId, container.VaultId);
+            var associatedData = BackupAssociatedData(container.BackupId, container.VaultId, container.FormatVersion);
             try
             {
                 plaintext = new byte[ciphertext.Length];
@@ -562,7 +809,13 @@ internal sealed class VaultBackupService : IVaultBackupService
         }
     }
 
-    private static byte[] BackupAssociatedData(string backupId, string vaultId) =>
+    /// <summary>
+    /// The AEAD associated data is bound to the container's own format
+    /// version, so a backup written by a reader of an older supported format
+    /// still opens. Using this build's current version here made every earlier
+    /// format undecryptable even though its payload was understood.
+    /// </summary>
+    private static byte[] BackupAssociatedData(string backupId, string vaultId, int formatVersion) =>
         Encoding.UTF8.GetBytes(
-            $"MetaBrain|{VaultBackupFormat.Purpose}|{VaultBackupFormat.CurrentVersion}|{vaultId}|{backupId}");
+            $"MetaBrain|{VaultBackupFormat.Purpose}|{formatVersion}|{vaultId}|{backupId}");
 }

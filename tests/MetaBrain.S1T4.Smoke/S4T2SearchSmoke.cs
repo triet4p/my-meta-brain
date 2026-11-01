@@ -131,7 +131,7 @@ internal static partial class OwnerServiceSmoke
             var bearer = ReadSessionBearer(session.SessionFile);
             var readProbe = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.memory.read",
                 sessionToken = bearer,
                 accessOperation = "memory.read",
@@ -143,7 +143,7 @@ internal static partial class OwnerServiceSmoke
                 "Same-session memory.read denied; the session itself is broken (reply=" + readProbe.GetRawText() + ").");
             var authProbe = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.access.authorize",
                 sessionToken = bearer,
                 accessOperation = "memory.search"
@@ -153,7 +153,7 @@ internal static partial class OwnerServiceSmoke
             Console.WriteLine("S4T2-PROBE authorize memory.search status=" + ReplyCode(authProbe));
             var rawSearch = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.memory.search",
                 sessionToken = bearer,
                 accessOperation = "memory.search",
@@ -220,7 +220,7 @@ internal static partial class OwnerServiceSmoke
             {
                 var timed = await InvokeAgentRequestAsync(fixture.AgentPipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = "agent.memory.search",
                     sessionToken = bearer,
                     accessOperation = "memory.search",
@@ -296,7 +296,7 @@ internal static partial class OwnerServiceSmoke
                 "The superseded frozen revision stayed servable after its revision moved (stdout=" + afterRebuild.StandardOutput.Trim() + ").");
             var frozenRead = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.memory.read",
                 sessionToken = bearer,
                 accessOperation = "memory.read",

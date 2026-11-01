@@ -99,7 +99,10 @@ public sealed record ServiceRequest(
     long? WorkspaceAnchorLength = null,
     string? WorkspaceExportDestination = null,
     string? WorkspaceExportToken = null,
-    string? WorkspaceExportConfirmation = null);
+    string? WorkspaceExportConfirmation = null,
+    string? WorkspacePurgeToken = null,
+    string? WorkspacePurgeConfirmation = null,
+    string? WorkspacePurgeReason = null);
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
     ScopeResourceRevision[] Resources,
@@ -1037,7 +1040,43 @@ public sealed record WorkspaceStatusWire(
     int Folders,
     int Files,
     int ContentRevisions,
-    int Deleted);
+    int Deleted,
+    int Purged = 0);
+
+/// <summary>One tombstone member of a pending workspace purge.</summary>
+public sealed record WorkspacePurgeNodeWire(
+    string NodeId,
+    string Kind,
+    string? ParentId,
+    string Name,
+    long Revision,
+    long ContentRevision);
+
+/// <summary>
+/// The preview of one pending irreversible workspace purge and the token that
+/// binds the act to this tree revision, deletion group, retained byte
+/// descriptors and anchor set.
+/// </summary>
+public sealed record WorkspacePurgePreviewWire(
+    string NodeId,
+    string DeletionId,
+    long TreeRevision,
+    string Preview,
+    WorkspacePurgeNodeWire[] Nodes,
+    int ContentRevisions,
+    long TotalBytes,
+    int Anchors);
+
+/// <summary>The outcome of one committed irreversible workspace purge.</summary>
+public sealed record WorkspacePurgeWire(
+    string PurgeId,
+    string NodeId,
+    string DeletionId,
+    long WorkspaceRevision,
+    int Nodes,
+    int ContentRevisions,
+    long Bytes,
+    int Anchors);
 
 /// <summary>
 /// One committed workspace mutation: the node it addressed, the new workspace
@@ -1257,11 +1296,13 @@ public sealed record ServiceReply(
     int? WorkspaceRestoredNodes = null,
     WorkspaceExportPreviewWire? WorkspaceExportPreview = null,
     WorkspaceExportWire? WorkspaceExport = null,
+    WorkspacePurgePreviewWire? WorkspacePurgePreview = null,
+    WorkspacePurgeWire? WorkspacePurge = null,
     string? ErrorCode = null);
 
 public sealed class ServiceRequestHandler
 {
-    public const int CurrentProtocolVersion = 1;
+    public const int CurrentProtocolVersion = 2;
     public const int MaximumIndexRows = 512;
     public const int MaximumLibraryOffset = 10000;
     public const int MaximumLibraryQueryLength = 256;
@@ -1290,6 +1331,8 @@ public sealed class ServiceRequestHandler
     public const string OwnerWorkspaceTombstonesOperation = "owner.workspace.tombstones";
     public const string OwnerWorkspaceAnchorCreateOperation = "owner.workspace.anchor.create";
     public const string OwnerWorkspaceAnchorListOperation = "owner.workspace.anchor.list";
+    public const string OwnerWorkspaceNodePurgePreviewOperation = "owner.workspace.node.purge.preview";
+    public const string OwnerWorkspaceNodePurgeOperation = "owner.workspace.node.purge";
     public const string OwnerWorkspaceExportPreviewOperation = "owner.workspace.export.preview";
     public const string OwnerWorkspaceExportOperation = "owner.workspace.export";
     public const string ResourceReadOperation = "resource.read";
@@ -1656,7 +1699,7 @@ public sealed class ServiceRequestHandler
             request.Operation is not (OwnerWorkspaceFolderCreateOperation or OwnerWorkspaceFileCreateOperation or
                 OwnerWorkspaceNodeRenameOperation or OwnerWorkspaceNodeMoveOperation or OwnerWorkspaceNodeCopyOperation or
                 OwnerWorkspaceNodeDeleteOperation or OwnerWorkspaceNodeRestoreOperation or
-                OwnerWorkspaceAnchorCreateOperation))
+                OwnerWorkspaceAnchorCreateOperation or OwnerWorkspaceNodePurgeOperation))
         {
             return false;
         }
@@ -1696,6 +1739,13 @@ public sealed class ServiceRequestHandler
 
         if ((request.WorkspaceExportToken is not null || request.WorkspaceExportConfirmation is not null) &&
             request.Operation is not OwnerWorkspaceExportOperation)
+        {
+            return false;
+        }
+
+        if ((request.WorkspacePurgeToken is not null || request.WorkspacePurgeConfirmation is not null ||
+                request.WorkspacePurgeReason is not null) &&
+            request.Operation is not OwnerWorkspaceNodePurgeOperation)
         {
             return false;
         }
@@ -1741,6 +1791,7 @@ public sealed class ServiceRequestHandler
         OwnerWorkspaceTombstonesOperation,
         OwnerWorkspaceAnchorListOperation,
         OwnerWorkspaceExportPreviewOperation,
+        OwnerWorkspaceNodePurgePreviewOperation,
         OwnerLibrarySearchOperation,
         OwnerRecallReadOperation,
         OwnerIndexStatusOperation,
@@ -2575,6 +2626,16 @@ public sealed class ServiceRequestHandler
             return HandleWorkspaceAnchorList(context, request, operation);
         }
 
+        if (string.Equals(request.Operation, OwnerWorkspaceNodePurgePreviewOperation, StringComparison.Ordinal))
+        {
+            return HandleWorkspaceNodePurgePreview(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerWorkspaceNodePurgeOperation, StringComparison.Ordinal))
+        {
+            return HandleWorkspaceNodePurge(context, request, operation);
+        }
+
         if (string.Equals(request.Operation, OwnerWorkspaceExportPreviewOperation, StringComparison.Ordinal))
         {
             return HandleWorkspaceExportPreview(context, request, operation);
@@ -2623,7 +2684,8 @@ public sealed class ServiceRequestHandler
                     status.FolderCount,
                     status.FileCount,
                     status.ContentRevisionCount,
-                    status.DeletedNodeCount));
+                    status.DeletedNodeCount,
+                    status.PurgedNodeCount));
         }
         catch (WorkspaceRefusalException refusal)
         {
@@ -3112,6 +3174,115 @@ public sealed class ServiceRequestHandler
         }
     }
 
+    /// <summary>
+    /// S12-T5 the owner-only irreversible workspace purge preview. It is a read:
+    /// it discloses the whole tombstone group, its retained revision/byte
+    /// anchors and the token binding the act, and writes nothing.
+    /// </summary>
+    private ServiceReply HandleWorkspaceNodePurgePreview(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (string.IsNullOrEmpty(request.ResourceId))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var preview = operation.PreviewWorkspacePurge(request.ResourceId);
+            return new ServiceReply(
+                CurrentProtocolVersion, "workspace_purge_preview", "owner", null,
+                WorkspacePurgePreview: new WorkspacePurgePreviewWire(
+                    preview.NodeId,
+                    preview.DeletionId,
+                    preview.TreeRevision,
+                    preview.Preview,
+                    preview.Nodes
+                        .Select(node => new WorkspacePurgeNodeWire(
+                            node.NodeId,
+                            node.Kind == WorkspaceNodeKind.File ? WorkspaceNodeKinds.File : WorkspaceNodeKinds.Folder,
+                            node.ParentId,
+                            node.Name,
+                            node.Revision,
+                            node.ContentRevision))
+                        .ToArray(),
+                    preview.ContentRevisionCount,
+                    preview.TotalBytes,
+                    preview.AnchorCount));
+        }
+        catch (WorkspaceRefusalException refusal)
+        {
+            return WorkspaceRefusal(refusal.Code);
+        }
+    }
+
+    /// <summary>
+    /// S12-T5 the owner-only irreversible workspace purge. The act needs the
+    /// preview token and the typed PURGE confirmation; the store re-derives the
+    /// preview and refuses any changed tree revision, group or retained bytes.
+    /// </summary>
+    private ServiceReply HandleWorkspaceNodePurge(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (string.IsNullOrEmpty(request.ResourceId) ||
+            request.WorkspaceTreeRevision is not { } treeRevision || treeRevision < 0)
+        {
+            return Error("invalid_request");
+        }
+
+        if (!string.Equals(request.WorkspacePurgeConfirmation, "PURGE", StringComparison.Ordinal) ||
+            string.IsNullOrEmpty(request.WorkspacePurgeToken) ||
+            string.IsNullOrWhiteSpace(request.WorkspacePurgeReason))
+        {
+            return WorkspaceRefusal(WorkspaceErrorCodes.PurgeConfirmation);
+        }
+
+        try
+        {
+            var purged = operation.PurgeWorkspaceNode(
+                request.ResourceId, request.WorkspacePurgeReason, treeRevision, request.WorkspacePurgeToken);
+            return new ServiceReply(
+                CurrentProtocolVersion, "workspace_purged", "owner", null,
+                WorkspacePurge: new WorkspacePurgeWire(
+                    purged.PurgeId,
+                    purged.NodeId,
+                    purged.DeletionId,
+                    purged.WorkspaceRevision,
+                    purged.NodesPurged,
+                    purged.ContentRevisionsPurged,
+                    purged.BytesPurged,
+                    purged.AnchorsPurged));
+        }
+        catch (WorkspaceRefusalException refusal)
+        {
+            return WorkspaceRefusal(refusal.Code);
+        }
+    }
+
     private ServiceReply HandleWorkspaceAnchorCreate(
         AuthenticatedContext context,
         ServiceRequest request,
@@ -3382,6 +3553,10 @@ public sealed class ServiceRequestHandler
         {
             return Error("invalid_request");
         }
+        catch (WorkspaceRefusalException refusal)
+        {
+            return WorkspaceRefusal(refusal.Code);
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
             return Error("backup_failed");
@@ -3421,6 +3596,10 @@ public sealed class ServiceRequestHandler
         catch (ArgumentException)
         {
             return Error("invalid_request");
+        }
+        catch (VaultRestoreRequiresUnlockException)
+        {
+            return Error("restore_requires_unlock");
         }
         catch (VaultBackupDeniedException)
         {

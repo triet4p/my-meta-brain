@@ -25,6 +25,10 @@ internal sealed record InstallLayout(
     string DataRoot)
 {
     internal const string StateFileName = "install-state.json";
+    // The data root records the one installation that owns it. Two install
+    // roots never share a live data root, so a second candidate cannot become a
+    // competing writer over one vault.
+    internal const string DataRootMarkerFileName = "data-root-owner.json";
     internal const string ServiceDirectoryName = "service";
     internal const string OwnerUiDirectoryName = "owner-ui";
     internal const string McpDirectoryName = "mcp";
@@ -79,6 +83,45 @@ internal sealed record InstallLayout(
             Path.Combine(Path.GetFullPath(installRoot), CliDirectoryName, "MetaBrain.Cli.exe"),
             Path.Combine(Path.GetFullPath(dataRoot), "service-settings.json"),
             Path.GetFullPath(dataRoot).TrimEnd(Path.DirectorySeparatorChar));
+}
+
+/// <summary>
+/// The owner recorded for one data root. It is written by the shared installer
+/// after every refusal has passed, so it records a decision rather than a
+/// partial attempt. A different install root pointing at the same data root is
+/// refused before the running host is stopped or any file is changed.
+/// </summary>
+internal sealed record DataRootOwner(
+    int SchemaVersion,
+    string InstallRoot,
+    string CandidateIdentity,
+    string ProductVersion,
+    string RecordedAtUtc)
+{
+    internal const int CurrentSchemaVersion = 1;
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = true
+    };
+
+    internal static DataRootOwner? Read(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        var owner = JsonSerializer.Deserialize<DataRootOwner>(File.ReadAllText(path), JsonOptions);
+        return owner is { SchemaVersion: CurrentSchemaVersion } &&
+            !string.IsNullOrWhiteSpace(owner.InstallRoot)
+            ? owner
+            : null;
+    }
+
+    internal void Write(string path) =>
+        File.WriteAllText(path, JsonSerializer.Serialize(this, JsonOptions));
 }
 
 /// <summary>

@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -259,7 +259,7 @@ internal static partial class OwnerServiceSmoke
                 "The user explicitly asked to connect this synthetic lesson to this synthetic research source as evidence.");
             var agentCreated = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.relation.create",
                 sessionToken = ReadSessionBearer(linkSession.SessionFile),
                 accessOperation = "link.create",
@@ -283,7 +283,7 @@ internal static partial class OwnerServiceSmoke
                 "The agent link.create grant did not create a proposed agent relation (reply=" + agentCreated.GetRawText() + ").");
             var agentRelationRead = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.relation.read",
                 sessionToken = ReadSessionBearer(linkSession.SessionFile),
                 accessOperation = "relation.read",
@@ -303,7 +303,7 @@ internal static partial class OwnerServiceSmoke
                 relCrossZone, lesson).ConfigureAwait(false);
             var crossZoneDenied = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.relation.read",
                 sessionToken = ReadSessionBearer(crossZoneSession.SessionFile),
                 accessOperation = "relation.read",
@@ -323,7 +323,7 @@ internal static partial class OwnerServiceSmoke
                 relSupportTwo, lesson, srcTwo).ConfigureAwait(false);
             var outOfScopeDenied = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.relation.read",
                 sessionToken = ReadSessionBearer(outOfScopeSession.SessionFile),
                 accessOperation = "relation.read",
@@ -334,7 +334,7 @@ internal static partial class OwnerServiceSmoke
                 "A relation outside the granted snapshot was served.");
             var unknownRelation = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.relation.read",
                 sessionToken = ReadSessionBearer(outOfScopeSession.SessionFile),
                 accessOperation = "relation.read",
@@ -350,7 +350,7 @@ internal static partial class OwnerServiceSmoke
                 relSupportTwo, lesson).ConfigureAwait(false);
             var itemOnlyDenied = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.relation.read",
                 sessionToken = ReadSessionBearer(itemOnlySession.SessionFile),
                 accessOperation = "relation.read",
@@ -365,7 +365,7 @@ internal static partial class OwnerServiceSmoke
             // without expanding the newer scope backward or forward.
             var warmRead = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.relation.read",
                 sessionToken = ReadSessionBearer(linkSession.SessionFile),
                 accessOperation = "relation.read",
@@ -381,7 +381,7 @@ internal static partial class OwnerServiceSmoke
             Require(collectionChange.ExitCode == 0, "The owner could not change synthetic collection membership for the policy-generation check.");
             var generationDenied = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.relation.read",
                 sessionToken = ReadSessionBearer(linkSession.SessionFile),
                 accessOperation = "relation.read",
@@ -398,7 +398,7 @@ internal static partial class OwnerServiceSmoke
             Require(revoke.ExitCode == 0, "The owner could not revoke the synthetic relation-read session.");
             var revokedDenied = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.relation.read",
                 sessionToken = ReadSessionBearer(revokedSession.SessionFile),
                 accessOperation = "relation.read",
@@ -413,7 +413,7 @@ internal static partial class OwnerServiceSmoke
             var zoneGrant = await IssueS2T4ZoneGrantAsync(connectionsExecutable, fixture, "s2t4-zone-beta-only", zoneBeta).ConfigureAwait(false);
             var zoneDenied = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.relation.read",
                 sessionToken = ReadSessionBearer(zoneGrant.SessionFile),
                 accessOperation = "relation.read",
@@ -424,7 +424,7 @@ internal static partial class OwnerServiceSmoke
                 "A zone-scoped grant reached a relation outside its zone.");
             var zoneLinkDenied = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.relation.create",
                 sessionToken = ReadSessionBearer(zoneGrant.SessionFile),
                 accessOperation = "link.create",
@@ -446,7 +446,7 @@ internal static partial class OwnerServiceSmoke
                 "A locked lifecycle transition was accepted.");
             var lockedAgentLink = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.relation.create",
                 sessionToken = ReadSessionBearer(linkSession.SessionFile),
                 accessOperation = "link.create",
@@ -456,7 +456,7 @@ internal static partial class OwnerServiceSmoke
                 "A locked vault served an agent link creation.");
             var lockedAgentRead = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.relation.read",
                 sessionToken = ReadSessionBearer(linkSession.SessionFile),
                 accessOperation = "relation.read",

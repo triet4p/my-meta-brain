@@ -132,7 +132,7 @@ internal static partial class OwnerServiceSmoke
             Require(locked.ExitCode == 0, "The synthetic S8-T4 vault did not lock (" + locked.StandardError.Trim() + ").");
             var lockedWrite = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.job.create",
                 resourceId = S8T4Source,
                 resourceRevision = 1,
@@ -168,7 +168,7 @@ internal static partial class OwnerServiceSmoke
             // ----- a real owner write, a real agent token failure, a real job failure -----
             var created = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "memory.create",
                 resourceId = S8T4ItemA,
                 zoneId = S8T4Zone,
@@ -178,7 +178,7 @@ internal static partial class OwnerServiceSmoke
                 "The synthetic S8-T4 record was not written (reply=" + created.GetRawText() + ").");
             var createdB = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "memory.create",
                 resourceId = S8T4ItemB,
                 zoneId = S8T4Zone,
@@ -189,7 +189,7 @@ internal static partial class OwnerServiceSmoke
 
             var redeem = await InvokeS8T4AgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.session.redeem",
                 token = invalidToken,
             }).ConfigureAwait(false);
@@ -199,7 +199,7 @@ internal static partial class OwnerServiceSmoke
 
             var source = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "source.create",
                 resourceId = S8T4Source,
                 zoneId = S8T4Zone,
@@ -210,7 +210,7 @@ internal static partial class OwnerServiceSmoke
 
             var job = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.job.create",
                 resourceId = S8T4Source,
                 resourceRevision = 1,
@@ -229,7 +229,7 @@ internal static partial class OwnerServiceSmoke
 
             var started = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.job.start",
                 jobId,
             }).ConfigureAwait(false);
@@ -247,7 +247,7 @@ internal static partial class OwnerServiceSmoke
             // below has a diagnostic that names the record it removes.
             var refusedJob = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.job.create",
                 resourceId = S8T4ItemA,
                 resourceRevision = 1,
@@ -390,7 +390,7 @@ internal static partial class OwnerServiceSmoke
             // ----- a stored credential never reaches the log, the audit or the diagnostics -----
             var provider = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.provider.config",
                 provider = "deepseek",
                 model = "deepseek-flash",
@@ -414,14 +414,14 @@ internal static partial class OwnerServiceSmoke
             // ----- the agent channel never serves the owner operations surface -----
             var agentAudit = await InvokeS8T4AgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.operations.audit",
             }).ConfigureAwait(false);
             Require(ReplyCode(agentAudit) == "forbidden",
                 "The agent channel served the owner audit trail (reply=" + agentAudit.GetRawText() + ").");
             var agentHealth = await InvokeS8T4AgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.operations.health",
             }).ConfigureAwait(false);
             Require(ReplyCode(agentHealth) == "forbidden",
@@ -433,7 +433,7 @@ internal static partial class OwnerServiceSmoke
             {
                 var filler = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = "memory.create",
                     resourceId = "s8t4-filler-" + index.ToString(CultureInfo.InvariantCulture),
                     zoneId = S8T4Zone,
@@ -454,7 +454,7 @@ internal static partial class OwnerServiceSmoke
                 "The owner CLI did not read the audit trail before the invalid retention (" + auditBeforeInvalid.StandardError.Trim() + ").");
             var invalidRetention = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.operations.retention",
                 retentionDays = 0,
                 retentionMaxRecords = 10,
@@ -495,7 +495,7 @@ internal static partial class OwnerServiceSmoke
             // still live when the purge runs.
             var refusedJobBeforePurge = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.job.create",
                 resourceId = S8T4ItemB,
                 resourceRevision = 1,
@@ -661,7 +661,7 @@ internal static partial class OwnerServiceSmoke
                 new UTF8Encoding(false)).ConfigureAwait(false);
             var mutationAfterCorruption = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "memory.create",
                 resourceId = "s8t4-item-after-corruption",
                 zoneId = S8T4Zone,
@@ -1025,6 +1025,10 @@ internal sealed class S8T4AuditFailureOperation : IVaultOperation
     public WorkspaceRestoreInfo RestoreWorkspaceNode(string nodeId, long expectedTreeRevision) => throw new NotSupportedException();
 
     public WorkspaceTombstoneInfo[] ReadWorkspaceTombstones() => throw new NotSupportedException();
+
+    public WorkspacePurgePreviewInfo PreviewWorkspacePurge(string nodeId) => throw new NotSupportedException();
+
+    public WorkspacePurgeInfo PurgeWorkspaceNode(string nodeId, string reason, long expectedTreeRevision, string previewToken) => throw new NotSupportedException();
 
     public WorkspaceAnchorInfo CreateWorkspaceAnchor(string fileId, long expectedContentRevision, long offset, long length, long expectedTreeRevision) => throw new NotSupportedException();
 

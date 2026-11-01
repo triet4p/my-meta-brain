@@ -85,6 +85,17 @@ public sealed class OwnerPurgeLedgerAuthority
     public const int MaximumReasonLength = 1000;
 
     /// <summary>
+    /// The zone an owner-confirmed workspace purge is recorded under. The
+    /// workspace keeps the same ledger as canonical records and sessions, so
+    /// one durable deletion bookkeeping — and one backup/restore rule — covers
+    /// every purged identity in the vault.
+    /// </summary>
+    public const string WorkspaceZoneId = "workspace";
+
+    /// <summary>The target kind a workspace purge records.</summary>
+    public const string WorkspaceTargetKind = "workspace-node";
+
+    /// <summary>
     /// True when the ID was purged by any applied (or in-flight confirmed)
     /// intent. Callers refuse canonical creates, imports, revises and catalog
     /// mappings for such IDs so nothing resurrects them.
@@ -122,6 +133,127 @@ public sealed class OwnerPurgeLedgerAuthority
         ArgumentNullException.ThrowIfNull(state);
         return ValidateAndNormalizeState(state).Intents.FirstOrDefault(intent =>
             string.Equals(intent.PurgeId, purgeId, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Every identity any confirmed purge reserved, across all zones. A single
+    /// validated pass gives callers a set to filter restored records, catalog
+    /// mappings and workspace nodes without re-validating the ledger per item.
+    /// </summary>
+    public static HashSet<string> ReservedIdentifiers(OwnerPurgeLedgerState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        var validated = ValidateAndNormalizeState(state);
+        var reserved = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var intent in validated.Intents)
+        {
+            reserved.Add(intent.TargetResourceId);
+            foreach (var impacted in intent.Impacted)
+            {
+                reserved.Add(impacted.ResourceId);
+            }
+        }
+
+        return reserved;
+    }
+
+    /// <summary>
+    /// The workspace node identities a purge reserved forever. Only intents
+    /// recorded under <see cref="WorkspaceZoneId"/> contribute, so a canonical
+    /// record purge can never erase an unrelated workspace node that happens to
+    /// share an opaque identifier. The set is what the workspace store and a
+    /// restore re-apply before serving or materializing nodes.
+    /// </summary>
+    public static HashSet<string> ReservedWorkspaceIdentifiers(OwnerPurgeLedgerState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        var validated = ValidateAndNormalizeState(state);
+        var reserved = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var intent in validated.Intents)
+        {
+            if (!string.Equals(intent.TargetZoneId, WorkspaceZoneId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            reserved.Add(intent.TargetResourceId);
+            foreach (var impacted in intent.Impacted)
+            {
+                reserved.Add(impacted.ResourceId);
+            }
+        }
+
+        return reserved;
+    }
+
+    /// <summary>
+    /// Builds the one durable ledger entry an owner-confirmed workspace purge
+    /// writes before it removes the canonical nodes. It names the selected
+    /// tombstone, the whole deletion group it belonged to and the owner's
+    /// reason, and carries no name, path, byte or key: the ledger records what
+    /// was purged, never the removed payload.
+    /// </summary>
+    public static OwnerPurgeIntent CreateWorkspaceIntent(
+        string purgeId,
+        string targetNodeId,
+        long targetRevision,
+        string targetKind,
+        IEnumerable<PurgedResourceRef> impacted,
+        string reason,
+        DateTimeOffset now,
+        long treeRevision)
+    {
+        ArgumentNullException.ThrowIfNull(impacted);
+        var refs = impacted.ToArray();
+        if (refs.Length == 0 || refs.Length > MaximumImpactedPerPurge)
+        {
+            throw new InvalidDataException("A workspace purge names between one and the ledger bound of identities.");
+        }
+
+        var utc = now.ToUniversalTime();
+        return ValidateIntent(new OwnerPurgeIntent(
+            purgeId,
+            targetNodeId,
+            targetRevision,
+            WorkspaceZoneId,
+            targetKind,
+            refs,
+            Array.Empty<string>(),
+            NormalizeReason(reason),
+            ExecutorKind.Owner,
+            utc,
+            utc,
+            utc,
+            PurgeIntentPhase.Applied,
+            treeRevision,
+            Array.Empty<PurgedResourceRef>()));
+    }
+
+    /// <summary>
+    /// Appends one already-validated intent to a validated ledger. A repeated
+    /// purge ID, a repeated identity or an exceeded bound refuses instead of
+    /// silently rewriting the deletion record.
+    /// </summary>
+    public static OwnerPurgeLedgerState Append(OwnerPurgeLedgerState state, OwnerPurgeIntent intent)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(intent);
+        var validated = ValidateAndNormalizeState(state);
+        if (validated.Intents.Any(existing =>
+            string.Equals(existing.PurgeId, intent.PurgeId, StringComparison.Ordinal)))
+        {
+            throw new ArgumentException("The purge intent already exists.");
+        }
+
+        if (validated.Intents.Length >= MaximumIntents)
+        {
+            throw new InvalidDataException("The purge ledger exceeds its bounds.");
+        }
+
+        return ValidateAndNormalizeState(validated with
+        {
+            Intents = validated.Intents.Append(ValidateIntent(intent)).ToArray()
+        });
     }
 
     /// <summary>

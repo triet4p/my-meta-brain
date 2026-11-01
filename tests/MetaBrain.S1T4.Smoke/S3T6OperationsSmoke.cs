@@ -99,7 +99,7 @@ internal static partial class OwnerServiceSmoke
 
             var agentPause = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "source.pause",
                 resourceId = codexId
             }).ConfigureAwait(false);
@@ -107,14 +107,14 @@ internal static partial class OwnerServiceSmoke
                 "The agent channel reached a source pause operation.");
             var agentRefresh = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "source.refresh"
             }).ConfigureAwait(false);
             Require(ReplyCode(agentRefresh) == "forbidden",
                 "The agent channel reached the source refresh operation.");
             var agentList = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "source.list"
             }).ConfigureAwait(false);
             Require(ReplyCode(agentList) == "forbidden",

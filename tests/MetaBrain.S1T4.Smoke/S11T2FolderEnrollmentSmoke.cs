@@ -39,12 +39,12 @@ internal static partial class OwnerServiceSmoke
                 "The S11-T2 synthetic vault did not provision (exit=" + provision.ExitCode + "; stderr=" + provision.StandardError.Trim() + ").");
             var agentPreview = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "source.folder.preview"
             }).ConfigureAwait(false);
             var agentEnroll = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "source.folder.enroll"
             }).ConfigureAwait(false);
             Require(ReplyCode(agentPreview) == "forbidden" && ReplyCode(agentEnroll) == "forbidden",

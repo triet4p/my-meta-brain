@@ -2,7 +2,7 @@
 
 ## Goal và trạng thái
 
-- Status: **In progress — S12-T1–T3 complete; S12-T4 active**. Release mục tiêu cuối sprint: **1.2.0**; chưa build/publish.
+- Status: **In progress — S12-T1–T4 complete; S12-T5 active**. Release mục tiêu cuối sprint: **1.2.0**; chưa build/publish.
 - Entry: Sprint 11 complete và 1.1.0 published.
 - Scope/trace: P2-02, P2-11, P2-12; R04, R10, R18, R33–R36, R39. Các P2 là candidates, không thay baseline khi chưa có approval.
 - Root: `F:/ai-ml/my-meta-brain`; target ref `main`; exact base/worktree/ownership resolve khi execution.
@@ -44,12 +44,13 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
     - Check: Exercise changed CLI/service và MCP paths; không browser/WPF prerequisite trước S13, trừ installed legacy-component transition. Ghi scenarios/observations/limits, không claim surface chưa chạy.
     - [Evidence R1 PASS](../../artifacts/sprint-12/reviews/S12-T3-C1-R1.md), [checkpoint PASS](../../artifacts/sprint-12/checkpoints/S12-T3-C1.md), commit `097a0867543b431794bc7e1fd589e1b8b56c8a4e`. Actual CLI/service mutation, pinned-anchor, tombstone/restore và T2-format compatibility proof accepted; no automatic format conversion.
 
-- [~] **S12-T4 — Original read/export và portability.**
+- [x] **S12-T4 — Original read/export và portability.**
     - Change: Thêm owner read/export file/folder có preview đích và scope; metadata/relations export có format version, không nhét vào original bytes.
     - Acceptance: Hash equality cho unmodified export sau restart/unlock; modified file có revision riêng. Explicit plaintext disclosure, không temp plaintext ngầm hoặc private citations ngoài selected scope.
     - Check: Exercise changed CLI/service và MCP paths; không browser/WPF prerequisite trước S13, trừ installed legacy-component transition. Ghi scenarios/observations/limits, không claim surface chưa chạy.
+    - [Evidence R1 PASS](../../artifacts/sprint-12/reviews/S12-T4-C1-R1.md), [checkpoint PASS](../../artifacts/sprint-12/checkpoints/S12-T4-C1.md), commit `d46fbacc48c42d37b9993d79b63bb84da9b24ef6`. Actual pinned file/folder export, scoped sidecar, destination/refusal và lock/restart proof accepted.
 
-- [ ] **S12-T5 — Workspace backup/restore và CLI owner coverage.**
+- [~] **S12-T5 — Workspace backup/restore và CLI owner coverage.**
     - Change: Nối shared encrypted backup/recovery với workspace; CLI quản lý cây/create/import/read/export/rename/move. Bổ sung mọi owner workflow còn thiếu từ mapping T1 (unlock/recovery, capture/library/source operations, proposal review, relations, jobs/lifecycle, catalog/request/token/session, backup/export/purge), không viết WPF mới.
     - Acceptance: Owner dùng folder/file thật và mọi retained workflow bằng CLI không cần browser/WPF/config edit; encrypted backup restore tái hiện bytes/identity/metadata. Lock/restart không hồi sinh sessions; credential không vào args/env/log/plaintext file. Exercise transition từ installed 1.1 CLI/UI/shared runtime với refusal hoặc explicit owner transition an toàn; không claim old UI/binary compatible với format mới.
     - Check: Exercise changed CLI/service và MCP paths; không browser/WPF prerequisite trước S13, trừ installed legacy-component transition. Ghi scenarios/observations/limits, không claim surface chưa chạy.
@@ -69,4 +70,4 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
 
 ## Gate record
 
-S12-T1–T3 evidence/checkpoint PASS tại các link trên. S12-T4 active; T5–T6, differential và publication chưa có gate result. Xem [roadmap](../ROADMAP-2.0.md) cho dependency tiếp theo; không tự advance bởi completion message.
+S12-T1–T4 evidence/checkpoint PASS tại các link trên. S12-T5 active; T6, differential và publication chưa có gate result. Xem [roadmap](../ROADMAP-2.0.md) cho dependency tiếp theo; không tự advance bởi completion message.

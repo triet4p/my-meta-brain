@@ -230,7 +230,7 @@ internal static partial class OwnerServiceSmoke
 
             var forgedIssue = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.scope.issue",
                 previewId = new string('0', 32),
                 isOwner = true,
@@ -272,7 +272,7 @@ internal static partial class OwnerServiceSmoke
 
             var collectionPreviewReply = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.scope.preview",
                 collectionId = SmokeFixture.CollectionId,
                 operations = new[] { "resource.read" },
@@ -299,7 +299,7 @@ internal static partial class OwnerServiceSmoke
                 "The owner could not add a concrete collection member.");
             var staleCollectionIssue = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.scope.issue",
                 previewId = pendingPreviewIdText,
                 isOwner = true,
@@ -985,7 +985,7 @@ internal static partial class OwnerServiceSmoke
         while (await reader.ReadLineAsync().ConfigureAwait(false) is { } line)
         {
             output.AppendLine(line);
-            if (line.StartsWith("READY protocol=1 channel=", StringComparison.Ordinal))
+            if (line.StartsWith("READY protocol=" + MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion + " channel=", StringComparison.Ordinal))
             {
                 ready.TrySetResult(true);
             }
@@ -999,6 +999,25 @@ internal static partial class OwnerServiceSmoke
 
     private static Task<CommandResult> RunOwnerCommandWithInputAsync(string executable, string standardInput, params string[] arguments) =>
         RunOwnerCommandAsync(executable, arguments, standardInput);
+
+    /// <summary>
+    /// The live walkthrough gets its operator key from the harness and hands it
+    /// to <c>provider-config</c> as one line of redirected standard input. The
+    /// product never reads the environment or a plaintext file for a key; only
+    /// this owner-authorized live harness does, so it can supply the secure
+    /// prompt non-interactively.
+    /// </summary>
+    private static string S6LiveProviderKey()
+    {
+        var key = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            throw new InvalidOperationException(
+                "The live provider walkthrough needs OPENAI_API_KEY for its stdin handoff to the secure prompt; the product itself never reads the environment.");
+        }
+
+        return key;
+    }
 
     private static async Task<CommandResult> RunOwnerCommandAsync(string executable, string[] arguments, string? standardInput)
     {
@@ -1120,7 +1139,7 @@ internal static partial class OwnerServiceSmoke
         var authentication = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
         Require(authentication is not null && authentication.Contains("\"authenticated\":true", StringComparison.Ordinal),
             "The owner pipe did not authenticate the synthetic race client.");
-        var request = JsonSerializer.Serialize(new { protocolVersion = 1, operation = "resource.read", resourceId });
+        var request = JsonSerializer.Serialize(new { protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion, operation = "resource.read", resourceId });
         await writer.WriteLineAsync(request).ConfigureAwait(false);
 
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);

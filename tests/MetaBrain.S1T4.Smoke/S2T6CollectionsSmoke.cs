@@ -164,7 +164,7 @@ internal static partial class OwnerServiceSmoke
             "The owner could not publish the S2-T6 catalog entry (exit=" + catalogPublish.ExitCode + "; stderr=" + catalogPublish.StandardError.Trim() + ").");
         var publicList = await InvokeAgentRequestAsync(fixture.AgentPipe, new
         {
-            protocolVersion = 1,
+            protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
             operation = "catalog.list"
         }).ConfigureAwait(false);
         Require(publicList.TryGetProperty("publishedCatalog", out var published) &&
@@ -196,7 +196,7 @@ internal static partial class OwnerServiceSmoke
             "The owner could not withdraw the S2-T6 catalog entry (exit=" + catalogWithdraw.ExitCode + "; stderr=" + catalogWithdraw.StandardError.Trim() + ").");
         var withdrawnList = await InvokeAgentRequestAsync(fixture.AgentPipe, new
         {
-            protocolVersion = 1,
+            protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
             operation = "catalog.list"
         }).ConfigureAwait(false);
         Require(withdrawnList.TryGetProperty("status", out var withdrawnStatus) && withdrawnStatus.GetString() == "catalog" &&
@@ -241,7 +241,7 @@ internal static partial class OwnerServiceSmoke
         // merely points at an approved member, and no view of hidden metadata.
         var oneWire = await InvokeAgentRequestAsync(fixture.AgentPipe, new
         {
-            protocolVersion = 1,
+            protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
             operation = "agent.collection.view",
             sessionToken = ReadSessionBearer(agentOne.SessionFile)
         }).ConfigureAwait(false);
@@ -278,7 +278,7 @@ internal static partial class OwnerServiceSmoke
         // source is in the granted snapshot.
         var agentRelationRead = await InvokeAgentRequestAsync(fixture.AgentPipe, new
         {
-            protocolVersion = 1,
+            protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
             operation = "agent.relation.read",
             sessionToken = ReadSessionBearer(agentOne.SessionFile),
             accessOperation = "relation.read",
@@ -289,7 +289,7 @@ internal static partial class OwnerServiceSmoke
             "A relation over an approved member opened a read the collection grant never approved");
         var agentSourceRead = await InvokeAgentRequestAsync(fixture.AgentPipe, new
         {
-            protocolVersion = 1,
+            protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
             operation = "agent.source.read",
             sessionToken = ReadSessionBearer(agentOne.SessionFile),
             accessOperation = "source.read",
@@ -300,7 +300,7 @@ internal static partial class OwnerServiceSmoke
             "A registered source outside the granted snapshot was served");
         var lifecycleOnAgentChannel = await InvokeAgentRequestAsync(fixture.AgentPipe, new
         {
-            protocolVersion = 1,
+            protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
             operation = "lifecycle.read",
             sessionToken = ReadSessionBearer(agentOne.SessionFile),
             resourceId = S2t6Shared,
@@ -310,7 +310,7 @@ internal static partial class OwnerServiceSmoke
             "The lifecycle operation was reachable on the agent channel (reply=" + lifecycleOnAgentChannel.GetRawText() + ").");
         var lifecycleResourceRead = await InvokeAgentRequestAsync(fixture.AgentPipe, new
         {
-            protocolVersion = 1,
+            protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
             operation = "agent.resource.read",
             sessionToken = ReadSessionBearer(agentOne.SessionFile),
             accessOperation = "memory.read",
@@ -339,7 +339,7 @@ internal static partial class OwnerServiceSmoke
             "An unknown resource produced a distinguishable denial (existence oracle)");
         var bogusSession = await InvokeAgentRequestAsync(fixture.AgentPipe, new
         {
-            protocolVersion = 1,
+            protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
             operation = "agent.collection.view",
             sessionToken = "mb2_not-a-real-session-bearer"
         }).ConfigureAwait(false);
@@ -347,7 +347,7 @@ internal static partial class OwnerServiceSmoke
             "A bogus session bearer did not fail closed on the collection view (reply=" + bogusSession.GetRawText() + ").");
         var steeredView = await InvokeAgentRequestAsync(fixture.AgentPipe, new
         {
-            protocolVersion = 1,
+            protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
             operation = "agent.collection.view",
             sessionToken = ReadSessionBearer(agentOne.SessionFile),
             resourceId = S2t6BetaOnly
@@ -540,7 +540,7 @@ internal static partial class OwnerServiceSmoke
             "A locked vault served an agent collection view (exit=" + lockedView.ExitCode + "; stderr=" + lockedView.StandardError.Trim() + ").");
         var lockedDiscovery = await InvokeAgentRequestAsync(fixture.AgentPipe, new
         {
-            protocolVersion = 1,
+            protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
             operation = "catalog.list"
         }).ConfigureAwait(false);
         Require(lockedDiscovery.TryGetProperty("status", out var lockedStatus) && lockedStatus.GetString() == "catalog" &&
@@ -578,7 +578,7 @@ internal static partial class OwnerServiceSmoke
             "The retained archive did not survive restart and unlock (stdout=" + retainedAfterRestart.StandardOutput.Trim() + ").");
         var catalogAfterRestart = await InvokeAgentRequestAsync(fixture.AgentPipe, new
         {
-            protocolVersion = 1,
+            protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
             operation = "catalog.list"
         }).ConfigureAwait(false);
         Require(catalogAfterRestart.TryGetProperty("status", out var restartedCatalogStatus) && restartedCatalogStatus.GetString() == "catalog" &&
@@ -617,7 +617,7 @@ internal static partial class OwnerServiceSmoke
         long revision) =>
         await InvokeAgentRequestAsync(fixture.AgentPipe, new
         {
-            protocolVersion = 1,
+            protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
             operation = accessOperation switch
             {
                 "relation.read" => "agent.relation.read",

@@ -180,7 +180,7 @@ internal static partial class OwnerServiceSmoke
             // ---- The agent channel never gets the owner's review surfaces ----
             var agentReview = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.review.list",
             }).ConfigureAwait(false);
             Require(ReplyCode(agentReview) == "forbidden",

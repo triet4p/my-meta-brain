@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO.Pipes;
 using System.Security.Principal;
 using System.Text;
@@ -84,7 +85,7 @@ internal sealed class NamedPipeService
     {
         using var ownerListener = WindowsPipeServer.Create(_settings, firstInstance: true);
         using var agentListener = WindowsPipeServer.CreateAgent(_settings, firstInstance: true);
-        Console.WriteLine("READY protocol=1 channel=owner+agent");
+        Console.WriteLine("READY protocol=" + ServiceRequestHandler.CurrentProtocolVersion.ToString(CultureInfo.InvariantCulture) + " channel=owner+agent");
         try
         {
             await Task.WhenAll(
@@ -222,6 +223,7 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerVaultRestoreOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerExportOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceExportOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceNodePurgeOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerVaultUpgradeOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerVaultRollbackOperation, StringComparison.Ordinal))
                 {
@@ -232,7 +234,10 @@ internal sealed class NamedPipeService
                     // export writes a whole selected scope outside the vault, one
                     // bounded file at a time, so it shares that bound instead of
                     // the one-act workspace guard; the request is cancellable and
-                    // the act removes what it created when it is interrupted.
+                    // the act removes what it created when it is interrupted. An
+                    // S12-T5 purge reclaims every retained revision of a
+                    // tombstone group, so its cleanup is proportional to that
+                    // group rather than to one bounded act.
                     timeout.CancelAfter(VaultSnapshotTimeout);
                 }
                 if (string.Equals(request.Operation, ServiceRequestHandler.SourceFolderPreviewOperation, StringComparison.Ordinal) ||
@@ -255,6 +260,7 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceTombstonesOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceAnchorCreateOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceAnchorListOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceNodePurgePreviewOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceExportPreviewOperation, StringComparison.Ordinal))
                 {
                     timeout.CancelAfter(WorkspaceTimeout);
@@ -414,6 +420,8 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceTombstonesOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceAnchorCreateOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceAnchorListOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceNodePurgePreviewOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceNodePurgeOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceExportPreviewOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceExportOperation, StringComparison.Ordinal);
                 using var operation = needsVaultOperation ? _vault.TryBeginOperation() : null;

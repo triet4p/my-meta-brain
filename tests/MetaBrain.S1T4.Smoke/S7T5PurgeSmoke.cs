@@ -143,7 +143,7 @@ internal static partial class OwnerServiceSmoke
             // Agent channel cannot purge: every purge operation is owner-only.
             var agentPurge = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "owner.purge.preview",
                 resourceId = S7T5TargetId,
                 resourceRevision = 2L,
@@ -722,6 +722,8 @@ internal static partial class OwnerServiceSmoke
         public WorkspaceDeleteInfo DeleteWorkspaceNode(string nodeId, long expectedTreeRevision, long expectedNodeRevision, string previewToken) => _inner.DeleteWorkspaceNode(nodeId, expectedTreeRevision, expectedNodeRevision, previewToken);
         public WorkspaceRestoreInfo RestoreWorkspaceNode(string nodeId, long expectedTreeRevision) => _inner.RestoreWorkspaceNode(nodeId, expectedTreeRevision);
         public WorkspaceTombstoneInfo[] ReadWorkspaceTombstones() => _inner.ReadWorkspaceTombstones();
+        public WorkspacePurgePreviewInfo PreviewWorkspacePurge(string nodeId) => _inner.PreviewWorkspacePurge(nodeId);
+        public WorkspacePurgeInfo PurgeWorkspaceNode(string nodeId, string reason, long expectedTreeRevision, string previewToken) => _inner.PurgeWorkspaceNode(nodeId, reason, expectedTreeRevision, previewToken);
         public WorkspaceAnchorInfo CreateWorkspaceAnchor(string fileId, long expectedContentRevision, long offset, long length, long expectedTreeRevision) => _inner.CreateWorkspaceAnchor(fileId, expectedContentRevision, offset, length, expectedTreeRevision);
         public WorkspaceAnchorInfo[] ReadWorkspaceAnchors(string fileId) => _inner.ReadWorkspaceAnchors(fileId);
         public WorkspaceExportPreviewInfo PreviewWorkspaceExport(string nodeId, long contentRevision, string destination) => _inner.PreviewWorkspaceExport(nodeId, contentRevision, destination);

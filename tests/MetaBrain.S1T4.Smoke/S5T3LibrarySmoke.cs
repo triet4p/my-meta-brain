@@ -394,7 +394,7 @@ internal static partial class OwnerServiceSmoke
             {
                 var upgraded = await InvokeAgentRequestAsync(fixture.ControlPipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = "memory.revise",
                     resourceId = assistantItem.Id,
                     zoneId = assistantItem.ZoneId,
@@ -422,7 +422,7 @@ internal static partial class OwnerServiceSmoke
             var scopedSession = await IssueS4T2GrantAsync(connectionsExecutable, fixture, "s5t3-scope", "memory.read", new[] { S5T3Symbol });
             var scopedAllowed = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.memory.read",
                 sessionToken = ReadSessionBearer(scopedSession.SessionFile),
                 accessOperation = "memory.read",
@@ -433,7 +433,7 @@ internal static partial class OwnerServiceSmoke
                 "The discriminator read of the granted item was denied, so the session itself is broken (" + ReplyCode(scopedAllowed) + ").");
             var scopedDenied = await InvokeAgentRequestAsync(fixture.AgentPipe, new
             {
-                protocolVersion = 1,
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                 operation = "agent.memory.read",
                 sessionToken = ReadSessionBearer(scopedSession.SessionFile),
                 accessOperation = "memory.read",
@@ -463,7 +463,7 @@ internal static partial class OwnerServiceSmoke
             {
                 var denied = await InvokeAgentRequestAsync(fixture.AgentPipe, new
                 {
-                    protocolVersion = 1,
+                    protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
                     operation = ownerOperation,
                     isOwner = true,
                     consent = "owner-console",

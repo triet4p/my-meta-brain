@@ -81,7 +81,10 @@ internal static class Program
                 string.Equals(args[0], "s11-t4", StringComparison.Ordinal) ||
                 string.Equals(args[0], "s12-t2", StringComparison.Ordinal) ||
                 string.Equals(args[0], "s12-t3", StringComparison.Ordinal) ||
-                string.Equals(args[0], "s12-t4", StringComparison.Ordinal))
+                string.Equals(args[0], "s12-t4", StringComparison.Ordinal) ||
+                string.Equals(args[0], "s12-t5", StringComparison.Ordinal) ||
+                string.Equals(args[0], "s12-t5-legacy", StringComparison.Ordinal) ||
+                string.Equals(args[0], "s12-t5-install", StringComparison.Ordinal))
             ? args[0]
                 : args.Length == 5 &&
                   string.Equals(args[0], "s8-t5", StringComparison.Ordinal)
@@ -145,6 +148,9 @@ internal static class Program
             Console.Error.WriteLine("S12-T2 invocation: MetaBrain.S1T4.Smoke.exe s12-t2 <MetaBrain.Connections.exe>");
             Console.Error.WriteLine("S12-T3 invocation: MetaBrain.S1T4.Smoke.exe s12-t3 <MetaBrain.Connections.exe>");
             Console.Error.WriteLine("S12-T4 invocation: MetaBrain.S1T4.Smoke.exe s12-t4 <MetaBrain.Connections.exe>");
+            Console.Error.WriteLine("S12-T5 invocation: MetaBrain.S1T4.Smoke.exe s12-t5 <MetaBrain.Connections.exe>");
+            Console.Error.WriteLine("S12-T5 legacy invocation: MetaBrain.S1T4.Smoke.exe s12-t5-legacy <MetaBrain.Connections.exe>");
+            Console.Error.WriteLine("S12-T5 installer invocation: MetaBrain.S1T4.Smoke.exe s12-t5-install <MetaBrain.Installer.exe>");
             return 2;
         }
 
@@ -227,6 +233,15 @@ internal static class Program
                     break;
                 case "s12-t4":
                     await OwnerServiceSmoke.RunS12T4WorkspaceExportAsync(fullPath).ConfigureAwait(false);
+                    break;
+                case "s12-t5":
+                    await OwnerServiceSmoke.RunS12T5WorkspaceBackupRestoreAsync(fullPath).ConfigureAwait(false);
+                    break;
+                case "s12-t5-legacy":
+                    await OwnerServiceSmoke.RunS12T5LegacyAsync(fullPath).ConfigureAwait(false);
+                    break;
+                case "s12-t5-install":
+                    await OwnerServiceSmoke.RunS12T5InstallerPreflightAsync(fullPath).ConfigureAwait(false);
                     break;
                 case "s4-t2":
                     await OwnerServiceSmoke.RunS4T2SearchAsync(fullPath).ConfigureAwait(false);
