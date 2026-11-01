@@ -7,11 +7,13 @@ administrator rights, an AppContainer, a patched agent runtime, or an account of
 - Product scope and requirements: [`META-BRAIN.md`](META-BRAIN.md), [`REQUIREMENTS.md`](REQUIREMENTS.md).
 - Sprint plan and acceptance for this work: [`sprint-plans/sprint-8.md`](sprint-plans/sprint-8.md).
 
+**Version boundary:** From 1.2.0 the supported products are the **CLI installer** and the **standalone MCP ZIP** (owner-approved [CR03](REQUIREMENTS.md#approved-change-record--cr03-2026-11-01) and the [workspace contract D090](META-BRAIN.md#134-approved-workspace-contract--d090)). The CLI covers every owner workflow; MCP remains the scoped agent surface; browser document preview/edit is a Sprint 13 surface and is not shipped, so no plaintext HTML/temp or guessed `open` syntax applies. **WPF Owner UI 1.1.0 is the frozen legacy product**: this 1.2 candidate publishes no UI installer, does not upgrade a 1.1 installation in place, and does not promise that the 1.1 console can use 1.2 runtime or data. Its 1.0.0/1.1.0 downloads, bytes and acceptance stay unchanged. Sections that describe WPF console surfaces are kept as 1.1.0 history and are marked as such.
+
 ## 1. The two roots
 
 | Root | Holds | Removed by |
 | --- | --- | --- |
-| **Install root** — e.g. `%LOCALAPPDATA%\MetaBrain\App` | The application files: `cli/`, `service/`, `owner-ui/`, `mcp/`, `installer/`, and `install-state.json` (which also records the product version) | `uninstall` |
+| **Install root** — e.g. `%LOCALAPPDATA%\MetaBrain\App` | The application files: `cli/`, `service/`, `mcp/`, `installer/`, and `install-state.json` (which also records the product version and the registered components `cli`/`mcp`) | `uninstall` |
 | **Data root** — e.g. `%LOCALAPPDATA%\MetaBrain\Data` | The owner&#39;s private data: `service-settings.json`, `vault/`, the runtime state (`runtime/`), the source snapshots, the backups and the recovery material | **never** by the installer |
 
 The two roots are separate on purpose: an upgrade replaces the application files and leaves the
@@ -52,12 +54,14 @@ recovery key was shown by the interrupted run and is not shown again.
 ## 2. Install
 
 ```text
-MetaBrain.Installer.exe install --payload &lt;published-payload-dir&gt; --install-root &lt;dir&gt; --data-root &lt;dir&gt; [--component cli|owner-ui|mcp|all] [--start]
+MetaBrain.Installer.exe install --payload &lt;published-payload-dir&gt; --install-root &lt;dir&gt; --data-root &lt;dir&gt; [--component cli|mcp|all] [--start]
+```
 
 - `--payload` — the published application: `cli/MetaBrain.Cli.exe`,
-  `service/MetaBrain.Connections.exe`, `owner-ui/MetaBrain.OwnerUi.exe`,
-  `mcp/MetaBrain.Mcp.exe`, `installer/MetaBrain.Installer.exe`. The release
-  bundle&#39;s own layout is exactly this payload.
+  `service/MetaBrain.Connections.exe`, `mcp/MetaBrain.Mcp.exe`,
+  `installer/MetaBrain.Installer.exe`. The release bundle&#39;s own layout is exactly this payload.
+  There is no `owner-ui/` directory in 1.2; naming `--component owner-ui` is refused with the
+  support-transition message.
 - `--install-root` — where the application files go.
 - `--data-root` — where the owner&#39;s private data goes. It is created with the ordinary permissions
   of the owner account. It must be a **sibling** of the install root, not a directory inside it
@@ -77,6 +81,15 @@ An install **never creates the vault**: the first start is locked and uninitiali
 creates the vault explicitly (&#167;4). Installing over an existing install root is an upgrade of the
 application files; the data root, the vault and the pipe endpoints are kept.
 
+**A 1.1.0 installation is refused in place.** The current installer refuses an existing installation
+whose recorded product version is older than 1.2.0 — including a real 1.1.0 installation — before it
+stops that host or changes any file or data. It names the supported transition: install 1.2 into a
+separate install root with its own data root and distinct `--control-pipe` / `--agent-pipe`
+endpoints, and leave the 1.1 application and data untouched. The same refusal covers an unknown or
+mixed component registration, a data root owned by another installation, an unowned data root that
+already holds Meta Brain data, overlapping roots, and a live endpoint that speaks another protocol
+revision. No refusal replaces, uninstalls or edits the old installation.
+
 ### 2.1 The release bundle (S9-T6)
 
 The bundle is one self-contained Windows x64 package with a directory per product entrypoint and
@@ -84,17 +97,17 @@ one for the shared runtime, plus the installer that consumes the same layout:
 
 ```text
 cli\MetaBrain.Cli.exe               owner CLI (--help, --version, lifecycle, owner commands)
-owner-ui\MetaBrain.OwnerUi.exe      owner console
 mcp\MetaBrain.Mcp.exe               agent MCP server over stdio
 service\MetaBrain.Connections.exe   shared runtime host (started by the shared lifecycle)
-installer\MetaBrain.Installer.exe   per-user install/upgrade/uninstall
+installer\MetaBrain.Installer.exe   per-user CLI/MCP install/upgrade/uninstall
 release-manifest.json               product version, runtime identifier, every file&#39;s size and SHA-256
 ```
 
-The bundle is a `--self-contained true -r win-x64` publish, so the target machine needs no .NET
-SDK, no installed .NET runtime, no repository and no PowerShell: unpack it and run the entrypoints.
-Its product version is the version every entrypoint reports (`--version`; the console shows it in
-its title; the installer records it in `install-state.json`).
+The 1.2.0 bundle ships the CLI and the MCP server (CR03/D089); the frozen 1.1.0 WPF Owner UI is not
+published here. The bundle is a `--self-contained true -r win-x64` publish, so the target machine
+needs no .NET SDK, no installed .NET runtime, no repository and no PowerShell: unpack it and run
+the entrypoints. Its product version is the version every 1.2 entrypoint reports (`--version`; the
+installer records it in `install-state.json`).
 
 A developer builds the bundle from a checkout with
 `powershell.exe -NoProfile -File scripts\release\publish-release-bundle.ps1`. That script is
@@ -113,26 +126,44 @@ powershell.exe -NoProfile -File scripts\release\assemble-candidate.ps1
 ```
 
 The command writes an immutable candidate directory under ignored
-`runtime\release-candidates`. The CLI asset is a standalone unsigned setup EXE;
-launch it for an interactive install/upgrade, or use
+`runtime\release-candidates`. The candidate has exactly two assets: the CLI setup
+EXE and the MCP ZIP. Launch the setup for an interactive install/upgrade, or use
 `MetaBrain-CLI-...exe install --install-root &lt;dir&gt; [--data-root &lt;dir&gt;]`.
 At the confirmation prompt, enter `n` or `q` to cancel before setup changes any files.
 The installed entrypoint is `cli\MetaBrain.Cli.exe`; use its full path with
 `--help` or `--version`. Setup supports `uninstall --install-root &lt;dir&gt;` and
-removes only the CLI component, keeping the shared runtime while another
-registered frontend depends on it and always preserving the selected data root.
+removes only the CLI component, keeping the shared runtime while the MCP component is
+registered (MCP itself is extracted from its ZIP, not installed by this setup) and always
+preserving the selected data root.
 It does not change PATH, profiles, autostart, services, registry, permissions or environment
 settings. The self-contained single-file .NET host may extract runtime support under
 `%TEMP%\.net\&lt;bundle&gt;\&lt;hash&gt;` on launch; this is runtime temp data, not an install or profile
-registration.
+registration. There is no 1.2 UI setup asset to download or run.
 
-### 2.3 Graphical Owner UI setup (S10-T4)
+### 2.3 Support transition from the 1.1.0 WPF product (S12-T6)
 
-Download the candidate-specific `MetaBrain-OwnerUI-...exe` setup executable. It opens a graphical setup window where the owner selects separate application and data locations, installs or updates only the Owner UI component through the shared installer, and may open `owner-ui\MetaBrain.OwnerUi.exe` after installation. Setup can also remove only the Owner UI; other registered components keep the shared runtime, and the data location is always retained.
+1.2.0 ships the CLI and the MCP server only. It publishes no `MetaBrain-UI-&lt;version&gt;.exe`, has no
+`owner-ui` component, and builds no WPF installer. The installer refuses to change an installed
+pre-1.2 (1.1.0 WPF) or unknown/mixed installation in place, before it stops that host or writes
+into either root, and names the supported transition: install 1.2 into a **separate install root**
+with its own **data root** and distinct `--control-pipe`/`--agent-pipe` endpoints. The 1.1
+application, its data, its endpoints and any running 1.1 host are left untouched, and nothing is
+uninstalled, replaced or migrated automatically. Sharing one live data root or running two writers
+is refused.
 
-The setup is self-contained for Windows x64 and requires no SDK, repository, command prompt, CLI bootstrap, or installed .NET runtime. The window supports keyboard navigation; Escape or Cancel closes setup before an operation begins. Once installation or removal starts, setup keeps the operation intact and reports the shared installer&#39;s actual success or refusal. It does not start or unlock the service. Setup is unsigned: SHA-256 checks bytes but does not authenticate the publisher. It temporarily extracts its embedded payload under the current user&#39;s `%TEMP%` and removes the staging directory when possible; the single-file host may also extract runtime support under `%TEMP%\.net`. No PATH, profile, service, registry, permission, environment or autostart changes are made.
+An installed 1.1 layout is detected from its recorded `install-state.json` product version, its
+`owner-ui/` directory or its root-level `MetaBrain.OwnerUi.exe`/`MetaBrain.OwnerUi.Setup.exe`
+markers. A 1.2 installation has neither that directory nor that component; naming
+`--component owner-ui` fails with the same support-transition message. The 1.1.0 Owner UI remains
+downloadable from its own unchanged release; it is not updated by 1.2 and makes no 1.2
+runtime/data compatibility claim.
 
-The Owner UI installer and CLI installer use the same installation identity, component state, runtime version and data root. If the other frontend is already installed, use the recorded data location; setup refuses a different data root or an incompatible shared candidate/version rather than replacing the other component&#39;s runtime.
+**A separately confirmed manual transition** is the owner&#39;s own act, not an installer feature:
+stop the 1.1 host explicitly, keep both 1.1 roots as they are, install 1.2 beside them with the
+separate roots and endpoints, then create or unlock the 1.2 vault and copy only what the owner
+chooses. 1.2 never reads, converts, deletes or migrates a 1.1 vault.
+
+### 2.4 Candidate identity and verification (S10-T2/T3)
 
 To recheck an existing candidate&#39;s asset hashes and file sets:
 
@@ -160,15 +191,16 @@ The value binds the assembly base HEAD plus that dirty worktree snapshot, not th
 separately approved source checkpoint commit, and it cannot be recomputed once any
 population file changes; it is not a Git object ID at all. Uncommitted source
 therefore does not masquerade as the HEAD revision, and a matching digest is not a
-signature: the candidate is unsigned. The CLI and graphical Owner UI setups embed
-their exact staged component/shared-runtime payloads and store the same candidate
-identity with shared install state. A different candidate or runtime version is
-refused when another frontend is registered; install the matching complete
-candidate or remove the other frontend before replacing the shared runtime.
-Rebuilds receive new IDs and never overwrite a candidate. Candidate manifests
-record both setup assets and embedded payload hashes, dependency inventories,
-licenses and unsigned status; SHA-256 does not authenticate the publisher. Public
-release remains owner-controlled and is not authorized.
+signature: the candidate is unsigned. The CLI setup embeds its exact staged
+component/shared-runtime payload and records the candidate identity in shared install
+state; the MCP ZIP carries the same identity in `package-manifest.json`. A different
+candidate or runtime version is refused when the other component is registered;
+install the matching complete candidate or remove the other component before
+replacing the shared runtime. Rebuilds receive new IDs and never overwrite a
+candidate. Candidate manifests record both assets (CLI setup + MCP package), the
+setup&#39;s embedded payload hashes, dependency inventories, licenses and unsigned
+status; SHA-256 does not authenticate the publisher. Public release remains
+owner-controlled and is not authorized.
 
 An unpacked developer bundle can still be passed to the shared installer&#39;s
 `--payload` command for a full-component install. An entrypoint run from the
@@ -179,7 +211,7 @@ unpacked directory uses the `service\MetaBrain.Connections.exe` beside it.
 Every service command below is run from the installed copy in `&lt;install root&gt;\installer`; it
 accepts `--install-root &lt;dir&gt;` to address another installation. The installed `uninstall` command
 acts on its own installation and optionally accepts `--component`; the dedicated CLI setup has
-its own CLI-only uninstall command (&#167;8), and the graphical Owner UI setup provides its own Owner UI-only removal surface (&#167;2.3).
+its own CLI-only uninstall command (&#167;8).
 
 ```text
 MetaBrain.Installer.exe start        # start the service host (locked)
@@ -200,10 +232,11 @@ recycled pid is never mistaken for the running host.
 
 ### 3.1 The shared instance lifecycle (S9-T2)
 
-Every frontend — the packaged CLI, the owner console and the agent bridge — resolves the same
+Every 1.2 frontend — the packaged CLI and the agent MCP bridge — resolves the same
 instance (one data root, one settings file, one pair of pipe endpoints) and starts or connects
 the same locked host through one shared implementation. The installer service commands above
-delegate to that same lifecycle, so no frontend keeps a second start/stop/status path.
+delegate to that same lifecycle, so no frontend keeps a second start/stop/status path. (The frozen
+1.1.0 console used the same shared internals; it is not part of the 1.2 runtime.)
 
 ```text
 cli\MetaBrain.Cli.exe lifecycle start --data-root &lt;dir&gt;     # create (clean root only) or select, then start the shared locked host
@@ -479,7 +512,44 @@ Open a source to read its status. The view reports availability, saved canonical
 
 State-action answers that omit a complete ingestion report show those facets as `not reported`, never as zero. When the same source ID and generation already has a complete status, the console retains its saved/index/interpretation/preservation details while applying the latest membership, pause and veto state.
 
-### 3.3 The owner console (S9-T4)
+### 3.2.7 The owner workspace (S12-T2–T5)
+
+The workspace is a private logical tree stored inside the unlocked vault: folders and files with stable random IDs, exact names and retained original-byte revisions. It needs the running shared host and an unlocked vault; a locked vault refuses every workspace command with `vault_locked`. No agent or MCP client can reach it: the agent channel&#39;s operation set is an explicit allowlist, and the workspace operations are owner-only.
+
+- `owner workspace-status --control-pipe &lt;pipe&gt;` reports `state=uninitialized|ready`, the authenticated format and metadata-schema versions, the current tree revision, the folder, file and retained-revision counts and `deleted=&lt;n&gt;` retained tombstones. An unreadable workspace is refused (see below), never reported as empty.
+- `owner workspace-tree --control-pipe &lt;pipe&gt;` lists every node as `FOLDER|FILE id=… parent=… name=&lt;JSON string&gt; revision=…`, with the latest `contentRevision`, `bytes` and `sha256` for a file. Only live nodes appear; a retained tombstone is not part of the tree. Names print as JSON strings so whitespace or control characters stay one record.
+- `owner workspace-mkdir --control-pipe &lt;pipe&gt; --parent-id &lt;id|root&gt; --name &lt;exact-name&gt; --expected-tree-revision &lt;n&gt;` creates one logical folder. Use `root` for the first act; an uninitialized workspace accepts `--expected-tree-revision 0`.
+- `owner workspace-import --control-pipe &lt;pipe&gt; --parent-id &lt;id|root&gt; [--name &lt;exact-name&gt;] --input-file &lt;file&gt; --expected-tree-revision &lt;n&gt;` stores the file&#39;s exact bytes as content revision 1. The logical name defaults to the source file name.
+- `owner workspace-revise --control-pipe &lt;pipe&gt; --file-id &lt;id&gt; --expected-content-revision &lt;live&gt; --input-file &lt;file&gt;` appends a retained content revision to an existing file under that file&#39;s content revision. The identity, name, parent and earlier revisions stay; every live citation anchor of the file becomes `stale` at its original revision instead of being rebound.
+- `owner workspace-read --control-pipe &lt;pipe&gt; --file-id &lt;id&gt; [--revision &lt;n&gt;] [--output-file &lt;new-file&gt;]` returns the exact original bytes of the latest (or a pinned retained) revision.
+- `owner workspace-rename --control-pipe &lt;pipe&gt; --node-id &lt;id&gt; --name &lt;exact-name&gt; --expected-tree-revision &lt;n&gt; --expected-node-revision &lt;n&gt;` changes only the exact name and the node&#39;s own revision. The id, parent, descendants, content revisions and anchors are untouched, so a citation of the document id survives the rename.
+- `owner workspace-move --control-pipe &lt;pipe&gt; --node-id &lt;id&gt; --parent-id &lt;id|root&gt; --expected-tree-revision &lt;n&gt; --expected-node-revision &lt;n&gt;` changes only the parent and the node&#39;s own revision. A cycle, a file destination and an occupied destination name are refused with `workspace_cycle`, `workspace_invalid_parent` and `name_conflict`.
+- `owner workspace-copy --control-pipe &lt;pipe&gt; --node-id &lt;id&gt; --parent-id &lt;id|root&gt; [--name &lt;exact-name&gt;] --expected-tree-revision &lt;n&gt;` copies one live file or one live folder subtree recursively under fresh identities. Each copied file starts its own content revision 1 from the source&#39;s latest bytes and no anchor, grant or other cross-document reference is copied. Copying a folder into itself is refused with `workspace_cycle`.
+- `owner workspace-delete-preview --control-pipe &lt;pipe&gt; --node-id &lt;id&gt;` writes nothing and reports exactly what a delete would tombstone at the current revision (one `NODE` line per live descendant) plus the `preview` token that binds the act to that exact tree revision, node revision and descendant set.
+- `owner workspace-delete --control-pipe &lt;pipe&gt; --node-id &lt;id&gt; --expected-tree-revision &lt;n&gt; --expected-node-revision &lt;n&gt; --preview &lt;token&gt;` replaces the node and its previewed live descendants with one reversible encrypted tombstone group. Identity, exact names, parent, retained bytes and anchors are kept; the nodes leave the tree, reads and anchor lists refuse with `workspace_deleted`, and a stale revision or a preview token that no longer matches refuses with `workspace_conflict`.
+- `owner workspace-restore --control-pipe &lt;pipe&gt; --node-id &lt;id&gt; --expected-tree-revision &lt;n&gt;` restores the whole deletion group the tombstone belongs to, with its original identities and bytes, only into locations whose parent is live and whose exact name is still unoccupied; otherwise it refuses with `workspace_restore_conflict` and changes nothing. Restoring a live node refuses with `workspace_not_deleted`.
+- `owner workspace-tombstones --control-pipe &lt;pipe&gt;` lists every retained tombstone with its id, kind, former parent and name, deletion group and revisions. A new file created at the freed name is a different identity, so deleting and re-creating a path never resumes the old one.
+- `owner workspace-anchor-create --control-pipe &lt;pipe&gt; --file-id &lt;id&gt; --expected-content-revision &lt;live&gt; --offset &lt;n&gt; --length &lt;n&gt; --expected-tree-revision &lt;n&gt;` pins one citation anchor to that exact byte range of the file&#39;s current content revision. The anchor records the document id, the content revision, the range and the digest of the anchored bytes; it stores no path and no display name. An out-of-range span refuses with `workspace_anchor_invalid` and a stale content revision with `workspace_conflict`.
+- `owner workspace-anchor-list --control-pipe &lt;pipe&gt; --file-id &lt;id&gt;` lists the anchors of one live file with their pinned `contentRevision`, range, digest and `live|stale` state. A deleted file refuses with `workspace_deleted` because its relations are unavailable until it is restored.
+
+- `owner workspace-purge-preview --control-pipe &lt;pipe&gt; --node-id &lt;id&gt;` writes nothing and reports the exact tombstone deletion group (one `TOMBSTONE` line per retained node), the retained content revisions, total bytes, anchors and the binding `token` an irreversible purge would erase, plus the disclosure that pre-existing backups and plaintext exports still hold their own copies. A live node is refused; this reads only.
+- `owner workspace-purge --control-pipe &lt;pipe&gt; --node-id &lt;id&gt; --expected-tree-revision &lt;n&gt; --preview &lt;token&gt; --confirm PURGE --reason &lt;text&gt;` permanently removes the previewed tombstone group and its retained bytes and anchors from this vault after re-deriving the preview, recording the owner&#39;s reason and every purged id in the vault&#39;s encrypted purge ledger before the workspace commit. A stale tree revision, group or token refuses with `workspace_conflict`; a missing reason or a confirmation other than `PURGE` refuses with `workspace_purge_confirmation`. The ledger is the same durable record canonical purges use, later backups carry it, and a restore re-applies it, so those identities are not resurrected here. Backups and exports made before the purge are disclosed, not recalled.
+- `owner workspace-export-preview --control-pipe &lt;pipe&gt; --node-id &lt;id&gt; [--content-revision N] --destination &lt;new-absolute-path&gt;` writes nothing and reports exactly what an export would write: every in-scope file pinned to its retained revision, every folder, the in-scope citation anchors, the new destination directory, the versioned metadata document and the binding token. For a file scope, `--content-revision N` pins one retained revision; for a folder scope it is refused with `workspace_export_revision` and every file pins its current content revision. Files outside the selected scope, citations of them and the selected node&#39;s parent identity are not included.
+- `owner workspace-export --control-pipe &lt;pipe&gt; --node-id &lt;id&gt; [--content-revision N] --destination &lt;new-absolute-path&gt; --preview &lt;token&gt; --confirm EXPORT` writes exactly the previewed scope as plaintext original bytes plus a separate versioned metadata document `metabrain-workspace-export.json` (`format: metabrain-workspace-export/1`, `metadataSchemaVersion: 1`) into one new destination directory. The destination must be an absolute path with no `.`/`..` segment, device namespace, reparse point in any existing ancestor, existing entry, or case-only collision with another in-scope name or the sidecar name; a logical name that is not a valid unchanged Windows component refuses with `workspace_export_name`. The token and the exact `EXPORT` confirmation are required and bind workspace identity and format, tree revision, selected node and revision, canonical destination and every in-scope node&#39;s id, node revision, pinned revision and exact path; any changed workspace, destination or scope refuses `workspace_conflict` before the first write. Each file is read from its authenticated retained revision, written create-only with a write-through flush and its buffer zeroized; the sidecar is written last. On cancellation, refusal or I/O failure the created files are deleted (deepest first, empty directories only, nothing followed) and the command refuses `workspace_export_failed`, or `workspace_export_incomplete` when removal could not complete. No temporary plaintext is staged in the vault or beside the destination. The copy lives outside the vault and cannot be revoked by a later lock, delete or purge.
+
+The preview is an unaudited owner read; the act is owner-only and audited under `owner.workspace.export` (the preview under `owner.workspace.export.preview` is unaudited). The act is cancellable between files and bounded by the same 10-minute whole-scope guard as record export. The workspace root itself is not exportable (`workspace_root_invalid`); tombstoned nodes are refused; a later revision is never substituted for a pinned one.
+
+Preconditions are separate: structural acts present the tree revision, byte replacements present the file&#39;s content revision, and a stale value refuses with `workspace_conflict` without overwriting. Sibling names compare as exact Unicode scalar sequences, ordinally and case-sensitively, so a case-different name is a distinct name; an exact duplicate refuses with `name_conflict`, an unrepresentable name with `invalid_name`. A file used as a parent refuses with `workspace_invalid_parent`.
+
+The store keeps names, paths, node metadata, the citation anchors, tombstone state and retained bytes encrypted with the unlocked vault data key. A staged state generation plus one atomically replaced pointer is the single commit point, so an interrupted commit reopens as either the previous or the fully committed revision, and unlock reclaims only unreachable staged files. Wrong key, tampered or truncated ciphertext and an unknown or newer workspace format fail closed with `workspace_unreadable` or `workspace_unsupported_version` without rewriting or pruning saved data. One act carries at most 1 MiB of original bytes in 1.2.0; a larger file refuses with `workspace_too_large` and is never truncated.
+
+The authenticated workspace format and metadata schema are both version 1. Version 1 is the workspace shape first released in 1.2.0, and the node lifecycle state, the deletion group and the anchors are optional members of that same shape: a state that omits them means &quot;every node is live and there are no anchors&quot;. A workspace therefore never changes version as a side effect of an ordinary act, and no automatic migration or conversion exists; an unknown or newer version is refused before any mutation instead. 1.1.0 and earlier have no workspace store at all, so no released build wrote a different workspace version. Purge of retained tombstones, scoped plaintext export, encrypted backup/restore and the remaining CLI coverage are delivered by S12-T4/T5 and were exercised in the accepted sprint evidence; the 1.2.0 candidate repeats the packaged end-to-end path.
+
+### 3.3 The Owner console (S9-T4) — 1.1.0 legacy, not shipped in 1.2
+
+This section documents the frozen 1.1.0 WPF console for history and transition proof. The 1.2.0
+release ships no Owner UI executable or installer; every workflow below is available through the
+CLI commands in &#167;3.2 and &#167;3.2.3–&#167;3.2.7, and the console is not compatible with 1.2 workspace data.
 
 The packaged console is `owner-ui/MetaBrain.OwnerUi.exe`. It opens on the **Owner session**
 view with no instance selected: it starts nothing, provisions nothing and unlocks nothing, so
@@ -544,7 +614,7 @@ cli\MetaBrain.Cli.exe owner lock     --control-pipe &lt;control-pipe&gt;
 
 `provision` asks for the vault passphrase twice and prints a one-time recovery key; store that key
 outside the vault. `unlock` accepts the passphrase or, with `owner recover`, the recovery key.
-The owner console (`owner-ui/MetaBrain.OwnerUi.exe`) drives the same operations.
+The CLI drives these operations; the frozen 1.1.0 console used the same shared owner channel.
 
 ### 4.1 Encrypted backup, restore and owner-scoped export
 
@@ -567,7 +637,7 @@ cli\MetaBrain.Cli.exe owner export --control-pipe &lt;control-pipe&gt; \
     [--include-relations true] [--include-lifecycle-states true]
 ```
 
-**In the owner console.** The same three acts are on the console view **Backup &amp; export**
+**In the 1.1.0 console (legacy, not shipped in 1.2).** The same three acts are on the console view **Backup &amp; export**
 (`owner-ui\MetaBrain.OwnerUi.exe --control-pipe &lt;control-pipe&gt;`), so the owner never has to type an
 operation, a resource ID or a path:
 
@@ -600,12 +670,27 @@ passphrase or your recovery key** opens your data, which is exactly the same bou
 vault. Keep backups where you would keep the recovery key.
 
 **What a restore does.** It reproduces your data — every record, its exact revision, its relations,
-its sources, its lifecycle and intention states, its archive and retained revisions, and the fact
+its sources, its lifecycle and intention states, its archive and retained revisions, the workspace
+identity, tree, exact names, parents, retained original bytes, anchors, tombstones, and the fact
 that something was deleted — into a directory that must not exist yet. The restored vault opens with
 your own passphrase or your own recovery key, because the restore carries the owner&#39;s key envelope
 and never re-keys it. The restored vault carries **no live authority**: no scope grant, no agent
-session and no redeemable token comes back, and a token that was already used stays used. The
-private index is not restored either; the derivative is excluded from the backup, so the restored
+session and no redeemable token comes back, and a token that was already used stays used.
+
+**The purge ledger is re-applied.** The backup carries the vault&#39;s one durable purge ledger, which
+records canonical record purges and workspace tombstone purges. A restore re-applies it, and while
+the same vault is unlocked it merges the live installation&#39;s ledger and already-consumed token
+verifiers. Restoring an older backup taken before a purge therefore withholds the identities this
+installation already purged — the restore prints `purgedRecordsWithheld`,
+`purgedWorkspaceNodesWithheld` and `purgedCatalogEntriesWithheld` and says the ledger was re-applied
+— instead of resurrecting them. A restore of the live vault&#39;s own backup while that vault is locked
+refuses with `restore_requires_unlock`: the live encrypted purge ledger cannot be read without the
+data key, so the service fails closed before creating the target rather than materializing a snapshot
+that might hold identities purged after the backup was taken. Unlock the live vault and run the same
+restore again to apply the merged ledger and consumed-token state; a backup of a different vault is
+not affected.
+
+The private index is not restored either; the derivative is excluded from the backup, so the restored
 vault has no published generation and the first search asks for `owner index-rebuild`.
 
 **What fails closed.** A wrong passphrase, a wrong recovery key, a lost key, a tampered container
@@ -614,10 +699,13 @@ never reset, re-key or invent a recovery. A refused restore leaves no target dir
 is no fallback key and no &quot;recovered&quot; mode: if you have lost both the passphrase and the recovery
 key, the backup cannot be opened.
 
-**Compatibility.** The backup format is versioned (`metabrain/vault-backup` v1) and the restore
-reads the version it writes. A backup taken by this build restores with this build. A future format
-change must keep reading the older backups or state plainly that it does not; no backup is
-silently dropped.
+**Compatibility.** The backup container is versioned (`metabrain/vault-backup`). This build writes
+format 2 (canonical records, owner states, workspace tree, retained original revisions, anchors,
+tombstones and the purge ledger) and reads format 1 and format 2. A format-1 backup written by 1.1
+restores its canonical records and truthfully no workspace, because it never held one, and the
+container&#39;s authenticated associated data is bound to the container&#39;s own format version. An
+unknown or newer format is refused before anything is written rather than silently dropping part of
+the snapshot.
 
 **Retention.** The product does not delete your backups for you. A backup keeps its own ciphertext
 until you delete that file yourself, and a backup taken before a purge still holds the ciphertext
@@ -684,7 +772,7 @@ was taken with. A backup taken after the upgrade restores just the same. There i
 re-key: losing both the passphrase and the recovery key still means the vault and every backup are
 unreadable.
 
-**In the owner console.** The **Backup &amp; export** view carries a *Vault format* card with the same
+**In the 1.1.0 console (legacy, not shipped in 1.2).** The **Backup &amp; export** view carries a *Vault format* card with the same
 keyless status line, a passphrase/recovery selector, *Upgrade the vault format*, *Roll back to the
 previous format* and the discard choice. The credential goes from the field into exactly one
 request and is cleared right after it, and the card&#39;s acts are enabled only while the vault is
@@ -693,9 +781,10 @@ counts, the schema before and after, whether the run resumed an interrupted upgr
 encrypted rollback point is kept (or that it was restored or discarded); the status line then
 re-reads the new format and rollback state.
 
-## 5. The owner console and the two clients
+## 5. The Owner console (1.1.0 legacy) and the two 1.2 clients
 
-- **Owner console**: `owner-ui\MetaBrain.OwnerUi.exe` — the owner&#39;s own surface, opened with no
+- **Owner console (1.1.0 legacy, not shipped in 1.2)**: `owner-ui\MetaBrain.OwnerUi.exe` — the
+  owner&#39;s own surface in the frozen 1.1.0 product, opened with no
   instance selected and no running service required (&#167;3.3): Owner session (select/create the
   data-root folder, start/connect/status/stop/restart the shared locked host), vault status,
   vault and key (provision/recovery/unlock/lock), library (search/open/revise/index recovery),
@@ -720,12 +809,13 @@ re-reads the new format and rollback state.
   request ticks resources and operations from the bound preview (narrowing
   only), picks an expiry duration (UTC instant) and a new local handoff file;
   the bearer is sealed into that file and never shown.
-- **The packaged console is the launcher**: no install, script, autostart, service registration,
-  profile or permission change is needed. Open `owner-ui\MetaBrain.OwnerUi.exe`, select the
-  data-root folder and start/connect the shared host on the **Owner session** view (&#167;3.3). A
-  throwaway review instance is just another repository-ignored data root selected in the same
-  console. The old scripted review launchers were retired in S9-T6 once this packaged path was
-  accepted; there is no runtime PowerShell prerequisite for opening the console.
+- **The 1.1.0 packaged console was its launcher (legacy)**: no install, script, autostart, service
+  registration, profile or permission change was needed. Open `owner-ui\MetaBrain.OwnerUi.exe`,
+  select the data-root folder and start/connect the shared host on the **Owner session** view
+  (&#167;3.3). The 1.2 CLI needs neither: `cli\MetaBrain.Cli.exe lifecycle start --data-root &lt;dir&gt;`. A
+  throwaway review instance is just another repository-ignored data root. The old scripted review
+  launchers were retired in S9-T6 once the packaged path was accepted; there is no runtime
+  PowerShell prerequisite for either entrypoint.
 - **Official Codex / OMP clients**: they connect as agents over the **agent pipe**, never over the
   owner pipe. The agent pipe carries only what an owner-approved grant allows, and the agent can
   neither unlock, approve, publish nor purge.
@@ -736,16 +826,16 @@ The MCP product entrypoint is started by the client, not by the installer:
 mcp\MetaBrain.Mcp.exe --data-root &lt;data-root&gt;
 ```
 
-The owner approves an agent request and mints the one-time handoff in the CLI or the Owner
-console; the client redeems that handoff once (`metabrain_redeem`) and the resulting session is
-what it uses. The grant is the only authority: an agent token, a working directory or a
-same-account process does not create owner authority.
+The owner approves an agent request and mints the one-time handoff in the CLI; the client redeems
+that handoff once (`metabrain_redeem`) and the resulting session is what it uses. The grant is the
+only authority: an agent token, a working directory or a same-account process does not create owner
+authority.
 
 ## 6. Startup policy
 
-The CLI and graphical Owner UI setups and the shared installer do not register login startup. Start the host explicitly
-through the CLI, Owner UI or MCP entrypoint. No autostart, service, scheduled task or profile
-integration is created by installation.
+The CLI setup and the shared installer do not register login startup. Start the host explicitly
+through the CLI lifecycle or the MCP entrypoint. The frozen 1.1.0 console used the same shared
+host. No autostart, service, scheduled task or profile integration is created by installation.
 
 ## 7. Restart, logout and reboot
 
@@ -762,10 +852,11 @@ MetaBrain-CLI-&lt;candidate&gt;.exe uninstall --install-root &lt;dir&gt;
 ```
 
 The installed shared installer removes the full shared installation by default; its optional
-`--component cli|owner-ui|mcp` removes only that registration. An individual component removal
+`--component cli|mcp` removes only that registration. An individual component removal
 keeps the shared runtime while another component remains registered. When the final component is
 removed, application/runtime files are removed but the data root is always kept: the vault,
-source snapshots, backups and recovery material are never deleted by the installer.
+source snapshots, backups and recovery material are never deleted by the installer. A 1.1.0
+installation is never removed or edited by the 1.2 installer; it stays under its own installer.
 
 Uninstall refuses with an actionable error if the shared host could not drain cleanly; it does not
 claim removal succeeded or replace live binaries.
@@ -1627,6 +1718,14 @@ removes the fixture when the run ends.
 - A real logout or reboot, and a connection from the official Codex/OMP clients,
   need the owner in front of the machine; they cannot be proved by a headless run.
 - The installer is Windows-only and per-user. There is no multi-account or shared-machine install.
+- 1.2.0 ships the CLI and the MCP server only. There is no Owner UI installer or UI component in
+  1.2, and the frozen 1.1.0 console is not guaranteed to read 1.2 runtime or workspace data. A
+  1.1 installation is refused in place; install 1.2 beside it with separate roots and endpoints
+  (&#167;2.3). The local 1.2.0 candidate is not a published release until the owner authorizes
+  publication and the public assets/links are smoke-verified.
+- One workspace act carries at most 1 MiB of original bytes in 1.2.0 (`workspace_too_large`), and
+  an encrypted backup/restore carries the workspace identity, tree, retained bytes and anchors
+  together with the rest of the vault.
 - The vault is lost if the owner loses both the passphrase and the recovery key. There is no reset
   and no back door.
 - The same owner account can read the owner&#39;s own files. The boundary is the key, the lock and the
