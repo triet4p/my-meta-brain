@@ -652,6 +652,26 @@ public static class OwnerGuidance
                 "The private index could not be read, so no private answer was served. Rebuild the library index, then try again.",
             ["resource_unavailable"] =
                 "The record was not served: it may have moved, been purged or failed its integrity check. Nothing else was substituted.",
+            ["workspace_conflict"] =
+                "The workspace changed since you last saw it, so this act was refused and nothing was written. Read workspace-status/workspace-tree again and repeat the act with the current revision.",
+            ["name_conflict"] =
+                "Another workspace node under the same parent already holds that exact name. Names compare exactly, so only an identical name collides; choose a different name. Nothing was overwritten.",
+            ["invalid_name"] =
+                "The workspace name is empty, longer than the logical-name bound, or not a valid Unicode scalar sequence. Supply a representable name; the file was not renamed or stored.",
+            ["workspace_invalid_parent"] =
+                "The parent you named is not a folder in this workspace. Read workspace-tree and choose a folder id.",
+            ["workspace_not_found"] =
+                "The workspace file or retained revision you named is not in the committed tree, so no bytes were served and nothing was changed.",
+            ["workspace_too_large"] =
+                "The original file is larger than one workspace act carries in this version, so it was not stored or changed. Split the import or wait for a chunked workspace format.",
+            ["workspace_revision_limit"] =
+                "This workspace file already holds the maximum number of retained revisions, so the new revision was refused and nothing was changed. Purge older revisions first.",
+            ["workspace_tree_limit"] =
+                "The workspace already holds the maximum number of logical nodes, so the new node was refused and nothing was changed.",
+            ["workspace_unreadable"] =
+                "The committed workspace could not be authenticated or read, so no workspace bytes were served and nothing was overwritten or deleted. Keep the workspace files for recovery and restore from an encrypted backup; do not delete them.",
+            ["workspace_unsupported_version"] =
+                "The workspace format or metadata schema is newer than this build understands, so it was refused before any mutation. Use a build that supports that version; do not delete or rewrite the workspace.",
             ["purge_target_moved"] =
                 "The purge target moved after the preview, so nothing was deleted. Preview the purge again against the current revision.",
             ["internal_failure"] =

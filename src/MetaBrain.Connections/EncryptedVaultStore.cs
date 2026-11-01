@@ -1572,7 +1572,13 @@ internal sealed class EncryptedVaultStore
         }
     }
 
-    private void AtomicWrite(string path, ReadOnlySpan<byte> content)
+    /// <summary>
+    /// The one atomic file discipline for private ciphertext: write a temporary
+    /// file in the destination directory with write-through, flush it to disk,
+    /// then replace the destination with one rename. It is shared with the
+    /// workspace store so both stores publish through the same mechanism.
+    /// </summary>
+    internal static void AtomicWrite(string path, ReadOnlySpan<byte> content)
     {
         var directory = Path.GetDirectoryName(path) ?? throw new InvalidDataException("Invalid vault file path.");
         var temporaryPath = Path.Combine(directory, "." + Guid.NewGuid().ToString("N") + ".tmp");

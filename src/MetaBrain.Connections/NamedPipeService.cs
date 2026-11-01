@@ -31,6 +31,11 @@ internal sealed class NamedPipeService
     // Folder preview/enrollment is bounded by the source and enumeration limits,
     // but may safely process more than one maximum-sized source in sequence.
     private static readonly TimeSpan SourceFolderEnrollmentTimeout = TimeSpan.FromMinutes(10);
+    // One workspace act stages and flushes one bounded ciphertext envelope
+    // (at most a 1 MiB original) plus one state generation and one pointer
+    // swap. It needs more room than the general guard on a slow disk while
+    // staying strictly bounded.
+    private static readonly TimeSpan WorkspaceTimeout = TimeSpan.FromMinutes(1);
     private readonly ServiceSettings _settings;
     private readonly ServiceRequestHandler _handler;
     private readonly VaultLifecycle _vault;
@@ -230,6 +235,15 @@ internal sealed class NamedPipeService
                 {
                     timeout.CancelAfter(SourceFolderEnrollmentTimeout);
                 }
+                if (string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceFolderCreateOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceFileCreateOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceFileReviseOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceFileReadOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceTreeOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceStatusOperation, StringComparison.Ordinal))
+                {
+                    timeout.CancelAfter(WorkspaceTimeout);
+                }
 
 
                 var needsVaultOperation =
@@ -369,7 +383,13 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerOperationsAuditOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerOperationsDiagnosticsOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerOperationsRetentionOperation, StringComparison.Ordinal) ||
-                    string.Equals(request.Operation, ServiceRequestHandler.OwnerExportOperation, StringComparison.Ordinal);
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerExportOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceStatusOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceTreeOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceFolderCreateOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceFileCreateOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceFileReviseOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceFileReadOperation, StringComparison.Ordinal);
                 using var operation = needsVaultOperation ? _vault.TryBeginOperation() : null;
                 if (needsVaultOperation && operation is not null)
                 {

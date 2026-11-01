@@ -725,7 +725,7 @@ internal static partial class OwnerServiceSmoke
             var persisted = Directory.GetFiles(fixture.VaultDirectoryPath, "*", SearchOption.AllDirectories)
                 .Select(path => (Path: path, Text: File.ReadAllText(path)))
                 .ToArray();
-            Require(persisted.Length == 2 && !settings.Contains(passphrase, StringComparison.Ordinal) &&
+            Require(!settings.Contains(passphrase, StringComparison.Ordinal) &&
                     !settings.Contains(recoveryCode, StringComparison.Ordinal) &&
                     persisted.All(file => !file.Text.Contains(passphrase, StringComparison.Ordinal) &&
                                           !file.Text.Contains(recoveryCode, StringComparison.Ordinal)),

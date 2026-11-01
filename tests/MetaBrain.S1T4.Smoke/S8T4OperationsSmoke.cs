@@ -1000,6 +1000,18 @@ internal sealed class S8T4AuditFailureOperation : IVaultOperation
 
     public void ValidateRegistration(string resourceId, long? expectedRevision = null) => throw new NotSupportedException();
 
+    public WorkspaceStatusInfo ReadWorkspaceStatus() => throw new NotSupportedException();
+
+    public WorkspaceSnapshot? ReadWorkspaceTree() => throw new NotSupportedException();
+
+    public WorkspaceMutationInfo CreateWorkspaceFolder(string parentId, string name, long expectedTreeRevision) => throw new NotSupportedException();
+
+    public WorkspaceMutationInfo CreateWorkspaceFile(string parentId, string name, byte[] content, long expectedTreeRevision) => throw new NotSupportedException();
+
+    public WorkspaceMutationInfo ReviseWorkspaceFile(string fileId, byte[] content, long expectedContentRevision) => throw new NotSupportedException();
+
+    public WorkspaceFileContent ReadWorkspaceFile(string fileId, long revision) => throw new NotSupportedException();
+
     public void Dispose()
     {
     }

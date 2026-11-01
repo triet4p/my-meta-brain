@@ -7,6 +7,8 @@ administrator rights, an AppContainer, a patched agent runtime, or an account of
 - Product scope and requirements: [`META-BRAIN.md`](META-BRAIN.md), [`REQUIREMENTS.md`](REQUIREMENTS.md).
 - Sprint plan and acceptance for this work: [`sprint-plans/sprint-8.md`](sprint-plans/sprint-8.md).
 
+**Version boundary:** Commands and WPF flows below describe released behavior through 1.1.0, not future CLI-only support. Owner-approved [CR03](REQUIREMENTS.md#approved-change-record--cr03-2026-11-01) plans CLI + MCP from 1.2.0 and optional CLI-launched document preview/edit from 1.3.0; these are not shipped commands or install instructions. WPF 1.1.0 is frozen with its historical downloads intact; do not assume it is compatible with a future runtime/data format. Sprint 12 must deliver explicit component transition/refusal guidance, and future release tasks update this runbook with exercised commands; do not create plaintext HTML/temp or follow guessed `open` syntax now.
+
 ## 1. The two roots
 
 | Root | Holds | Removed by |
@@ -478,6 +480,21 @@ After reading sources, select a current folder member to inspect the service-rep
 Open a source to read its status. The view reports availability, saved canonical-event/preserved-byte counts, preservation, interpretation, derivation/indexing, the exact diagnostic code and byte offset, pending/unprocessed counts, consent and retention, and metadata-only preserved spans. Enrollment by itself is shown as metadata only—not as a saved event or indexed content. The console does not render transcript or preserved bytes. To export one exact preserved span after unlock, use the existing owner CLI command `source-preserved-record-read` with the source ID and offset and a new output file. Lock, disconnect or ending the owner session clears the folder root draft, preview, source details and in-flight answers; the console remains an owner-pipe client and does not open or write vault files.
 
 State-action answers that omit a complete ingestion report show those facets as `not reported`, never as zero. When the same source ID and generation already has a complete status, the console retains its saved/index/interpretation/preservation details while applying the latest membership, pause and veto state.
+
+### 3.2.7 The owner workspace (S12-T2)
+
+The workspace is a private logical tree stored inside the unlocked vault: folders and files with stable random IDs, exact names and retained original-byte revisions. It needs the running shared host and an unlocked vault; a locked vault refuses every workspace command with `vault_locked`. No agent or MCP client can reach it: the agent channel's operation set is an explicit allowlist, and the workspace operations are owner-only.
+
+- `owner workspace-status --control-pipe <pipe>` reports `state=uninitialized|ready`, the authenticated format and metadata-schema versions, the current tree revision and the folder, file and retained-revision counts. An unreadable workspace is refused (see below), never reported as empty.
+- `owner workspace-tree --control-pipe <pipe>` lists every node as `FOLDER|FILE id=… parent=… name=<JSON string> revision=…`, with the latest `contentRevision`, `bytes` and `sha256` for a file. Names print as JSON strings so whitespace or control characters stay one record.
+- `owner workspace-mkdir --control-pipe <pipe> --parent-id <id|root> --name <exact-name> --expected-tree-revision <n>` creates one logical folder. Use `root` for the first act; an uninitialized workspace accepts `--expected-tree-revision 0`.
+- `owner workspace-import --control-pipe <pipe> --parent-id <id|root> [--name <exact-name>] --input-file <file> --expected-tree-revision <n>` stores the file's exact bytes as content revision 1. The logical name defaults to the source file name.
+- `owner workspace-revise --control-pipe <pipe> --file-id <id> --expected-content-revision <live> --input-file <file>` appends a retained content revision to an existing file.
+- `owner workspace-read --control-pipe <pipe> --file-id <id> [--revision <n>] [--output-file <new-file>]` returns the exact original bytes of the latest (or a pinned retained) revision.
+
+Preconditions are separate: structural acts present the tree revision, byte replacements present the file's content revision, and a stale value refuses with `workspace_conflict` without overwriting. Sibling names compare as exact Unicode scalar sequences, ordinally and case-sensitively, so a case-different name is a distinct name; an exact duplicate refuses with `name_conflict`, an unrepresentable name with `invalid_name`. A file used as a parent refuses with `workspace_invalid_parent`.
+
+The store keeps names, paths, node metadata and retained bytes encrypted with the unlocked vault data key. A staged state generation plus one atomically replaced pointer is the single commit point, so an interrupted commit reopens as either the previous or the fully committed revision, and unlock reclaims only unreachable staged files. Wrong key, tampered or truncated ciphertext and a newer workspace format fail closed with `workspace_unreadable` or `workspace_unsupported_version` without rewriting or pruning saved data. One act carries at most 1 MiB of original bytes in 1.2.0; a larger file refuses with `workspace_too_large` and is never truncated. Rename, move, copy, delete, restore and purge land in S12-T3; scoped plaintext export in S12-T4; encrypted backup/restore and the remaining CLI coverage in S12-T5.
 
 ### 3.3 The owner console (S9-T4)
 

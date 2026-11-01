@@ -88,7 +88,11 @@ public sealed record ServiceRequest(
     string? SourceFolderConfirmation = null,
     DateTimeOffset? SourceFolderRawPreservationRetainUntilUtc = null,
     DateTimeOffset? RawPreservationRetainUntilUtc = null,
-    long? SourceRecordOffset = null);
+    long? SourceRecordOffset = null,
+    string? WorkspaceParentId = null,
+    string? WorkspaceName = null,
+    long? WorkspaceTreeRevision = null,
+    long? WorkspaceContentRevision = null);
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
     ScopeResourceRevision[] Resources,
@@ -980,6 +984,69 @@ public sealed record ScheduleRunWire(
     DateTimeOffset? NextDueAtUtc,
     string? Message);
 
+/// <summary>
+/// One retained original-byte revision as the owner sees it: the revision
+/// number, its exact length and the SHA-256 of the original bytes. No name,
+/// path or content is part of it.
+/// </summary>
+public sealed record WorkspaceContentRevisionWire(long Revision, long Length, string Sha256);
+
+/// <summary>
+/// One logical workspace node on the wire. <see cref="Kind"/> is
+/// <c>folder</c> or <c>file</c>; <see cref="ParentId"/> is null only for the
+/// workspace root. Names travel exactly as stored (no normalization) because
+/// this is the owner channel, the only plane that may see them.
+/// </summary>
+public sealed record WorkspaceNodeWire(
+    string Id,
+    string Kind,
+    string? ParentId,
+    string Name,
+    long Revision,
+    long ContentRevision,
+    WorkspaceContentRevisionWire[] Revisions);
+
+/// <summary>One committed workspace tree, exactly as the encrypted state holds it.</summary>
+public sealed record WorkspaceTreeWire(
+    string WorkspaceId,
+    int FormatVersion,
+    int MetadataSchemaVersion,
+    long Revision,
+    string RootId,
+    WorkspaceNodeWire[] Nodes);
+
+/// <summary>
+/// The committed workspace state. <see cref="State"/> is <c>ready</c> or
+/// <c>uninitialized</c>; an unreadable or newer workspace is a refusal, never
+/// an empty state. <see cref="Revision"/> is the structural precondition value
+/// for the next tree act.
+/// </summary>
+public sealed record WorkspaceStatusWire(
+    string State,
+    int FormatVersion,
+    int MetadataSchemaVersion,
+    long Revision,
+    string? RootId,
+    int Folders,
+    int Files,
+    int ContentRevisions);
+
+/// <summary>
+/// One committed workspace mutation: the node it addressed, the new workspace
+/// tree revision ("revision") and the node's new content revision when the act
+/// replaced bytes.
+/// </summary>
+public sealed record WorkspaceMutationWire(
+    string NodeId,
+    long WorkspaceRevision,
+    long NodeRevision,
+    long ContentRevision,
+    long Length,
+    string? Sha256);
+
+/// <summary>The exact revision the owner read, with its authenticated metadata.</summary>
+public sealed record WorkspaceFileWire(string FileId, long Revision, long Length, string Sha256);
+
 public sealed record ServiceReply(
     int ProtocolVersion,
     string? Status,
@@ -1061,6 +1128,10 @@ public sealed record ServiceReply(
     OperationsRetentionWire? OperationsRetention = null,
     SourceFolderPreviewWire? SourceFolderPreview = null,
     SourceFolderEnrollmentWire? SourceFolderEnrollment = null,
+    WorkspaceStatusWire? WorkspaceStatus = null,
+    WorkspaceTreeWire? WorkspaceTree = null,
+    WorkspaceMutationWire? WorkspaceMutation = null,
+    WorkspaceFileWire? WorkspaceFile = null,
     string? ErrorCode = null);
 
 public sealed class ServiceRequestHandler
@@ -1079,6 +1150,12 @@ public sealed class ServiceRequestHandler
     public const string OwnerVaultUpgradeOperation = "vault.upgrade";
     public const string OwnerVaultRollbackOperation = "vault.rollback";
     public const string OwnerExportOperation = "vault.export";
+    public const string OwnerWorkspaceStatusOperation = "owner.workspace.status";
+    public const string OwnerWorkspaceTreeOperation = "owner.workspace.tree";
+    public const string OwnerWorkspaceFolderCreateOperation = "owner.workspace.folder.create";
+    public const string OwnerWorkspaceFileCreateOperation = "owner.workspace.file.create";
+    public const string OwnerWorkspaceFileReviseOperation = "owner.workspace.file.revise";
+    public const string OwnerWorkspaceFileReadOperation = "owner.workspace.file.read";
     public const string ResourceReadOperation = "resource.read";
     public const string SourceReadOperation = "source.read";
     public const string ResourceWriteOperation = "resource.write";
@@ -1342,7 +1419,7 @@ public sealed class ServiceRequestHandler
                  string.Equals(request.Operation, SourcePreservedRecordReadOperation, StringComparison.Ordinal)) &&
                 (request.SourceFolderRawPreservationRetainUntilUtc is null ||
                  string.Equals(request.Operation, SourceFolderPreviewOperation, StringComparison.Ordinal));
-            reply = rawPreservationFieldsMatchOperation
+            reply = rawPreservationFieldsMatchOperation && WorkspaceFieldsBelongToOperation(request)
                 ? await HandleRequestAsync(context, request, operation, cancellationToken).ConfigureAwait(false)
                 : Error("invalid_request");
         }
@@ -1417,6 +1494,27 @@ public sealed class ServiceRequestHandler
         operation is not null && KnownOperations.Contains(operation) && !UnauditedOperations.Contains(operation);
 
     /// <summary>
+    /// S12-T2: a workspace field is accepted only on the workspace operation
+    /// that reads it. A structural precondition belongs to the two create acts,
+    /// a content revision belongs to the revise and read acts, and nothing else
+    /// may carry them, so a caller can never smuggle one act's gate into
+    /// another operation that would silently ignore it.
+    /// </summary>
+    private static bool WorkspaceFieldsBelongToOperation(ServiceRequest request)
+    {
+        if (request.WorkspaceParentId is not null || request.WorkspaceName is not null || request.WorkspaceTreeRevision is not null)
+        {
+            if (request.Operation is not (OwnerWorkspaceFolderCreateOperation or OwnerWorkspaceFileCreateOperation))
+            {
+                return false;
+            }
+        }
+
+        return request.WorkspaceContentRevision is null ||
+            request.Operation is OwnerWorkspaceFileReviseOperation or OwnerWorkspaceFileReadOperation;
+    }
+
+    /// <summary>
     /// Every operation name this service knows, read from the operation
     /// constants themselves so the list can never drift from the dispatcher.
     /// </summary>
@@ -1447,6 +1545,9 @@ public sealed class ServiceRequestHandler
     private static readonly HashSet<string> UnauditedOperations = new(StringComparer.Ordinal)
     {
         OwnerStatusOperation,
+        OwnerWorkspaceStatusOperation,
+        OwnerWorkspaceTreeOperation,
+        OwnerWorkspaceFileReadOperation,
         OwnerLibrarySearchOperation,
         OwnerRecallReadOperation,
         OwnerIndexStatusOperation,
@@ -2206,9 +2307,313 @@ public sealed class ServiceRequestHandler
             return await HandleOwnerScheduleRunAsync(context, operation, cancellationToken).ConfigureAwait(false);
         }
 
+        if (string.Equals(request.Operation, OwnerWorkspaceStatusOperation, StringComparison.Ordinal))
+        {
+            return HandleWorkspaceStatus(context, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerWorkspaceTreeOperation, StringComparison.Ordinal))
+        {
+            return HandleWorkspaceTree(context, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerWorkspaceFolderCreateOperation, StringComparison.Ordinal))
+        {
+            return HandleWorkspaceFolderCreate(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerWorkspaceFileCreateOperation, StringComparison.Ordinal))
+        {
+            return HandleWorkspaceFileCreate(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerWorkspaceFileReviseOperation, StringComparison.Ordinal))
+        {
+            return HandleWorkspaceFileRevise(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerWorkspaceFileReadOperation, StringComparison.Ordinal))
+        {
+            return HandleWorkspaceFileRead(context, request, operation);
+        }
 
         return Error("unknown_operation");
     }
+
+    /// <summary>
+    /// S12-T2 the owner-only workspace acts. They are private state of the
+    /// unlocked vault: the agent channel never reaches them (its operation
+    /// set is an explicit allowlist), a locked vault refuses them, and a
+    /// workspace that cannot be authenticated refuses rather than looking
+    /// empty. Sibling names, preconditions and format versions are enforced
+    /// inside the store, so this plane answers the store's own refusal and
+    /// never invents a permissive fallback.
+    /// </summary>
+    private ServiceReply HandleWorkspaceStatus(AuthenticatedContext context, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        try
+        {
+            var status = operation.ReadWorkspaceStatus();
+            return new ServiceReply(
+                CurrentProtocolVersion, "workspace", "owner", null,
+                WorkspaceStatus: new WorkspaceStatusWire(
+                    status.State,
+                    status.FormatVersion,
+                    status.MetadataSchemaVersion,
+                    status.Revision,
+                    status.RootId,
+                    status.FolderCount,
+                    status.FileCount,
+                    status.ContentRevisionCount));
+        }
+        catch (WorkspaceRefusalException refusal)
+        {
+            return WorkspaceRefusal(refusal.Code);
+        }
+    }
+
+    private ServiceReply HandleWorkspaceTree(AuthenticatedContext context, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        try
+        {
+            var tree = operation.ReadWorkspaceTree();
+            return tree is null
+                ? new ServiceReply(CurrentProtocolVersion, "workspace_empty", "owner", null)
+                : new ServiceReply(
+                    CurrentProtocolVersion, "workspace", "owner", null,
+                    WorkspaceTree: ProjectWorkspaceTree(tree));
+        }
+        catch (WorkspaceRefusalException refusal)
+        {
+            return WorkspaceRefusal(refusal.Code);
+        }
+    }
+
+    private ServiceReply HandleWorkspaceFolderCreate(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (string.IsNullOrEmpty(request.WorkspaceParentId) || request.WorkspaceName is null ||
+            request.WorkspaceTreeRevision is not { } treeRevision || treeRevision < 0)
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var mutation = operation.CreateWorkspaceFolder(request.WorkspaceParentId, request.WorkspaceName, treeRevision);
+            return new ServiceReply(
+                CurrentProtocolVersion, "workspace_mutated", "owner", null,
+                WorkspaceMutation: ProjectWorkspaceMutation(mutation));
+        }
+        catch (WorkspaceRefusalException refusal)
+        {
+            return WorkspaceRefusal(refusal.Code);
+        }
+    }
+
+    private ServiceReply HandleWorkspaceFileCreate(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (string.IsNullOrEmpty(request.WorkspaceParentId) || request.WorkspaceName is null ||
+            request.WorkspaceTreeRevision is not { } treeRevision || treeRevision < 0 ||
+            request.ContentBase64 is null)
+        {
+            return Error("invalid_request");
+        }
+
+        byte[]? content = null;
+        try
+        {
+            content = Convert.FromBase64String(request.ContentBase64);
+            var mutation = operation.CreateWorkspaceFile(
+                request.WorkspaceParentId, request.WorkspaceName, content, treeRevision);
+            return new ServiceReply(
+                CurrentProtocolVersion, "workspace_mutated", "owner", null,
+                WorkspaceMutation: ProjectWorkspaceMutation(mutation));
+        }
+        catch (FormatException)
+        {
+            return Error("invalid_request");
+        }
+        catch (WorkspaceRefusalException refusal)
+        {
+            return WorkspaceRefusal(refusal.Code);
+        }
+        finally
+        {
+            if (content is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(content);
+            }
+        }
+    }
+
+    private ServiceReply HandleWorkspaceFileRevise(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (string.IsNullOrEmpty(request.ResourceId) ||
+            request.WorkspaceContentRevision is not { } expectedContentRevision ||
+            expectedContentRevision < 1 || request.ContentBase64 is null)
+        {
+            return Error("invalid_request");
+        }
+
+        byte[]? content = null;
+        try
+        {
+            content = Convert.FromBase64String(request.ContentBase64);
+            var mutation = operation.ReviseWorkspaceFile(request.ResourceId, content, expectedContentRevision);
+            return new ServiceReply(
+                CurrentProtocolVersion, "workspace_mutated", "owner", null,
+                WorkspaceMutation: ProjectWorkspaceMutation(mutation));
+        }
+        catch (FormatException)
+        {
+            return Error("invalid_request");
+        }
+        catch (WorkspaceRefusalException refusal)
+        {
+            return WorkspaceRefusal(refusal.Code);
+        }
+        finally
+        {
+            if (content is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(content);
+            }
+        }
+    }
+
+    private ServiceReply HandleWorkspaceFileRead(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        var revision = request.WorkspaceContentRevision ?? 0;
+        if (string.IsNullOrEmpty(request.ResourceId) || revision < 0)
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var content = operation.ReadWorkspaceFile(request.ResourceId, revision);
+            try
+            {
+                return new ServiceReply(
+                    CurrentProtocolVersion, "content", "owner", null,
+                    ContentBase64: Convert.ToBase64String(content.Content),
+                    ContentType: "application/octet-stream",
+                    WorkspaceFile: new WorkspaceFileWire(
+                        request.ResourceId, content.Revision, content.Length, content.Sha256));
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(content.Content);
+            }
+        }
+        catch (WorkspaceRefusalException refusal)
+        {
+            return WorkspaceRefusal(refusal.Code);
+        }
+    }
+
+    private static WorkspaceTreeWire ProjectWorkspaceTree(WorkspaceSnapshot tree) =>
+        new(
+            tree.WorkspaceId,
+            tree.FormatVersion,
+            tree.MetadataSchemaVersion,
+            tree.Revision,
+            tree.RootId,
+            tree.Nodes
+                .Select(node => new WorkspaceNodeWire(
+                    node.Id,
+                    node.Kind == WorkspaceNodeKind.File ? WorkspaceNodeKinds.File : WorkspaceNodeKinds.Folder,
+                    node.ParentId,
+                    node.Name,
+                    node.Revision,
+                    node.ContentRevision,
+                    node.Revisions
+                        .Select(revision => new WorkspaceContentRevisionWire(revision.Revision, revision.Length, revision.Sha256))
+                        .ToArray()))
+                .ToArray());
+
+    private static WorkspaceMutationWire ProjectWorkspaceMutation(WorkspaceMutationInfo mutation) =>
+        new(
+            mutation.NodeId,
+            mutation.WorkspaceRevision,
+            mutation.NodeRevision,
+            mutation.ContentRevision,
+            mutation.Length,
+            mutation.Sha256);
+
+    private static ServiceReply WorkspaceRefusal(string code) => Refusal(code, OwnerGuidance.ForCode(code));
 
     /// <summary>
     /// S8-T2 the owner backup act: one encrypted snapshot of the unlocked

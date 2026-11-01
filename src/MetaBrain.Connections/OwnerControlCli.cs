@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -12,6 +12,13 @@ namespace MetaBrain.Connections;
 internal static class OwnerControlCli
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
+    /// <summary>
+    /// The largest original file one workspace act carries in 1.2.0. The
+    /// service enforces the same bound; checking it before the request keeps a
+    /// too-large file a clear refusal instead of a cut-off owner request.
+    /// </summary>
+    private const int WorkspaceMaximumContentBytes = 1024 * 1024;
 
     public static async Task<int> RunAsync(string[] args)
     {
@@ -129,6 +136,12 @@ internal static class OwnerControlCli
                 "unlock" => await UnlockAsync(options, useRecoveryCode: false).ConfigureAwait(false),
                 "recover" => await UnlockAsync(options, useRecoveryCode: true).ConfigureAwait(false),
                 "lock" => await LockAsync(options).ConfigureAwait(false),
+                "workspace-status" => await WorkspaceStatusAsync(options).ConfigureAwait(false),
+                "workspace-tree" => await WorkspaceTreeAsync(options).ConfigureAwait(false),
+                "workspace-mkdir" => await WorkspaceMkdirAsync(options).ConfigureAwait(false),
+                "workspace-import" => await WorkspaceImportAsync(options).ConfigureAwait(false),
+                "workspace-revise" => await WorkspaceReviseAsync(options).ConfigureAwait(false),
+                "workspace-read" => await WorkspaceReadAsync(options).ConfigureAwait(false),
                 "backup" => await BackupAsync(options).ConfigureAwait(false),
                 "restore" => await RestoreAsync(options, useRecoveryCode: false).ConfigureAwait(false),
                 "restore-with-recovery-code" => await RestoreAsync(options, useRecoveryCode: true).ConfigureAwait(false),
@@ -271,6 +284,314 @@ internal static class OwnerControlCli
             CryptographicOperations.ZeroMemory(bytes);
         }
     }
+
+    /// <summary>
+    /// S12-T2 the owner workspace persistence surface: status, tree, folder
+    /// creation, original-byte import, revision-gated revise and exact
+    /// revision read. Every command goes through the running service because
+    /// only the service's unlocked lease holds the data key; the CLI never
+    /// opens a workspace file, decrypts nothing and keeps no private state.
+    /// </summary>
+    private static async Task<int> WorkspaceStatusAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(
+            ControlPipe(options),
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerWorkspaceStatusOperation)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "workspace") || !TryWorkspaceObject(result.Reply, "workspaceStatus", out var status))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        Console.WriteLine($"WORKSPACE state={DisplayText(status, "state")} format={DisplayText(status, "formatVersion")} schema={DisplayText(status, "metadataSchemaVersion")} revision={DisplayText(status, "revision")} root={DisplayText(status, "rootId")} folders={DisplayText(status, "folders")} files={DisplayText(status, "files")} revisions={DisplayText(status, "contentRevisions")}");
+        return 0;
+    }
+
+    private static async Task<int> WorkspaceTreeAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(
+            ControlPipe(options),
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerWorkspaceTreeOperation)).ConfigureAwait(false);
+        if (!result.Success || (!HasStatus(result.Reply, "workspace") && !HasStatus(result.Reply, "workspace_empty")))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        if (HasStatus(result.Reply, "workspace_empty"))
+        {
+            Console.WriteLine("WORKSPACE empty");
+            return 0;
+        }
+
+        if (!TryWorkspaceObject(result.Reply, "workspaceTree", out var tree) ||
+            !tree.TryGetProperty("nodes", out var nodes) || nodes.ValueKind != JsonValueKind.Array)
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        foreach (var node in nodes.EnumerateArray())
+        {
+            var isFile = string.Equals(JsonValueText(node, "kind"), "file", StringComparison.Ordinal);
+            // The name is printed as its JSON string so a logical name that
+            // contains whitespace or a control character stays one readable
+            // record instead of breaking the line format.
+            var line = $"{(isFile ? "FILE" : "FOLDER")} id={DisplayText(node, "id")} parent={DisplayText(node, "parentId")} " +
+                $"name={JsonSerializer.Serialize(GetWorkspaceName(node))} revision={DisplayText(node, "revision")}";
+            if (isFile)
+            {
+                line += " contentRevision=" + DisplayText(node, "contentRevision");
+                if (node.TryGetProperty("revisions", out var revisions) && revisions.ValueKind == JsonValueKind.Array && revisions.GetArrayLength() > 0)
+                {
+                    var latest = revisions[revisions.GetArrayLength() - 1];
+                    line += $" bytes={DisplayText(latest, "length")} sha256={DisplayText(latest, "sha256")} revisions={revisions.GetArrayLength().ToString(CultureInfo.InvariantCulture)}";
+                }
+            }
+
+            Console.WriteLine(line);
+        }
+
+        Console.WriteLine($"WORKSPACE revision={DisplayText(tree, "revision")} nodes={nodes.GetArrayLength().ToString(CultureInfo.InvariantCulture)}");
+        return 0;
+    }
+
+    private static async Task<int> WorkspaceMkdirAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--parent-id", "--name", "--expected-tree-revision");
+        var controlPipe = ControlPipe(options);
+        var parentId = options.Required("--parent-id");
+        var name = options.Required("--name");
+        if (!TryParseRevision(options, "--expected-tree-revision", out var expectedTreeRevision))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceFolderCreateOperation,
+                WorkspaceParentId: parentId,
+                WorkspaceName: name,
+                WorkspaceTreeRevision: expectedTreeRevision)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "workspace_mutated") ||
+            !TryWorkspaceObject(result.Reply, "workspaceMutation", out var mutation))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        Console.WriteLine($"MKDIR id={DisplayText(mutation, "nodeId")} revision={DisplayText(mutation, "workspaceRevision")} nodeRevision={DisplayText(mutation, "nodeRevision")}");
+        return 0;
+    }
+
+    private static async Task<int> WorkspaceImportAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--parent-id", "--name", "--input-file", "--expected-tree-revision");
+        var controlPipe = ControlPipe(options);
+        var parentId = options.Required("--parent-id");
+        var inputPath = options.Required("--input-file");
+        if (!TryParseRevision(options, "--expected-tree-revision", out var expectedTreeRevision))
+        {
+            return Usage();
+        }
+
+        var content = await ReadWorkspaceInputAsync(inputPath).ConfigureAwait(false);
+        try
+        {
+            if (content is null)
+            {
+                return 4;
+            }
+
+            // The logical name defaults to the source file name; a name the
+            // service cannot represent as a valid Unicode scalar sequence is
+            // refused there, never silently renamed here.
+            var name = options.Optional("--name") ?? Path.GetFileName(inputPath);
+            var result = await InvokeOwnerAsync(controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.OwnerWorkspaceFileCreateOperation,
+                    ContentBase64: Convert.ToBase64String(content),
+                    WorkspaceParentId: parentId,
+                    WorkspaceName: name,
+                    WorkspaceTreeRevision: expectedTreeRevision)).ConfigureAwait(false);
+            if (!result.Success || !HasStatus(result.Reply, "workspace_mutated") ||
+                !TryWorkspaceObject(result.Reply, "workspaceMutation", out var mutation))
+            {
+                WriteServiceError(result);
+                return 4;
+            }
+
+            Console.WriteLine($"IMPORT id={DisplayText(mutation, "nodeId")} revision={DisplayText(mutation, "workspaceRevision")} contentRevision={DisplayText(mutation, "contentRevision")} bytes={DisplayText(mutation, "length")} sha256={DisplayText(mutation, "sha256")}");
+            return 0;
+        }
+        finally
+        {
+            if (content is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(content);
+            }
+        }
+    }
+
+    private static async Task<int> WorkspaceReviseAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--file-id", "--input-file", "--expected-content-revision");
+        var controlPipe = ControlPipe(options);
+        var fileId = options.Required("--file-id");
+        var inputPath = options.Required("--input-file");
+        if (!TryParseRevision(options, "--expected-content-revision", out var expectedContentRevision) ||
+            expectedContentRevision < 1)
+        {
+            return Usage();
+        }
+
+        var content = await ReadWorkspaceInputAsync(inputPath).ConfigureAwait(false);
+        try
+        {
+            if (content is null)
+            {
+                return 4;
+            }
+
+            var result = await InvokeOwnerAsync(controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.OwnerWorkspaceFileReviseOperation,
+                    fileId,
+                    ContentBase64: Convert.ToBase64String(content),
+                    WorkspaceContentRevision: expectedContentRevision)).ConfigureAwait(false);
+            if (!result.Success || !HasStatus(result.Reply, "workspace_mutated") ||
+                !TryWorkspaceObject(result.Reply, "workspaceMutation", out var mutation))
+            {
+                WriteServiceError(result);
+                return 4;
+            }
+
+            Console.WriteLine($"REVISE id={DisplayText(mutation, "nodeId")} revision={DisplayText(mutation, "workspaceRevision")} contentRevision={DisplayText(mutation, "contentRevision")} bytes={DisplayText(mutation, "length")} sha256={DisplayText(mutation, "sha256")}");
+            return 0;
+        }
+        finally
+        {
+            if (content is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(content);
+            }
+        }
+    }
+
+    private static async Task<int> WorkspaceReadAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--file-id", "--revision", "--output-file");
+        var controlPipe = ControlPipe(options);
+        var fileId = options.Required("--file-id");
+        var outputFile = options.Optional("--output-file");
+        long? revision = null;
+        if (options.Optional("--revision") is { } revisionText)
+        {
+            if (!long.TryParse(revisionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) || parsed < 0)
+            {
+                return Usage();
+            }
+
+            revision = parsed;
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceFileReadOperation,
+                fileId,
+                WorkspaceContentRevision: revision)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "content") ||
+            !result.Reply.TryGetProperty("contentBase64", out var contentValue) ||
+            contentValue.ValueKind != JsonValueKind.String)
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        var bytes = Convert.FromBase64String(contentValue.GetString() ?? string.Empty);
+        var file = TryWorkspaceObject(result.Reply, "workspaceFile", out var fileElement) ? fileElement : default;
+        try
+        {
+            if (outputFile is null)
+            {
+                var output = Console.OpenStandardOutput();
+                await output.WriteAsync(bytes).ConfigureAwait(false);
+                await output.FlushAsync().ConfigureAwait(false);
+            }
+            else
+            {
+                await using var output = new FileStream(outputFile, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                await output.WriteAsync(bytes).ConfigureAwait(false);
+                await output.FlushAsync().ConfigureAwait(false);
+                Console.WriteLine($"READ content bytes={bytes.Length} revision={DisplayText(file, "revision")} sha256={DisplayText(file, "sha256")}");
+            }
+
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(bytes);
+        }
+    }
+
+    /// <summary>
+    /// Reads one owner-chosen original file for an import or a revision. The
+    /// same bounded envelope the service enforces is enforced here first, so a
+    /// too-large file is a clear refusal instead of a cut-off request line.
+    /// </summary>
+    private static async Task<byte[]?> ReadWorkspaceInputAsync(string inputPath)
+    {
+        if (!File.Exists(inputPath))
+        {
+            Console.Error.WriteLine("ERROR input_file_missing");
+            return null;
+        }
+
+        if (new FileInfo(inputPath).Length > WorkspaceMaximumContentBytes)
+        {
+            Console.Error.WriteLine("ERROR workspace_too_large");
+            Console.Error.WriteLine("HINT one workspace act carries at most " + WorkspaceMaximumContentBytes.ToString(CultureInfo.InvariantCulture) + " original bytes in 1.2.0; the file was not stored or modified.");
+            return null;
+        }
+
+        var content = await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        if (content.Length > WorkspaceMaximumContentBytes)
+        {
+            CryptographicOperations.ZeroMemory(content);
+            Console.Error.WriteLine("ERROR workspace_too_large");
+            Console.Error.WriteLine("HINT one workspace act carries at most " + WorkspaceMaximumContentBytes.ToString(CultureInfo.InvariantCulture) + " original bytes in 1.2.0; the file was not stored or modified.");
+            return null;
+        }
+
+        return content;
+    }
+
+    private static bool TryWorkspaceObject(JsonElement reply, string property, out JsonElement value)
+    {
+        if (reply.ValueKind == JsonValueKind.Object &&
+            reply.TryGetProperty(property, out value) &&
+            value.ValueKind == JsonValueKind.Object)
+        {
+            return true;
+        }
+
+        value = default;
+        return false;
+    }
+
+    private static string GetWorkspaceName(JsonElement node) =>
+        node.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String
+            ? name.GetString() ?? string.Empty
+            : string.Empty;
+
+    private static bool TryParseRevision(CommandOptions options, string name, out long revision) =>
+        long.TryParse(options.Required(name), NumberStyles.Integer, CultureInfo.InvariantCulture, out revision) && revision >= 0;
 
     private static async Task<int> AgentReadAsync(CommandOptions options)
     {
@@ -7812,6 +8133,7 @@ internal static class OwnerControlCli
         {
             Console.Error.WriteLine("Owner commands (run `owner <verb> --help` for one command; `owner help --command <verb>` is the same):");
             Console.Error.WriteLine("  vault: status|provision|unlock|recover|lock|upgrade|upgrade-with-recovery-code|rollback|rollback-with-recovery-code|health|audit|diagnostics|retention|backup|restore|restore-with-recovery-code|export");
+            Console.Error.WriteLine("  workspace: workspace-status|workspace-tree|workspace-mkdir|workspace-import|workspace-revise|workspace-read");
             Console.Error.WriteLine("  capture: memory-create|memory-revise|memory-import|memory-read|read|write|source-create|source-revise|source-read|research-capture|research-read|feedback-create|feedback-read");
             Console.Error.WriteLine("  library: library|memory-read|source-read|research-read|relation-read|lifecycle-read|lifecycle-retained-read|recall-read|review-list|review-record|index-status|index-rebuild");
             Console.Error.WriteLine("  review: proposal-list|proposal-read|proposal-publish|proposal-reject|lifecycle-publish|lifecycle-reject|lifecycle-withdraw|lifecycle-repropose|lifecycle-question-resolve|lifecycle-question-reopen|relation-list|relation-read|relation-create|relation-accept|relation-reject|relation-unlink|relation-relink|declassify-preview|declassify-publish|declassify-proposal-publish");
@@ -7933,6 +8255,12 @@ internal static class OwnerControlCli
         "restore" => "owner restore --control-pipe <pipe> --backup-file <file> --target-directory <not-yet-existing-dir>: clean restore with the passphrase (secure prompt). Wrong key/tamper writes nothing. Restored vault carries no live authority; the index needs index-rebuild.",
         "restore-with-recovery-code" => "owner restore-with-recovery-code --control-pipe <pipe> --backup-file <file> --target-directory <not-yet-existing-dir>: same restore with the recovery key.",
         "export" => "owner export --control-pipe <pipe> --resource-ids <id,...> --output-file <new-file> [--include-relations true] [--include-lifecycle-states true]: explicit readable plaintext copy of exactly the selected records (create-only; cannot be revoked afterwards). Citations outside the scope are withheld whole.",
+        "workspace-status" => "owner workspace-status --control-pipe <pipe>: committed workspace state (ready/uninitialized), format/schema versions, tree revision and counts. An unreadable or newer workspace is refused, never shown as empty.",
+        "workspace-tree" => "owner workspace-tree --control-pipe <pipe>: every logical folder/file with stable id, parent, exact name, tree revision and (for files) the latest content revision, bytes and SHA-256. Names print as JSON strings.",
+        "workspace-mkdir" => "owner workspace-mkdir --control-pipe <pipe> --parent-id <id|root> --name <exact-name> --expected-tree-revision <n>: create one logical folder at the tree revision you last saw. Revision 0 initializes an empty workspace. Sibling names are compared ordinals, case-sensitively.",
+        "workspace-import" => "owner workspace-import --control-pipe <pipe> --parent-id <id|root> [--name <exact-name>] --input-file <file> --expected-tree-revision <n>: store the file's exact original bytes (empty and non-UTF-8 included) as content revision 1 under your structural precondition. Defaults to the source file name; an unrepresentable name or an occupied sibling name is refused, never renamed or overwritten.",
+        "workspace-revise" => "owner workspace-revise --control-pipe <pipe> --file-id <id> --expected-content-revision <live> --input-file <file>: store the exact bytes as the next retained content revision. A stale revision is refused; earlier revisions stay readable.",
+        "workspace-read" => "owner workspace-read --control-pipe <pipe> --file-id <id> [--revision N] [--output-file <new-file>]: exact original bytes (stdout, or create-only file). No revision reads the latest; a positive revision reads that retained revision.",
         "upgrade" => "owner upgrade --control-pipe <pipe>: raise old content schemas while locked (secure passphrase prompt; keeps an encrypted rollback point; leaves the vault locked).",
         "upgrade-with-recovery-code" => "owner upgrade-with-recovery-code --control-pipe <pipe>: same upgrade with the recovery key.",
         "rollback" => "owner rollback --control-pipe <pipe> [--discard true]: restore (or discard) the encrypted rollback point while locked.",

@@ -13,9 +13,12 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
     private readonly object _stateGate = new();
     private readonly object _contentGate = new();
     private readonly EncryptedVaultStore _store;
+    private readonly EncryptedWorkspaceStore _workspaceStore;
     private byte[]? _dataKey;
     private byte[]? _indexKey;
     private VaultManifest? _manifest;
+    private WorkspaceStateRecord? _workspace;
+    private string? _workspaceUnavailableCode;
     private int _activeOperations;
     private bool _locking;
     private bool _maintenance;
@@ -28,6 +31,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
     public VaultLifecycle(EncryptedVaultStore store)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
+        _workspaceStore = new EncryptedWorkspaceStore(_store.RootPath);
     }
 
     public string State
@@ -103,6 +107,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
                 // files are never visible to readers; reaping them here keeps
                 // no half-published state across restarts.
                 _store.ReconcileUnpublished(manifest);
+                OpenWorkspaceLocked();
                 RecoverPendingFolderRegistrations();
                 BumpUnlockEpochLocked();
                 ResetRefreshSignalLocked();
@@ -690,6 +695,252 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
         }
     }
 
+    /// <summary>
+    /// S12-T2 opens the committed workspace for one unlocked epoch and
+    /// reclaims only files an interrupted commit staged but never published. A
+    /// workspace that cannot be authenticated keeps every file untouched: the
+    /// epoch reports the refusal and each workspace act refuses, while the
+    /// rest of the vault stays usable.
+    /// </summary>
+    private void OpenWorkspaceLocked()
+    {
+        _workspace = null;
+        _workspaceUnavailableCode = null;
+        if (_manifest is null || _dataKey is null)
+        {
+            return;
+        }
+
+        var result = _workspaceStore.Open(_manifest.VaultId, _dataKey);
+        _workspace = result.State;
+        _workspaceUnavailableCode = result.ErrorCode;
+    }
+
+    private void EnsureWorkspaceAvailableLocked()
+    {
+        EnsureSourceEnrollmentRecoveryComplete();
+        if (_manifest is null || _dataKey is null)
+        {
+            throw new ManagedResourceUnavailableException();
+        }
+
+        if (_workspaceUnavailableCode is not null)
+        {
+            throw new WorkspaceRefusalException(_workspaceUnavailableCode);
+        }
+    }
+
+    private WorkspaceStatusInfo ReadWorkspaceStatus()
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            if (_workspace is null)
+            {
+                return new WorkspaceStatusInfo(
+                    WorkspaceStates.Uninitialized,
+                    EncryptedWorkspaceStore.CurrentFormatVersion,
+                    EncryptedWorkspaceStore.CurrentMetadataSchemaVersion,
+                    0,
+                    null,
+                    0,
+                    0,
+                    0);
+            }
+
+            var folders = 0;
+            var files = 0;
+            var revisions = 0;
+            foreach (var node in _workspace.Nodes)
+            {
+                if (string.Equals(node.Kind, EncryptedWorkspaceStore.FolderKind, StringComparison.Ordinal))
+                {
+                    if (!string.Equals(node.Id, _workspace.RootId, StringComparison.Ordinal))
+                    {
+                        folders++;
+                    }
+
+                    continue;
+                }
+
+                files++;
+                revisions += node.Revisions.Length;
+            }
+
+            return new WorkspaceStatusInfo(
+                WorkspaceStates.Ready,
+                _workspace.FormatVersion,
+                _workspace.MetadataSchemaVersion,
+                _workspace.Revision,
+                _workspace.RootId,
+                folders,
+                files,
+                revisions);
+        }
+    }
+
+    private WorkspaceSnapshot? ReadWorkspaceTree()
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            if (_workspace is null)
+            {
+                return null;
+            }
+
+            return new WorkspaceSnapshot(
+                _workspace.WorkspaceId,
+                _workspace.FormatVersion,
+                _workspace.MetadataSchemaVersion,
+                _workspace.Revision,
+                _workspace.RootId,
+                _workspace.Nodes.Select(ToWorkspaceNodeInfo).ToArray());
+        }
+    }
+
+    private static WorkspaceNodeInfo ToWorkspaceNodeInfo(WorkspaceNodeRecord node) =>
+        new(
+            node.Id,
+            string.Equals(node.Kind, EncryptedWorkspaceStore.FileKind, StringComparison.Ordinal)
+                ? WorkspaceNodeKind.File
+                : WorkspaceNodeKind.Folder,
+            node.ParentId,
+            node.Name,
+            node.Revision,
+            node.ContentRevision,
+            node.Revisions
+                .Select(revision => new WorkspaceContentRevisionInfo(revision.Revision, revision.Length, revision.Sha256))
+                .ToArray());
+
+    private WorkspaceMutationInfo CreateWorkspaceFolder(string parentId, string name, long expectedTreeRevision)
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            var (state, resolvedParentId, expectedTreeRevisionValue) = PrepareWorkspaceMutationLocked(
+                expectedTreeRevision, parentId, name, contentLength: 0);
+            var next = _workspaceStore.CreateFolder(
+                _manifest!.VaultId,
+                _dataKey!,
+                state,
+                resolvedParentId,
+                name,
+                expectedTreeRevisionValue,
+                out var created);
+            _workspace = next;
+            return new WorkspaceMutationInfo(created.Id, next.Revision, created.Revision, 0, 0, null);
+        }
+    }
+
+    private WorkspaceMutationInfo CreateWorkspaceFile(
+        string parentId,
+        string name,
+        byte[] content,
+        long expectedTreeRevision)
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            var (state, resolvedParentId, expectedTreeRevisionValue) = PrepareWorkspaceMutationLocked(
+                expectedTreeRevision, parentId, name, content.Length);
+            var next = _workspaceStore.CreateFile(
+                _manifest!.VaultId,
+                _dataKey!,
+                state,
+                resolvedParentId,
+                name,
+                content,
+                expectedTreeRevisionValue,
+                out var created);
+            _workspace = next;
+            return DescribeWorkspaceMutation(created, next.Revision);
+        }
+    }
+
+    private WorkspaceMutationInfo ReviseWorkspaceFile(string fileId, byte[] content, long expectedContentRevision)
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            if (_workspace is null)
+            {
+                throw new WorkspaceRefusalException(WorkspaceErrorCodes.NotFound);
+            }
+
+            var next = _workspaceStore.ReviseFile(
+                _manifest!.VaultId,
+                _dataKey!,
+                _workspace,
+                fileId,
+                content,
+                expectedContentRevision,
+                out var revised);
+            _workspace = next;
+            return DescribeWorkspaceMutation(revised, next.Revision);
+        }
+    }
+
+    private WorkspaceFileContent ReadWorkspaceFile(string fileId, long revision)
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            if (_workspace is null)
+            {
+                throw new WorkspaceRefusalException(WorkspaceErrorCodes.NotFound);
+            }
+
+            return _workspaceStore.ReadContent(_manifest!.VaultId, _dataKey!, _workspace, fileId, revision);
+        }
+    }
+
+    private static WorkspaceMutationInfo DescribeWorkspaceMutation(WorkspaceNodeRecord node, long workspaceRevision)
+    {
+        var revision = node.Revisions[^1];
+        return new WorkspaceMutationInfo(
+            node.Id,
+            workspaceRevision,
+            node.Revision,
+            revision.Revision,
+            revision.Length,
+            revision.Sha256);
+    }
+
+    /// <summary>
+    /// Creates the empty tree a caller saw before the first commit (revision
+    /// 0) so its precondition stays truthful, while every later act is gated
+    /// by the committed tree revision. A caller that presents 0 after the
+    /// workspace exists is stale and is refused by the store's revision gate,
+    /// and the first act is validated before the empty tree is committed, so a
+    /// refused act still leaves nothing behind.
+    /// </summary>
+    private (WorkspaceStateRecord State, string ParentId, long ExpectedTreeRevision) PrepareWorkspaceMutationLocked(
+        long expectedTreeRevision,
+        string parentId,
+        string name,
+        int contentLength)
+    {
+        if (_workspace is not null)
+        {
+            return (_workspace, ResolveWorkspaceParentId(_workspace, parentId), expectedTreeRevision);
+        }
+
+        if (expectedTreeRevision != 0)
+        {
+            throw new WorkspaceRefusalException(WorkspaceErrorCodes.Conflict);
+        }
+
+        var empty = EncryptedWorkspaceStore.CreateEmptyState();
+        EncryptedWorkspaceStore.ValidateNewNode(
+            empty, ResolveWorkspaceParentId(empty, parentId), name, contentLength, empty.Revision);
+        _workspace = _workspaceStore.Initialize(_manifest!.VaultId, _dataKey!);
+        return (_workspace, _workspace.RootId, _workspace.Revision);
+    }
+
+    private static string ResolveWorkspaceParentId(WorkspaceStateRecord state, string parentId) =>
+        string.Equals(parentId, WorkspaceParentIds.Root, StringComparison.Ordinal) ? state.RootId : parentId;
+
     private byte[] ReadContent(string resourceId, long? expectedRevision = null)
     {
         lock (_contentGate)
@@ -890,6 +1141,12 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
         }
 
         _manifest = null;
+        // S12-T2: the workspace tree belongs to the unlocked epoch. It is
+        // plaintext metadata in memory, so it leaves with the key; a locked
+        // vault has no workspace tree, no workspace name and no workspace
+        // revision to serve.
+        _workspace = null;
+        _workspaceUnavailableCode = null;
         _locking = false;
         // The lock signal belongs to this locked epoch: the drain that reached
         // this point has already stopped the in-flight batch reads, and no
@@ -992,6 +1249,16 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
         public void ValidateRegistration(string resourceId, long? expectedRevision = null) => GetOwner().ValidateRegistration(resourceId, expectedRevision);
         public long WriteContent(string resourceId, string zoneId, byte[] content) => GetOwner().WriteContent(resourceId, zoneId, content);
         public long WriteContent(string resourceId, string zoneId, byte[] content, long expectedRevision) => GetOwner().WriteContent(resourceId, zoneId, content, expectedRevision);
+        public WorkspaceStatusInfo ReadWorkspaceStatus() => GetOwner().ReadWorkspaceStatus();
+        public WorkspaceSnapshot? ReadWorkspaceTree() => GetOwner().ReadWorkspaceTree();
+        public WorkspaceMutationInfo CreateWorkspaceFolder(string parentId, string name, long expectedTreeRevision) =>
+            GetOwner().CreateWorkspaceFolder(parentId, name, expectedTreeRevision);
+        public WorkspaceMutationInfo CreateWorkspaceFile(string parentId, string name, byte[] content, long expectedTreeRevision) =>
+            GetOwner().CreateWorkspaceFile(parentId, name, content, expectedTreeRevision);
+        public WorkspaceMutationInfo ReviseWorkspaceFile(string fileId, byte[] content, long expectedContentRevision) =>
+            GetOwner().ReviseWorkspaceFile(fileId, content, expectedContentRevision);
+        public WorkspaceFileContent ReadWorkspaceFile(string fileId, long revision) =>
+            GetOwner().ReadWorkspaceFile(fileId, revision);
 
         public void Dispose()
         {

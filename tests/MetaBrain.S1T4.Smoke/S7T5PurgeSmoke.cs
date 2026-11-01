@@ -709,6 +709,12 @@ internal static partial class OwnerServiceSmoke
         public bool DeleteCanonicalResource(string resourceId) => _inner.DeleteCanonicalResource(resourceId);
         public OperationsAuditState LoadOperationsAuditState() => _inner.LoadOperationsAuditState();
         public T UpdateOperationsAuditState<T>(Func<OperationsAuditState, (OperationsAuditState State, T Result)> update) => _inner.UpdateOperationsAuditState(update);
+        public WorkspaceStatusInfo ReadWorkspaceStatus() => _inner.ReadWorkspaceStatus();
+        public WorkspaceSnapshot? ReadWorkspaceTree() => _inner.ReadWorkspaceTree();
+        public WorkspaceMutationInfo CreateWorkspaceFolder(string parentId, string name, long expectedTreeRevision) => _inner.CreateWorkspaceFolder(parentId, name, expectedTreeRevision);
+        public WorkspaceMutationInfo CreateWorkspaceFile(string parentId, string name, byte[] content, long expectedTreeRevision) => _inner.CreateWorkspaceFile(parentId, name, content, expectedTreeRevision);
+        public WorkspaceMutationInfo ReviseWorkspaceFile(string fileId, byte[] content, long expectedContentRevision) => _inner.ReviseWorkspaceFile(fileId, content, expectedContentRevision);
+        public WorkspaceFileContent ReadWorkspaceFile(string fileId, long revision) => _inner.ReadWorkspaceFile(fileId, revision);
         public void Dispose() => _inner.Dispose();
     }
 
