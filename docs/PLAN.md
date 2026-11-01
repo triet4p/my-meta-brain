@@ -16,6 +16,10 @@ Meta Brain là bộ nhớ thứ hai local-first cho owner, encrypted personal va
 - Repository: [triet4p/my-meta-brain](https://github.com/triet4p/my-meta-brain); assigned project repository là Meta Brain, target branch `main` / remote `origin`. Brief phải nêu explicit root/ref, không dùng home/ancestor repository ngầm định; mỗi future independently gated project task có reviewed-snapshot commit riêng.
 - Supplemental protected deepseek-flash proof superseded/stopped, không có provider inference được nghiệm thu; unknown prior $0.0054 reservation giữ nguyên. Cleanup không đọc key/profile/ledger, gọi provider, build native code, provision/install Windows service, hoặc cấu hình AppContainer; chỉ tạo ACL cho local synthetic fixture trong service/CLI smoke. New model execution thuộc S6-T1 sau consent, pricing và frozen budgets; không production acceptance hiện tại.
 
+Owner-approved **CR03/D089 (2026-11-01)**: từ Sprint 12/1.2.0, CLI là owner surface đầy đủ và MCP là agent surface; ngừng phát triển/phát hành WPF mới, giữ nguyên 1.0/1.1 historical assets/evidence. Sprint 13 thêm optional browser document preview/edit qua foreground CLI `open`, không web workbench/owner console hoặc plaintext HTML temp. [Change record](REQUIREMENTS.md#approved-change-record--cr03-2026-11-01) giữ functional outcomes, key/scope/lock invariants và quy định legacy UI/shared-runtime transition. Chỉ documentation planning; Sprint 12 chưa authorize execution.
+
+Owner-approved [D090 workspace contract](META-BRAIN.md#134-approved-workspace-contract--d090) resolves S12 storage/key/disclosure and mixed-install transition choices; implementation, evidence and gates remain separate. Other sharing/engine/migration decisions remain gated. Earlier statements about these choices being open or Sprint 12 authorization describe their planning-time state.
+
 ## Milestones
 
 Mỗi chặng có một sprint plan chi tiết. Hoàn thành chặng không đồng nghĩa sản phẩm đã sẵn sàng daily production; release cuối cần tất cả chặng. Các contract phía sau phải được xem khi thực hiện phía trước, nhưng không xây trước chức năng ngoài task.
@@ -31,6 +35,15 @@ Mỗi chặng có một sprint plan chi tiết. Hoàn thành chặng không đ�
 | [x] M7 — Time and lifecycle | Intention, temporal recall, review-after, forgetting, archive và purge đúng lineage | M6 | [Sprint 7](sprint-plans/sprint-7.md) |
 | [x] M8 — Daily production | Install startup locked, encrypted backup/recovery/restore/export/migration, CR01 security replay và owner acceptance | M7; Sprint 8 accepted | [Sprint 8](sprint-plans/sprint-8.md) |
 | [x] M9 — Public release 1.0.0 và onboarding | CLI/UI/MCP release, hai bộ cài Windows riêng cho CLI/UI, landing page và scenario guides với Codex/OMP integration; kế thừa functional/flow acceptance Sprint 9, không test lại | Sprint 9 complete; release integrity + owner publication gate accepted | [Sprint 10](sprint-plans/sprint-10.md) |
+| [x] M10 — Folder/raw-first capture / 1.1.0 | Folder enrollment, partial-schema ingestion và trạng thái nguồn trung thực | M9; CR02/D088 approved, Sprint 11 published | [Sprint 11](sprint-plans/sprint-11.md) |
+| [~] M11 — CLI encrypted file workspace / 1.2.0 | Original bytes, identity, key/lock/export/backup; CLI parity và installed-WPF support transition | M10; storage/key approval, CR03 | [Sprint 12](sprint-plans/sprint-12.md) |
+| [ ] M12 — CLI open và document browser / 1.3.0 | CLI lexical search/read/revise; optional scoped preview/text-edit, revision/conflict/lock và bounded work | M11; bridge security/budget contract, CR03 | [Sprint 13](sprint-plans/sprint-13.md) |
+| [ ] M13 — Cognitive memory / 1.4.0 | Sáu facets, owner review, grounded jobs và temporal/intention lifecycle | M12; taxonomy approval | [Sprint 14](sprint-plans/sprint-14.md) |
+| [ ] M14 — Hybrid recall / 1.5.0 | Passage search Việt–Anh, exact/semantic, purpose-aware và region results | M13; engine/budget approval | [Sprint 15](sprint-plans/sprint-15.md) |
+| [ ] M15 — Relational recall / 1.6.0 | File/folder typed relations, stale evidence, bounded explained traversal | M14 | [Sprint 16](sprint-plans/sprint-16.md) |
+| [ ] M16 — Folder sharing/context / 1.7.0 | Owner scope preview và evidence context trên normal Codex/OMP | M15; sharing approval | [Sprint 17](sprint-plans/sprint-17.md) |
+| [ ] M17 — Migration/daily readiness / 1.8.0 | Opt-in migration, restore/purge, owner UX và performance acceptance | M16; migration approval | [Sprint 18](sprint-plans/sprint-18.md) |
+| [ ] M18 — Public 2.0.0 | Default/API clean cutover, exact candidate và public major release | M17 published; G2-T1–T3 gates + owner approval | [G2 release milestone](ROADMAP-2.0.md#8-g2--final-release-200-không-phải-sprint-bổ-sung) |
 
 ## Active Sprints
 
@@ -50,6 +63,16 @@ S1-T9 [behavioral evidence A3](../artifacts/sprint-1/reviews/S1-T9-S1T9-REVIEW-2
 | 8 | Complete — M8 | S8-T1–T7 [x]; S8-T1A [x] | Owner T7 acceptance; [R1 PASS](../artifacts/sprint-8/reviews/S8-T7-R1.md), [C1 checkpoint](../artifacts/sprint-8/checkpoints/S8-T7-C1.md), commit `9ce136bc`; [final differential PASS](../artifacts/sprint-8/reviews/S8-DEEP-A1.md), no actionable findings; accepted limits retained; no push |
 | 9 | Complete — three-product delivery | S9-T1–T7 [x] | T7 [R1 PASS](../artifacts/sprint-9/product/reviews/S9-T7-R1.md) + [C1 checkpoint](../artifacts/sprint-9/product/checkpoints/S9-T7-C1.md), latest commit `635af2a6`; owner acceptance + [final differential PASS](../artifacts/sprint-9/product/reviews/S9-DEEP-D1.md), zero actionable findings; no push |
 | 10 | Complete — M9 / 1.0.0 published | S10-T1–T8 [x] | [Sprint plan](sprint-plans/sprint-10.md); [CYCLE2 R2 PASS](../artifacts/sprint-10/reviews/S10-T8-CYCLE2-R2.md), [C4](../artifacts/sprint-10/checkpoints/S10-T8-C4.md), commit `ac842182`; [D5 PASS](../artifacts/sprint-10/reviews/S10-DEEP-D5.md); [public release](https://github.com/triet4p/my-meta-brain/releases/tag/v1.0.0), [website](https://triet4p.github.io/my-meta-brain/), [final publication](../artifacts/sprint-10/publication/S10-PUBLISH-P5.md); MIT/copyright retained |
+| 11 | Complete — M10 / 1.1.0 published | S11-T1–T6 [x] | Source/tag `98a83790`; [final D3 PASS](../artifacts/sprint-11/reviews/S11-DEEP-D3.md), [public proof](../artifacts/sprint-11/publication/S11-PUBLISH-P2.md), [release](https://github.com/triet4p/my-meta-brain/releases/tag/v1.1.0), [site](https://triet4p.github.io/my-meta-brain/); exact CLI/UI/MCP assets verified, no actionable findings |
+| 12 | In progress — planned 1.2.0 | S12-T1 [~]; S12-T2–T6 [ ] | [Workspace plan](sprint-plans/sprint-12.md); owner authorized start/auto-routing, contract investigation first; storage/key/disclosure approval remains gated |
+| 13 | Not started — planned 1.3.0 | S13-T1–T6 [ ] | [CLI open/document plan](sprint-plans/sprint-13.md); waits for 1.2.0 publication |
+| 14 | Not started — planned 1.4.0 | S14-T1–T6 [ ] | [Cognitive plan](sprint-plans/sprint-14.md); waits for 1.3.0 publication |
+| 15 | Not started — planned 1.5.0 | S15-T1–T6 [ ] | [Hybrid recall plan](sprint-plans/sprint-15.md); waits for 1.4.0 publication |
+| 16 | Not started — planned 1.6.0 | S16-T1–T6 [ ] | [Relational plan](sprint-plans/sprint-16.md); waits for 1.5.0 publication |
+| 17 | Not started — planned 1.7.0 | S17-T1–T6 [ ] | [Sharing/context plan](sprint-plans/sprint-17.md); waits for 1.6.0 publication |
+| 18 | Not started — planned 1.8.0 | S18-T1–T6 [ ] | [Migration/readiness plan](sprint-plans/sprint-18.md); waits for 1.7.0 publication |
+
+2.0 planning: [roadmap](ROADMAP-2.0.md) assigns one usable 1.x.0 per Sprint 11–18, then separate G2 after 1.8.0. Sprint 11/1.1.0 published; Sprint 12–18/G2 pending. Owner-approved CR03 changes S12+ distribution to CLI installer + MCP ZIP; S13 browser is document-only, not a replacement management console. Storage/key/sharing/engine/migration choices remain separately gated. No worker launch, migration, commit/push or publication is authorized by this planning update.
 
 Sprint 9 owner scope (2026-10-24): no new domain functionality; remove obsolete ACL/ownership-hardening code and complete independently usable packaged CLI, Owner UI and MCP Server over the same core/application/runtime. CLI and UI each cover owner workflows without PowerShell bootstrap or mandatory frontend switching; MCP covers agent workflows with existing explicit owner unlock/approval prerequisites, not owner authority. Order T1 cleanup → T2 shared lifecycle → T3 CLI → T4 UI → T5 MCP → T6 release bundle → T7 acceptance. [Sprint 9](sprint-plans/sprint-9.md) defines coverage, preserved security boundaries and new records under `artifacts/sprint-9/product/` to avoid historical-record collisions. S9-T1 authorized for implementation with full-route evidence and delegated Bronze checkpoint; worker cannot stage/commit, no push.
 
@@ -102,7 +125,7 @@ Owner-approved [D016/CR01](../.agents/memory/decisions.md) thay isolation bằng
 
 | Decision | Current selection and remaining proof | Verification owner |
 | --- | --- | --- |
-| D-OPEN-1 — Language, packaging, UI host, IPC | Retain C#/.NET 10, WPF, versioned local pipes, self-contained win-x64; normal official Codex/OMP connectors. Non-admin app/service lifecycle không cần agent sandbox/SCM identity proof; actual packaging/UI vẫn pending. | S1-T9, S4-T1, S5-T1, S8-T1 |
+| D-OPEN-1 — Language, packaging, owner surface, IPC | Retain C#/.NET 10, versioned local pipes, self-contained win-x64, normal Codex/OMP connectors. WPF accepted for 1.0/1.1; CR03/D089 selects CLI + MCP from S12 and narrow document browser from S13. Remaining proof: installed-component transition, full CLI coverage, scoped bridge/render/save/lock lifecycle; no desktop framework contest. | S12-T1/T5/T6, S13-T1–T6 |
 | D-OPEN-2 — Crypto/key/lock and token trust boundary | Standard AEAD/KDF/envelope chọn theo approved packages; user key/recovery, startup locked, no key agent. Grant snapshot + atomic single-use redemption/session checks, not OS identities. | S1-T2…S1-T6, S8-T2 |
 | D-OPEN-3 — Encrypted canonical write/index protocol | File-first ciphertext, revision/atomic/crash/migration; private SQLite DB/WAL/temp protection chọn bằng evidence, no plaintext or dual truth. | S2-T2, S2-T7, S8-T3 |
 | D-OPEN-4 — Search/embedding choice | Dữ liệu Việt–Anh, symbol search và paraphrase trong giới hạn tài nguyên; không vector DB mặc định vì thói quen | S4-T2, tuning S8-T5 |
@@ -124,6 +147,8 @@ Giới hạn vận hành được khóa trước tuning, không nâng ngưỡng 
 - Owner-approved Sprint 8 replans retain key-vault scope, R01–R40 and prohibition of agent ACL/owner/permissions/host-system/config mutations. D086 supersedes only the old T5 query-p95/rebuild-time sign-off gates; other budgets and security/recovery obligations remain. [Sprint 8](sprint-plans/sprint-8.md) complete: T1–T7/T1A accepted, owner T7 approval recorded, [R1 PASS](../artifacts/sprint-8/reviews/S8-T7-R1.md), [C1 checkpoint](../artifacts/sprint-8/checkpoints/S8-T7-C1.md), commit `9ce136bc4c8394b7b8af1230c2f00a448b3a6cc8`, [final differential PASS](../artifacts/sprint-8/reviews/S8-DEEP-A1.md). Historical findings remain recorded; accepted provider/race/native-dialog and same-owner/copied-data limits are not claims of universal protection. No repeated owner test matrix, no push.
 
 ## Backlog / Future Work
+
+Định hướng hậu 1.0: [file-first/cognitive memory](POST-1.0-DIRECTION.md), [roadmap 2.0](ROADMAP-2.0.md); Sprint 11/1.1 complete, Sprint 12–18 planned và G2 sau 1.8.0. CR03 đã chốt CLI + MCP và narrow document browser, không phải storage/key/share/engine/migration approval. Các changed contract còn mở cần approval trước implementation/cutover; giữ baseline và bằng chứng lịch sử.
 
 Không thuộc completion criteria baseline: multi-device sync, multi-user collaboration/SaaS, crawler chủ động, PDF/web automation, graph database, agent tự nghiên cứu liên tục, marketplace và benchmark công khai. Chỉ đưa vào kế hoạch bằng change request có rationale; không lấy chúng thay thế mục bắt buộc.
 

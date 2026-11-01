@@ -2,6 +2,10 @@
 
 This is the release/install/site contract for Sprint 10. It does not change product behavior or re-run Sprint 9 acceptance. **Requirements** below are binding; proposed implementation choices are identified explicitly; unverified prerequisites remain unverified. Product versions, signing claims, release assets, publication, and support status must never be inferred from a plan or from the existing S9 bundle.
 
+**Version boundary (CR03, 2026-11-01):** This remains the historical 1.0.0/Sprint 10 contract; its three-product/WPF rules do not mandate future UI installers. From Sprint 12/1.2.0 onward, the owner-approved [CR03](REQUIREMENTS.md#approved-change-record--cr03-2026-11-01) and [roadmap release contract](ROADMAP-2.0.md#7-definition-of-release-mỗi-sprint) require a CLI installer + MCP ZIP, with document-browser assets bundled from Sprint 13. Preserve old downloads, bytes, acceptance and component/data ownership; prove safe legacy-UI transition or explicit refusal/remediation before upgrading the shared runtime. No implementation or publication is authorized here.
+
+**Future transition clarification (D090):** For 1.2, refuse a 1.1 WPF or unknown/mixed installation before stopping or changing files; recommend separate installation, data root and endpoints, with no live shared data root or competing writers. Independently refuse mismatched wire/version endpoints before private operations, including manually mixed binaries. A separately confirmed owner transition requires proof of preserved components/data. See [workspace specification](META-BRAIN.md#134-approved-workspace-contract--d090); this is a future requirement, not evidence that the historical installer implements it.
+
 ## Freeze identity and immutability
 
 - Candidate identity is immutable provenance: candidate directories, `candidate-manifest.json`, and
