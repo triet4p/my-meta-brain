@@ -715,6 +715,15 @@ internal static partial class OwnerServiceSmoke
         public WorkspaceMutationInfo CreateWorkspaceFile(string parentId, string name, byte[] content, long expectedTreeRevision) => _inner.CreateWorkspaceFile(parentId, name, content, expectedTreeRevision);
         public WorkspaceMutationInfo ReviseWorkspaceFile(string fileId, byte[] content, long expectedContentRevision) => _inner.ReviseWorkspaceFile(fileId, content, expectedContentRevision);
         public WorkspaceFileContent ReadWorkspaceFile(string fileId, long revision) => _inner.ReadWorkspaceFile(fileId, revision);
+        public WorkspaceMutationInfo RenameWorkspaceNode(string nodeId, string name, long expectedTreeRevision, long expectedNodeRevision) => _inner.RenameWorkspaceNode(nodeId, name, expectedTreeRevision, expectedNodeRevision);
+        public WorkspaceMutationInfo MoveWorkspaceNode(string nodeId, string destinationParentId, long expectedTreeRevision, long expectedNodeRevision) => _inner.MoveWorkspaceNode(nodeId, destinationParentId, expectedTreeRevision, expectedNodeRevision);
+        public WorkspaceCopyInfo CopyWorkspaceNode(string nodeId, string destinationParentId, string? name, long expectedTreeRevision) => _inner.CopyWorkspaceNode(nodeId, destinationParentId, name, expectedTreeRevision);
+        public WorkspaceDeletePreviewInfo PreviewWorkspaceDelete(string nodeId) => _inner.PreviewWorkspaceDelete(nodeId);
+        public WorkspaceDeleteInfo DeleteWorkspaceNode(string nodeId, long expectedTreeRevision, long expectedNodeRevision, string previewToken) => _inner.DeleteWorkspaceNode(nodeId, expectedTreeRevision, expectedNodeRevision, previewToken);
+        public WorkspaceRestoreInfo RestoreWorkspaceNode(string nodeId, long expectedTreeRevision) => _inner.RestoreWorkspaceNode(nodeId, expectedTreeRevision);
+        public WorkspaceTombstoneInfo[] ReadWorkspaceTombstones() => _inner.ReadWorkspaceTombstones();
+        public WorkspaceAnchorInfo CreateWorkspaceAnchor(string fileId, long expectedContentRevision, long offset, long length, long expectedTreeRevision) => _inner.CreateWorkspaceAnchor(fileId, expectedContentRevision, offset, length, expectedTreeRevision);
+        public WorkspaceAnchorInfo[] ReadWorkspaceAnchors(string fileId) => _inner.ReadWorkspaceAnchors(fileId);
         public void Dispose() => _inner.Dispose();
     }
 

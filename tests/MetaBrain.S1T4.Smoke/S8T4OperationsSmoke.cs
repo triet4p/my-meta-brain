@@ -1012,6 +1012,24 @@ internal sealed class S8T4AuditFailureOperation : IVaultOperation
 
     public WorkspaceFileContent ReadWorkspaceFile(string fileId, long revision) => throw new NotSupportedException();
 
+    public WorkspaceMutationInfo RenameWorkspaceNode(string nodeId, string name, long expectedTreeRevision, long expectedNodeRevision) => throw new NotSupportedException();
+
+    public WorkspaceMutationInfo MoveWorkspaceNode(string nodeId, string destinationParentId, long expectedTreeRevision, long expectedNodeRevision) => throw new NotSupportedException();
+
+    public WorkspaceCopyInfo CopyWorkspaceNode(string nodeId, string destinationParentId, string? name, long expectedTreeRevision) => throw new NotSupportedException();
+
+    public WorkspaceDeletePreviewInfo PreviewWorkspaceDelete(string nodeId) => throw new NotSupportedException();
+
+    public WorkspaceDeleteInfo DeleteWorkspaceNode(string nodeId, long expectedTreeRevision, long expectedNodeRevision, string previewToken) => throw new NotSupportedException();
+
+    public WorkspaceRestoreInfo RestoreWorkspaceNode(string nodeId, long expectedTreeRevision) => throw new NotSupportedException();
+
+    public WorkspaceTombstoneInfo[] ReadWorkspaceTombstones() => throw new NotSupportedException();
+
+    public WorkspaceAnchorInfo CreateWorkspaceAnchor(string fileId, long expectedContentRevision, long offset, long length, long expectedTreeRevision) => throw new NotSupportedException();
+
+    public WorkspaceAnchorInfo[] ReadWorkspaceAnchors(string fileId) => throw new NotSupportedException();
+
     public void Dispose()
     {
     }

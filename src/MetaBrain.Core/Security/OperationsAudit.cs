@@ -672,6 +672,18 @@ public static class OwnerGuidance
                 "The committed workspace could not be authenticated or read, so no workspace bytes were served and nothing was overwritten or deleted. Keep the workspace files for recovery and restore from an encrypted backup; do not delete them.",
             ["workspace_unsupported_version"] =
                 "The workspace format or metadata schema is newer than this build understands, so it was refused before any mutation. Use a build that supports that version; do not delete or rewrite the workspace.",
+            ["workspace_deleted"] =
+                "That workspace node is an encrypted tombstone, not part of the live tree, so no read, rename, move, copy or replace was served. Restore the deletion group first if you want to work with it again.",
+            ["workspace_not_deleted"] =
+                "That workspace node is live, so there is no tombstone to restore. Nothing was changed; read workspace-tombstones to list the nodes that can be restored.",
+            ["workspace_cycle"] =
+                "The move or copy would place a folder inside itself or its own subtree, so it was refused and nothing was written. Choose a destination outside that subtree.",
+            ["workspace_restore_conflict"] =
+                "The tombstone cannot return: its location is occupied by a live node or its parent is not live, so nothing was restored or overwritten. Free the exact name (delete or rename the occupying node) and restore again.",
+            ["workspace_root_immutable"] =
+                "The workspace root folder has no parent and an empty name, so it cannot be renamed, moved, copied, deleted or restored. Nothing was changed.",
+            ["workspace_anchor_invalid"] =
+                "The anchored range is not inside the pinned content revision (the offset is past the end, the length is zero, or the range overruns it), so no anchor was created. Choose a range inside that revision's exact bytes.",
             ["purge_target_moved"] =
                 "The purge target moved after the preview, so nothing was deleted. Preview the purge again against the current revision.",
             ["internal_failure"] =

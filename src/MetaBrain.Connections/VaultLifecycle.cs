@@ -745,21 +745,34 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
                     null,
                     0,
                     0,
+                    0,
                     0);
             }
 
             var folders = 0;
             var files = 0;
             var revisions = 0;
+            var deleted = 0;
             foreach (var node in _workspace.Nodes)
             {
+                if (string.Equals(node.State, WorkspaceNodeStates.Deleted, StringComparison.Ordinal))
+                {
+                    deleted++;
+                }
+
                 if (string.Equals(node.Kind, EncryptedWorkspaceStore.FolderKind, StringComparison.Ordinal))
                 {
-                    if (!string.Equals(node.Id, _workspace.RootId, StringComparison.Ordinal))
+                    if (!string.Equals(node.Id, _workspace.RootId, StringComparison.Ordinal) &&
+                        !string.Equals(node.State, WorkspaceNodeStates.Deleted, StringComparison.Ordinal))
                     {
                         folders++;
                     }
 
+                    continue;
+                }
+
+                if (string.Equals(node.State, WorkspaceNodeStates.Deleted, StringComparison.Ordinal))
+                {
                     continue;
                 }
 
@@ -775,7 +788,8 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
                 _workspace.RootId,
                 folders,
                 files,
-                revisions);
+                revisions,
+                deleted);
         }
     }
 
@@ -795,7 +809,10 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
                 _workspace.MetadataSchemaVersion,
                 _workspace.Revision,
                 _workspace.RootId,
-                _workspace.Nodes.Select(ToWorkspaceNodeInfo).ToArray());
+                _workspace.Nodes
+                    .Where(node => !string.Equals(node.State, WorkspaceNodeStates.Deleted, StringComparison.Ordinal))
+                    .Select(ToWorkspaceNodeInfo)
+                    .ToArray());
         }
     }
 
@@ -897,14 +914,228 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
 
     private static WorkspaceMutationInfo DescribeWorkspaceMutation(WorkspaceNodeRecord node, long workspaceRevision)
     {
-        var revision = node.Revisions[^1];
+        var revision = node.Revisions.Length > 0 ? node.Revisions[^1] : null;
         return new WorkspaceMutationInfo(
             node.Id,
             workspaceRevision,
             node.Revision,
-            revision.Revision,
-            revision.Length,
-            revision.Sha256);
+            node.ContentRevision,
+            revision?.Length ?? 0,
+            revision?.Sha256);
+    }
+
+    private WorkspaceMutationInfo RenameWorkspaceNode(
+        string nodeId,
+        string name,
+        long expectedTreeRevision,
+        long expectedNodeRevision)
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            if (_workspace is null)
+            {
+                throw new WorkspaceRefusalException(WorkspaceErrorCodes.NotFound);
+            }
+
+            var next = _workspaceStore.RenameNode(
+                _manifest!.VaultId,
+                _dataKey!,
+                _workspace,
+                nodeId,
+                name,
+                expectedTreeRevision,
+                expectedNodeRevision,
+                out var renamed);
+            _workspace = next;
+            return DescribeWorkspaceMutation(renamed, next.Revision);
+        }
+    }
+
+    private WorkspaceMutationInfo MoveWorkspaceNode(
+        string nodeId,
+        string destinationParentId,
+        long expectedTreeRevision,
+        long expectedNodeRevision)
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            if (_workspace is null)
+            {
+                throw new WorkspaceRefusalException(WorkspaceErrorCodes.NotFound);
+            }
+
+            var next = _workspaceStore.MoveNode(
+                _manifest!.VaultId,
+                _dataKey!,
+                _workspace,
+                nodeId,
+                string.Equals(destinationParentId, WorkspaceParentIds.Root, StringComparison.Ordinal)
+                    ? _workspace.RootId
+                    : destinationParentId,
+                expectedTreeRevision,
+                expectedNodeRevision,
+                out var moved);
+            _workspace = next;
+            return DescribeWorkspaceMutation(moved, next.Revision);
+        }
+    }
+
+    private WorkspaceCopyInfo CopyWorkspaceNode(
+        string nodeId,
+        string destinationParentId,
+        string? name,
+        long expectedTreeRevision)
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            if (_workspace is null)
+            {
+                throw new WorkspaceRefusalException(WorkspaceErrorCodes.NotFound);
+            }
+
+            var next = _workspaceStore.CopyNode(
+                _manifest!.VaultId,
+                _dataKey!,
+                _workspace,
+                nodeId,
+                string.Equals(destinationParentId, WorkspaceParentIds.Root, StringComparison.Ordinal)
+                    ? _workspace.RootId
+                    : destinationParentId,
+                name,
+                expectedTreeRevision,
+                out var copy);
+            _workspace = next;
+            return copy;
+        }
+    }
+
+    private WorkspaceDeletePreviewInfo PreviewWorkspaceDelete(string nodeId)
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            if (_workspace is null)
+            {
+                throw new WorkspaceRefusalException(WorkspaceErrorCodes.NotFound);
+            }
+
+            return EncryptedWorkspaceStore.PreviewDelete(_workspace, nodeId);
+        }
+    }
+
+    private WorkspaceDeleteInfo DeleteWorkspaceNode(
+        string nodeId,
+        long expectedTreeRevision,
+        long expectedNodeRevision,
+        string previewToken)
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            if (_workspace is null)
+            {
+                throw new WorkspaceRefusalException(WorkspaceErrorCodes.NotFound);
+            }
+
+            var next = _workspaceStore.DeleteNode(
+                _manifest!.VaultId,
+                _dataKey!,
+                _workspace,
+                nodeId,
+                expectedTreeRevision,
+                expectedNodeRevision,
+                previewToken,
+                out var deleted);
+            _workspace = next;
+            return deleted;
+        }
+    }
+
+    private WorkspaceRestoreInfo RestoreWorkspaceNode(string nodeId, long expectedTreeRevision)
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            if (_workspace is null)
+            {
+                throw new WorkspaceRefusalException(WorkspaceErrorCodes.NotFound);
+            }
+
+            var next = _workspaceStore.RestoreNode(
+                _manifest!.VaultId,
+                _dataKey!,
+                _workspace,
+                nodeId,
+                expectedTreeRevision,
+                out var restored);
+            _workspace = next;
+            return restored;
+        }
+    }
+
+    private WorkspaceTombstoneInfo[] ReadWorkspaceTombstones()
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            return _workspace is null
+                ? Array.Empty<WorkspaceTombstoneInfo>()
+                : EncryptedWorkspaceStore.ListTombstones(_workspace);
+        }
+    }
+
+    private WorkspaceAnchorInfo CreateWorkspaceAnchor(
+        string fileId,
+        long expectedContentRevision,
+        long offset,
+        long length,
+        long expectedTreeRevision)
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            if (_workspace is null)
+            {
+                throw new WorkspaceRefusalException(WorkspaceErrorCodes.NotFound);
+            }
+
+            var next = _workspaceStore.CreateAnchor(
+                _manifest!.VaultId,
+                _dataKey!,
+                _workspace,
+                fileId,
+                expectedContentRevision,
+                offset,
+                length,
+                expectedTreeRevision,
+                out var created);
+            _workspace = next;
+            return new WorkspaceAnchorInfo(
+                created.Id,
+                created.FileId,
+                created.ContentRevision,
+                created.Offset,
+                created.Length,
+                created.Sha256,
+                created.State ?? WorkspaceAnchorStates.Live);
+        }
+    }
+
+    private WorkspaceAnchorInfo[] ReadWorkspaceAnchors(string fileId)
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            if (_workspace is null)
+            {
+                throw new WorkspaceRefusalException(WorkspaceErrorCodes.NotFound);
+            }
+
+            return EncryptedWorkspaceStore.ReadAnchors(_workspace, fileId);
+        }
     }
 
     /// <summary>
@@ -1259,6 +1490,22 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
             GetOwner().ReviseWorkspaceFile(fileId, content, expectedContentRevision);
         public WorkspaceFileContent ReadWorkspaceFile(string fileId, long revision) =>
             GetOwner().ReadWorkspaceFile(fileId, revision);
+        public WorkspaceMutationInfo RenameWorkspaceNode(string nodeId, string name, long expectedTreeRevision, long expectedNodeRevision) =>
+            GetOwner().RenameWorkspaceNode(nodeId, name, expectedTreeRevision, expectedNodeRevision);
+        public WorkspaceMutationInfo MoveWorkspaceNode(string nodeId, string destinationParentId, long expectedTreeRevision, long expectedNodeRevision) =>
+            GetOwner().MoveWorkspaceNode(nodeId, destinationParentId, expectedTreeRevision, expectedNodeRevision);
+        public WorkspaceCopyInfo CopyWorkspaceNode(string nodeId, string destinationParentId, string? name, long expectedTreeRevision) =>
+            GetOwner().CopyWorkspaceNode(nodeId, destinationParentId, name, expectedTreeRevision);
+        public WorkspaceDeletePreviewInfo PreviewWorkspaceDelete(string nodeId) =>
+            GetOwner().PreviewWorkspaceDelete(nodeId);
+        public WorkspaceDeleteInfo DeleteWorkspaceNode(string nodeId, long expectedTreeRevision, long expectedNodeRevision, string previewToken) =>
+            GetOwner().DeleteWorkspaceNode(nodeId, expectedTreeRevision, expectedNodeRevision, previewToken);
+        public WorkspaceRestoreInfo RestoreWorkspaceNode(string nodeId, long expectedTreeRevision) =>
+            GetOwner().RestoreWorkspaceNode(nodeId, expectedTreeRevision);
+        public WorkspaceTombstoneInfo[] ReadWorkspaceTombstones() => GetOwner().ReadWorkspaceTombstones();
+        public WorkspaceAnchorInfo CreateWorkspaceAnchor(string fileId, long expectedContentRevision, long offset, long length, long expectedTreeRevision) =>
+            GetOwner().CreateWorkspaceAnchor(fileId, expectedContentRevision, offset, length, expectedTreeRevision);
+        public WorkspaceAnchorInfo[] ReadWorkspaceAnchors(string fileId) => GetOwner().ReadWorkspaceAnchors(fileId);
 
         public void Dispose()
         {

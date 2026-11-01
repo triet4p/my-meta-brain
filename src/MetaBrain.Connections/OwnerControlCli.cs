@@ -142,6 +142,15 @@ internal static class OwnerControlCli
                 "workspace-import" => await WorkspaceImportAsync(options).ConfigureAwait(false),
                 "workspace-revise" => await WorkspaceReviseAsync(options).ConfigureAwait(false),
                 "workspace-read" => await WorkspaceReadAsync(options).ConfigureAwait(false),
+                "workspace-rename" => await WorkspaceRenameAsync(options).ConfigureAwait(false),
+                "workspace-move" => await WorkspaceMoveAsync(options).ConfigureAwait(false),
+                "workspace-copy" => await WorkspaceCopyAsync(options).ConfigureAwait(false),
+                "workspace-delete-preview" => await WorkspaceDeletePreviewAsync(options).ConfigureAwait(false),
+                "workspace-delete" => await WorkspaceDeleteAsync(options).ConfigureAwait(false),
+                "workspace-restore" => await WorkspaceRestoreAsync(options).ConfigureAwait(false),
+                "workspace-tombstones" => await WorkspaceTombstonesAsync(options).ConfigureAwait(false),
+                "workspace-anchor-create" => await WorkspaceAnchorCreateAsync(options).ConfigureAwait(false),
+                "workspace-anchor-list" => await WorkspaceAnchorListAsync(options).ConfigureAwait(false),
                 "backup" => await BackupAsync(options).ConfigureAwait(false),
                 "restore" => await RestoreAsync(options, useRecoveryCode: false).ConfigureAwait(false),
                 "restore-with-recovery-code" => await RestoreAsync(options, useRecoveryCode: true).ConfigureAwait(false),
@@ -304,7 +313,7 @@ internal static class OwnerControlCli
             return 4;
         }
 
-        Console.WriteLine($"WORKSPACE state={DisplayText(status, "state")} format={DisplayText(status, "formatVersion")} schema={DisplayText(status, "metadataSchemaVersion")} revision={DisplayText(status, "revision")} root={DisplayText(status, "rootId")} folders={DisplayText(status, "folders")} files={DisplayText(status, "files")} revisions={DisplayText(status, "contentRevisions")}");
+        Console.WriteLine($"WORKSPACE state={DisplayText(status, "state")} format={DisplayText(status, "formatVersion")} schema={DisplayText(status, "metadataSchemaVersion")} revision={DisplayText(status, "revision")} root={DisplayText(status, "rootId")} folders={DisplayText(status, "folders")} files={DisplayText(status, "files")} revisions={DisplayText(status, "contentRevisions")} deleted={DisplayText(status, "deleted")}");
         return 0;
     }
 
@@ -539,6 +548,324 @@ internal static class OwnerControlCli
             CryptographicOperations.ZeroMemory(bytes);
         }
     }
+
+    /// <summary>
+    /// S12-T3 renames one live node without touching its identity, parent,
+    /// descendants, retained bytes or anchors. Both the workspace tree
+    /// revision and the node's own revision must be the ones the owner saw,
+    /// and an occupied sibling name is refused, never overwritten.
+    /// </summary>
+    private static async Task<int> WorkspaceRenameAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--node-id", "--name", "--expected-tree-revision", "--expected-node-revision");
+        var controlPipe = ControlPipe(options);
+        var nodeId = options.Required("--node-id");
+        var name = options.Required("--name");
+        if (!TryParseRevision(options, "--expected-tree-revision", out var treeRevision) ||
+            !TryParseRevision(options, "--expected-node-revision", out var nodeRevision) ||
+            nodeRevision < 1)
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceNodeRenameOperation,
+                nodeId,
+                WorkspaceName: name,
+                WorkspaceTreeRevision: treeRevision,
+                WorkspaceNodeRevision: nodeRevision)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "workspace_mutated") ||
+            !TryWorkspaceObject(result.Reply, "workspaceMutation", out var mutation))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        Console.WriteLine($"RENAME id={DisplayText(mutation, "nodeId")} revision={DisplayText(mutation, "workspaceRevision")} nodeRevision={DisplayText(mutation, "nodeRevision")}");
+        return 0;
+    }
+
+    /// <summary>
+    /// S12-T3 moves one live node to another live folder without touching its
+    /// identity, descendant identities, retained bytes or anchors. A cycle, a
+    /// non-folder destination and an occupied destination name are refused.
+    /// </summary>
+    private static async Task<int> WorkspaceMoveAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--node-id", "--parent-id", "--expected-tree-revision", "--expected-node-revision");
+        var controlPipe = ControlPipe(options);
+        var nodeId = options.Required("--node-id");
+        var parentId = options.Required("--parent-id");
+        if (!TryParseRevision(options, "--expected-tree-revision", out var treeRevision) ||
+            !TryParseRevision(options, "--expected-node-revision", out var nodeRevision) ||
+            nodeRevision < 1)
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceNodeMoveOperation,
+                nodeId,
+                WorkspaceParentId: parentId,
+                WorkspaceTreeRevision: treeRevision,
+                WorkspaceNodeRevision: nodeRevision)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "workspace_mutated") ||
+            !TryWorkspaceObject(result.Reply, "workspaceMutation", out var mutation))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        Console.WriteLine($"MOVE id={DisplayText(mutation, "nodeId")} revision={DisplayText(mutation, "workspaceRevision")} nodeRevision={DisplayText(mutation, "nodeRevision")}");
+        return 0;
+    }
+
+    /// <summary>
+    /// S12-T3 copies one file or one folder subtree with fresh identities and
+    /// independent content revisions. The source keeps its own bytes and
+    /// revisions; the copy inherits no anchor or other cross-document
+    /// reference.
+    /// </summary>
+    private static async Task<int> WorkspaceCopyAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--node-id", "--parent-id", "--name", "--expected-tree-revision");
+        var controlPipe = ControlPipe(options);
+        var nodeId = options.Required("--node-id");
+        var parentId = options.Required("--parent-id");
+        if (!TryParseRevision(options, "--expected-tree-revision", out var treeRevision))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceNodeCopyOperation,
+                nodeId,
+                WorkspaceParentId: parentId,
+                WorkspaceName: options.Optional("--name"),
+                WorkspaceTreeRevision: treeRevision)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "workspace_copied") ||
+            !TryWorkspaceObject(result.Reply, "workspaceCopy", out var copy))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        Console.WriteLine($"COPY id={DisplayText(copy, "nodeId")} parent={DisplayText(copy, "parentId")} name={JsonSerializer.Serialize(GetWorkspaceName(copy))} revision={DisplayText(copy, "workspaceRevision")} folders={DisplayText(copy, "folders")} files={DisplayText(copy, "files")}");
+        return 0;
+    }
+
+    /// <summary>
+    /// S12-T3 prints exactly what a delete would tombstone at the current
+    /// revision, with the confirmation token the delete requires. It changes
+    /// nothing.
+    /// </summary>
+    private static async Task<int> WorkspaceDeletePreviewAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--node-id");
+        var controlPipe = ControlPipe(options);
+        var nodeId = options.Required("--node-id");
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceNodeDeletePreviewOperation,
+                nodeId)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "workspace_delete_preview") ||
+            !TryWorkspaceObject(result.Reply, "workspaceDeletePreview", out var preview))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        if (preview.TryGetProperty("descendants", out var descendants) &&
+            descendants.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var descendant in descendants.EnumerateArray())
+            {
+                Console.WriteLine($"NODE kind={DisplayText(descendant, "kind")} id={DisplayText(descendant, "nodeId")} parent={DisplayText(descendant, "parentId")} name={JsonSerializer.Serialize(GetWorkspaceName(descendant))} revision={DisplayText(descendant, "revision")}");
+            }
+
+            Console.WriteLine($"DELETE PREVIEW kind={DisplayText(preview, "kind")} id={DisplayText(preview, "nodeId")} name={JsonSerializer.Serialize(GetWorkspaceName(preview))} revision={DisplayText(preview, "treeRevision")} nodeRevision={DisplayText(preview, "nodeRevision")} descendants={descendants.GetArrayLength().ToString(CultureInfo.InvariantCulture)} preview={DisplayText(preview, "preview")}");
+            return 0;
+        }
+
+        WriteServiceError(result);
+        return 4;
+    }
+
+    /// <summary>
+    /// S12-T3 tombstones the node and descendants exactly as previewed. The
+    /// confirmation token must match the live state, so a folder delete cannot
+    /// outrun its own preview and a stale revision never deletes anything.
+    /// </summary>
+    private static async Task<int> WorkspaceDeleteAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--node-id", "--expected-tree-revision", "--expected-node-revision", "--preview");
+        var controlPipe = ControlPipe(options);
+        var nodeId = options.Required("--node-id");
+        var preview = options.Required("--preview");
+        if (!TryParseRevision(options, "--expected-tree-revision", out var treeRevision) ||
+            !TryParseRevision(options, "--expected-node-revision", out var nodeRevision) ||
+            nodeRevision < 1)
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceNodeDeleteOperation,
+                nodeId,
+                WorkspaceTreeRevision: treeRevision,
+                WorkspaceNodeRevision: nodeRevision,
+                WorkspacePreviewToken: preview)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "workspace_deleted") ||
+            !TryWorkspaceObject(result.Reply, "workspaceDelete", out var deleted))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        Console.WriteLine($"DELETE id={DisplayText(deleted, "nodeId")} deletion={DisplayText(deleted, "deletionId")} revision={DisplayText(deleted, "workspaceRevision")} folders={DisplayText(deleted, "folders")} files={DisplayText(deleted, "files")}");
+        return 0;
+    }
+
+    /// <summary>
+    /// S12-T3 restores the deletion group one tombstone belongs to, and only
+    /// into locations that are still free. It never revives anything that was
+    /// not part of that deletion.
+    /// </summary>
+    private static async Task<int> WorkspaceRestoreAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--node-id", "--expected-tree-revision");
+        var controlPipe = ControlPipe(options);
+        var nodeId = options.Required("--node-id");
+        if (!TryParseRevision(options, "--expected-tree-revision", out var treeRevision))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceNodeRestoreOperation,
+                nodeId,
+                WorkspaceTreeRevision: treeRevision)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "workspace_restored") ||
+            !TryWorkspaceObject(result.Reply, "workspaceMutation", out var mutation))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        var restored = result.Reply.TryGetProperty("workspaceRestoredNodes", out var restoredValue) &&
+            restoredValue.ValueKind == JsonValueKind.Number
+            ? restoredValue.GetInt32().ToString(CultureInfo.InvariantCulture)
+            : "0";
+        Console.WriteLine($"RESTORE id={DisplayText(mutation, "nodeId")} revision={DisplayText(mutation, "workspaceRevision")} nodeRevision={DisplayText(mutation, "nodeRevision")} restored={restored}");
+        return 0;
+    }
+
+    private static async Task<int> WorkspaceTombstonesAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(
+            ControlPipe(options),
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceTombstonesOperation)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "workspace_tombstones") ||
+            !result.Reply.TryGetProperty("workspaceTombstones", out var tombstones) ||
+            tombstones.ValueKind != JsonValueKind.Array)
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        foreach (var tombstone in tombstones.EnumerateArray())
+        {
+            Console.WriteLine($"TOMBSTONE kind={DisplayText(tombstone, "kind")} id={DisplayText(tombstone, "nodeId")} parent={DisplayText(tombstone, "parentId")} name={JsonSerializer.Serialize(GetWorkspaceName(tombstone))} deletion={DisplayText(tombstone, "deletionId")} revision={DisplayText(tombstone, "revision")} contentRevision={DisplayText(tombstone, "contentRevision")}");
+        }
+
+        Console.WriteLine($"TOMBSTONES count={tombstones.GetArrayLength().ToString(CultureInfo.InvariantCulture)}");
+        return 0;
+    }
+
+    /// <summary>
+    /// S12-T3 pins a citation anchor to a byte range of the file's current
+    /// content revision. The anchor stores the document id, that exact revision
+    /// and the digest of the anchored bytes, never a path or display name.
+    /// </summary>
+    private static async Task<int> WorkspaceAnchorCreateAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--file-id", "--expected-content-revision", "--offset", "--length", "--expected-tree-revision");
+        var controlPipe = ControlPipe(options);
+        var fileId = options.Required("--file-id");
+        if (!TryParseRevision(options, "--expected-content-revision", out var contentRevision) ||
+            contentRevision < 1 ||
+            !TryParseRevision(options, "--expected-tree-revision", out var treeRevision) ||
+            !long.TryParse(options.Required("--offset"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var offset) ||
+            offset < 0 ||
+            !long.TryParse(options.Required("--length"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var length) ||
+            length < 1)
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceAnchorCreateOperation,
+                fileId,
+                WorkspaceContentRevision: contentRevision,
+                WorkspaceAnchorOffset: offset,
+                WorkspaceAnchorLength: length,
+                WorkspaceTreeRevision: treeRevision)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "workspace_anchor") ||
+            !TryWorkspaceObject(result.Reply, "workspaceAnchor", out var anchor))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        WriteWorkspaceAnchor(anchor);
+        return 0;
+    }
+
+    private static async Task<int> WorkspaceAnchorListAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--file-id");
+        var controlPipe = ControlPipe(options);
+        var fileId = options.Required("--file-id");
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceAnchorListOperation,
+                fileId)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "workspace_anchors") ||
+            !result.Reply.TryGetProperty("workspaceAnchors", out var anchors) ||
+            anchors.ValueKind != JsonValueKind.Array)
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        foreach (var anchor in anchors.EnumerateArray())
+        {
+            WriteWorkspaceAnchor(anchor);
+        }
+
+        Console.WriteLine($"ANCHORS file={fileId} count={anchors.GetArrayLength().ToString(CultureInfo.InvariantCulture)}");
+        return 0;
+    }
+
+    private static void WriteWorkspaceAnchor(JsonElement anchor) =>
+        Console.WriteLine($"ANCHOR id={DisplayText(anchor, "anchorId")} file={DisplayText(anchor, "fileId")} contentRevision={DisplayText(anchor, "contentRevision")} offset={DisplayText(anchor, "offset")} length={DisplayText(anchor, "length")} sha256={DisplayText(anchor, "sha256")} state={DisplayText(anchor, "state")}");
 
     /// <summary>
     /// Reads one owner-chosen original file for an import or a revision. The
@@ -8133,7 +8460,7 @@ internal static class OwnerControlCli
         {
             Console.Error.WriteLine("Owner commands (run `owner <verb> --help` for one command; `owner help --command <verb>` is the same):");
             Console.Error.WriteLine("  vault: status|provision|unlock|recover|lock|upgrade|upgrade-with-recovery-code|rollback|rollback-with-recovery-code|health|audit|diagnostics|retention|backup|restore|restore-with-recovery-code|export");
-            Console.Error.WriteLine("  workspace: workspace-status|workspace-tree|workspace-mkdir|workspace-import|workspace-revise|workspace-read");
+            Console.Error.WriteLine("  workspace: workspace-status|workspace-tree|workspace-mkdir|workspace-import|workspace-revise|workspace-read|workspace-rename|workspace-move|workspace-copy|workspace-delete-preview|workspace-delete|workspace-restore|workspace-tombstones|workspace-anchor-create|workspace-anchor-list");
             Console.Error.WriteLine("  capture: memory-create|memory-revise|memory-import|memory-read|read|write|source-create|source-revise|source-read|research-capture|research-read|feedback-create|feedback-read");
             Console.Error.WriteLine("  library: library|memory-read|source-read|research-read|relation-read|lifecycle-read|lifecycle-retained-read|recall-read|review-list|review-record|index-status|index-rebuild");
             Console.Error.WriteLine("  review: proposal-list|proposal-read|proposal-publish|proposal-reject|lifecycle-publish|lifecycle-reject|lifecycle-withdraw|lifecycle-repropose|lifecycle-question-resolve|lifecycle-question-reopen|relation-list|relation-read|relation-create|relation-accept|relation-reject|relation-unlink|relation-relink|declassify-preview|declassify-publish|declassify-proposal-publish");
@@ -8261,6 +8588,15 @@ internal static class OwnerControlCli
         "workspace-import" => "owner workspace-import --control-pipe <pipe> --parent-id <id|root> [--name <exact-name>] --input-file <file> --expected-tree-revision <n>: store the file's exact original bytes (empty and non-UTF-8 included) as content revision 1 under your structural precondition. Defaults to the source file name; an unrepresentable name or an occupied sibling name is refused, never renamed or overwritten.",
         "workspace-revise" => "owner workspace-revise --control-pipe <pipe> --file-id <id> --expected-content-revision <live> --input-file <file>: store the exact bytes as the next retained content revision. A stale revision is refused; earlier revisions stay readable.",
         "workspace-read" => "owner workspace-read --control-pipe <pipe> --file-id <id> [--revision N] [--output-file <new-file>]: exact original bytes (stdout, or create-only file). No revision reads the latest; a positive revision reads that retained revision.",
+        "workspace-rename" => "owner workspace-rename --control-pipe <pipe> --node-id <id> --name <exact-name> --expected-tree-revision <n> --expected-node-revision <n>: rename one live file or folder in place. The id, parent, descendants, bytes and anchors are untouched; an occupied sibling name is refused. A tombstone must be restored first.",
+        "workspace-move" => "owner workspace-move --control-pipe <pipe> --node-id <id> --parent-id <id|root> --expected-tree-revision <n> --expected-node-revision <n>: move one live file or folder to a live folder. The id, descendants, bytes and anchors are untouched; a cycle, a file destination or an occupied destination name is refused.",
+        "workspace-copy" => "owner workspace-copy --control-pipe <pipe> --node-id <id> --parent-id <id|root> [--name <exact-name>] --expected-tree-revision <n>: copy one file or one folder subtree under fresh ids. Each copied file starts its own content revision 1 from the source's latest bytes; no anchor, grant or cross-document reference is copied. Copying a folder into its own subtree is refused.",
+        "workspace-delete-preview" => "owner workspace-delete-preview --control-pipe <pipe> --node-id <id>: list exactly what a delete would tombstone at the current revision (folder descendants included) and print the confirmation token that binds the delete to this preview. Changes nothing.",
+        "workspace-delete" => "owner workspace-delete --control-pipe <pipe> --node-id <id> --expected-tree-revision <n> --expected-node-revision <n> --preview <token>: reversible encrypted tombstone of the selected node and, for a folder, its previewed descendants. Identity, names, bytes and anchors are retained; relations become unavailable. A stale revision or a preview token that no longer matches is refused.",
+        "workspace-restore" => "owner workspace-restore --control-pipe <pipe> --node-id <id> --expected-tree-revision <n>: restore the whole deletion group that tombstone belongs to, with its original ids and bytes, only into locations that are still unoccupied and whose parent is live. Otherwise refused.",
+        "workspace-tombstones" => "owner workspace-tombstones --control-pipe <pipe>: every retained encrypted tombstone with its id, kind, former parent/name, deletion group and revisions. Restoring the deleted path is not resurrected by a new file: a new file at that path has its own id.",
+        "workspace-anchor-create" => "owner workspace-anchor-create --control-pipe <pipe> --file-id <id> --expected-content-revision <live> --offset <n> --length <n> --expected-tree-revision <n>: pin a citation anchor to that exact byte range of the file's current content revision, recording the range digest and no path. A later replacement marks it stale at its original revision instead of rebinding it.",
+        "workspace-anchor-list" => "owner workspace-anchor-list --control-pipe <pipe> --file-id <id>: anchors of one live file with their pinned content revision, range, digest and state (live/stale). A deleted file's relations are unavailable until it is restored.",
         "upgrade" => "owner upgrade --control-pipe <pipe>: raise old content schemas while locked (secure passphrase prompt; keeps an encrypted rollback point; leaves the vault locked).",
         "upgrade-with-recovery-code" => "owner upgrade-with-recovery-code --control-pipe <pipe>: same upgrade with the recovery key.",
         "rollback" => "owner rollback --control-pipe <pipe> [--discard true]: restore (or discard) the encrypted rollback point while locked.",

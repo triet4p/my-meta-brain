@@ -23,6 +23,31 @@ public static class WorkspaceNodeKinds
 }
 
 /// <summary>
+/// The persisted lifecycle states of a workspace node. A live node is part of
+/// the tree; a deleted node is an encrypted tombstone that still owns its
+/// identity, name, parent, content revisions and relations, but occupies
+/// nothing in the tree until it is restored into an unoccupied location.
+/// </summary>
+public static class WorkspaceNodeStates
+{
+    public const string Live = "live";
+    public const string Deleted = "deleted";
+}
+
+/// <summary>
+/// The persisted states of one citation anchor. An anchor binds a document id,
+/// an exact content revision and a byte range with the digest of those bytes;
+/// it never stores a path. <see cref="Live"/> means the anchored revision is
+/// still the document's current revision, <see cref="Stale"/> means the
+/// document's content advanced and the anchor was marked rather than rebound.
+/// </summary>
+public static class WorkspaceAnchorStates
+{
+    public const string Live = "live";
+    public const string Stale = "stale";
+}
+
+/// <summary>
 /// One retained original-byte revision of a file. The revision is separate
 /// from the workspace tree revision: replacing content advances only this
 /// counter, and a caller that pins a revision keeps addressing exactly those
@@ -39,9 +64,9 @@ public sealed record WorkspaceContentRevisionInfo(long Revision, long Length, st
 /// One node of the logical tree as the owner sees it. <see cref="ParentId"/> is
 /// null only for the workspace root folder. <see cref="Name"/> is the exact
 /// logical name (no normalization); <see cref="Revision"/> is the node's own
-/// metadata/tree revision and advances when a later task renames or moves it,
-/// while <see cref="ContentRevision"/> and <see cref="Revisions"/> describe the
-/// original bytes of a file.
+/// metadata/tree revision and advances when the node is renamed, moved,
+/// tombstoned or restored, while <see cref="ContentRevision"/> and
+/// <see cref="Revisions"/> describe the original bytes of a file.
 /// </summary>
 public sealed record WorkspaceNodeInfo(
     string Id,
@@ -72,6 +97,8 @@ public sealed record WorkspaceSnapshot(
 /// <see cref="WorkspaceStates.Uninitialized"/>; an unreadable or unsupported
 /// workspace is a refusal, never an empty workspace. The revision is the
 /// structural precondition value for the next tree change.
+/// <see cref="DeletedNodeCount"/> counts the encrypted tombstones that are not
+/// part of the tree but still retain identity, metadata and bytes.
 /// </summary>
 public sealed record WorkspaceStatusInfo(
     string State,
@@ -81,7 +108,8 @@ public sealed record WorkspaceStatusInfo(
     string? RootId,
     int FolderCount,
     int FileCount,
-    int ContentRevisionCount);
+    int ContentRevisionCount,
+    int DeletedNodeCount);
 
 /// <summary>
 /// The outcome of one committed workspace mutation: the node it addressed and
@@ -95,6 +123,93 @@ public sealed record WorkspaceMutationInfo(
     long ContentRevision,
     long Length,
     string? Sha256);
+
+/// <summary>
+/// The outcome of one committed copy: the fresh root node the copy created,
+/// where it now lives, and how many nodes were created beneath it. Every
+/// copied node has its own identity, its own content revision and no inherited
+/// relations.
+/// </summary>
+public sealed record WorkspaceCopyInfo(
+    string NodeId,
+    string? ParentId,
+    string Name,
+    long WorkspaceRevision,
+    int FolderCount,
+    int FileCount);
+
+/// <summary>
+/// The outcome of one committed tombstone: the selected node keeps its
+/// identity, the deletion act got its own identifier so the whole subtree can
+/// be restored as one unit, and the counts describe what became unavailable.
+/// </summary>
+public sealed record WorkspaceDeleteInfo(
+    string NodeId,
+    string DeletionId,
+    long WorkspaceRevision,
+    int FolderCount,
+    int FileCount);
+
+/// <summary>
+/// The outcome of one committed restore: the selected node is live again with
+/// its original identity, and <see cref="RestoredNodeCount"/> reports the whole
+/// deletion group that was reinstated with it.
+/// </summary>
+public sealed record WorkspaceRestoreInfo(
+    string NodeId,
+    long WorkspaceRevision,
+    long NodeRevision,
+    long ContentRevision,
+    long Length,
+    string? Sha256,
+    int RestoredNodeCount);
+
+/// <summary>One encrypted tombstone as the owner sees it.</summary>
+public sealed record WorkspaceTombstoneInfo(
+    string NodeId,
+    WorkspaceNodeKind Kind,
+    string? ParentId,
+    string Name,
+    string DeletionId,
+    long Revision,
+    long ContentRevision);
+
+/// <summary>One node that a folder delete would tombstone with the selected folder.</summary>
+public sealed record WorkspacePreviewNodeInfo(
+    string NodeId,
+    WorkspaceNodeKind Kind,
+    string? ParentId,
+    string Name,
+    long Revision);
+
+/// <summary>
+/// The preview of one pending delete: exactly what the act would tombstone at
+/// the revision the owner is looking at, plus the confirmation token that binds
+/// the act to that preview. Nothing is written by producing it.
+/// </summary>
+public sealed record WorkspaceDeletePreviewInfo(
+    string NodeId,
+    WorkspaceNodeKind Kind,
+    string Name,
+    long TreeRevision,
+    long NodeRevision,
+    string Preview,
+    WorkspacePreviewNodeInfo[] Descendants);
+
+/// <summary>
+/// One revision-pinned citation anchor. It names the document id, the exact
+/// content revision and the byte range, and carries the digest of the anchored
+/// bytes; it never carries a mutable path or display name. A stale anchor keeps
+/// its original revision and range and is never rebound to newer content.
+/// </summary>
+public sealed record WorkspaceAnchorInfo(
+    string AnchorId,
+    string FileId,
+    long ContentRevision,
+    long Offset,
+    long Length,
+    string Sha256,
+    string State);
 
 /// <summary>
 /// The exact original bytes of one retained file revision, together with the
@@ -160,6 +275,24 @@ public static class WorkspaceErrorCodes
 
     /// <summary>The workspace format or metadata schema is newer than this build.</summary>
     public const string UnsupportedVersion = "workspace_unsupported_version";
+
+    /// <summary>The selected node is an encrypted tombstone, not part of the live tree.</summary>
+    public const string Deleted = "workspace_deleted";
+
+    /// <summary>The selected node is live, so it is not a restorable tombstone.</summary>
+    public const string NotDeleted = "workspace_not_deleted";
+
+    /// <summary>The move or copy would place a folder inside its own subtree.</summary>
+    public const string Cycle = "workspace_cycle";
+
+    /// <summary>The tombstone cannot return because its location is occupied or its parent is not live.</summary>
+    public const string RestoreConflict = "workspace_restore_conflict";
+
+    /// <summary>The workspace root folder cannot be renamed, moved, copied, deleted or restored.</summary>
+    public const string RootImmutable = "workspace_root_immutable";
+
+    /// <summary>The anchored byte range is not inside the pinned content revision.</summary>
+    public const string AnchorInvalid = "workspace_anchor_invalid";
 }
 
 /// <summary>
@@ -236,7 +369,95 @@ public interface IWorkspacePersistence
     /// Reads the exact original bytes of one retained revision. A
     /// <paramref name="revision"/> of 0 reads the latest committed revision;
     /// a positive revision reads that retained revision even after newer ones
-    /// exist. The caller owns (and zeroizes) the returned buffer.
+    /// exist. The owner owns (and zeroizes) the returned buffer.
     /// </summary>
     WorkspaceFileContent ReadWorkspaceFile(string fileId, long revision);
+
+    /// <summary>
+    /// Renames one live node inside its current parent under both the tree and
+    /// the node's own revision. Identity, parent, descendants, retained content
+    /// revisions and citation anchors are untouched; an occupied sibling name
+    /// refuses the act without changing anything.
+    /// </summary>
+    WorkspaceMutationInfo RenameWorkspaceNode(
+        string nodeId,
+        string name,
+        long expectedTreeRevision,
+        long expectedNodeRevision);
+
+    /// <summary>
+    /// Moves one live node to a destination folder under both the tree and the
+    /// node's own revision. Identity, descendants, retained content revisions
+    /// and citation anchors are untouched; a cycle, an occupied destination
+    /// name or a non-folder destination refuses the act without changing
+    /// anything.
+    /// </summary>
+    WorkspaceMutationInfo MoveWorkspaceNode(
+        string nodeId,
+        string destinationParentId,
+        long expectedTreeRevision,
+        long expectedNodeRevision);
+
+    /// <summary>
+    /// Copies one live file or one live folder subtree into a destination
+    /// folder under the tree revision the caller saw. Every copied node gets a
+    /// fresh identity and every copied file starts its own content revision 1
+    /// from the source's latest original bytes; no grant, citation anchor or
+    /// other cross-document reference is copied.
+    /// </summary>
+    WorkspaceCopyInfo CopyWorkspaceNode(
+        string nodeId,
+        string destinationParentId,
+        string? name,
+        long expectedTreeRevision);
+
+    /// <summary>
+    /// Reports exactly what a delete of the selected live node would tombstone
+    /// at the current revision and the confirmation token that binds the act to
+    /// that preview. Nothing is written.
+    /// </summary>
+    WorkspaceDeletePreviewInfo PreviewWorkspaceDelete(string nodeId);
+
+    /// <summary>
+    /// Tombstones the selected live node and every live descendant under both
+    /// the tree and the node's own revision, but only for the exact preview the
+    /// caller confirmed. Identity, names, retained bytes and anchors are kept,
+    /// and the act is reversible with <see cref="RestoreWorkspaceNode"/>.
+    /// </summary>
+    WorkspaceDeleteInfo DeleteWorkspaceNode(
+        string nodeId,
+        long expectedTreeRevision,
+        long expectedNodeRevision,
+        string previewToken);
+
+    /// <summary>
+    /// Restores the deletion group the selected tombstone belongs to, but only
+    /// when every reinstated node's location is unoccupied and its parent is
+    /// live. A group whose location was taken refuses without changing
+    /// anything.
+    /// </summary>
+    WorkspaceRestoreInfo RestoreWorkspaceNode(string nodeId, long expectedTreeRevision);
+
+    /// <summary>Lists the encrypted tombstones the committed workspace retains.</summary>
+    WorkspaceTombstoneInfo[] ReadWorkspaceTombstones();
+
+    /// <summary>
+    /// Pins one citation anchor to the live file's current content revision.
+    /// The anchor records the document id, that exact revision, the byte range
+    /// and the digest of the anchored bytes; it never records a path or name,
+    /// so a later rename or move cannot rebind it.
+    /// </summary>
+    WorkspaceAnchorInfo CreateWorkspaceAnchor(
+        string fileId,
+        long expectedContentRevision,
+        long offset,
+        long length,
+        long expectedTreeRevision);
+
+    /// <summary>
+    /// Lists the anchors of one live file. An anchor whose document content
+    /// advanced keeps its original revision and is reported stale; a deleted
+    /// file refuses because its relations are unavailable.
+    /// </summary>
+    WorkspaceAnchorInfo[] ReadWorkspaceAnchors(string fileId);
 }
