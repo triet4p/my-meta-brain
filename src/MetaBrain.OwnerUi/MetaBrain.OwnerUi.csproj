@@ -8,6 +8,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- Frozen 1.1.0 legacy product (CR03/D089). The 1.2.0 release ships the
+         CLI and MCP only, so this source is kept for history and transition
+         proof and is never packaged. It keeps its own version so any local
+         build identifies itself as the 1.1.0 WPF product, not as a 1.2 one. -->
+    <Version>1.1.0</Version>
+    <AssemblyVersion>1.1.0.0</AssemblyVersion>
+    <FileVersion>1.1.0.0</FileVersion>
   </PropertyGroup>
   <ItemGroup>
     <!-- The owner application reaches the shared core/application policy only

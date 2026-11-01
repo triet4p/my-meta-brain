@@ -1037,6 +1037,21 @@ internal static partial class OwnerServiceSmoke
         Require(Directory.GetFileSystemEntries(mixedData).Length == 0,
             "The refused mixed-component case wrote into the data root.");
 
+        // 2c. Naming the removed Owner UI component is refused with the
+        // support-transition message before any file is written.
+        var unsupportedRoot = Path.Combine(fixture.CasesRoot, "owner-ui-component", "install");
+        var unsupported = await RunOwnerCommandAsync(installer,
+            "install", "--payload", fixture.PayloadDirectory,
+            "--install-root", unsupportedRoot,
+            "--data-root", Path.Combine(fixture.CasesRoot, "owner-ui-component", "data"),
+            "--component", "owner-ui").ConfigureAwait(false);
+        Require(unsupported.ExitCode != 0 &&
+                unsupported.StandardError.Contains("frozen 1.1.0 WPF product", StringComparison.Ordinal),
+            "The installer accepted the removed Owner UI component (exit=" +
+            unsupported.ExitCode.ToString(CultureInfo.InvariantCulture) + "; stderr=" + unsupported.StandardError.Trim() + ").");
+        Require(!Directory.Exists(unsupportedRoot),
+            "The refused Owner UI component case created its install root.");
+
         // 2b. A different release candidate registered for another frontend
         // is refused (mixed candidate).
         var candidateInstall = Path.Combine(fixture.CasesRoot, "candidate-mix", "install");
@@ -1049,7 +1064,7 @@ internal static partial class OwnerServiceSmoke
             installedAtUtc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
             dataRoot = candidateData,
             productVersion = MetaBrain.Connections.ProductInfo.Version,
-            components = new[] { "owner-ui" },
+            components = new[] { "mcp" },
             candidateIdentity = "another-release",
         }), new UTF8Encoding(false)).ConfigureAwait(false);
         var candidateBefore = S12T5DirectoryFingerprint(candidateInstall);
@@ -1239,13 +1254,16 @@ internal static partial class OwnerServiceSmoke
         foreach (var relative in new[]
                  {
                      "cli/MetaBrain.Cli.exe", "service/MetaBrain.Connections.exe",
-                     "owner-ui/MetaBrain.OwnerUi.exe", "mcp/MetaBrain.Mcp.exe",
+                     "mcp/MetaBrain.Mcp.exe",
                      "installer/MetaBrain.Installer.exe", "install-state.json"
                  })
         {
             Require(File.Exists(Path.Combine(safeInstall, relative)),
                 "The separate install did not write " + relative + ".");
         }
+
+        Require(!Directory.Exists(Path.Combine(safeInstall, "owner-ui")),
+            "The CLI+MCP install created an Owner UI component directory.");
 
         foreach (var relative in new[] { "service-settings.json", "data-root-owner.json" })
         {
@@ -1625,7 +1643,6 @@ internal sealed class S12T5InstallFixture : IDisposable
         var targetFramework = Path.GetFileName(installerDirectory);
         CopyOutputDirectory(repositoryRoot, configuration, targetFramework, "MetaBrain.Connections", "service", "MetaBrain.Connections.exe");
         CopyOutputDirectory(repositoryRoot, configuration, targetFramework, "MetaBrain.Cli", "cli", "MetaBrain.Cli.exe");
-        CopyOutputDirectory(repositoryRoot, configuration, targetFramework, "MetaBrain.OwnerUi", "owner-ui", "MetaBrain.OwnerUi.exe");
         CopyOutputDirectory(repositoryRoot, configuration, targetFramework, "MetaBrain.Mcp", "mcp", "MetaBrain.Mcp.exe");
         CopyOutputDirectory(repositoryRoot, configuration, targetFramework, "MetaBrain.Installer", "installer", "MetaBrain.Installer.exe");
     }

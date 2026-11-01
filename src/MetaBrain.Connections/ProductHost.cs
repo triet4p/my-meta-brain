@@ -3,11 +3,11 @@ namespace MetaBrain.Connections;
 /// <summary>
 /// Locates the shared host executable for a packaged product entrypoint. The
 /// release layout keeps each product entrypoint in its own directory and the
-/// shared runtime in <c>service/</c> beside them — <c>cli/</c>,
-/// <c>owner-ui/</c>, <c>mcp/</c> and <c>installer/</c> all resolve the same
+/// shared runtime in <c>service/</c> beside them — <c>cli/</c>, <c>mcp/</c>
+/// and <c>installer/</c> all resolve the same
 /// <c>service/MetaBrain.Connections.exe</c>. A developer build keeps the
 /// executables side by side, and the shared host resolves to itself. This is
-/// the only place that knows the product layout, so the three frontends and
+/// the only place that knows the product layout, so the two 1.2 frontends and
 /// the installer can never disagree about which host belongs to them.
 /// </summary>
 internal static class ProductHost

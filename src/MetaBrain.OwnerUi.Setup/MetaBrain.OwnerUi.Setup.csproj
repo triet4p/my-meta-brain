@@ -8,6 +8,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- Frozen 1.1.0 legacy setup source (CR03/D089). No 1.2 release script
+         builds or ships a UI installer; the retained source is history for the
+         published 1.1.0 asset and keeps its 1.1.0 identity. -->
+    <Version>1.1.0</Version>
+    <AssemblyVersion>1.1.0.0</AssemblyVersion>
+    <FileVersion>1.1.0.0</FileVersion>
   </PropertyGroup>
   <ItemGroup Condition="'$(OwnerUiSetupPayloadPath)' != ''">
     <EmbeddedResource Include="$(OwnerUiSetupPayloadPath)" LogicalName="MetaBrain.OwnerUi.Setup.Payload.zip" />

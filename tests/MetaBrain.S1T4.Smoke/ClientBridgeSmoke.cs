@@ -86,6 +86,53 @@ internal static partial class OwnerServiceSmoke
             var malformed = await RunBridgeRawAsync(connectionsExecutable, fixture.AgentPipe, "not-json").ConfigureAwait(false);
             Require(malformed.Contains("bridge_parse_error", StringComparison.Ordinal),
                 "The bridge did not fail closed on malformed JSON-RPC.");
+            var typedArgumentReplies = await RunBridgeRawAsync(connectionsExecutable, fixture.AgentPipe,
+                """{"jsonrpc":"2.0","id":101,"method":"tools/call","params":{"name":"metabrain_scoped_read","arguments":{"sessionFile":"missing","operation":"resource.read","resourceId":"s12t6-invalid","resourceRevision":1}}}""",
+                """{"jsonrpc":"2.0","id":102,"method":"tools/call","params":{"name":"metabrain_scoped_read","arguments":{"sessionFile":"missing","operation":"resource.read","resourceId":"s12t6-invalid","resourceRevision":true}}}""",
+                """{"jsonrpc":"2.0","id":103,"method":"tools/call","params":{"name":"metabrain_scoped_read","arguments":{"sessionFile":"missing","operation":"resource.read","resourceId":"s12t6-invalid","resourceRevision":null}}}""",
+                """{"jsonrpc":"2.0","id":104,"method":"tools/call","params":{"name":"metabrain_scoped_read","arguments":{"sessionFile":"missing","operation":"resource.read","resourceId":"s12t6-invalid","resourceRevision":{"revision":"1"}}}}""",
+                """{"jsonrpc":"2.0","id":105,"method":"tools/call","params":{"name":"metabrain_scoped_read","arguments":{"sessionFile":"missing","operation":"resource.read","resourceId":"s12t6-invalid","resourceRevision":["1"]}}}""",
+                """{"jsonrpc":"2.0","id":106,"method":"tools/call","params":{"name":"metabrain_redeem","arguments":{"sessionFile":"mb1_FAKEBEARER","invalid":{"nested":1}}}}""",
+                """{"jsonrpc":"2.0","id":107,"method":"ping"}""",
+                """{"jsonrpc":"2.0","id":108,"method":"tools/call","params":{"name":"metabrain_catalog_list","arguments":{}}}""").ConfigureAwait(false);
+            var typedArgumentResponses = typedArgumentReplies
+                .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(line => JsonDocument.Parse(line))
+                .ToArray();
+            try
+            {
+                var responsesById = typedArgumentResponses.ToDictionary(
+                    response => response.RootElement.GetProperty("id").GetInt32());
+                for (var id = 101; id <= 105; id++)
+                {
+                    var error = responsesById[id].RootElement.GetProperty("error");
+                    Require(error.GetProperty("code").GetInt32() == -32602 &&
+                            error.GetProperty("message").GetString() == "bridge_invalid_params",
+                        "A non-string tool argument was not refused as invalid params (id=" + id + ").");
+                }
+
+                var bearerError = responsesById[106].RootElement.GetProperty("error");
+                Require(bearerError.GetProperty("code").GetInt32() == -32602 &&
+                        bearerError.GetProperty("message").GetString() == "bridge_raw_bearer_denied",
+                    "A raw bearer was not denied before other mistyped arguments.");
+                Require(responsesById[107].RootElement.GetProperty("result").ValueKind == JsonValueKind.Object &&
+                        !responsesById[107].RootElement.GetProperty("result").EnumerateObject().Any(),
+                    "The MCP process did not answer ping after mistyped argument refusals.");
+                var catalogResult = responsesById[108].RootElement.GetProperty("result");
+                var catalogText = catalogResult.GetProperty("content")[0].GetProperty("text").GetString();
+                Require(catalogText is not null &&
+                        catalogText.Contains(BridgeCatalogA, StringComparison.Ordinal) &&
+                        catalogText.Contains(BridgeCatalogB, StringComparison.Ordinal),
+                    "The MCP process did not complete a valid tool call after mistyped argument refusals.");
+                Console.WriteLine("PASS typed tool arguments are refused with -32602, bearer denial takes precedence, and the same MCP process answers ping and a valid tool call");
+            }
+            finally
+            {
+                foreach (var response in typedArgumentResponses)
+                {
+                    response.Dispose();
+                }
+            }
 
             // Same bridge: access request returns an opaque receipt only.
             var requestOut = await RunBridgeToolAsync(connectionsExecutable, fixture.AgentPipe,
@@ -338,7 +385,7 @@ internal static partial class OwnerServiceSmoke
         return await RunBridgeRawAsync(executable, agentPipe, payload).ConfigureAwait(false);
     }
 
-    private static async Task<string> RunBridgeRawAsync(string executable, string agentPipe, string line)
+    private static async Task<string> RunBridgeRawAsync(string executable, string agentPipe, params string[] lines)
     {
         var start = new System.Diagnostics.ProcessStartInfo(executable)
         {
@@ -359,7 +406,11 @@ internal static partial class OwnerServiceSmoke
 
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();
-        await process.StandardInput.WriteLineAsync(line).ConfigureAwait(false);
+        foreach (var line in lines)
+        {
+            await process.StandardInput.WriteLineAsync(line).ConfigureAwait(false);
+        }
+
         await process.StandardInput.FlushAsync().ConfigureAwait(false);
         process.StandardInput.Close();
         try

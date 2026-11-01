@@ -7,13 +7,13 @@ administrator rights, an AppContainer, a patched agent runtime, or an account of
 - Product scope and requirements: [`META-BRAIN.md`](META-BRAIN.md), [`REQUIREMENTS.md`](REQUIREMENTS.md).
 - Sprint plan and acceptance for this work: [`sprint-plans/sprint-8.md`](sprint-plans/sprint-8.md).
 
-**Version boundary:** Commands and WPF flows below describe released behavior through 1.1.0, not future CLI-only support. Owner-approved [CR03](REQUIREMENTS.md#approved-change-record--cr03-2026-11-01) plans CLI + MCP from 1.2.0 and optional CLI-launched document preview/edit from 1.3.0; these are not shipped commands or install instructions. WPF 1.1.0 is frozen with its historical downloads intact; do not assume it is compatible with a future runtime/data format. Sprint 12 must deliver explicit component transition/refusal guidance, and future release tasks update this runbook with exercised commands; do not create plaintext HTML/temp or follow guessed `open` syntax now.
+**Version boundary:** From 1.2.0 the supported products are the **CLI installer** and the **standalone MCP ZIP** (owner-approved [CR03](REQUIREMENTS.md#approved-change-record--cr03-2026-11-01) and the [workspace contract D090](META-BRAIN.md#134-approved-workspace-contract--d090)). The CLI covers every owner workflow; MCP remains the scoped agent surface; browser document preview/edit is a Sprint 13 surface and is not shipped, so no plaintext HTML/temp or guessed `open` syntax applies. **WPF Owner UI 1.1.0 is the frozen legacy product**: this 1.2 candidate publishes no UI installer, does not upgrade a 1.1 installation in place, and does not promise that the 1.1 console can use 1.2 runtime or data. Its 1.0.0/1.1.0 downloads, bytes and acceptance stay unchanged. Sections that describe WPF console surfaces are kept as 1.1.0 history and are marked as such.
 
 ## 1. The two roots
 
 | Root | Holds | Removed by |
 | --- | --- | --- |
-| **Install root** — e.g. `%LOCALAPPDATA%\MetaBrain\App` | The application files: `cli/`, `service/`, `owner-ui/`, `mcp/`, `installer/`, and `install-state.json` (which also records the product version) | `uninstall` |
+| **Install root** — e.g. `%LOCALAPPDATA%\MetaBrain\App` | The application files: `cli/`, `service/`, `mcp/`, `installer/`, and `install-state.json` (which also records the product version and the registered components `cli`/`mcp`) | `uninstall` |
 | **Data root** — e.g. `%LOCALAPPDATA%\MetaBrain\Data` | The owner's private data: `service-settings.json`, `vault/`, the runtime state (`runtime/`), the source snapshots, the backups and the recovery material | **never** by the installer |
 
 The two roots are separate on purpose: an upgrade replaces the application files and leaves the
@@ -54,12 +54,14 @@ recovery key was shown by the interrupted run and is not shown again.
 ## 2. Install
 
 ```text
-MetaBrain.Installer.exe install --payload <published-payload-dir> --install-root <dir> --data-root <dir> [--component cli|owner-ui|mcp|all] [--start]
+MetaBrain.Installer.exe install --payload <published-payload-dir> --install-root <dir> --data-root <dir> [--component cli|mcp|all] [--start]
+```
 
 - `--payload` — the published application: `cli/MetaBrain.Cli.exe`,
-  `service/MetaBrain.Connections.exe`, `owner-ui/MetaBrain.OwnerUi.exe`,
-  `mcp/MetaBrain.Mcp.exe`, `installer/MetaBrain.Installer.exe`. The release
-  bundle's own layout is exactly this payload.
+  `service/MetaBrain.Connections.exe`, `mcp/MetaBrain.Mcp.exe`,
+  `installer/MetaBrain.Installer.exe`. The release bundle's own layout is exactly this payload.
+  There is no `owner-ui/` directory in 1.2; naming `--component owner-ui` is refused with the
+  support-transition message.
 - `--install-root` — where the application files go.
 - `--data-root` — where the owner's private data goes. It is created with the ordinary permissions
   of the owner account. It must be a **sibling** of the install root, not a directory inside it
@@ -95,17 +97,17 @@ one for the shared runtime, plus the installer that consumes the same layout:
 
 ```text
 cli\MetaBrain.Cli.exe               owner CLI (--help, --version, lifecycle, owner commands)
-owner-ui\MetaBrain.OwnerUi.exe      owner console
 mcp\MetaBrain.Mcp.exe               agent MCP server over stdio
 service\MetaBrain.Connections.exe   shared runtime host (started by the shared lifecycle)
-installer\MetaBrain.Installer.exe   per-user install/upgrade/uninstall
+installer\MetaBrain.Installer.exe   per-user CLI/MCP install/upgrade/uninstall
 release-manifest.json               product version, runtime identifier, every file's size and SHA-256
 ```
 
-The bundle is a `--self-contained true -r win-x64` publish, so the target machine needs no .NET
-SDK, no installed .NET runtime, no repository and no PowerShell: unpack it and run the entrypoints.
-Its product version is the version every entrypoint reports (`--version`; the console shows it in
-its title; the installer records it in `install-state.json`).
+The 1.2.0 bundle ships the CLI and the MCP server (CR03/D089); the frozen 1.1.0 WPF Owner UI is not
+published here. The bundle is a `--self-contained true -r win-x64` publish, so the target machine
+needs no .NET SDK, no installed .NET runtime, no repository and no PowerShell: unpack it and run
+the entrypoints. Its product version is the version every 1.2 entrypoint reports (`--version`; the
+installer records it in `install-state.json`).
 
 A developer builds the bundle from a checkout with
 `powershell.exe -NoProfile -File scripts\release\publish-release-bundle.ps1`. That script is
@@ -124,26 +126,44 @@ powershell.exe -NoProfile -File scripts\release\assemble-candidate.ps1
 ```
 
 The command writes an immutable candidate directory under ignored
-`runtime\release-candidates`. The CLI asset is a standalone unsigned setup EXE;
-launch it for an interactive install/upgrade, or use
+`runtime\release-candidates`. The candidate has exactly two assets: the CLI setup
+EXE and the MCP ZIP. Launch the setup for an interactive install/upgrade, or use
 `MetaBrain-CLI-...exe install --install-root <dir> [--data-root <dir>]`.
 At the confirmation prompt, enter `n` or `q` to cancel before setup changes any files.
 The installed entrypoint is `cli\MetaBrain.Cli.exe`; use its full path with
 `--help` or `--version`. Setup supports `uninstall --install-root <dir>` and
-removes only the CLI component, keeping the shared runtime while another
-registered frontend depends on it and always preserving the selected data root.
+removes only the CLI component, keeping the shared runtime while the MCP component is
+registered (MCP itself is extracted from its ZIP, not installed by this setup) and always
+preserving the selected data root.
 It does not change PATH, profiles, autostart, services, registry, permissions or environment
 settings. The self-contained single-file .NET host may extract runtime support under
 `%TEMP%\.net\<bundle>\<hash>` on launch; this is runtime temp data, not an install or profile
-registration.
+registration. There is no 1.2 UI setup asset to download or run.
 
-### 2.3 Graphical Owner UI setup (S10-T4)
+### 2.3 Support transition from the 1.1.0 WPF product (S12-T6)
 
-Download the candidate-specific `MetaBrain-OwnerUI-...exe` setup executable. It opens a graphical setup window where the owner selects separate application and data locations, installs or updates only the Owner UI component through the shared installer, and may open `owner-ui\MetaBrain.OwnerUi.exe` after installation. Setup can also remove only the Owner UI; other registered components keep the shared runtime, and the data location is always retained.
+1.2.0 ships the CLI and the MCP server only. It publishes no `MetaBrain-UI-<version>.exe`, has no
+`owner-ui` component, and builds no WPF installer. The installer refuses to change an installed
+pre-1.2 (1.1.0 WPF) or unknown/mixed installation in place, before it stops that host or writes
+into either root, and names the supported transition: install 1.2 into a **separate install root**
+with its own **data root** and distinct `--control-pipe`/`--agent-pipe` endpoints. The 1.1
+application, its data, its endpoints and any running 1.1 host are left untouched, and nothing is
+uninstalled, replaced or migrated automatically. Sharing one live data root or running two writers
+is refused.
 
-The setup is self-contained for Windows x64 and requires no SDK, repository, command prompt, CLI bootstrap, or installed .NET runtime. The window supports keyboard navigation; Escape or Cancel closes setup before an operation begins. Once installation or removal starts, setup keeps the operation intact and reports the shared installer's actual success or refusal. It does not start or unlock the service. Setup is unsigned: SHA-256 checks bytes but does not authenticate the publisher. It temporarily extracts its embedded payload under the current user's `%TEMP%` and removes the staging directory when possible; the single-file host may also extract runtime support under `%TEMP%\.net`. No PATH, profile, service, registry, permission, environment or autostart changes are made.
+An installed 1.1 layout is detected from its recorded `install-state.json` product version, its
+`owner-ui/` directory or its root-level `MetaBrain.OwnerUi.exe`/`MetaBrain.OwnerUi.Setup.exe`
+markers. A 1.2 installation has neither that directory nor that component; naming
+`--component owner-ui` fails with the same support-transition message. The 1.1.0 Owner UI remains
+downloadable from its own unchanged release; it is not updated by 1.2 and makes no 1.2
+runtime/data compatibility claim.
 
-The Owner UI installer and CLI installer use the same installation identity, component state, runtime version and data root. If the other frontend is already installed, use the recorded data location; setup refuses a different data root or an incompatible shared candidate/version rather than replacing the other component's runtime.
+**A separately confirmed manual transition** is the owner's own act, not an installer feature:
+stop the 1.1 host explicitly, keep both 1.1 roots as they are, install 1.2 beside them with the
+separate roots and endpoints, then create or unlock the 1.2 vault and copy only what the owner
+chooses. 1.2 never reads, converts, deletes or migrates a 1.1 vault.
+
+### 2.4 Candidate identity and verification (S10-T2/T3)
 
 To recheck an existing candidate's asset hashes and file sets:
 
@@ -171,15 +191,16 @@ The value binds the assembly base HEAD plus that dirty worktree snapshot, not th
 separately approved source checkpoint commit, and it cannot be recomputed once any
 population file changes; it is not a Git object ID at all. Uncommitted source
 therefore does not masquerade as the HEAD revision, and a matching digest is not a
-signature: the candidate is unsigned. The CLI and graphical Owner UI setups embed
-their exact staged component/shared-runtime payloads and store the same candidate
-identity with shared install state. A different candidate or runtime version is
-refused when another frontend is registered; install the matching complete
-candidate or remove the other frontend before replacing the shared runtime.
-Rebuilds receive new IDs and never overwrite a candidate. Candidate manifests
-record both setup assets and embedded payload hashes, dependency inventories,
-licenses and unsigned status; SHA-256 does not authenticate the publisher. Public
-release remains owner-controlled and is not authorized.
+signature: the candidate is unsigned. The CLI setup embeds its exact staged
+component/shared-runtime payload and records the candidate identity in shared install
+state; the MCP ZIP carries the same identity in `package-manifest.json`. A different
+candidate or runtime version is refused when the other component is registered;
+install the matching complete candidate or remove the other component before
+replacing the shared runtime. Rebuilds receive new IDs and never overwrite a
+candidate. Candidate manifests record both assets (CLI setup + MCP package), the
+setup's embedded payload hashes, dependency inventories, licenses and unsigned
+status; SHA-256 does not authenticate the publisher. Public release remains
+owner-controlled and is not authorized.
 
 An unpacked developer bundle can still be passed to the shared installer's
 `--payload` command for a full-component install. An entrypoint run from the
@@ -190,7 +211,7 @@ unpacked directory uses the `service\MetaBrain.Connections.exe` beside it.
 Every service command below is run from the installed copy in `<install root>\installer`; it
 accepts `--install-root <dir>` to address another installation. The installed `uninstall` command
 acts on its own installation and optionally accepts `--component`; the dedicated CLI setup has
-its own CLI-only uninstall command (§8), and the graphical Owner UI setup provides its own Owner UI-only removal surface (§2.3).
+its own CLI-only uninstall command (§8).
 
 ```text
 MetaBrain.Installer.exe start        # start the service host (locked)
@@ -211,10 +232,11 @@ recycled pid is never mistaken for the running host.
 
 ### 3.1 The shared instance lifecycle (S9-T2)
 
-Every frontend — the packaged CLI, the owner console and the agent bridge — resolves the same
+Every 1.2 frontend — the packaged CLI and the agent MCP bridge — resolves the same
 instance (one data root, one settings file, one pair of pipe endpoints) and starts or connects
 the same locked host through one shared implementation. The installer service commands above
-delegate to that same lifecycle, so no frontend keeps a second start/stop/status path.
+delegate to that same lifecycle, so no frontend keeps a second start/stop/status path. (The frozen
+1.1.0 console used the same shared internals; it is not part of the 1.2 runtime.)
 
 ```text
 cli\MetaBrain.Cli.exe lifecycle start --data-root <dir>     # create (clean root only) or select, then start the shared locked host
@@ -521,9 +543,13 @@ Preconditions are separate: structural acts present the tree revision, byte repl
 
 The store keeps names, paths, node metadata, the citation anchors, tombstone state and retained bytes encrypted with the unlocked vault data key. A staged state generation plus one atomically replaced pointer is the single commit point, so an interrupted commit reopens as either the previous or the fully committed revision, and unlock reclaims only unreachable staged files. Wrong key, tampered or truncated ciphertext and an unknown or newer workspace format fail closed with `workspace_unreadable` or `workspace_unsupported_version` without rewriting or pruning saved data. One act carries at most 1 MiB of original bytes in 1.2.0; a larger file refuses with `workspace_too_large` and is never truncated.
 
-The authenticated workspace format and metadata schema are both version 1. Version 1 is the workspace shape first released in 1.2.0, and the node lifecycle state, the deletion group and the anchors are optional members of that same shape: a state that omits them means "every node is live and there are no anchors". A workspace therefore never changes version as a side effect of an ordinary act, and no automatic migration or conversion exists; an unknown or newer version is refused before any mutation instead. 1.1.0 and earlier have no workspace store at all, so no released build wrote a different workspace version. Purge of retained tombstones and scoped plaintext export land in S12-T4/T5; encrypted backup/restore and the remaining CLI coverage in S12-T5.
+The authenticated workspace format and metadata schema are both version 1. Version 1 is the workspace shape first released in 1.2.0, and the node lifecycle state, the deletion group and the anchors are optional members of that same shape: a state that omits them means "every node is live and there are no anchors". A workspace therefore never changes version as a side effect of an ordinary act, and no automatic migration or conversion exists; an unknown or newer version is refused before any mutation instead. 1.1.0 and earlier have no workspace store at all, so no released build wrote a different workspace version. Purge of retained tombstones, scoped plaintext export, encrypted backup/restore and the remaining CLI coverage are delivered by S12-T4/T5 and were exercised in the accepted sprint evidence; the 1.2.0 candidate repeats the packaged end-to-end path.
 
-### 3.3 The owner console (S9-T4)
+### 3.3 The Owner console (S9-T4) — 1.1.0 legacy, not shipped in 1.2
+
+This section documents the frozen 1.1.0 WPF console for history and transition proof. The 1.2.0
+release ships no Owner UI executable or installer; every workflow below is available through the
+CLI commands in §3.2 and §3.2.3–§3.2.7, and the console is not compatible with 1.2 workspace data.
 
 The packaged console is `owner-ui/MetaBrain.OwnerUi.exe`. It opens on the **Owner session**
 view with no instance selected: it starts nothing, provisions nothing and unlocks nothing, so
@@ -588,7 +614,7 @@ cli\MetaBrain.Cli.exe owner lock     --control-pipe <control-pipe>
 
 `provision` asks for the vault passphrase twice and prints a one-time recovery key; store that key
 outside the vault. `unlock` accepts the passphrase or, with `owner recover`, the recovery key.
-The owner console (`owner-ui/MetaBrain.OwnerUi.exe`) drives the same operations.
+The CLI drives these operations; the frozen 1.1.0 console used the same shared owner channel.
 
 ### 4.1 Encrypted backup, restore and owner-scoped export
 
@@ -611,7 +637,7 @@ cli\MetaBrain.Cli.exe owner export --control-pipe <control-pipe> \
     [--include-relations true] [--include-lifecycle-states true]
 ```
 
-**In the owner console.** The same three acts are on the console view **Backup & export**
+**In the 1.1.0 console (legacy, not shipped in 1.2).** The same three acts are on the console view **Backup & export**
 (`owner-ui\MetaBrain.OwnerUi.exe --control-pipe <control-pipe>`), so the owner never has to type an
 operation, a resource ID or a path:
 
@@ -746,7 +772,7 @@ was taken with. A backup taken after the upgrade restores just the same. There i
 re-key: losing both the passphrase and the recovery key still means the vault and every backup are
 unreadable.
 
-**In the owner console.** The **Backup & export** view carries a *Vault format* card with the same
+**In the 1.1.0 console (legacy, not shipped in 1.2).** The **Backup & export** view carries a *Vault format* card with the same
 keyless status line, a passphrase/recovery selector, *Upgrade the vault format*, *Roll back to the
 previous format* and the discard choice. The credential goes from the field into exactly one
 request and is cleared right after it, and the card's acts are enabled only while the vault is
@@ -755,9 +781,10 @@ counts, the schema before and after, whether the run resumed an interrupted upgr
 encrypted rollback point is kept (or that it was restored or discarded); the status line then
 re-reads the new format and rollback state.
 
-## 5. The owner console and the two clients
+## 5. The Owner console (1.1.0 legacy) and the two 1.2 clients
 
-- **Owner console**: `owner-ui\MetaBrain.OwnerUi.exe` — the owner's own surface, opened with no
+- **Owner console (1.1.0 legacy, not shipped in 1.2)**: `owner-ui\MetaBrain.OwnerUi.exe` — the
+  owner's own surface in the frozen 1.1.0 product, opened with no
   instance selected and no running service required (§3.3): Owner session (select/create the
   data-root folder, start/connect/status/stop/restart the shared locked host), vault status,
   vault and key (provision/recovery/unlock/lock), library (search/open/revise/index recovery),
@@ -782,12 +809,13 @@ re-reads the new format and rollback state.
   request ticks resources and operations from the bound preview (narrowing
   only), picks an expiry duration (UTC instant) and a new local handoff file;
   the bearer is sealed into that file and never shown.
-- **The packaged console is the launcher**: no install, script, autostart, service registration,
-  profile or permission change is needed. Open `owner-ui\MetaBrain.OwnerUi.exe`, select the
-  data-root folder and start/connect the shared host on the **Owner session** view (§3.3). A
-  throwaway review instance is just another repository-ignored data root selected in the same
-  console. The old scripted review launchers were retired in S9-T6 once this packaged path was
-  accepted; there is no runtime PowerShell prerequisite for opening the console.
+- **The 1.1.0 packaged console was its launcher (legacy)**: no install, script, autostart, service
+  registration, profile or permission change was needed. Open `owner-ui\MetaBrain.OwnerUi.exe`,
+  select the data-root folder and start/connect the shared host on the **Owner session** view
+  (§3.3). The 1.2 CLI needs neither: `cli\MetaBrain.Cli.exe lifecycle start --data-root <dir>`. A
+  throwaway review instance is just another repository-ignored data root. The old scripted review
+  launchers were retired in S9-T6 once the packaged path was accepted; there is no runtime
+  PowerShell prerequisite for either entrypoint.
 - **Official Codex / OMP clients**: they connect as agents over the **agent pipe**, never over the
   owner pipe. The agent pipe carries only what an owner-approved grant allows, and the agent can
   neither unlock, approve, publish nor purge.
@@ -798,16 +826,16 @@ The MCP product entrypoint is started by the client, not by the installer:
 mcp\MetaBrain.Mcp.exe --data-root <data-root>
 ```
 
-The owner approves an agent request and mints the one-time handoff in the CLI or the Owner
-console; the client redeems that handoff once (`metabrain_redeem`) and the resulting session is
-what it uses. The grant is the only authority: an agent token, a working directory or a
-same-account process does not create owner authority.
+The owner approves an agent request and mints the one-time handoff in the CLI; the client redeems
+that handoff once (`metabrain_redeem`) and the resulting session is what it uses. The grant is the
+only authority: an agent token, a working directory or a same-account process does not create owner
+authority.
 
 ## 6. Startup policy
 
-The CLI and graphical Owner UI setups and the shared installer do not register login startup. Start the host explicitly
-through the CLI, Owner UI or MCP entrypoint. No autostart, service, scheduled task or profile
-integration is created by installation.
+The CLI setup and the shared installer do not register login startup. Start the host explicitly
+through the CLI lifecycle or the MCP entrypoint. The frozen 1.1.0 console used the same shared
+host. No autostart, service, scheduled task or profile integration is created by installation.
 
 ## 7. Restart, logout and reboot
 
@@ -824,10 +852,11 @@ MetaBrain-CLI-<candidate>.exe uninstall --install-root <dir>
 ```
 
 The installed shared installer removes the full shared installation by default; its optional
-`--component cli|owner-ui|mcp` removes only that registration. An individual component removal
+`--component cli|mcp` removes only that registration. An individual component removal
 keeps the shared runtime while another component remains registered. When the final component is
 removed, application/runtime files are removed but the data root is always kept: the vault,
-source snapshots, backups and recovery material are never deleted by the installer.
+source snapshots, backups and recovery material are never deleted by the installer. A 1.1.0
+installation is never removed or edited by the 1.2 installer; it stays under its own installer.
 
 Uninstall refuses with an actionable error if the shared host could not drain cleanly; it does not
 claim removal succeeded or replace live binaries.
@@ -1689,6 +1718,14 @@ removes the fixture when the run ends.
 - A real logout or reboot, and a connection from the official Codex/OMP clients,
   need the owner in front of the machine; they cannot be proved by a headless run.
 - The installer is Windows-only and per-user. There is no multi-account or shared-machine install.
+- 1.2.0 ships the CLI and the MCP server only. There is no Owner UI installer or UI component in
+  1.2, and the frozen 1.1.0 console is not guaranteed to read 1.2 runtime or workspace data. A
+  1.1 installation is refused in place; install 1.2 beside it with separate roots and endpoints
+  (§2.3). The local 1.2.0 candidate is not a published release until the owner authorizes
+  publication and the public assets/links are smoke-verified.
+- One workspace act carries at most 1 MiB of original bytes in 1.2.0 (`workspace_too_large`), and
+  an encrypted backup/restore carries the workspace identity, tree, retained bytes and anchors
+  together with the rest of the vault.
 - The vault is lost if the owner loses both the passphrase and the recovery key. There is no reset
   and no back door.
 - The same owner account can read the owner's own files. The boundary is the key, the lock and the

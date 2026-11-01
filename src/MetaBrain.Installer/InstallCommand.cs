@@ -39,11 +39,50 @@ internal static class InstallCommand
         var existing = InstallState.Read(statePath);
         if (existing is null && (File.Exists(statePath) ||
             new[] { InstallLayout.ServiceDirectoryName, InstallLayout.CliDirectoryName,
-                InstallLayout.OwnerUiDirectoryName, InstallLayout.McpDirectoryName }.Any(directory =>
+                InstallLayout.LegacyOwnerUiDirectoryName, InstallLayout.McpDirectoryName }.Any(directory =>
                 Directory.Exists(Path.Combine(installRoot, directory)))))
         {
             throw new InvalidOperationException("The selected install root contains an unrecognized or unsupported Meta Brain installation. Use its matching installer or choose an empty install root; no files were changed.");
         }
+
+        // D090/D6: the installed transition is refused by default before the
+        // running host is stopped or any file changes. A pre-1.2 WPF
+        // installation, an unknown component set and an in-place upgrade from
+        // a release before 1.2.0 are all mixed candidates; the owner installs
+        // 1.2 beside them with its own install root, data root and endpoints.
+        if (existing is null && HasLegacyWpfMarkers(installRoot))
+        {
+            throw new InvalidOperationException(LegacyInstallRefusal(installRoot, dataRoot));
+        }
+
+        if (existing is not null)
+        {
+            // 1.2 supports the CLI and the MCP server only (CR03/D089). A
+            // state from before 1.2.0 is refused first, so an actual installed
+            // 1.1 WPF layout receives the support-transition message instead
+            // of an incidental candidate-identity error.
+            if (!string.Equals(existing.ProductVersion, ProductInfo.Version, StringComparison.Ordinal) &&
+                IsOlderThan12(existing.ProductVersion))
+            {
+                throw new InvalidOperationException(
+                    "The install root holds a " + existing.ProductVersion +
+                    " installation. This build refuses to upgrade a 1.1 WPF installation or an unknown/mixed candidate in place; it stopped nothing and changed no files. " +
+                    LegacyRemediation(installRoot, dataRoot));
+            }
+
+            var unknownComponents = (existing.Components ?? System.Array.Empty<string>())
+                .Where(component => component is not ("cli" or "mcp"))
+                .ToArray();
+            if (unknownComponents.Length != 0)
+            {
+                throw new InvalidOperationException(
+                    "The install root registers an unknown or mixed component set (" +
+                    string.Join(",", unknownComponents) + "); this release installs the CLI and the MCP server only. " +
+                    "This build refuses to change that installation. " +
+                    LegacyRemediation(installRoot, dataRoot));
+            }
+        }
+
         var candidateIdentity = options.Optional("--candidate-id") ?? existing?.CandidateIdentity ?? "legacy";
         var incomingComponents = ComponentsFor(component);
         var existingComponents = existing?.Components ?? Array.Empty<string>();
@@ -65,39 +104,6 @@ internal static class InstallCommand
                 dataRoot, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException("The selected data root differs from the existing shared installation. Re-run setup with its recorded data root: " + existing.DataRoot);
-        }
-
-        // D090/D6: the installed transition is refused by default before the
-        // running host is stopped or any file changes. A 1.1 WPF installation,
-        // an unknown component set and an in-place upgrade from a release
-        // before 1.2.0 are all mixed candidates; the owner installs 1.2 beside
-        // them with its own install root, data root and endpoints.
-        if (existing is null && HasLegacyWpfMarkers(installRoot))
-        {
-            throw new InvalidOperationException(LegacyInstallRefusal(installRoot, dataRoot));
-        }
-
-        if (existing is not null)
-        {
-            var unknownComponents = (existing.Components ?? System.Array.Empty<string>())
-                .Where(component => component is not ("cli" or "owner-ui" or "mcp"))
-                .ToArray();
-            if (unknownComponents.Length != 0)
-            {
-                throw new InvalidOperationException(
-                    "The install root registers an unknown or mixed candidate (" +
-                    string.Join(",", unknownComponents) + "). This build refuses to change that installation. " +
-                    LegacyRemediation(installRoot, dataRoot));
-            }
-
-            if (!string.Equals(existing.ProductVersion, ProductInfo.Version, StringComparison.Ordinal) &&
-                IsOlderThan12(existing.ProductVersion))
-            {
-                throw new InvalidOperationException(
-                    "The install root holds a " + existing.ProductVersion +
-                    " installation. This build refuses to upgrade a 1.1 WPF installation or an unknown/mixed candidate in place; it stopped nothing and changed no files. " +
-                    LegacyRemediation(installRoot, dataRoot));
-            }
         }
 
         var dataRootOwnerPath = Path.Combine(dataRoot, InstallLayout.DataRootMarkerFileName);
@@ -174,7 +180,6 @@ internal static class InstallCommand
         Console.WriteLine("control pipe=" + settings.ControlPipe);
         Console.WriteLine("agent pipe=" + settings.AgentPipe);
         Console.WriteLine("cli=" + layout.CliExecutable);
-        Console.WriteLine("owner console=" + layout.OwnerUiExecutable);
         Console.WriteLine("mcp=" + layout.McpExecutable);
         Console.WriteLine("shared host=" + layout.ServiceExecutable);
         Console.WriteLine("installed components=" + string.Join(",", components.Order(StringComparer.Ordinal)));
@@ -216,12 +221,11 @@ internal static class InstallCommand
         var removedDirectories = component switch
         {
             "cli" => new[] { InstallLayout.CliDirectoryName },
-            "owner-ui" => new[] { InstallLayout.OwnerUiDirectoryName },
             "mcp" => new[] { InstallLayout.McpDirectoryName },
             _ => new[]
             {
-                InstallLayout.ServiceDirectoryName, InstallLayout.OwnerUiDirectoryName,
-                InstallLayout.McpDirectoryName, InstallLayout.CliDirectoryName
+                InstallLayout.ServiceDirectoryName, InstallLayout.McpDirectoryName,
+                InstallLayout.CliDirectoryName
             }
         };
         foreach (var directory in removedDirectories)
@@ -431,7 +435,6 @@ internal static class InstallCommand
                      {
                          InstallLayout.ServiceDirectoryName => new[] { Path.Combine(directory, "MetaBrain.Connections.exe") },
                          InstallLayout.CliDirectoryName => new[] { Path.Combine(directory, "MetaBrain.Cli.exe") },
-                         InstallLayout.OwnerUiDirectoryName => new[] { Path.Combine(directory, "MetaBrain.OwnerUi.exe") },
                          InstallLayout.McpDirectoryName => new[] { Path.Combine(directory, "MetaBrain.Mcp.exe") },
                          InstallLayout.InstallerDirectoryName => new[] { Path.Combine(directory, "MetaBrain.Installer.exe") },
                          _ => Array.Empty<string>()
@@ -518,24 +521,24 @@ internal static class InstallCommand
 
     private static string NormalizeComponent(string component) => component switch
     {
-        "all" or "cli" or "owner-ui" or "mcp" => component,
-        _ => throw new ArgumentException("Component must be cli, owner-ui, mcp, or all.")
+        "all" or "cli" or "mcp" => component,
+        "owner-ui" => throw new ArgumentException("The Owner UI is the frozen 1.1.0 WPF product and is not installed by this release. Use --component cli, mcp, or all."),
+        _ => throw new ArgumentException("Component must be cli, mcp, or all.")
     };
 
     private static string[] ComponentsFor(string component) => component switch
     {
-        "all" => new[] { "cli", "owner-ui", "mcp" },
+        "all" => new[] { "cli", "mcp" },
         _ => new[] { component }
     };
 
     private static string[] DirectoriesFor(string component) => component switch
     {
         "cli" => new[] { InstallLayout.ServiceDirectoryName, InstallLayout.CliDirectoryName, InstallLayout.InstallerDirectoryName },
-        "owner-ui" => new[] { InstallLayout.ServiceDirectoryName, InstallLayout.OwnerUiDirectoryName, InstallLayout.InstallerDirectoryName },
         "mcp" => new[] { InstallLayout.ServiceDirectoryName, InstallLayout.McpDirectoryName, InstallLayout.InstallerDirectoryName },
         _ => new[]
         {
-            InstallLayout.ServiceDirectoryName, InstallLayout.OwnerUiDirectoryName, InstallLayout.McpDirectoryName,
+            InstallLayout.ServiceDirectoryName, InstallLayout.McpDirectoryName,
             InstallLayout.CliDirectoryName, InstallLayout.InstallerDirectoryName
         }
     };

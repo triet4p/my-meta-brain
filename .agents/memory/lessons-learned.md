@@ -838,3 +838,10 @@ the assignment can fail before the sentinel check or any child starts.
 **Root cause:** `scripts/release/assemble-candidate.ps1` hashes the `git ls-files --cached --others --exclude-standard` population after fixed exclusions (per-file SHA-256 lines joined by newline, SHA-256 over the UTF-8 bytes). It is a content digest of the assembly-instant worktree (tracked plus untracked non-ignored files), not a Git tree object, so any later edit — even a docs-only one — changes the recomputed value while the recorded value stays bound to that instant.
 **Fix / workaround:** Read the field as an assembly-instant worktree digest. Verify it only against a preserved snapshot, describe it that way in docs, and rely on the recorded `head` plus `workingTreeIncluded` instead of recomputing it post-hoc.
 **Watch out for:** Never widen the exclusion set, rebuild a candidate, or report a defect just to make a recomputation match; the algorithm, manifest and immutable assets need owner approval to change.
+
+## [2026-11-01] Non-string MCP tool arguments killed the stdio bridge
+
+**Symptom:** A numeric `resourceRevision` in an MCP `tools/call` terminated the stdio process with an unhandled `InvalidOperationException`.
+**Root cause:** The bridge's raw-bearer scan called `GetValue<string>()` on every argument node without first checking its JSON type.
+**Fix / workaround:** Scan actual JSON strings for bearer material, then return the existing `-32602 bridge_invalid_params` refusal for any non-string argument. Search all string values before rejecting a type so raw-bearer denial keeps precedence. Add a same-process regression with number, boolean, null, object and array values followed by ping and a valid tool call.
+**Watch out for:** JSON null is a null `JsonNode`, and numbers, booleans, objects and arrays must not be stringified or coerced when a tool schema requires strings.

@@ -9,7 +9,7 @@ Meta Brain serves as an owner-controlled second brain designed to preserve evide
 Visit the [Meta Brain website](https://triet4p.github.io/my-meta-brain/) for downloads and
 practical usage guides:
 
-- [CLI and Owner UI scenarios](https://triet4p.github.io/my-meta-brain/scenarios.html)
+- [CLI and MCP scenarios](https://triet4p.github.io/my-meta-brain/scenarios.html)
 - [Connect Codex CLI](https://triet4p.github.io/my-meta-brain/codex.html)
 - [Connect Oh My Pi](https://triet4p.github.io/my-meta-brain/omp.html)
 - [Installation and operations runbook](https://triet4p.github.io/my-meta-brain/operations.html)
@@ -44,19 +44,19 @@ Meta Brain operates under an **owner-controlled personal vault** security model 
 
 ## System Architecture
 
-The release bundle carries one shared runtime and three independent product entrypoints (.NET 10 on Windows):
+The release bundle carries one shared runtime and two supported product entrypoints (.NET 10 on Windows):
 
 ```
 ┌────────────────────────────────────────────────────────┐
-│  AI Clients (MCP)          Owner CLI        Owner UI   │
-│  Codex CLI / OMP     cli\MetaBrain.Cli.exe  owner-ui\  │
+│  AI Clients (MCP)                  Owner CLI           │
+│  Codex CLI / OMP             cli\MetaBrain.Cli.exe     │
 │  mcp\MetaBrain.Mcp.exe                                 │
-└───────────┬───────────────────┬─────────────────┬──────┘
-            │ stdio JSON-RPC 2.0│ owner channel   │ owner channel
-┌───────────▼───────────────────▼─────────────────▼──────┐
+└───────────┬───────────────────────────┬────────────────┘
+            │ stdio JSON-RPC 2.0        │ owner channel
+┌───────────▼───────────────────────────▼────────────────┐
 │          service\MetaBrain.Connections.exe             │
 │  - Shared locked host (Windows Named-Pipe Server)      │
-│  - Stdio MCP agent bridge / owner console client       │
+│  - Stdio MCP agent bridge                              │
 └──────────────────────────┬─────────────────────────────┘
                            │ In-Process Dispatch
 ┌──────────────────────────▼─────────────────────────────┐
@@ -73,7 +73,10 @@ The release bundle carries one shared runtime and three independent product entr
 └────────────────────────────────────────────────────────┘
 ```
 
-The three products share one instance, one locked host, one vault and one policy implementation. Each runs when the others are closed; opening another frontend never restarts or unlocks the instance in use, and closing one never stops the host another frontend is using.
+The two 1.2 products share one instance, one locked host, one vault and one policy implementation.
+Each runs when the other is closed; opening one never restarts or unlocks the instance in use, and
+closing one never stops the host the other is using. The WPF Owner UI is the frozen 1.1.0 legacy
+product and is neither packaged nor upgraded by 1.2.
 
 ### Components
 
@@ -81,7 +84,7 @@ The three products share one instance, one locked host, one vault and one policy
 2. **`MetaBrain.Application` (`net10.0`)**: The mediation and application-service layer. Dispatches typed operations between channels while strictly enforcing owner vs. agent policy boundaries.
 3. **`MetaBrain.Connections` (`net10.0-windows`)**: The shared runtime: Windows named-pipe host and service control, the shared instance lifecycle every frontend uses, the owner management CLI, and the vault-blind stdio MCP agent bridge.
 4. **`MetaBrain.Cli` (`net10.0-windows`)**: The packaged owner CLI entrypoint (`cli/MetaBrain.Cli.exe`): `--help`/`--version`, the shared `lifecycle` verbs and every `owner` workflow, with no second implementation.
-5. **`MetaBrain.OwnerUi` (`net10.0-windows`)**: The WPF owner console (`owner-ui/MetaBrain.OwnerUi.exe`) with integrated first-run select/start/connect and the owner workflow views.
+5. **`MetaBrain.OwnerUi` (`net10.0-windows`)** — **frozen 1.1.0 legacy source**: the WPF owner console (`owner-ui/MetaBrain.OwnerUi.exe`) as published in 1.1.0. It is retained for history and transition proof only; 1.2 packages no UI component and offers no 1.2 compatibility. `MetaBrain.OwnerUi.Setup` is the matching frozen 1.1.0 graphical setup source.
 6. **`MetaBrain.Mcp` (`net10.0-windows`)**: The packaged MCP server entrypoint (`mcp/MetaBrain.Mcp.exe`) that starts/connects the shared locked host and serves the existing agent-scoped tools over stdio.
 7. **`MetaBrain.Installer` (`net10.0-windows`)**: The per-user installer (`installer/MetaBrain.Installer.exe`) for install/upgrade/uninstall; it always keeps the data root.
 8. **`MetaBrain.S1T4.Smoke` (`net10.0-windows`)**: Comprehensive end-to-end integration and smoke verification suite for IPC, crypto, session lifecycles, catalog discovery, installation and MCP communication.
@@ -137,13 +140,14 @@ the owner approves or narrows requests in the CLI or the Owner console, never in
 ## Prerequisites
 
 - **Operating System:** 64-bit Windows releases that Microsoft lists as supported for .NET 10 at
-  release time and that can run the required desktop/WPF UI. The product is not verified on every
-  supported Windows SKU; Linux, macOS, ARM, Server Core and Nano Server are out of scope for this
-  release (uses Windows Named Pipes and DPAPI).
-- **Running the 1.1.0 release:** use the dedicated CLI setup executable, graphical Owner UI setup
-  executable or standalone MCP ZIP. They are self-contained `win-x64` distributions, so no .NET
-  SDK, installed .NET runtime, source checkout or PowerShell is required. The repository payload
-  bundle described below is developer tooling, not the end-user installation path.
+  release time. The 1.2 CLI and MCP server need no desktop/WPF capability. The product is not
+  verified on every supported Windows SKU; Linux, macOS, ARM, Server Core and Nano Server are out
+  of scope for this release (uses Windows Named Pipes and DPAPI).
+- **Running the 1.2 candidate:** use the dedicated CLI setup executable and/or the standalone MCP
+  ZIP. They are self-contained `win-x64` distributions, so no .NET SDK, installed .NET runtime,
+  source checkout or PowerShell is required. The 1.2 candidate has no Owner UI installer; 1.1.0
+  keeps its own unchanged WPF downloads. The repository payload bundle described below is
+  developer tooling, not the end-user installation path.
 - **Building from source:** [.NET 10 SDK](https://dotnet.microsoft.com/) (`net10.0` /
   `net10.0-windows`), plus PowerShell for the release script.
 - **AI Clients (Optional):** Official [Codex CLI](https://github.com/openai/codex) or
@@ -153,15 +157,16 @@ the owner approves or narrows requests in the CLI or the Owner console, never in
 
 ## Getting Started
 
-Release 1.1.0 is published as three dedicated assets:
+Release 1.1.0 remains published and unchanged at
+[`v1.1.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.1.0):
 [`MetaBrain-CLI-1.1.0.exe`](https://github.com/triet4p/my-meta-brain/releases/download/v1.1.0/MetaBrain-CLI-1.1.0.exe),
 [`MetaBrain-UI-1.1.0.exe`](https://github.com/triet4p/my-meta-brain/releases/download/v1.1.0/MetaBrain-UI-1.1.0.exe)
 and
-[`MetaBrain-MCP-1.1.0.zip`](https://github.com/triet4p/my-meta-brain/releases/download/v1.1.0/MetaBrain-MCP-1.1.0.zip).
-The [1.1.0 release record](docs/release-1.1.0.md) lists their frozen byte sizes, SHA-256 hashes,
-internal candidate provenance, dependency/license notices, unsigned status and known limits; the
-GitHub Release and Pages site are live. Use the website quick starts or the operations runbook for
-installation; do not treat the developer bundle below as the end-user download.
+[`MetaBrain-MCP-1.1.0.zip`](https://github.com/triet4p/my-meta-brain/releases/download/v1.1.0/MetaBrain-MCP-1.1.0.zip),
+with its frozen hashes in the [1.1.0 release record](docs/release-1.1.0.md). 1.1.0 adds owner
+folder enrollment, raw-preserved partial ingestion and folder refresh; an installed 1.0.0 binary
+does not gain those surfaces, and a 1.1.0 journal v2 source fails closed on a 1.0.0 binary instead
+of being rewritten.
 
 Release 1.0.0 remains published and unchanged at
 [`v1.0.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.0.0):
@@ -169,10 +174,15 @@ Release 1.0.0 remains published and unchanged at
 [`MetaBrain-UI-1.0.0.exe`](https://github.com/triet4p/my-meta-brain/releases/download/v1.0.0/MetaBrain-UI-1.0.0.exe)
 and
 [`MetaBrain-MCP-1.0.0.zip`](https://github.com/triet4p/my-meta-brain/releases/download/v1.0.0/MetaBrain-MCP-1.0.0.zip),
-with its frozen hashes in the [1.0.0 release record](docs/release-1.0.0.md). 1.1.0 adds owner
-folder enrollment, raw-preserved partial ingestion and folder refresh; an installed 1.0.0 binary
-does not gain those surfaces, and a 1.1.0 journal v2 source fails closed on a 1.0.0 binary instead
-of being rewritten.
+with its frozen hashes in the [1.0.0 release record](docs/release-1.0.0.md).
+
+**1.2.0 is a prepared candidate, not a published release.** It ships two assets — a CLI setup and
+the standalone MCP ZIP — and no Owner UI installer; the public names are
+`MetaBrain-CLI-1.2.0.exe` and `MetaBrain-MCP-1.2.0.zip` once the owner authorizes publication. The
+[candidate release record](docs/release-1.2.0.md) lists the exact frozen candidate identity, byte
+sizes, SHA-256 hashes, dependency/license notices, unsigned status and known limits; its download
+links resolve only after authorized upload. The WPF Owner UI 1.1.0 is the frozen legacy product:
+1.2 refuses to change its installation in place and makes no 1.2 compatibility claim.
 
 ### Developer bundle: build the payload from a checkout
 
@@ -187,10 +197,9 @@ is the payload the installer consumes:
 
 ```text
 cli\MetaBrain.Cli.exe               owner CLI (--help, --version, lifecycle, owner commands)
-owner-ui\MetaBrain.OwnerUi.exe      owner console
 mcp\MetaBrain.Mcp.exe               agent MCP server over stdio
 service\MetaBrain.Connections.exe   shared runtime host (started by the shared lifecycle)
-installer\MetaBrain.Installer.exe   per-user install/upgrade/uninstall
+installer\MetaBrain.Installer.exe   per-user CLI/MCP install/upgrade/uninstall
 ```
 
 ### 2. Install for the current user

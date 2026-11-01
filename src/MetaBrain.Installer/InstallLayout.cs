@@ -13,12 +13,10 @@ namespace MetaBrain.Installer;
 internal sealed record InstallLayout(
     string InstallRoot,
     string ServiceDirectory,
-    string OwnerUiDirectory,
     string McpDirectory,
     string CliDirectory,
     string InstallerDirectory,
     string ServiceExecutable,
-    string OwnerUiExecutable,
     string McpExecutable,
     string CliExecutable,
     string SettingsPath,
@@ -30,7 +28,10 @@ internal sealed record InstallLayout(
     // competing writer over one vault.
     internal const string DataRootMarkerFileName = "data-root-owner.json";
     internal const string ServiceDirectoryName = "service";
-    internal const string OwnerUiDirectoryName = "owner-ui";
+    // 1.2 supports the CLI and the MCP server only (CR03/D089). The name stays
+    // for legacy-layout detection: a 1.1 WPF installation this build refuses
+    // still carries owner-ui/ and the root-level Owner UI executables.
+    internal const string LegacyOwnerUiDirectoryName = "owner-ui";
     internal const string McpDirectoryName = "mcp";
     internal const string CliDirectoryName = "cli";
     internal const string InstallerDirectoryName = "installer";
@@ -73,12 +74,10 @@ internal sealed record InstallLayout(
         new(
             Path.GetFullPath(installRoot).TrimEnd(Path.DirectorySeparatorChar),
             Path.Combine(Path.GetFullPath(installRoot), ServiceDirectoryName),
-            Path.Combine(Path.GetFullPath(installRoot), OwnerUiDirectoryName),
             Path.Combine(Path.GetFullPath(installRoot), McpDirectoryName),
             Path.Combine(Path.GetFullPath(installRoot), CliDirectoryName),
             Path.Combine(Path.GetFullPath(installRoot), InstallerDirectoryName),
             Path.Combine(Path.GetFullPath(installRoot), ServiceDirectoryName, "MetaBrain.Connections.exe"),
-            Path.Combine(Path.GetFullPath(installRoot), OwnerUiDirectoryName, "MetaBrain.OwnerUi.exe"),
             Path.Combine(Path.GetFullPath(installRoot), McpDirectoryName, "MetaBrain.Mcp.exe"),
             Path.Combine(Path.GetFullPath(installRoot), CliDirectoryName, "MetaBrain.Cli.exe"),
             Path.Combine(Path.GetFullPath(dataRoot), "service-settings.json"),
@@ -158,6 +157,11 @@ internal sealed record InstallState(
             ? state with
             {
                 SchemaVersion = CurrentSchemaVersion,
+                // Schema 1 is the 1.0/1.1 installation state: those releases
+                // registered the CLI, Owner UI and MCP. Such a state is always
+                // refused by the pre-1.2 transition check, so the historical
+                // default stays truthful instead of silently claiming a
+                // 1.2-supported component set.
                 Components = state.Components ?? new[] { "cli", "owner-ui", "mcp" }
             }
             : null;

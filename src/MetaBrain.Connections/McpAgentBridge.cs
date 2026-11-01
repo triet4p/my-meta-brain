@@ -406,7 +406,10 @@ internal static class McpAgentBridge
 
     private static async Task<string> CallToolAsync(string agentPipe, JsonNode? id, JsonObject? rawParams)
     {
-        var name = rawParams?["name"]?.GetValue<string>();
+        var nameNode = rawParams?["name"];
+        var name = nameNode is JsonValue jsonName && jsonName.TryGetValue<string>(out var parsedName)
+            ? parsedName
+            : null;
         var args = rawParams?["arguments"] as JsonObject;
         if (string.IsNullOrWhiteSpace(name) || args is null)
         {
@@ -415,12 +418,26 @@ internal static class McpAgentBridge
 
         // Fail closed on bearer-shaped material in tool arguments: handoff/session
         // files are DPAPI-protected paths; raw tokens must never cross this bridge.
-        foreach (var value in args.Select(pair => pair.Value?.GetValue<string>() ?? string.Empty))
+        // Every advertised tool argument currently has JSON Schema type "string". Search all
+        // string values for bearer material before refusing any mistyped value.
+        var invalidArgumentType = false;
+        foreach (var pair in args)
         {
-            if (value.Contains("mb1_", StringComparison.Ordinal) || value.Contains("mbs1_", StringComparison.Ordinal))
+            if (pair.Value is not JsonValue jsonValue || !jsonValue.TryGetValue<string>(out var text))
+            {
+                invalidArgumentType = true;
+                continue;
+            }
+
+            if (text.Contains("mb1_", StringComparison.Ordinal) || text.Contains("mbs1_", StringComparison.Ordinal))
             {
                 return ErrorEnvelope(id, -32602, "bridge_raw_bearer_denied");
             }
+        }
+
+        if (invalidArgumentType)
+        {
+            return ErrorEnvelope(id, -32602, "bridge_invalid_params");
         }
 
         if (name is "metabrain_relation_create" or "metabrain_relation_supersede" or

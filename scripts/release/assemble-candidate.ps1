@@ -2,10 +2,12 @@
 .SYNOPSIS
     Assemble immutable Sprint 10 setup and MCP candidate assets from this checkout.
 .DESCRIPTION
-    Reuses the existing self-contained win-x64 bundle. CLI and Owner UI become
-    standalone setups embedding exact component/runtime payloads; MCP remains
-    independently consumable. Identity binds HEAD and a digest of tracked
-    source plus tracked working-tree content. Output is never overwritten.
+    Reuses the existing self-contained win-x64 bundle. The CLI becomes a
+    standalone setup embedding the exact component/runtime payload; MCP remains
+    independently consumable. The 1.2.0 release ships the CLI and the MCP server
+    only (CR03/D089); no Owner UI asset is assembled. Identity binds HEAD and a
+    digest of tracked source plus tracked working-tree content. Output is never
+    overwritten.
 #>
 [CmdletBinding()]
 param([string] $OutputRoot = '', [switch] $VerifyOnly, [string] $CandidateDirectory = '')
@@ -43,7 +45,7 @@ function Verify-Candidate([string] $Root) {
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw ('Candidate asset missing: ' + $asset.name) }
         $item = Get-Item -LiteralPath $path
         if ($item.Length -ne $asset.bytes -or (Hash-File $path) -ne $asset.sha256) { throw ('Candidate asset integrity mismatch: ' + $asset.name) }
-        if ($asset.product -in @('CLI','OwnerUI')) {
+        if ($asset.product -eq 'CLI') {
             $files = @($asset.files)
             if ($files.Count -ne 1 -or $files[0].path -cne $asset.name -or
                 $files[0].bytes -ne $asset.bytes -or $files[0].sha256 -cne $asset.sha256) {
@@ -61,16 +63,9 @@ function Verify-Candidate([string] $Root) {
             $previousBundleRoot = $env:DOTNET_BUNDLE_EXTRACT_BASE_DIR
             try {
                 $env:DOTNET_BUNDLE_EXTRACT_BASE_DIR = $verificationBundleRoot
-                if ($asset.product -eq 'CLI') {
-                    $inspectionText = (& $path --verify-payload) -join "`n"
-                    $inspectionExitCode = $LASTEXITCODE
-                    $inspection = $inspectionText | ConvertFrom-Json
-                } else {
-                    $inspectionPath = Join-Path $verificationBundleRoot 'payload-inspection.json'
-                    $inspectionProcess = Start-Process -FilePath $path -ArgumentList @('--verify-payload', $inspectionPath) -PassThru -Wait
-                    $inspectionExitCode = $inspectionProcess.ExitCode
-                    $inspection = Get-Content -LiteralPath $inspectionPath -Raw | ConvertFrom-Json
-                }
+                $inspectionText = (& $path --verify-payload) -join "`n"
+                $inspectionExitCode = $LASTEXITCODE
+                $inspection = $inspectionText | ConvertFrom-Json
             } finally {
                 if ($null -eq $previousBundleRoot) {
                     Remove-Item Env:\DOTNET_BUNDLE_EXTRACT_BASE_DIR -ErrorAction SilentlyContinue
@@ -137,7 +132,7 @@ function Verify-Candidate([string] $Root) {
             } finally { $zip.Dispose() }
         }
     }
-    if (@($manifest.assets).Count -ne 3) { throw 'Candidate must contain exactly three product assets.' }
+    if (@($manifest.assets).Count -ne 2) { throw 'Candidate must contain exactly two product assets: the CLI setup and the MCP package.' }
     Write-Host ('VERIFIED ' + $Root)
 }
 if ($VerifyOnly) { if (-not $CandidateDirectory) { throw '-CandidateDirectory is required with -VerifyOnly.' }; Verify-Candidate ([IO.Path]::GetFullPath($CandidateDirectory)); exit 0 }
@@ -161,7 +156,6 @@ if ($LASTEXITCODE -ne 0) { throw 'Existing self-contained bundle assembly failed
 $bundle = Join-Path $temp ('MetaBrain-' + $version + '-win-x64')
 $definitions = @(
     @{ product='CLI'; deps='cli/MetaBrain.Cli.deps.json'; name=('MetaBrain-CLI-' + $version + '-win-x64-' + $source + '-' + $id + '.exe'); paths=@('cli','service','installer') },
-    @{ product='OwnerUI'; deps='owner-ui/MetaBrain.OwnerUi.deps.json'; name=('MetaBrain-OwnerUI-' + $version + '-win-x64-' + $source + '-' + $id + '.exe'); paths=@('owner-ui','service','installer') },
     @{ product='MCP'; deps='mcp/MetaBrain.Mcp.deps.json'; name=('MetaBrain-MCP-' + $version + '-win-x64-' + $source + '-' + $id + '.zip'); paths=@('mcp','service') }
 )
 function Add-PackageLicenses([string] $Stage, [string] $DepsPath, [string] $Product) {
@@ -212,7 +206,7 @@ $stage = Join-Path $destination ($d.product + '-stage'); New-Item -ItemType Dire
 foreach ($part in $d.paths) { Copy-Item -LiteralPath (Join-Path $bundle $part) -Destination $stage -Recurse }
 Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination (Join-Path $stage 'LICENSE')
     $runtimeNote = ''
-    if ($d.product -in @('CLI','OwnerUI')) {
+    if ($d.product -eq 'CLI') {
         $runtimeNote = 'Setup temporarily extracts its embedded payload under the current user''s %TEMP% folder and removes the staging directory when possible; the single-file host may also extract runtime support under %TEMP%\.net. Setup does not change global or profile environment settings.'
     } elseif ($d.product -eq 'MCP') {
         $runtimeNote = 'Extract the complete ZIP while preserving its directories; register the extracted mcp/MetaBrain.Mcp.exe as an absolute stdio command with --data-root <owner data-root> or --config <service-settings.json>. The package manifest records exact layout, version, tested client versions, dependencies and limits.'
@@ -273,26 +267,18 @@ $runtimeNote
     }
     $layout = @(Get-ChildItem -LiteralPath $stage -Recurse -File | ForEach-Object { $rel=$_.FullName.Substring($stage.Length+1).Replace('\','/'); [ordered]@{path=$rel;bytes=$_.Length;sha256=(Hash-File $_.FullName)} })
     $assetPath = Join-Path $destination $d.name
-    if ($d.product -in @('CLI','OwnerUI')) {
-        $payloadName = if ($d.product -eq 'CLI') { 'CLI-setup-payload.zip' } else { 'OwnerUI-setup-payload.zip' }
+    if ($d.product -eq 'CLI') {
+        $payloadName = 'CLI-setup-payload.zip'
         $payloadPath = Join-Path $destination $payloadName
         [IO.Compression.ZipFile]::CreateFromDirectory($stage, $payloadPath, [IO.Compression.CompressionLevel]::Optimal, $false)
         $payloadSha256 = Hash-File $payloadPath
         $setupOutput = Join-Path $destination ($d.product + '-setup-build')
         $candidateIdentity = $source + '-' + $id
-        if ($d.product -eq 'CLI') {
-            $setupProject = Join-Path $repo 'src\MetaBrain.Installer\MetaBrain.Installer.csproj'
-            $setupAssembly = 'MetaBrain.Installer.exe'
-            $identityArgument = '-p:CliSetupCandidateIdentity=' + $candidateIdentity
-            $payloadArgument = '-p:CliSetupPayloadPath=' + $payloadPath
-            $payloadHashArgument = '-p:CliSetupPayloadSha256=' + $payloadSha256
-        } else {
-            $setupProject = Join-Path $repo 'src\MetaBrain.OwnerUi.Setup\MetaBrain.OwnerUi.Setup.csproj'
-            $setupAssembly = 'MetaBrain.OwnerUi.Setup.exe'
-            $identityArgument = '-p:OwnerUiSetupCandidateIdentity=' + $candidateIdentity
-            $payloadArgument = '-p:OwnerUiSetupPayloadPath=' + $payloadPath
-            $payloadHashArgument = '-p:OwnerUiSetupPayloadSha256=' + $payloadSha256
-        }
+        $setupProject = Join-Path $repo 'src\MetaBrain.Installer\MetaBrain.Installer.csproj'
+        $setupAssembly = 'MetaBrain.Installer.exe'
+        $identityArgument = '-p:CliSetupCandidateIdentity=' + $candidateIdentity
+        $payloadArgument = '-p:CliSetupPayloadPath=' + $payloadPath
+        $payloadHashArgument = '-p:CliSetupPayloadSha256=' + $payloadSha256
         $dotnetRestore = & dotnet restore $setupProject -r win-x64 --source (Join-Path $repo 'runtime\dotnet-home\.nuget\packages') --nologo
         $restoreExitCode = $LASTEXITCODE
         $dotnetRestore | ForEach-Object { Write-Host $_ }
@@ -319,14 +305,14 @@ $runtimeNote
     }
 }
 Remove-Item -LiteralPath $temp -Recurse -Force
-foreach ($p in @('CLI-stage','OwnerUI-stage','MCP-stage')) { Remove-Item -LiteralPath (Join-Path $destination $p) -Recurse -Force }
+foreach ($p in @('CLI-stage','MCP-stage')) { Remove-Item -LiteralPath (Join-Path $destination $p) -Recurse -Force }
 $manifest = [ordered]@{
     schemaVersion=1; product='Meta Brain'; productVersion=$version; runtimeIdentifier='win-x64'; selfContained=$true
     source=[ordered]@{head=$head;sourceTreeSha256=$treeHash;identity=$source;workingTreeIncluded=$true}
     candidateId=$id; assembledAtUtc=[DateTime]::UtcNow.ToString('O')
     signing='unsigned; SHA-256 does not authenticate publisher'
-    supportedPlatforms='64-bit Windows client/server releases supported by .NET 10 at publication time and satisfying required desktop/WPF capabilities; exact product-tested SKU coverage is not asserted.'
-    compatibility=[ordered]@{cli='Dedicated setup EXE installs cli/MetaBrain.Cli.exe; use that installed path directly with --help or --version.';ownerUi='Dedicated graphical setup EXE installs owner-ui/MetaBrain.OwnerUi.exe; the installed console remains the Owner UI entrypoint.';mcp=[ordered]@{package='standalone self-contained zip';version=$version;entrypoint='mcp/MetaBrain.Mcp.exe';sharedRuntime='service/MetaBrain.Connections.exe';transport='stdio';command='absolute path to extracted mcp/MetaBrain.Mcp.exe';args=[ordered]@{dataRoot=@('--data-root','<owner data-root>');config=@('--config','<service-settings.json>')};protocolVersions=@('2025-11-25','2025-06-18','2025-03-26','2024-11-05');testedCodexCliVersion='0.164.0';testedOhMyPiVersion='18.12.6';configuration='process-scoped Codex overrides or project-local OMP .omp/mcp.json';limits='No SDK, repository, installed .NET runtime, PowerShell, key or bearer is required; no profile is edited.'}}
+    supportedPlatforms='64-bit Windows client/server releases supported by .NET 10 at publication time; the CLI and MCP server need no desktop/WPF capability. Exact product-tested SKU coverage is not asserted.'
+    compatibility=[ordered]@{cli='Dedicated setup EXE installs cli/MetaBrain.Cli.exe; use that installed path directly with --help or --version. It installs and registers the CLI component only.';mcp=[ordered]@{package='standalone self-contained zip';version=$version;entrypoint='mcp/MetaBrain.Mcp.exe';sharedRuntime='service/MetaBrain.Connections.exe';transport='stdio';command='absolute path to extracted mcp/MetaBrain.Mcp.exe';args=[ordered]@{dataRoot=@('--data-root','<owner data-root>');config=@('--config','<service-settings.json>')};protocolVersions=@('2025-11-25','2025-06-18','2025-03-26','2024-11-05');testedCodexCliVersion='0.164.0';testedOhMyPiVersion='18.12.6';configuration='process-scoped Codex overrides or project-local OMP .omp/mcp.json';limits='No SDK, repository, installed .NET runtime, PowerShell, key or bearer is required; no profile is edited.'};supportTransition='1.2.0 installs and registers the CLI and MCP components only. The 1.1.0 WPF Owner UI is the frozen legacy product: this release does not package a UI installer and refuses to change an installed 1.1.0 or unknown/mixed installation in place, recommending a separate 1.2 install root, data root and endpoints.'}
     notes='SHA-256 is an integrity check, not publisher authentication. Package graph and per-package license/notice inventory are included; review bundled license texts before distribution. Setups temporarily stage payload in the current user temporary directory and single-file hosts may use the .NET bundle-extraction cache; neither changes global/profile settings.'
     dependencyInventories=$dependencyInventories
     assets=$assets

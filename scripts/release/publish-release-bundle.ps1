@@ -12,13 +12,13 @@
     entrypoint and one for the shared runtime host:
 
         cli/MetaBrain.Cli.exe              owner CLI (help, --version, lifecycle, owner commands)
-        owner-ui/MetaBrain.OwnerUi.exe     owner console
         mcp/MetaBrain.Mcp.exe              agent MCP server over stdio
         service/MetaBrain.Connections.exe  shared runtime host (started by the shared lifecycle)
         installer/MetaBrain.Installer.exe  per-user install/upgrade/uninstall
 
     The payload layout is exactly what `MetaBrain.Installer.exe install --payload
-    <bundle>` expects. The script also writes release-manifest.json (product
+    <bundle>` expects. The 1.2.0 release ships the CLI and the MCP server only
+    (CR03/D089); the frozen 1.1.0 WPF Owner UI is not published by this script. The script also writes release-manifest.json (product
     version, runtime identifier, every file with its size and SHA-256) and a
     .zip beside the stage directory. It writes only under the output root
     (repository-ignored runtime/release by default) and changes no host state:
@@ -78,7 +78,6 @@ New-Item -ItemType Directory -Path $stage -Force | Out-Null
 $publishes = @(
     @{ Project = 'src\MetaBrain.Connections\MetaBrain.Connections.csproj'; Directory = 'service';   Executable = 'MetaBrain.Connections.exe' },
     @{ Project = 'src\MetaBrain.Cli\MetaBrain.Cli.csproj';                 Directory = 'cli';       Executable = 'MetaBrain.Cli.exe' },
-    @{ Project = 'src\MetaBrain.OwnerUi\MetaBrain.OwnerUi.csproj';         Directory = 'owner-ui';  Executable = 'MetaBrain.OwnerUi.exe' },
     @{ Project = 'src\MetaBrain.Mcp\MetaBrain.Mcp.csproj';                 Directory = 'mcp';       Executable = 'MetaBrain.Mcp.exe' },
     @{ Project = 'src\MetaBrain.Installer\MetaBrain.Installer.csproj';     Directory = 'installer'; Executable = 'MetaBrain.Installer.exe' }
 )
@@ -146,12 +145,11 @@ $manifest = [ordered]@{
     builtAtUtc = [DateTime]::UtcNow.ToString('O')
     entrypoints = [ordered]@{
         cli = 'cli/MetaBrain.Cli.exe'
-        ownerUi = 'owner-ui/MetaBrain.OwnerUi.exe'
         mcp = 'mcp/MetaBrain.Mcp.exe'
         installer = 'installer/MetaBrain.Installer.exe'
     }
     sharedRuntimeHost = 'service/MetaBrain.Connections.exe'
-    installedLayout = '<install root>/{cli,owner-ui,mcp,service,installer} plus install-state.json; the data root is separate and is always kept by uninstall'
+    installedLayout = '<install root>/{cli,mcp,service,installer} plus install-state.json; the data root is separate and is always kept by uninstall. The frozen 1.1.0 WPF Owner UI is not part of this release.'
     fileCount = $files.Count
     files = $files
 }

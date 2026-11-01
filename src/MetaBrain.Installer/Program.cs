@@ -69,13 +69,14 @@ internal static class Program
 
     private static void WriteUsage()
     {
-        Console.Error.WriteLine("Meta Brain installer " + ProductInfo.Version + " — per-user install/upgrade/uninstall; always keeps the data root");
-        Console.Error.WriteLine("Commands: install --payload <dir> --install-root <dir> --data-root <dir> [--component cli|owner-ui|mcp|all] [--start] | start | stop | restart | status | health | uninstall [--component cli|owner-ui|mcp|all]");
-        Console.Error.WriteLine("Release payload layout: cli/MetaBrain.Cli.exe, owner-ui/MetaBrain.OwnerUi.exe, mcp/MetaBrain.Mcp.exe, service/MetaBrain.Connections.exe, installer/MetaBrain.Installer.exe.");
-        Console.Error.WriteLine("Installed layout: <install root>/{cli,owner-ui,mcp,service,installer} plus install-state.json; the data root holds service-settings.json, vault/, runtime/, source snapshots, backups and recovery material.");
+        Console.Error.WriteLine("Meta Brain installer " + ProductInfo.Version + " — per-user CLI/MCP install/upgrade/uninstall; always keeps the data root");
+        Console.Error.WriteLine("Commands: install --payload <dir> --install-root <dir> --data-root <dir> [--component cli|mcp|all] [--start] | start | stop | restart | status | health | uninstall [--component cli|mcp|all]");
+        Console.Error.WriteLine("Release payload layout: cli/MetaBrain.Cli.exe, mcp/MetaBrain.Mcp.exe, service/MetaBrain.Connections.exe, installer/MetaBrain.Installer.exe.");
+        Console.Error.WriteLine("Installed layout: <install root>/{cli,mcp,service,installer} plus install-state.json; the data root holds service-settings.json, vault/, runtime/, source snapshots, backups and recovery material.");
+        Console.Error.WriteLine("A 1.1.0 WPF installation is the frozen legacy product; this installer refuses to change it and installs beside it only with a separate install root, data root and endpoints.");
         Console.Error.WriteLine("Every service command (start, stop, restart, status, health) accepts --install-root <dir> to address an installation other than the one this installer belongs to.");
         Console.Error.WriteLine("An install or uninstall may name one component; it preserves the shared runtime while any registered component remains and always preserves the data root.");
         Console.Error.WriteLine("The install root and the data root must not overlap: give them sibling directories.");
-        Console.Error.WriteLine("Credentials and every owner decision stay in the CLI, the owner console or the MCP client; the installer never provisions, unlocks, publishes, approves or purges.");
+        Console.Error.WriteLine("Credentials and every owner decision stay in the CLI or the MCP client; the installer never provisions, unlocks, publishes, approves or purges.");
     }
 }
