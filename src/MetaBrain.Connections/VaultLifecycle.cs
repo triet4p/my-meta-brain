@@ -1139,6 +1139,59 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
     }
 
     /// <summary>
+    /// S12-T4 previews one plaintext export of the selected live node. It
+    /// resolves the scope and the pinned revisions from the one committed
+    /// snapshot and validates the destination; it writes nothing and stages no
+    /// temporary plaintext.
+    /// </summary>
+    private WorkspaceExportPreviewInfo PreviewWorkspaceExport(string nodeId, long contentRevision, string destination)
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            if (_workspace is null)
+            {
+                throw new WorkspaceRefusalException(WorkspaceErrorCodes.NotFound);
+            }
+
+            return EncryptedWorkspaceStore.PreviewExport(_workspace, nodeId, contentRevision, destination);
+        }
+    }
+
+    /// <summary>
+    /// S12-T4 writes the previewed scope as original bytes outside the vault.
+    /// The act runs against one committed snapshot under the content gate, so
+    /// the revision the owner previewed is exactly the revision that is read
+    /// and written, and the workspace itself is never modified.
+    /// </summary>
+    private WorkspaceExportInfo ExportWorkspaceNode(
+        string nodeId,
+        long contentRevision,
+        string destination,
+        string previewToken,
+        CancellationToken cancellationToken)
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            if (_workspace is null)
+            {
+                throw new WorkspaceRefusalException(WorkspaceErrorCodes.NotFound);
+            }
+
+            return _workspaceStore.ExportNode(
+                _manifest!.VaultId,
+                _dataKey!,
+                _workspace,
+                nodeId,
+                contentRevision,
+                destination,
+                previewToken,
+                cancellationToken);
+        }
+    }
+
+    /// <summary>
     /// Creates the empty tree a caller saw before the first commit (revision
     /// 0) so its precondition stays truthful, while every later act is gated
     /// by the committed tree revision. A caller that presents 0 after the
@@ -1506,6 +1559,15 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
         public WorkspaceAnchorInfo CreateWorkspaceAnchor(string fileId, long expectedContentRevision, long offset, long length, long expectedTreeRevision) =>
             GetOwner().CreateWorkspaceAnchor(fileId, expectedContentRevision, offset, length, expectedTreeRevision);
         public WorkspaceAnchorInfo[] ReadWorkspaceAnchors(string fileId) => GetOwner().ReadWorkspaceAnchors(fileId);
+        public WorkspaceExportPreviewInfo PreviewWorkspaceExport(string nodeId, long contentRevision, string destination) =>
+            GetOwner().PreviewWorkspaceExport(nodeId, contentRevision, destination);
+        public WorkspaceExportInfo ExportWorkspaceNode(
+            string nodeId,
+            long contentRevision,
+            string destination,
+            string previewToken,
+            CancellationToken cancellationToken) =>
+            GetOwner().ExportWorkspaceNode(nodeId, contentRevision, destination, previewToken, cancellationToken);
 
         public void Dispose()
         {

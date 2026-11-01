@@ -1611,6 +1611,8 @@ internal static partial class OwnerServiceSmoke
         public WorkspaceTombstoneInfo[] ReadWorkspaceTombstones() => _inner.ReadWorkspaceTombstones();
         public WorkspaceAnchorInfo CreateWorkspaceAnchor(string fileId, long expectedContentRevision, long offset, long length, long expectedTreeRevision) => _inner.CreateWorkspaceAnchor(fileId, expectedContentRevision, offset, length, expectedTreeRevision);
         public WorkspaceAnchorInfo[] ReadWorkspaceAnchors(string fileId) => _inner.ReadWorkspaceAnchors(fileId);
+        public WorkspaceExportPreviewInfo PreviewWorkspaceExport(string nodeId, long contentRevision, string destination) => _inner.PreviewWorkspaceExport(nodeId, contentRevision, destination);
+        public WorkspaceExportInfo ExportWorkspaceNode(string nodeId, long contentRevision, string destination, string previewToken, CancellationToken cancellationToken) => _inner.ExportWorkspaceNode(nodeId, contentRevision, destination, previewToken, cancellationToken);
         public void Dispose() => _inner.Dispose();
     }
 }

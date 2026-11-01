@@ -1030,6 +1030,10 @@ internal sealed class S8T4AuditFailureOperation : IVaultOperation
 
     public WorkspaceAnchorInfo[] ReadWorkspaceAnchors(string fileId) => throw new NotSupportedException();
 
+    public WorkspaceExportPreviewInfo PreviewWorkspaceExport(string nodeId, long contentRevision, string destination) => throw new NotSupportedException();
+
+    public WorkspaceExportInfo ExportWorkspaceNode(string nodeId, long contentRevision, string destination, string previewToken, CancellationToken cancellationToken) => throw new NotSupportedException();
+
     public void Dispose()
     {
     }

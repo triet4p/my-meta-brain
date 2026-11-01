@@ -163,6 +163,21 @@ internal sealed class EncryptedWorkspaceStore
     private const string TemporarySuffix = ".tmp";
     private const string StateDirectoryName = "state";
     private const string BlobDirectoryName = "blobs";
+    // One export writes original bytes outside the vault plus one versioned
+    // metadata document. The document is a separate portable file; no exported
+    // original is ever edited to carry it, and nothing is staged inside the
+    // vault. The destination is validated as a new path on a real directory
+    // tree before the first byte is written.
+    internal const string ExportFormat = "metabrain-workspace-export/1";
+    internal const int ExportMetadataSchemaVersion = 1;
+    internal const string ExportSidecarName = "metabrain-workspace-export.json";
+    private static readonly char[] InvalidExportNameCharacters = Path.GetInvalidFileNameChars();
+    private static readonly string[] ReservedExportDeviceNames =
+    {
+        "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+    };
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -444,6 +459,775 @@ internal sealed class EncryptedWorkspaceStore
         {
             throw new WorkspaceRefusalException(WorkspaceErrorCodes.Unavailable);
         }
+    }
+
+    /// <summary>
+    /// Reports the exact plaintext scope one export would write. It resolves the
+    /// retained revision of every file in the selection, checks the destination
+    /// and every exact logical name against the destination filesystem, and
+    /// returns the token that binds the act to this exact state. It reads only:
+    /// no directory, file or temporary plaintext is created.
+    /// </summary>
+    public static WorkspaceExportPreviewInfo PreviewExport(
+        WorkspaceStateRecord state,
+        string nodeId,
+        long contentRevision,
+        string destination)
+    {
+        var node = FindLiveNode(state, nodeId);
+        EnsureNotRoot(state, node);
+        var canonicalDestination = ValidateExportDestination(destination);
+        var scope = BuildExportScope(state, node, contentRevision);
+        return new WorkspaceExportPreviewInfo(
+            node.Id,
+            KindOf(node),
+            node.Name,
+            state.Revision,
+            node.Revision,
+            scope.SelectedContentRevision,
+            canonicalDestination,
+            Path.Combine(canonicalDestination, ExportSidecarName),
+            ComputeExportToken(state, node, scope, canonicalDestination),
+            scope.Files,
+            scope.Folders,
+            scope.Anchors,
+            scope.ExcludedTombstones,
+            scope.TotalBytes);
+    }
+
+    /// <summary>
+    /// Writes one previewed scope as original bytes outside the vault and one
+    /// versioned metadata document beside them. The act refuses unless the
+    /// recomputed preview matches the owner's token exactly, then creates one
+    /// new destination directory, recreates the selected hierarchy with the
+    /// exact logical names, writes every file with create-only semantics from
+    /// its pinned retained revision, and writes the metadata document last. An
+    /// interrupted or failed act removes exactly what it created; the vault is
+    /// never modified by an export, and no temporary plaintext is staged.
+    /// </summary>
+    public WorkspaceExportInfo ExportNode(
+        string vaultId,
+        ReadOnlySpan<byte> dataKey,
+        WorkspaceStateRecord state,
+        string nodeId,
+        long contentRevision,
+        string destination,
+        string previewToken,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(previewToken))
+        {
+            throw new WorkspaceRefusalException(WorkspaceErrorCodes.ExportConfirmation);
+        }
+
+        var preview = PreviewExport(state, nodeId, contentRevision, destination);
+        if (!string.Equals(preview.Token, previewToken, StringComparison.Ordinal))
+        {
+            throw new WorkspaceRefusalException(WorkspaceErrorCodes.Conflict);
+        }
+
+        var node = FindLiveNode(state, nodeId);
+        var createdDirectories = new List<string>(preview.Folders.Length + 1);
+        var createdFiles = new List<string>(preview.Files.Length + 1);
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            EnsureExportDestinationFree(preview.Destination);
+            Directory.CreateDirectory(preview.Destination);
+            createdDirectories.Add(preview.Destination);
+            EnsureCreatedExportDirectory(preview.Destination);
+
+            foreach (var folder in preview.Folders)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var path = ExportPath(preview.Destination, folder.Path);
+                Directory.CreateDirectory(path);
+                createdDirectories.Add(path);
+                EnsureCreatedExportDirectory(path);
+            }
+
+            foreach (var file in preview.Files)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var path = ExportPath(preview.Destination, file.Path);
+                var content = ReadContent(vaultId, dataKey, state, file.FileId, file.ContentRevision);
+                try
+                {
+                    if (content.Length != file.Length ||
+                        !string.Equals(content.Sha256, file.Sha256, StringComparison.Ordinal))
+                    {
+                        throw new WorkspaceRefusalException(WorkspaceErrorCodes.Conflict);
+                    }
+
+                    using var stream = new FileStream(
+                        path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024, FileOptions.WriteThrough);
+                    stream.Write(content.Content, 0, content.Content.Length);
+                    stream.Flush(flushToDisk: true);
+                    createdFiles.Add(path);
+                }
+                finally
+                {
+                    Clear(content.Content);
+                }
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var sidecarSha256 = WriteExportSidecar(state, node, preview);
+            createdFiles.Add(preview.SidecarPath);
+            return new WorkspaceExportInfo(
+                node.Id,
+                preview.Destination,
+                preview.SidecarPath,
+                state.Revision,
+                preview.Folders.Length,
+                preview.Files.Length,
+                preview.TotalBytes,
+                sidecarSha256);
+        }
+        catch (OperationCanceledException)
+        {
+            DeleteExportArtifacts(createdFiles, createdDirectories);
+            throw;
+        }
+        catch (WorkspaceRefusalException)
+        {
+            DeleteExportArtifacts(createdFiles, createdDirectories);
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
+            System.Security.SecurityException or NotSupportedException)
+        {
+            var removed = DeleteExportArtifacts(createdFiles, createdDirectories);
+            throw new WorkspaceRefusalException(
+                removed ? WorkspaceErrorCodes.ExportFailed : WorkspaceErrorCodes.ExportIncomplete);
+        }
+    }
+
+    /// <summary>One node of an export scope with its destination-relative path.</summary>
+    private sealed record ExportScopeEntry(WorkspaceNodeRecord Node, string Path, long ExportedRevision);
+
+    /// <summary>The whole resolved scope: the entries, the pinned revisions and what is withheld.</summary>
+    private sealed record ExportScope(
+        ExportScopeEntry[] Entries,
+        WorkspaceExportFileInfo[] Files,
+        WorkspaceExportFolderInfo[] Folders,
+        WorkspaceAnchorInfo[] Anchors,
+        int ExcludedTombstones,
+        long TotalBytes,
+        long SelectedContentRevision);
+
+    /// <summary>
+    /// Resolves the selected live node and its live descendants into the exact
+    /// destination paths, pinned file revisions, in-scope anchors and the count
+    /// of excluded tombstones. Every name that becomes a destination component
+    /// must be representable there unchanged; a name that is not refuses
+    /// instead of being rewritten, and two names that would collide under the
+    /// destination filesystem's case-insensitive rule refuse as well.
+    /// </summary>
+    private static ExportScope BuildExportScope(
+        WorkspaceStateRecord state,
+        WorkspaceNodeRecord node,
+        long requestedRevision)
+    {
+        if (requestedRevision < 0 || (requestedRevision > 0 && IsFolder(node)))
+        {
+            throw new WorkspaceRefusalException(WorkspaceErrorCodes.ExportRevision);
+        }
+
+        var subtree = CollectLiveSubtree(state, node);
+        var entries = new List<ExportScopeEntry>(subtree.Count);
+        var files = new List<WorkspaceExportFileInfo>();
+        var folders = new List<WorkspaceExportFolderInfo>();
+        var fileIds = new HashSet<string>(StringComparer.Ordinal);
+        var relativePaths = new Dictionary<string, string>(StringComparer.Ordinal) { [node.Id] = string.Empty };
+        var occupied = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var totalBytes = 0L;
+        var selectedContentRevision = 0L;
+        for (var index = 0; index < subtree.Count; index++)
+        {
+            var current = subtree[index];
+            string path;
+            if (index == 0)
+            {
+                path = string.Empty;
+            }
+            else
+            {
+                EnsureExportedName(current.Name);
+                var parentPath = relativePaths[current.ParentId!];
+                path = parentPath.Length == 0 ? current.Name : parentPath + "/" + current.Name;
+                relativePaths[current.Id] = path;
+            }
+
+            var exportedRevision = 0L;
+            if (IsFolder(current))
+            {
+                if (index > 0)
+                {
+                    ReserveExportPath(occupied, path);
+                    folders.Add(new WorkspaceExportFolderInfo(current.Id, path));
+                }
+            }
+            else
+            {
+                if (index == 0)
+                {
+                    EnsureExportedName(current.Name);
+                    path = current.Name;
+                    relativePaths[current.Id] = path;
+                }
+
+                ReserveExportPath(occupied, path);
+                exportedRevision = index == 0
+                    ? ResolveSelectedRevision(current, requestedRevision)
+                    : current.ContentRevision;
+                var revision = ResolveRevisionRecord(current, exportedRevision);
+                files.Add(new WorkspaceExportFileInfo(
+                    current.Id, path, revision.Revision, revision.Length, revision.Sha256));
+                fileIds.Add(current.Id);
+                totalBytes = checked(totalBytes + revision.Length);
+                if (index == 0)
+                {
+                    selectedContentRevision = revision.Revision;
+                }
+            }
+
+            entries.Add(new ExportScopeEntry(current, path, exportedRevision));
+        }
+
+        var anchors = new List<WorkspaceAnchorInfo>();
+        foreach (var anchor in AnchorsOf(state))
+        {
+            if (!fileIds.Contains(anchor.FileId))
+            {
+                continue;
+            }
+
+            anchors.Add(new WorkspaceAnchorInfo(
+                anchor.Id,
+                anchor.FileId,
+                anchor.ContentRevision,
+                anchor.Offset,
+                anchor.Length,
+                anchor.Sha256,
+                anchor.State ?? WorkspaceAnchorStates.Live));
+        }
+
+        anchors.Sort((left, right) => string.CompareOrdinal(left.AnchorId, right.AnchorId));
+        return new ExportScope(
+            entries.ToArray(),
+            files.ToArray(),
+            folders.ToArray(),
+            anchors.ToArray(),
+            IsFolder(node) ? CountExcludedTombstones(state, node.Id) : 0,
+            totalBytes,
+            selectedContentRevision);
+    }
+
+    /// <summary>
+    /// The exact token that binds an export to the owner's preview: the
+    /// workspace identity and revision, the selected node and its revision, the
+    /// canonical destination and every in-scope node's identity, revision and
+    /// exact path, in a stable order. Any change between preview and export
+    /// makes the token differ, so the act refuses instead of exporting
+    /// something the owner did not see.
+    /// </summary>
+    private static string ComputeExportToken(
+        WorkspaceStateRecord state,
+        WorkspaceNodeRecord node,
+        ExportScope scope,
+        string destination)
+    {
+        var ordered = new List<ExportScopeEntry>(scope.Entries);
+        ordered.Sort((left, right) => string.CompareOrdinal(left.Node.Id, right.Node.Id));
+        var text = new StringBuilder(256 + (ordered.Count * 80));
+        text.Append("MetaBrain|workspace-export-preview|1|")
+            .Append(state.WorkspaceId).Append('|')
+            .Append(state.FormatVersion.ToString(CultureInfo.InvariantCulture)).Append('|')
+            .Append(state.MetadataSchemaVersion.ToString(CultureInfo.InvariantCulture)).Append('|')
+            .Append(state.Revision.ToString(CultureInfo.InvariantCulture)).Append('|')
+            .Append(node.Id).Append('|')
+            .Append(node.Revision.ToString(CultureInfo.InvariantCulture)).Append('|')
+            .Append(node.Kind).Append('|')
+            .Append(destination);
+        foreach (var entry in ordered)
+        {
+            text.Append('|')
+                .Append(entry.Node.Id).Append(':')
+                .Append(entry.Node.Revision.ToString(CultureInfo.InvariantCulture)).Append(':')
+                .Append(entry.ExportedRevision.ToString(CultureInfo.InvariantCulture)).Append(':')
+                .Append(entry.Path);
+        }
+
+        return Digest(Encoding.UTF8.GetBytes(text.ToString()));
+    }
+
+    /// <summary>
+    /// The retained revision an export of the selected file pins: the latest
+    /// committed revision when the owner names none, otherwise exactly the
+    /// revision the owner named. A later revision is never substituted.
+    /// </summary>
+    private static long ResolveSelectedRevision(WorkspaceNodeRecord node, long requestedRevision)
+    {
+        if (requestedRevision == 0)
+        {
+            return node.ContentRevision;
+        }
+
+        return ResolveRevisionRecord(node, requestedRevision).Revision;
+    }
+
+    private static WorkspaceRevisionRecord ResolveRevisionRecord(WorkspaceNodeRecord node, long revision)
+    {
+        foreach (var candidate in node.Revisions)
+        {
+            if (candidate.Revision == revision)
+            {
+                return candidate;
+            }
+        }
+
+        throw new WorkspaceRefusalException(WorkspaceErrorCodes.NotFound);
+    }
+
+    /// <summary>
+    /// Counts the encrypted tombstones whose retained parent chain passes
+    /// through the selected folder. They are not part of the live tree, so they
+    /// are not exported; reporting the number keeps the exclusion explicit
+    /// instead of silent. The walk is memoised, so it is linear in the state.
+    /// </summary>
+    private static int CountExcludedTombstones(WorkspaceStateRecord state, string folderId)
+    {
+        var parents = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var candidate in state.Nodes)
+        {
+            parents[candidate.Id] = candidate.ParentId;
+        }
+
+        var underSelected = new Dictionary<string, bool>(StringComparer.Ordinal) { [folderId] = true };
+        var count = 0;
+        foreach (var candidate in state.Nodes)
+        {
+            if (!string.Equals(candidate.State, WorkspaceNodeStates.Deleted, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var chain = new List<string>();
+            var cursor = candidate.ParentId;
+            bool? matches = null;
+            while (cursor is not null)
+            {
+                if (underSelected.TryGetValue(cursor, out var known))
+                {
+                    matches = known;
+                    break;
+                }
+
+                chain.Add(cursor);
+                cursor = parents.TryGetValue(cursor, out var parent) ? parent : null;
+            }
+
+            var result = matches ?? false;
+            foreach (var id in chain)
+            {
+                underSelected[id] = result;
+            }
+
+            if (result)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// Validates the owner's destination as a new directory on a real tree: an
+    /// absolute path without a traversal segment or device namespace, a safe
+    /// leaf name, an existing parent whose ancestors are real directories
+    /// rather than reparse points, and no entry that already occupies the exact
+    /// name under the destination filesystem's case-insensitive rule. A hostile
+    /// or racing destination refuses instead of being trusted.
+    /// </summary>
+    private static string ValidateExportDestination(string? destination)
+    {
+        if (string.IsNullOrWhiteSpace(destination) ||
+            destination.StartsWith(@"\\?\", StringComparison.Ordinal) ||
+            destination.StartsWith(@"\\.\", StringComparison.Ordinal) ||
+            destination.StartsWith(@"\??\", StringComparison.Ordinal) ||
+            !Path.IsPathFullyQualified(destination))
+        {
+            throw new WorkspaceRefusalException(WorkspaceErrorCodes.ExportDestination);
+        }
+
+        foreach (var segment in destination.Split(new[] { '\\', '/' }, StringSplitOptions.None))
+        {
+            if (segment is "." or "..")
+            {
+                throw new WorkspaceRefusalException(WorkspaceErrorCodes.ExportDestination);
+            }
+        }
+
+        string canonical;
+        try
+        {
+            canonical = Path.GetFullPath(destination);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            throw new WorkspaceRefusalException(WorkspaceErrorCodes.ExportDestination);
+        }
+
+        if (canonical.Length == 0 || canonical.EndsWith(Path.DirectorySeparatorChar) ||
+            canonical.EndsWith(Path.AltDirectorySeparatorChar))
+        {
+            throw new WorkspaceRefusalException(WorkspaceErrorCodes.ExportDestination);
+        }
+
+        var leaf = Path.GetFileName(canonical);
+        var parent = Path.GetDirectoryName(canonical);
+        if (string.IsNullOrEmpty(leaf) || string.IsNullOrEmpty(parent) ||
+            !IsRepresentableExportName(leaf) || !Directory.Exists(parent))
+        {
+            throw new WorkspaceRefusalException(WorkspaceErrorCodes.ExportDestination);
+        }
+
+        try
+        {
+            for (var info = new DirectoryInfo(parent); info is not null; info = info.Parent)
+            {
+                var attributes = info.Attributes;
+                if ((attributes & FileAttributes.Directory) == 0 ||
+                    (attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    throw new WorkspaceRefusalException(WorkspaceErrorCodes.ExportDestination);
+                }
+            }
+
+            if (File.Exists(canonical) || Directory.Exists(canonical))
+            {
+                throw new WorkspaceRefusalException(WorkspaceErrorCodes.ExportDestination);
+            }
+
+            foreach (var entry in Directory.EnumerateFileSystemEntries(parent))
+            {
+                if (string.Equals(Path.GetFileName(entry), leaf, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new WorkspaceRefusalException(WorkspaceErrorCodes.ExportDestination);
+                }
+            }
+        }
+        catch (WorkspaceRefusalException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
+            System.Security.SecurityException or ArgumentException or NotSupportedException)
+        {
+            throw new WorkspaceRefusalException(WorkspaceErrorCodes.ExportDestination);
+        }
+
+        return canonical;
+    }
+
+    /// <summary>
+    /// True when one exact logical name can be a destination path component
+    /// unchanged: no separator or other invalid character, not a relative
+    /// directory marker, not a reserved device name, and not ending in a dot or
+    /// space that the destination filesystem would silently drop.
+    /// </summary>
+    private static bool IsRepresentableExportName(string? name)
+    {
+        if (string.IsNullOrEmpty(name) || name.Length > MaximumNameLength ||
+            name is "." or ".." || name[^1] is '.' or ' ')
+        {
+            return false;
+        }
+
+        if (name.IndexOfAny(InvalidExportNameCharacters) >= 0)
+        {
+            return false;
+        }
+
+        var stem = name.Split('.')[0];
+        foreach (var reserved in ReservedExportDeviceNames)
+        {
+            if (string.Equals(stem, reserved, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static void EnsureExportedName(string name)
+    {
+        if (!IsRepresentableExportName(name))
+        {
+            throw new WorkspaceRefusalException(WorkspaceErrorCodes.ExportName);
+        }
+    }
+
+    /// <summary>
+    /// Claims one destination-relative path. A second selected node with the
+    /// same path under the destination's case-insensitive rule, or a top-level
+    /// name that would collide with the metadata document, refuses the export.
+    /// </summary>
+    private static void ReserveExportPath(Dictionary<string, string> occupied, string path)
+    {
+        if (path.Length == 0)
+        {
+            return;
+        }
+
+        if (path.IndexOf('/') < 0 &&
+            string.Equals(path, ExportSidecarName, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new WorkspaceRefusalException(WorkspaceErrorCodes.ExportCollision);
+        }
+
+        if (!occupied.TryAdd(path, path))
+        {
+            throw new WorkspaceRefusalException(WorkspaceErrorCodes.ExportCollision);
+        }
+    }
+
+    private static string ExportPath(string destination, string relativePath)
+    {
+        var path = destination;
+        foreach (var segment in relativePath.Split('/'))
+        {
+            path = Path.Combine(path, segment);
+        }
+
+        return path;
+    }
+
+    private static void EnsureExportDestinationFree(string destination)
+    {
+        if (File.Exists(destination) || Directory.Exists(destination))
+        {
+            throw new WorkspaceRefusalException(WorkspaceErrorCodes.ExportDestination);
+        }
+    }
+
+    /// <summary>
+    /// Confirms a directory this act just created is a real, empty directory:
+    /// a reparse point planted at the destination would otherwise redirect
+    /// every following write outside the previewed scope, and pre-existing
+    /// content would mean the act did not create what the preview showed.
+    /// </summary>
+    private static void EnsureCreatedExportDirectory(string path)
+    {
+        var info = new DirectoryInfo(path);
+        var attributes = info.Attributes;
+        if ((attributes & FileAttributes.Directory) == 0 ||
+            (attributes & FileAttributes.ReparsePoint) != 0 ||
+            info.LinkTarget is not null)
+        {
+            throw new WorkspaceRefusalException(WorkspaceErrorCodes.ExportDestination);
+        }
+
+        using var entries = Directory.EnumerateFileSystemEntries(path).GetEnumerator();
+        if (entries.MoveNext())
+        {
+            throw new WorkspaceRefusalException(WorkspaceErrorCodes.ExportDestination);
+        }
+    }
+
+    /// <summary>
+    /// Removes exactly what a failed export created, deepest first, and only
+    /// empty directories. Pre-existing destination content is never deleted,
+    /// and an unexpected entry makes the removal fail truthfully instead of
+    /// deleting something the act did not write.
+    /// </summary>
+    private static bool DeleteExportArtifacts(List<string> files, List<string> directories)
+    {
+        var removed = true;
+        foreach (var file in files)
+        {
+            try
+            {
+                if (File.Exists(file))
+                {
+                    File.Delete(file);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
+                System.Security.SecurityException)
+            {
+                removed = false;
+            }
+        }
+
+        for (var index = directories.Count - 1; index >= 0; index--)
+        {
+            try
+            {
+                if (Directory.Exists(directories[index]))
+                {
+                    Directory.Delete(directories[index], recursive: false);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
+                System.Security.SecurityException)
+            {
+                removed = false;
+            }
+        }
+
+        return removed;
+    }
+
+    /// <summary>
+    /// Writes the versioned metadata document of one export: the workspace and
+    /// export formats, the selected node, every in-scope node with its identity,
+    /// exact name, parent, hierarchy path and retained revisions, and the
+    /// anchors of those files. Nodes and anchors outside the scope are absent,
+    /// never summarised. Relations are reported as unsupported rather than
+    /// invented, because workspace relations are not implemented. The document
+    /// is streamed with its digest computed on the same write, so no second copy
+    /// of it is held.
+    /// </summary>
+    private static string WriteExportSidecar(
+        WorkspaceStateRecord state,
+        WorkspaceNodeRecord selected,
+        WorkspaceExportPreviewInfo preview)
+    {
+        using var stream = new FileStream(
+            preview.SidecarPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024,
+            FileOptions.WriteThrough);
+        using var hash = SHA256.Create();
+        using (var crypto = new CryptoStream(stream, hash, CryptoStreamMode.Write, leaveOpen: true))
+        {
+            using var writer = new Utf8JsonWriter(crypto, new JsonWriterOptions { Indented = true });
+            writer.WriteStartObject();
+            writer.WriteString("format", ExportFormat);
+            writer.WriteNumber("exportFormatVersion", 1);
+            writer.WriteNumber("metadataSchemaVersion", ExportMetadataSchemaVersion);
+            writer.WriteNumber("workspaceFormatVersion", state.FormatVersion);
+            writer.WriteNumber("workspaceMetadataSchemaVersion", state.MetadataSchemaVersion);
+            writer.WriteString("workspaceId", state.WorkspaceId);
+            writer.WriteNumber("treeRevision", state.Revision);
+            writer.WriteString("createdAtUtc", DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+            writer.WriteStartObject("selected");
+            writer.WriteString("nodeId", selected.Id);
+            writer.WriteString("kind", IsFolder(selected) ? FolderKind : FileKind);
+            writer.WriteString("name", selected.Name);
+            writer.WriteNumber("nodeRevision", selected.Revision);
+            writer.WriteNumber("contentRevision", preview.ContentRevision);
+            writer.WriteEndObject();
+            writer.WriteString(
+                "disclosure",
+                "Every exported file is plaintext outside the vault. A later lock, delete or purge does not revoke this copy.");
+
+            writer.WriteStartArray("nodes");
+            WriteExportNode(
+                writer,
+                selected,
+                IsFolder(selected) ? string.Empty : selected.Name,
+                preview.ContentRevision,
+                isRoot: true);
+            foreach (var folder in preview.Folders)
+            {
+                var node = FindNode(state, folder.FolderId)
+                    ?? throw new WorkspaceRefusalException(WorkspaceErrorCodes.NotFound);
+                WriteExportNode(writer, node, folder.Path, 0, isRoot: false);
+            }
+
+            foreach (var file in preview.Files)
+            {
+                if (string.Equals(file.FileId, selected.Id, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var node = FindNode(state, file.FileId)
+                    ?? throw new WorkspaceRefusalException(WorkspaceErrorCodes.NotFound);
+                WriteExportNode(writer, node, file.Path, file.ContentRevision, isRoot: false);
+            }
+
+            writer.WriteEndArray();
+
+            writer.WriteStartArray("anchors");
+            foreach (var anchor in preview.Anchors)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("anchorId", anchor.AnchorId);
+                writer.WriteString("fileId", anchor.FileId);
+                writer.WriteNumber("contentRevision", anchor.ContentRevision);
+                writer.WriteNumber("offset", anchor.Offset);
+                writer.WriteNumber("length", anchor.Length);
+                writer.WriteString("sha256", anchor.Sha256);
+                writer.WriteString("state", anchor.State);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+
+            writer.WriteStartArray("relations");
+            writer.WriteEndArray();
+            writer.WriteString(
+                "relationSupport",
+                "Workspace relations are not implemented in this export format version, so the relations array is empty rather than inferred.");
+            writer.WriteStartArray("notes");
+            writer.WriteStringValue("Only the selected node and the live nodes beneath it are included; every other node, the selected node's parent identity, titles, grants and private index stay in the vault.");
+            writer.WriteStringValue("Each file is written from the retained revision this document names, which is the revision the owner previewed; a later revision is not substituted.");
+            writer.WriteStringValue("Tombstones beneath the selected folder are not part of the live tree and are not exported; their count is reported in the preview.");
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+            writer.Flush();
+        }
+
+        stream.Flush(flushToDisk: true);
+        return Convert.ToHexStringLower(hash.Hash ?? Array.Empty<byte>());
+    }
+
+    private static void WriteExportNode(
+        Utf8JsonWriter writer,
+        WorkspaceNodeRecord node,
+        string path,
+        long exportedRevision,
+        bool isRoot)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("nodeId", node.Id);
+        writer.WriteString("kind", KindOf(node) == WorkspaceNodeKind.Folder ? FolderKind : FileKind);
+        if (isRoot)
+        {
+            writer.WriteNull("parentId");
+        }
+        else
+        {
+            writer.WriteString("parentId", node.ParentId);
+        }
+
+        writer.WriteString("name", node.Name);
+        writer.WriteNumber("revision", node.Revision);
+        writer.WriteString("path", path);
+        if (!IsFolder(node))
+        {
+            var exported = ResolveRevisionRecord(node, exportedRevision);
+            writer.WriteNumber("contentRevision", exported.Revision);
+            writer.WriteNumber("length", exported.Length);
+            writer.WriteString("sha256", exported.Sha256);
+            writer.WriteStartArray("retainedRevisions");
+            foreach (var revision in node.Revisions)
+            {
+                writer.WriteStartObject();
+                writer.WriteNumber("revision", revision.Revision);
+                writer.WriteNumber("length", revision.Length);
+                writer.WriteString("sha256", revision.Sha256);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+        }
+
+        writer.WriteEndObject();
     }
 
     /// <summary>

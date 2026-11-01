@@ -2,7 +2,7 @@
 
 ## Goal và trạng thái
 
-- Status: **In progress — S12-T1–T2 complete; S12-T3 active**. Release mục tiêu cuối sprint: **1.2.0**; chưa build/publish.
+- Status: **In progress — S12-T1–T3 complete; S12-T4 active**. Release mục tiêu cuối sprint: **1.2.0**; chưa build/publish.
 - Entry: Sprint 11 complete và 1.1.0 published.
 - Scope/trace: P2-02, P2-11, P2-12; R04, R10, R18, R33–R36, R39. Các P2 là candidates, không thay baseline khi chưa có approval.
 - Root: `F:/ai-ml/my-meta-brain`; target ref `main`; exact base/worktree/ownership resolve khi execution.
@@ -38,12 +38,13 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
     - Check: Exercise changed CLI/service và MCP paths; không browser/WPF prerequisite trước S13, trừ installed legacy-component transition. Ghi scenarios/observations/limits, không claim surface chưa chạy.
     - [Evidence R2 PASS](../../artifacts/sprint-12/reviews/S12-T2-C1-R2.md), [checkpoint PASS](../../artifacts/sprint-12/checkpoints/S12-T2-C1.md), commit `d08784d56edc17f366e446bc4b7ecdad80b0a06a`. Actual CLI/service byte-fidelity, restart/lock, conflict, tamper/truncation và real-kill recovery smoke accepted; limits trong evidence.
 
-- [~] **S12-T3 — Stable identity và revision operations.**
+- [x] **S12-T3 — Stable identity và revision operations.**
     - Change: Owner create/rename/move/copy/revise/delete theo semantics T1, identity tách path và citation anchors tách display.
     - Acceptance: Rename/move giữ ID/relations, copy nhận identity đúng contract; concurrent edits/replacement conflict không overwrite; lock chặn mutations. Không write ngược original Codex/OMP sessions.
     - Check: Exercise changed CLI/service và MCP paths; không browser/WPF prerequisite trước S13, trừ installed legacy-component transition. Ghi scenarios/observations/limits, không claim surface chưa chạy.
+    - [Evidence R1 PASS](../../artifacts/sprint-12/reviews/S12-T3-C1-R1.md), [checkpoint PASS](../../artifacts/sprint-12/checkpoints/S12-T3-C1.md), commit `097a0867543b431794bc7e1fd589e1b8b56c8a4e`. Actual CLI/service mutation, pinned-anchor, tombstone/restore và T2-format compatibility proof accepted; no automatic format conversion.
 
-- [ ] **S12-T4 — Original read/export và portability.**
+- [~] **S12-T4 — Original read/export và portability.**
     - Change: Thêm owner read/export file/folder có preview đích và scope; metadata/relations export có format version, không nhét vào original bytes.
     - Acceptance: Hash equality cho unmodified export sau restart/unlock; modified file có revision riêng. Explicit plaintext disclosure, không temp plaintext ngầm hoặc private citations ngoài selected scope.
     - Check: Exercise changed CLI/service và MCP paths; không browser/WPF prerequisite trước S13, trừ installed legacy-component transition. Ghi scenarios/observations/limits, không claim surface chưa chạy.
@@ -68,4 +69,4 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
 
 ## Gate record
 
-S12-T1–T2 evidence/checkpoint PASS tại các link trên. S12-T3 active; T4–T6, differential và publication chưa có gate result. Xem [roadmap](../ROADMAP-2.0.md) cho dependency tiếp theo; không tự advance bởi completion message.
+S12-T1–T3 evidence/checkpoint PASS tại các link trên. S12-T4 active; T5–T6, differential và publication chưa có gate result. Xem [roadmap](../ROADMAP-2.0.md) cho dependency tiếp theo; không tự advance bởi completion message.

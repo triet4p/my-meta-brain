@@ -218,6 +218,69 @@ public sealed record WorkspaceAnchorInfo(
 public sealed record WorkspaceFileContent(long Revision, long Length, string Sha256, byte[] Content);
 
 /// <summary>
+/// One original file that an export writes outside the vault. <see cref="Path"/>
+/// is the relative destination path built from the exact logical names, joined
+/// with '/'; the bytes written are exactly the retained revision the preview
+/// pinned, never a later revision.
+/// </summary>
+public sealed record WorkspaceExportFileInfo(
+    string FileId,
+    string Path,
+    long ContentRevision,
+    long Length,
+    string Sha256);
+
+/// <summary>One logical folder that an export recreates, with its relative path.</summary>
+public sealed record WorkspaceExportFolderInfo(string FolderId, string Path);
+
+/// <summary>
+/// The exact scope one pending export would disclose: the selected node, the
+/// destination that would be created, every file and folder beneath it at the
+/// revisions the export pinned, and the anchors that belong to those files.
+/// Nothing is written by producing it. <see cref="Token"/> binds the act to
+/// this exact workspace revision, scope, pinned revisions and destination, so
+/// a changed workspace, destination or selection refuses instead of exporting
+/// something the owner did not see.
+/// </summary>
+/// <remarks>
+/// <see cref="ExcludedTombstones"/> counts the encrypted tombstones beneath the
+/// selected folder that are not part of the live tree and therefore not
+/// exported; the number is reported so the exclusion is never silent.
+/// <see cref="Anchors"/> carries only anchors of files inside the scope, so a
+/// citation of a document outside the selection never leaves the vault.
+/// </remarks>
+public sealed record WorkspaceExportPreviewInfo(
+    string NodeId,
+    WorkspaceNodeKind Kind,
+    string Name,
+    long TreeRevision,
+    long NodeRevision,
+    long ContentRevision,
+    string Destination,
+    string SidecarPath,
+    string Token,
+    WorkspaceExportFileInfo[] Files,
+    WorkspaceExportFolderInfo[] Folders,
+    WorkspaceAnchorInfo[] Anchors,
+    int ExcludedTombstones,
+    long TotalBytes);
+
+/// <summary>
+/// The outcome of one committed plaintext export: where the owner's copy was
+/// written, the versioned metadata document that travels with it, and what the
+/// act disclosed. The vault itself is unchanged by the act.
+/// </summary>
+public sealed record WorkspaceExportInfo(
+    string NodeId,
+    string Destination,
+    string SidecarPath,
+    long TreeRevision,
+    int FolderCount,
+    int FileCount,
+    long TotalBytes,
+    string SidecarSha256);
+
+/// <summary>
 /// The parent selector that names the workspace root before its generated id
 /// is known. A node id is always 32 lowercase hex characters, so this word can
 /// never collide with an id; it is only a selector, never a stored name.
@@ -293,6 +356,46 @@ public static class WorkspaceErrorCodes
 
     /// <summary>The anchored byte range is not inside the pinned content revision.</summary>
     public const string AnchorInvalid = "workspace_anchor_invalid";
+
+    /// <summary>
+    /// The destination the owner named cannot be used safely: it is not an
+    /// absolute path, it contains a traversal segment or a device namespace,
+    /// its parent is not a real directory, a component of the path is a
+    /// reparse point, or an entry already occupies the exact name.
+    /// </summary>
+    public const string ExportDestination = "workspace_export_destination";
+
+    /// <summary>
+    /// One exact logical name cannot be a destination path component on this
+    /// platform (a separator, a reserved device name, a trailing dot or space,
+    /// or an invalid character). The name is refused, never rewritten.
+    /// </summary>
+    public const string ExportName = "workspace_export_name";
+
+    /// <summary>
+    /// Two selected names would occupy the same destination entry under the
+    /// destination filesystem's case-insensitive rule, or a selected name would
+    /// collide with the metadata document.
+    /// </summary>
+    public const string ExportCollision = "workspace_export_collision";
+
+    /// <summary>The export act did not name the plaintext disclosure confirmation.</summary>
+    public const string ExportConfirmation = "workspace_export_confirmation";
+
+    /// <summary>
+    /// A revision selector was supplied for a folder, or the selected file does
+    /// not retain that revision. A later revision is never silently substituted.
+    /// </summary>
+    public const string ExportRevision = "workspace_export_revision";
+
+    /// <summary>The plaintext export could not be written; everything the act created was removed.</summary>
+    public const string ExportFailed = "workspace_export_failed";
+
+    /// <summary>
+    /// The plaintext export could not be written and the act could not remove
+    /// everything it created, so the destination may hold a partial copy.
+    /// </summary>
+    public const string ExportIncomplete = "workspace_export_incomplete";
 }
 
 /// <summary>
@@ -460,4 +563,31 @@ public interface IWorkspacePersistence
     /// file refuses because its relations are unavailable.
     /// </summary>
     WorkspaceAnchorInfo[] ReadWorkspaceAnchors(string fileId);
+
+    /// <summary>
+    /// Reports the exact plaintext scope one export of the selected live file
+    /// or folder would write at <paramref name="destination"/>, the retained
+    /// revision of every file in it, the versioned metadata document that
+    /// travels with it, and the token that binds the act. Nothing is written,
+    /// no temporary plaintext is staged, and a tombstone, the workspace root,
+    /// an unusable destination or a name that cannot be represented on the
+    /// destination filesystem refuses with a real code.
+    /// </summary>
+    WorkspaceExportPreviewInfo PreviewWorkspaceExport(string nodeId, long contentRevision, string destination);
+
+    /// <summary>
+    /// Writes the selected live file or folder as original bytes outside the
+    /// vault at the destination the owner named, but only for exactly the
+    /// scope, revisions and destination the owner previewed. Each file keeps
+    /// its exact retained bytes; the metadata document is written next to the
+    /// content, never inside an original file; the vault itself is unchanged.
+    /// A stale preview, a changed destination or a changed revision refuses
+    /// before anything is written, and a failure removes what the act created.
+    /// </summary>
+    WorkspaceExportInfo ExportWorkspaceNode(
+        string nodeId,
+        long contentRevision,
+        string destination,
+        string previewToken,
+        CancellationToken cancellationToken);
 }

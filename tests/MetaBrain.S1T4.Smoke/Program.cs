@@ -80,7 +80,8 @@ internal static class Program
                 string.Equals(args[0], "s11-t3", StringComparison.Ordinal) ||
                 string.Equals(args[0], "s11-t4", StringComparison.Ordinal) ||
                 string.Equals(args[0], "s12-t2", StringComparison.Ordinal) ||
-                string.Equals(args[0], "s12-t3", StringComparison.Ordinal))
+                string.Equals(args[0], "s12-t3", StringComparison.Ordinal) ||
+                string.Equals(args[0], "s12-t4", StringComparison.Ordinal))
             ? args[0]
                 : args.Length == 5 &&
                   string.Equals(args[0], "s8-t5", StringComparison.Ordinal)
@@ -143,6 +144,7 @@ internal static class Program
             Console.Error.WriteLine("S11-T4 invocation: MetaBrain.S1T4.Smoke.exe s11-t4 <MetaBrain.Connections.exe>");
             Console.Error.WriteLine("S12-T2 invocation: MetaBrain.S1T4.Smoke.exe s12-t2 <MetaBrain.Connections.exe>");
             Console.Error.WriteLine("S12-T3 invocation: MetaBrain.S1T4.Smoke.exe s12-t3 <MetaBrain.Connections.exe>");
+            Console.Error.WriteLine("S12-T4 invocation: MetaBrain.S1T4.Smoke.exe s12-t4 <MetaBrain.Connections.exe>");
             return 2;
         }
 
@@ -222,6 +224,9 @@ internal static class Program
                     break;
                 case "s12-t3":
                     await OwnerServiceSmoke.RunS12T3WorkspaceMutationsAsync(fullPath).ConfigureAwait(false);
+                    break;
+                case "s12-t4":
+                    await OwnerServiceSmoke.RunS12T4WorkspaceExportAsync(fullPath).ConfigureAwait(false);
                     break;
                 case "s4-t2":
                     await OwnerServiceSmoke.RunS4T2SearchAsync(fullPath).ConfigureAwait(false);

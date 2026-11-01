@@ -684,6 +684,20 @@ public static class OwnerGuidance
                 "The workspace root folder has no parent and an empty name, so it cannot be renamed, moved, copied, deleted or restored. Nothing was changed.",
             ["workspace_anchor_invalid"] =
                 "The anchored range is not inside the pinned content revision (the offset is past the end, the length is zero, or the range overruns it), so no anchor was created. Choose a range inside that revision's exact bytes.",
+            ["workspace_export_destination"] =
+                "The export destination cannot be used safely: it must be a new absolute path below an existing real directory, without traversal or device-namespace segments, and no entry may already occupy the exact name. Nothing was written. Choose a new destination path and preview again.",
+            ["workspace_export_name"] =
+                "One selected workspace name cannot be written unchanged on this destination filesystem (a separator, an invalid character, a reserved device name, or a trailing dot/space). The name is refused rather than rewritten, so nothing was written. Rename that node or export another scope.",
+            ["workspace_export_collision"] =
+                "Two selected names would occupy the same destination entry under the destination's case-insensitive rule, or a selected name collides with the metadata document. Nothing was written. Rename one node or export a narrower scope.",
+            ["workspace_export_confirmation"] =
+                "A plaintext export needs the exact EXPORT confirmation and the preview token, so nothing was written. Run workspace-export-preview, read the disclosed scope and destination, then repeat with its token and the typed confirmation.",
+            ["workspace_export_revision"] =
+                "The export revision selector names a revision that is not retained by the selected file, or was supplied for a folder. Nothing was written and no later revision was substituted. Choose a retained revision and preview again.",
+            ["workspace_export_failed"] =
+                "The plaintext export could not be written, and everything this act created was removed, so the destination has no partial copy from it. The vault is unchanged. Check the destination path and free space, then preview and export again.",
+            ["workspace_export_incomplete"] =
+                "The plaintext export could not be written and this act could not remove everything it created, so the destination may hold a partial plaintext copy. Inspect that destination before retrying; the vault itself is unchanged.",
             ["purge_target_moved"] =
                 "The purge target moved after the preview, so nothing was deleted. Preview the purge again against the current revision.",
             ["internal_failure"] =

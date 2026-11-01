@@ -151,6 +151,8 @@ internal static class OwnerControlCli
                 "workspace-tombstones" => await WorkspaceTombstonesAsync(options).ConfigureAwait(false),
                 "workspace-anchor-create" => await WorkspaceAnchorCreateAsync(options).ConfigureAwait(false),
                 "workspace-anchor-list" => await WorkspaceAnchorListAsync(options).ConfigureAwait(false),
+                "workspace-export-preview" => await WorkspaceExportPreviewAsync(options).ConfigureAwait(false),
+                "workspace-export" => await WorkspaceExportAsync(options).ConfigureAwait(false),
                 "backup" => await BackupAsync(options).ConfigureAwait(false),
                 "restore" => await RestoreAsync(options, useRecoveryCode: false).ConfigureAwait(false),
                 "restore-with-recovery-code" => await RestoreAsync(options, useRecoveryCode: true).ConfigureAwait(false),
@@ -866,6 +868,169 @@ internal static class OwnerControlCli
 
     private static void WriteWorkspaceAnchor(JsonElement anchor) =>
         Console.WriteLine($"ANCHOR id={DisplayText(anchor, "anchorId")} file={DisplayText(anchor, "fileId")} contentRevision={DisplayText(anchor, "contentRevision")} offset={DisplayText(anchor, "offset")} length={DisplayText(anchor, "length")} sha256={DisplayText(anchor, "sha256")} state={DisplayText(anchor, "state")}");
+
+    /// <summary>
+    /// S12-T4 prints exactly what a plaintext export of the selected file or
+    /// folder would disclose: every file at the retained revision the export
+    /// would pin, every folder, the in-scope anchors, the new destination
+    /// directory, the versioned metadata document and the token the export
+    /// requires. It writes nothing.
+    /// </summary>
+    private static async Task<int> WorkspaceExportPreviewAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--node-id", "--content-revision", "--destination");
+        var controlPipe = ControlPipe(options);
+        var nodeId = options.Required("--node-id");
+        var destination = options.Required("--destination");
+        long? contentRevision = null;
+        if (options.Optional("--content-revision") is { } revisionText)
+        {
+            if (!long.TryParse(revisionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) || parsed <= 0)
+            {
+                return Usage();
+            }
+
+            contentRevision = parsed;
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceExportPreviewOperation,
+                nodeId,
+                WorkspaceContentRevision: contentRevision,
+                WorkspaceExportDestination: destination)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "workspace_export_preview") ||
+            !TryWorkspaceObject(result.Reply, "workspaceExportPreview", out var preview))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        var folderCount = WriteExportFolders(preview);
+        var fileCount = WriteExportFiles(preview);
+        var anchorCount = WriteExportAnchors(preview);
+        Console.WriteLine(
+            $"EXPORT PREVIEW id={DisplayText(preview, "nodeId")} kind={DisplayText(preview, "kind")} " +
+            $"name={JsonSerializer.Serialize(GetWorkspaceName(preview))} revision={DisplayText(preview, "treeRevision")} " +
+            $"nodeRevision={DisplayText(preview, "nodeRevision")} contentRevision={DisplayText(preview, "contentRevision")} " +
+            $"files={fileCount.ToString(CultureInfo.InvariantCulture)} folders={folderCount.ToString(CultureInfo.InvariantCulture)} " +
+            $"anchors={anchorCount.ToString(CultureInfo.InvariantCulture)} tombstonesExcluded={JsonNumberText(preview, "excludedTombstones")} " +
+            $"bytes={JsonNumberText(preview, "totalBytes")} destination={JsonSerializer.Serialize(DisplayText(preview, "destination"))} " +
+            $"sidecar={JsonSerializer.Serialize(DisplayText(preview, "sidecarPath"))} token={DisplayText(preview, "token")}");
+        Console.WriteLine(
+            "EXPORT DISCLOSURE every listed file leaves the vault as plaintext original bytes at the destination above; " +
+            "lock, delete or purge does not revoke that copy. The vault and every original stay unchanged. " +
+            "Repeat with --preview <token> --confirm EXPORT to write exactly this scope.");
+        return 0;
+    }
+
+    /// <summary>
+    /// S12-T4 writes the exact scope the owner previewed as plaintext original
+    /// bytes outside the vault. The typed EXPORT confirmation is required here
+    /// before the request leaves the client, and the service refuses unless the
+    /// preview token still matches the live workspace, revision, scope and
+    /// destination.
+    /// </summary>
+    private static async Task<int> WorkspaceExportAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--node-id", "--content-revision", "--destination", "--preview", "--confirm");
+        var controlPipe = ControlPipe(options);
+        var nodeId = options.Required("--node-id");
+        var destination = options.Required("--destination");
+        var previewToken = options.Required("--preview");
+        var confirmation = options.Required("--confirm");
+        if (!string.Equals(confirmation, "EXPORT", StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine(
+                "ERROR " + WorkspaceErrorCodes.ExportConfirmation +
+                ": a plaintext export needs the typed EXPORT confirmation and the preview token; nothing was written.");
+            return 4;
+        }
+
+        long? contentRevision = null;
+        if (options.Optional("--content-revision") is { } revisionText)
+        {
+            if (!long.TryParse(revisionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) || parsed <= 0)
+            {
+                return Usage();
+            }
+
+            contentRevision = parsed;
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceExportOperation,
+                nodeId,
+                WorkspaceContentRevision: contentRevision,
+                WorkspaceExportDestination: destination,
+                WorkspaceExportToken: previewToken,
+                WorkspaceExportConfirmation: confirmation)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "workspace_exported") ||
+            !TryWorkspaceObject(result.Reply, "workspaceExport", out var export))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        Console.WriteLine(
+            $"EXPORT written destination={JsonSerializer.Serialize(DisplayText(export, "destination"))} " +
+            $"files={JsonNumberText(export, "files")} folders={JsonNumberText(export, "folders")} " +
+            $"bytes={JsonNumberText(export, "totalBytes")} sidecar={JsonSerializer.Serialize(DisplayText(export, "sidecarPath"))} " +
+            $"sidecarSha256={DisplayText(export, "sidecarSha256")} revision={DisplayText(export, "treeRevision")}");
+        return 0;
+    }
+
+    private static int WriteExportFolders(JsonElement preview)
+    {
+        if (!preview.TryGetProperty("folders", out var folders) || folders.ValueKind != JsonValueKind.Array)
+        {
+            return 0;
+        }
+
+        foreach (var folder in folders.EnumerateArray())
+        {
+            Console.WriteLine(
+                $"FOLDER id={DisplayText(folder, "folderId")} path={JsonSerializer.Serialize(DisplayText(folder, "path"))}");
+        }
+
+        return folders.GetArrayLength();
+    }
+
+    private static int WriteExportFiles(JsonElement preview)
+    {
+        if (!preview.TryGetProperty("files", out var files) || files.ValueKind != JsonValueKind.Array)
+        {
+            return 0;
+        }
+
+        foreach (var file in files.EnumerateArray())
+        {
+            Console.WriteLine(
+                $"FILE id={DisplayText(file, "fileId")} path={JsonSerializer.Serialize(DisplayText(file, "path"))} " +
+                $"revision={DisplayText(file, "contentRevision")} bytes={DisplayText(file, "length")} " +
+                $"sha256={DisplayText(file, "sha256")}");
+        }
+
+        return files.GetArrayLength();
+    }
+
+    private static int WriteExportAnchors(JsonElement preview)
+    {
+        if (!preview.TryGetProperty("anchors", out var anchors) || anchors.ValueKind != JsonValueKind.Array)
+        {
+            return 0;
+        }
+
+        foreach (var anchor in anchors.EnumerateArray())
+        {
+            WriteWorkspaceAnchor(anchor);
+        }
+
+        return anchors.GetArrayLength();
+    }
 
     /// <summary>
     /// Reads one owner-chosen original file for an import or a revision. The
@@ -8460,7 +8625,7 @@ internal static class OwnerControlCli
         {
             Console.Error.WriteLine("Owner commands (run `owner <verb> --help` for one command; `owner help --command <verb>` is the same):");
             Console.Error.WriteLine("  vault: status|provision|unlock|recover|lock|upgrade|upgrade-with-recovery-code|rollback|rollback-with-recovery-code|health|audit|diagnostics|retention|backup|restore|restore-with-recovery-code|export");
-            Console.Error.WriteLine("  workspace: workspace-status|workspace-tree|workspace-mkdir|workspace-import|workspace-revise|workspace-read|workspace-rename|workspace-move|workspace-copy|workspace-delete-preview|workspace-delete|workspace-restore|workspace-tombstones|workspace-anchor-create|workspace-anchor-list");
+            Console.Error.WriteLine("  workspace: workspace-status|workspace-tree|workspace-mkdir|workspace-import|workspace-revise|workspace-read|workspace-rename|workspace-move|workspace-copy|workspace-delete-preview|workspace-delete|workspace-restore|workspace-tombstones|workspace-anchor-create|workspace-anchor-list|workspace-export-preview|workspace-export");
             Console.Error.WriteLine("  capture: memory-create|memory-revise|memory-import|memory-read|read|write|source-create|source-revise|source-read|research-capture|research-read|feedback-create|feedback-read");
             Console.Error.WriteLine("  library: library|memory-read|source-read|research-read|relation-read|lifecycle-read|lifecycle-retained-read|recall-read|review-list|review-record|index-status|index-rebuild");
             Console.Error.WriteLine("  review: proposal-list|proposal-read|proposal-publish|proposal-reject|lifecycle-publish|lifecycle-reject|lifecycle-withdraw|lifecycle-repropose|lifecycle-question-resolve|lifecycle-question-reopen|relation-list|relation-read|relation-create|relation-accept|relation-reject|relation-unlink|relation-relink|declassify-preview|declassify-publish|declassify-proposal-publish");
@@ -8597,6 +8762,8 @@ internal static class OwnerControlCli
         "workspace-tombstones" => "owner workspace-tombstones --control-pipe <pipe>: every retained encrypted tombstone with its id, kind, former parent/name, deletion group and revisions. Restoring the deleted path is not resurrected by a new file: a new file at that path has its own id.",
         "workspace-anchor-create" => "owner workspace-anchor-create --control-pipe <pipe> --file-id <id> --expected-content-revision <live> --offset <n> --length <n> --expected-tree-revision <n>: pin a citation anchor to that exact byte range of the file's current content revision, recording the range digest and no path. A later replacement marks it stale at its original revision instead of rebinding it.",
         "workspace-anchor-list" => "owner workspace-anchor-list --control-pipe <pipe> --file-id <id>: anchors of one live file with their pinned content revision, range, digest and state (live/stale). A deleted file's relations are unavailable until it is restored.",
+        "workspace-export-preview" => "owner workspace-export-preview --control-pipe <pipe> --node-id <id> [--content-revision N] --destination <new-absolute-path>: exactly what a plaintext export would write outside the vault — every file at the retained revision it would pin, every folder, the in-scope anchors, the new destination directory, the versioned metadata document and the binding token. Files outside the selected scope, citations of them and the selected node's parent identity are not included. Changes nothing.",
+        "workspace-export" => "owner workspace-export --control-pipe <pipe> --node-id <id> [--content-revision N] --destination <new-absolute-path> --preview <token> --confirm EXPORT: write exactly the previewed scope as plaintext original bytes plus a versioned metadata document, into one new destination directory. Create-only: an existing entry or unrelated file is never overwritten, and a stale preview, changed destination, tombstone, lock or unsupported logical name refuses with nothing written. The copy lives outside the vault and cannot be revoked by a later lock, delete or purge.",
         "upgrade" => "owner upgrade --control-pipe <pipe>: raise old content schemas while locked (secure passphrase prompt; keeps an encrypted rollback point; leaves the vault locked).",
         "upgrade-with-recovery-code" => "owner upgrade-with-recovery-code --control-pipe <pipe>: same upgrade with the recovery key.",
         "rollback" => "owner rollback --control-pipe <pipe> [--discard true]: restore (or discard) the encrypted rollback point while locked.",

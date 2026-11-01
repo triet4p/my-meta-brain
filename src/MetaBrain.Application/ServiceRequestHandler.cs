@@ -96,7 +96,10 @@ public sealed record ServiceRequest(
     long? WorkspaceNodeRevision = null,
     string? WorkspacePreviewToken = null,
     long? WorkspaceAnchorOffset = null,
-    long? WorkspaceAnchorLength = null);
+    long? WorkspaceAnchorLength = null,
+    string? WorkspaceExportDestination = null,
+    string? WorkspaceExportToken = null,
+    string? WorkspaceExportConfirmation = null);
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
     ScopeResourceRevision[] Resources,
@@ -1117,6 +1120,49 @@ public sealed record WorkspaceAnchorWire(
     string Sha256,
     string State);
 
+/// <summary>One original file a pending export would write, at its pinned revision.</summary>
+public sealed record WorkspaceExportFileWire(
+    string FileId,
+    string Path,
+    long ContentRevision,
+    long Length,
+    string Sha256);
+
+/// <summary>One logical folder a pending export would recreate.</summary>
+public sealed record WorkspaceExportFolderWire(string FolderId, string Path);
+
+/// <summary>
+/// The exact plaintext scope one export would disclose, with the destination
+/// that would be created, the metadata document that travels with it and the
+/// token that binds the act. Nothing is written by producing it.
+/// </summary>
+public sealed record WorkspaceExportPreviewWire(
+    string NodeId,
+    string Kind,
+    string Name,
+    long TreeRevision,
+    long NodeRevision,
+    long ContentRevision,
+    string Destination,
+    string SidecarPath,
+    string Token,
+    WorkspaceExportFileWire[] Files,
+    WorkspaceExportFolderWire[] Folders,
+    WorkspaceAnchorWire[] Anchors,
+    int ExcludedTombstones,
+    long TotalBytes);
+
+/// <summary>The outcome of one plaintext export, including the metadata document digest.</summary>
+public sealed record WorkspaceExportWire(
+    string NodeId,
+    string Destination,
+    string SidecarPath,
+    long TreeRevision,
+    int Folders,
+    int Files,
+    long TotalBytes,
+    string SidecarSha256);
+
 public sealed record ServiceReply(
     int ProtocolVersion,
     string? Status,
@@ -1209,6 +1255,8 @@ public sealed record ServiceReply(
     WorkspaceAnchorWire? WorkspaceAnchor = null,
     WorkspaceAnchorWire[]? WorkspaceAnchors = null,
     int? WorkspaceRestoredNodes = null,
+    WorkspaceExportPreviewWire? WorkspaceExportPreview = null,
+    WorkspaceExportWire? WorkspaceExport = null,
     string? ErrorCode = null);
 
 public sealed class ServiceRequestHandler
@@ -1242,6 +1290,8 @@ public sealed class ServiceRequestHandler
     public const string OwnerWorkspaceTombstonesOperation = "owner.workspace.tombstones";
     public const string OwnerWorkspaceAnchorCreateOperation = "owner.workspace.anchor.create";
     public const string OwnerWorkspaceAnchorListOperation = "owner.workspace.anchor.list";
+    public const string OwnerWorkspaceExportPreviewOperation = "owner.workspace.export.preview";
+    public const string OwnerWorkspaceExportOperation = "owner.workspace.export";
     public const string ResourceReadOperation = "resource.read";
     public const string SourceReadOperation = "source.read";
     public const string ResourceWriteOperation = "resource.write";
@@ -1613,7 +1663,8 @@ public sealed class ServiceRequestHandler
 
         if (request.WorkspaceContentRevision is not null &&
             request.Operation is not (OwnerWorkspaceFileReviseOperation or OwnerWorkspaceFileReadOperation or
-                OwnerWorkspaceAnchorCreateOperation))
+                OwnerWorkspaceAnchorCreateOperation or OwnerWorkspaceExportPreviewOperation or
+                OwnerWorkspaceExportOperation))
         {
             return false;
         }
@@ -1633,6 +1684,18 @@ public sealed class ServiceRequestHandler
 
         if ((request.WorkspaceAnchorOffset is not null || request.WorkspaceAnchorLength is not null) &&
             request.Operation is not OwnerWorkspaceAnchorCreateOperation)
+        {
+            return false;
+        }
+
+        if (request.WorkspaceExportDestination is not null &&
+            request.Operation is not (OwnerWorkspaceExportPreviewOperation or OwnerWorkspaceExportOperation))
+        {
+            return false;
+        }
+
+        if ((request.WorkspaceExportToken is not null || request.WorkspaceExportConfirmation is not null) &&
+            request.Operation is not OwnerWorkspaceExportOperation)
         {
             return false;
         }
@@ -1677,6 +1740,7 @@ public sealed class ServiceRequestHandler
         OwnerWorkspaceNodeDeletePreviewOperation,
         OwnerWorkspaceTombstonesOperation,
         OwnerWorkspaceAnchorListOperation,
+        OwnerWorkspaceExportPreviewOperation,
         OwnerLibrarySearchOperation,
         OwnerRecallReadOperation,
         OwnerIndexStatusOperation,
@@ -2511,6 +2575,16 @@ public sealed class ServiceRequestHandler
             return HandleWorkspaceAnchorList(context, request, operation);
         }
 
+        if (string.Equals(request.Operation, OwnerWorkspaceExportPreviewOperation, StringComparison.Ordinal))
+        {
+            return HandleWorkspaceExportPreview(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerWorkspaceExportOperation, StringComparison.Ordinal))
+        {
+            return HandleWorkspaceExport(context, request, operation, cancellationToken);
+        }
+
         return Error("unknown_operation");
     }
 
@@ -3108,6 +3182,137 @@ public sealed class ServiceRequestHandler
             return WorkspaceRefusal(refusal.Code);
         }
     }
+
+    /// <summary>
+    /// S12-T4 the owner plaintext export preview: exactly what an export of the
+    /// selected file or folder would write outside the vault, at which retained
+    /// revisions, to which new destination, with the versioned metadata
+    /// document and the token that binds the act. It writes nothing and stages
+    /// no temporary plaintext.
+    /// </summary>
+    private ServiceReply HandleWorkspaceExportPreview(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        var revision = request.WorkspaceContentRevision ?? 0;
+        if (string.IsNullOrEmpty(request.ResourceId) || revision < 0 ||
+            string.IsNullOrEmpty(request.WorkspaceExportDestination))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var preview = operation.PreviewWorkspaceExport(
+                request.ResourceId, revision, request.WorkspaceExportDestination);
+            return new ServiceReply(
+                CurrentProtocolVersion, "workspace_export_preview", "owner", null,
+                WorkspaceExportPreview: ProjectWorkspaceExportPreview(preview));
+        }
+        catch (WorkspaceRefusalException refusal)
+        {
+            return WorkspaceRefusal(refusal.Code);
+        }
+    }
+
+    /// <summary>
+    /// S12-T4 the owner plaintext export act: the exact scope the owner
+    /// previewed is written outside the vault at the exact destination, and a
+    /// typed EXPORT confirmation together with the preview token is required
+    /// before anything is written. The act is a disclosure, so it is audited;
+    /// it never modifies the workspace, an original, a grant or a session.
+    /// </summary>
+    private ServiceReply HandleWorkspaceExport(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation,
+        CancellationToken cancellationToken)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        var revision = request.WorkspaceContentRevision ?? 0;
+        if (string.IsNullOrEmpty(request.ResourceId) || revision < 0 ||
+            string.IsNullOrEmpty(request.WorkspaceExportDestination) ||
+            string.IsNullOrEmpty(request.WorkspaceExportToken))
+        {
+            return Error("invalid_request");
+        }
+
+        if (!string.Equals(request.WorkspaceExportConfirmation, "EXPORT", StringComparison.Ordinal))
+        {
+            return WorkspaceRefusal(WorkspaceErrorCodes.ExportConfirmation);
+        }
+
+        try
+        {
+            var export = operation.ExportWorkspaceNode(
+                request.ResourceId,
+                revision,
+                request.WorkspaceExportDestination,
+                request.WorkspaceExportToken,
+                cancellationToken);
+            return new ServiceReply(
+                CurrentProtocolVersion, "workspace_exported", "owner", null,
+                WorkspaceExport: new WorkspaceExportWire(
+                    export.NodeId,
+                    export.Destination,
+                    export.SidecarPath,
+                    export.TreeRevision,
+                    export.FolderCount,
+                    export.FileCount,
+                    export.TotalBytes,
+                    export.SidecarSha256));
+        }
+        catch (WorkspaceRefusalException refusal)
+        {
+            return WorkspaceRefusal(refusal.Code);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return Error("export_failed");
+        }
+    }
+
+    private static WorkspaceExportPreviewWire ProjectWorkspaceExportPreview(WorkspaceExportPreviewInfo preview) =>
+        new(
+            preview.NodeId,
+            preview.Kind == WorkspaceNodeKind.File ? WorkspaceNodeKinds.File : WorkspaceNodeKinds.Folder,
+            preview.Name,
+            preview.TreeRevision,
+            preview.NodeRevision,
+            preview.ContentRevision,
+            preview.Destination,
+            preview.SidecarPath,
+            preview.Token,
+            preview.Files
+                .Select(file => new WorkspaceExportFileWire(
+                    file.FileId, file.Path, file.ContentRevision, file.Length, file.Sha256))
+                .ToArray(),
+            preview.Folders
+                .Select(folder => new WorkspaceExportFolderWire(folder.FolderId, folder.Path))
+                .ToArray(),
+            preview.Anchors.Select(ProjectWorkspaceAnchor).ToArray(),
+            preview.ExcludedTombstones,
+            preview.TotalBytes);
 
     private static WorkspaceTreeWire ProjectWorkspaceTree(WorkspaceSnapshot tree) =>
         new(
