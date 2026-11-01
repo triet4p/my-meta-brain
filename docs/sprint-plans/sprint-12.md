@@ -2,7 +2,7 @@
 
 ## Goal và trạng thái
 
-- Status: **In progress — S12-T1–T5 complete; S12-T6 candidate preparation active**. Release mục tiêu cuối sprint: **1.2.0**; chưa build/publish release candidate.
+- Status: **Complete — 1.2.0 published (2026-11-01)**. Candidate `921141ec536c`, source/tag `820794576d9edfe59e215263c5172daa4a302c87`; prepublication evidence/checkpoints, final differential và independent public smoke PASS.
 - Entry: Sprint 11 complete và 1.1.0 published.
 - Scope/trace: P2-02, P2-11, P2-12; R04, R10, R18, R33–R36, R39. Các P2 là candidates, không thay baseline khi chưa có approval.
 - Root: `F:/ai-ml/my-meta-brain`; target ref `main`; exact base/worktree/ownership resolve khi execution.
@@ -56,10 +56,11 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
     - Check: Exercise changed CLI/service và MCP paths; không browser/WPF prerequisite trước S13, trừ installed legacy-component transition. Ghi scenarios/observations/limits, không claim surface chưa chạy.
     - [Evidence R1 PASS](../../artifacts/sprint-12/reviews/S12-T5-C1-R1.md), [checkpoint PASS](../../artifacts/sprint-12/checkpoints/S12-T5-C1.md), commit `884dc6db58e5fb3b74a61ce00ffe1835d0fff5eb`. Backup/purge/consumed-token and real project-local installed-1.1 transition proof accepted; inherited interactive prompt lacks fresh PTY proof, as disclosed in review.
 
-- [~] **S12-T6 — Release 1.2.0.**
+- [x] **S12-T6 — Release 1.2.0.**
     - Change: Package CLI installer + MCP ZIP, workspace opt-in, CLI parity/support-transition, key/recovery/format/export guides và upgrade/restore compatibility; ngừng tạo UI installer mới nhưng giữ nguyên downloads 1.0/1.1.
     - Acceptance: End-to-end CLI import → encrypted store → restart/unlock → original-format export/backup restore trên exact candidate; retained owner workflows CLI-complete, installed-WPF transition có evidence; release contract chung đạt.
     - Check: Exercise packaged CLI/service và MCP changed paths; browser `open` chưa shipped, không đòi WPF proof hoặc ghi browser PASS trước Sprint 13.
+    - Prepublication [evidence R1 PASS](../../artifacts/sprint-12/reviews/S12-T6-C1-R1.md), [checkpoint PASS](../../artifacts/sprint-12/checkpoints/S12-T6-C1.md), commit `820794576d9edfe59e215263c5172daa4a302c87`; candidate `921141ec536c`. Owner authorized publication; [publication record](../../artifacts/sprint-12/publication/S12-PUBLISH-P1.md), [independent public review PASS](../../artifacts/sprint-12/reviews/S12-PUBLIC-C1-R1.md), [release](https://github.com/triet4p/my-meta-brain/releases/tag/v1.2.0), [site](https://triet4p.github.io/my-meta-brain/).
 
 ## Exit và release boundary
 
@@ -71,4 +72,4 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
 
 ## Gate record
 
-S12-T1–T5 evidence/checkpoint PASS tại các link trên. S12-T6 candidate preparation active; differential và publication chưa có gate result. Xem [roadmap](../ROADMAP-2.0.md) cho dependency tiếp theo; không tự advance bởi completion message.
+S12-T1–T6 evidence/checkpoint PASS tại các link trên. [Final differential D1 PASS](../../artifacts/sprint-12/reviews/S12-DEEP-D1.md), [publication/public smoke PASS](../../artifacts/sprint-12/reviews/S12-PUBLIC-C1-R1.md), no actionable findings. Public tag/source `82079457`, candidate `921141ec536c`, exact CLI/MCP hashes verified. Sprint 12/M11 Complete; Sprint 13 chưa launch, cần owner authorization riêng.

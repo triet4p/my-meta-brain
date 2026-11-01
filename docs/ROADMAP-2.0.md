@@ -1,6 +1,6 @@
 # Meta Brain — Roadmap tới 2.0.0
 
-- Ngày lập: 2026-10-29. Trạng thái: **Planned; chưa authorize implementation hoặc publication.**
+- Ngày lập: 2026-10-29. Trạng thái: **Sprint 12 Complete, 1.2.0 published; Sprint 13–18/G2 planned, chưa authorize launch.**
 - Cơ sở: [định hướng hậu 1.0.0](POST-1.0-DIRECTION.md), phản hồi owner và yêu cầu mỗi sprint có một release 1.x.x.
 - [PLAN](PLAN.md) là overview/status; task atomic nằm ở từng sprint bên dưới. 1.0.0 và các gate lịch sử giữ nguyên.
 - Cập nhật owner-approved 2026-11-01: [CR03](REQUIREMENTS.md#approved-change-record--cr03-2026-11-01)/D089 chuyển Sprint 12+ sang CLI + MCP, browser chỉ document preview/edit. Approval này là planning/support contract, không authorize implementation/publication.
@@ -127,4 +127,4 @@ G2-T1 không được mở nếu 1.x buộc thay contract chưa được duyệt
 
 Không mặc định thêm multi-device sync, SaaS/multi-user, Linux/macOS/ARM, autonomous researcher, crawler/PDF automation, graph database, provider mới, telemetry hoặc auto-update. Multi-platform/UI đổi stack chỉ qua quyết định có lý do, không phát sinh từ roadmap.
 
-Hiện tại: Sprint 11 / M10 **Complete**, [1.1.0 published](https://github.com/triet4p/my-meta-brain/releases/tag/v1.1.0) gồm CLI/UI/MCP; CR02/D088 và folder-refresh policy đã approved/implemented trong S11. [Final differential D3 PASS](../artifacts/sprint-11/reviews/S11-DEEP-D3.md), [public proof](../artifacts/sprint-11/publication/S11-PUBLISH-P2.md) accepted. Sprint 12–18 **Not started**, releases 1.2.0–1.8.0/2.0.0 **Planned**; Sprint 12 cần owner authorize riêng, không tự advance.
+Hiện tại: Sprint 11/M10 **Complete**, 1.1.0 published gồm CLI/UI/MCP. Sprint 12/M11 **Complete**, [1.2.0 published](https://github.com/triet4p/my-meta-brain/releases/tag/v1.2.0) gồm CLI installer + MCP ZIP, WPF 1.1 legacy frozen. D090 approved, T1–T6 evidence/checkpoints và [final differential D1 PASS](../artifacts/sprint-12/reviews/S12-DEEP-D1.md); owner-authorized publication và [independent public smoke PASS](../artifacts/sprint-12/reviews/S12-PUBLIC-C1-R1.md). Source/tag `82079457`, candidate `921141ec536c`, exact public asset hashes verified; [site](https://triet4p.github.io/my-meta-brain/) deployed. Sprint 13–18/G2 **Not started**, cần owner authorization riêng, không tự launch.
