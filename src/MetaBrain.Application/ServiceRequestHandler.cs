@@ -102,7 +102,8 @@ public sealed record ServiceRequest(
     string? WorkspaceExportConfirmation = null,
     string? WorkspacePurgeToken = null,
     string? WorkspacePurgeConfirmation = null,
-    string? WorkspacePurgeReason = null);
+    string? WorkspacePurgeReason = null,
+    long? WorkspaceUnlockEpoch = null);
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
     ScopeResourceRevision[] Resources,
@@ -1298,7 +1299,8 @@ public sealed record ServiceReply(
     WorkspaceExportWire? WorkspaceExport = null,
     WorkspacePurgePreviewWire? WorkspacePurgePreview = null,
     WorkspacePurgeWire? WorkspacePurge = null,
-    string? ErrorCode = null);
+    string? ErrorCode = null,
+    long? UnlockEpoch = null);
 
 public sealed class ServiceRequestHandler
 {
@@ -1749,6 +1751,12 @@ public sealed class ServiceRequestHandler
         {
             return false;
         }
+        if (request.WorkspaceUnlockEpoch is { } unlockEpoch &&
+            (unlockEpoch < 0 || request.Operation is not
+                (OwnerWorkspaceFileReadOperation or OwnerWorkspaceFileReviseOperation)))
+        {
+            return false;
+        }
 
         return true;
     }
@@ -1899,7 +1907,8 @@ public sealed class ServiceRequestHandler
             }
 
             return new ServiceReply(CurrentProtocolVersion, "running", "owner", null,
-                VaultState: _vault.State, VaultFormat: _vaultMaintenance?.ReadFormatStatus());
+                VaultState: _vault.State, VaultFormat: _vaultMaintenance?.ReadFormatStatus(),
+                UnlockEpoch: _vault.UnlockEpoch);
         }
 
         if (string.Equals(request.Operation, AgentRedeemOperation, StringComparison.Ordinal))
@@ -2825,10 +2834,28 @@ public sealed class ServiceRequestHandler
             return Error("invalid_request");
         }
 
+        if (request.WorkspaceUnlockEpoch is { } expectedUnlockEpoch &&
+            operation.LoadScopeGrantState().UnlockEpoch != expectedUnlockEpoch)
+        {
+            return Error("session_expired");
+        }
+
+        if (request.WorkspaceUnlockEpoch is not null &&
+            !string.Equals(_vault.State, "unlocked", StringComparison.Ordinal))
+        {
+            return Error("vault_locked");
+        }
+
         byte[]? content = null;
         try
         {
             content = Convert.FromBase64String(request.ContentBase64);
+            if (request.WorkspaceUnlockEpoch is not null &&
+                !string.Equals(_vault.State, "unlocked", StringComparison.Ordinal))
+            {
+                return Error("vault_locked");
+            }
+
             var mutation = operation.ReviseWorkspaceFile(request.ResourceId, content, expectedContentRevision);
             return new ServiceReply(
                 CurrentProtocolVersion, "workspace_mutated", "owner", null,
@@ -2851,6 +2878,7 @@ public sealed class ServiceRequestHandler
         }
     }
 
+
     private ServiceReply HandleWorkspaceFileRead(
         AuthenticatedContext context,
         ServiceRequest request,
@@ -2872,17 +2900,36 @@ public sealed class ServiceRequestHandler
             return Error("invalid_request");
         }
 
+        var unlockEpoch = operation.LoadScopeGrantState().UnlockEpoch;
+        if (request.WorkspaceUnlockEpoch is { } expectedUnlockEpoch &&
+            unlockEpoch != expectedUnlockEpoch)
+        {
+            return Error("session_expired");
+        }
+
         try
         {
             var content = operation.ReadWorkspaceFile(request.ResourceId, revision);
             try
             {
+                if (!string.Equals(_vault.State, "unlocked", StringComparison.Ordinal))
+                {
+                    return Error("vault_locked");
+                }
+
+                if (request.WorkspaceUnlockEpoch is { } expectedEpoch &&
+                    operation.LoadScopeGrantState().UnlockEpoch != expectedEpoch)
+                {
+                    return Error("session_expired");
+                }
+
                 return new ServiceReply(
                     CurrentProtocolVersion, "content", "owner", null,
                     ContentBase64: Convert.ToBase64String(content.Content),
                     ContentType: "application/octet-stream",
                     WorkspaceFile: new WorkspaceFileWire(
-                        request.ResourceId, content.Revision, content.Length, content.Sha256));
+                        request.ResourceId, content.Revision, content.Length, content.Sha256),
+                    UnlockEpoch: unlockEpoch);
             }
             finally
             {

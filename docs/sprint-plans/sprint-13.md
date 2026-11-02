@@ -2,7 +2,7 @@
 
 ## Goal và trạng thái
 
-- Status: **In progress — S13-T1–T3 accepted; S13-T4 active**. Release mục tiêu cuối sprint: **1.3.0**; chưa build/publish.
+- Status: **In progress — S13-T1–T4 accepted; S13-T5 active**. Release mục tiêu cuối sprint: **1.3.0**; chưa build/publish.
 - Entry: Sprint 12 complete và 1.2.0 published.
 - Scope/trace: P2-03, P2-10, P2-12; R10, R23, R30, R32, R38, R39. Các P2 là candidates, không thay baseline khi chưa có approval.
 - Root: `F:/ai-ml/my-meta-brain`; target ref `main`; exact base/worktree/ownership resolve khi execution.
@@ -40,12 +40,13 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
     - Check: CLI-only revise và actual browser preview → edit → save, concurrent conflict, invalid encoding, cancel/unsaved handling; giữ nguồn read-only.
     - [Evidence R1 PASS](../../artifacts/sprint-13/reviews/S13-T3-C1-R1.md), [checkpoint](../../artifacts/sprint-13/checkpoints/S13-T3-C1.md), commit `f2a4c81cccfa404949bf48371ffc2087461cd58c`. CLI/browser editing, conflict/draft, encoding/CSV refusal and restart/reopen accepted.
 
-- [~] **S13-T4 — CLI lexical search và open-at-location.**
+- [x] **S13-T4 — CLI lexical search và open-at-location.**
     - Change: Shared lexical filename/path/heading/content search, CLI folder filters và revision-pinned anchors; CLI trả đủ evidence/location dạng text/structured result, `open` có thể hiển thị đúng đoạn đã chọn.
     - Acceptance: Exact symbol/phrase/name khớp; hit anchor cùng revision preview, stale anchor không trỏ nhầm. Filter không cấp quyền; frontend không tự rank. Search usable hoàn toàn qua CLI trước hybrid sprint, không đưa search console vào browser.
     - Check: Actual CLI query-to-source và browser anchor rendering khi được mở; observe stale/missing/scope negatives.
+    - [Evidence R1 PASS](../../artifacts/sprint-13/reviews/S13-T4-C1-R1.md), [checkpoint](../../artifacts/sprint-13/checkpoints/S13-T4-C1.md), commit `25a3e4b7efddca5a8a79ecfffac0ecfaade8e155`. Actual CLI search/source locations and Chromium pinned highlights accepted; stale/missing/mismatch fail closed.
 
-- [ ] **S13-T5 — Document session lifecycle và bounded work.**
+- [~] **S13-T5 — Document session lifecycle và bounded work.**
     - Change: Nối bounded cache/progress/cancel với foreground CLI bridge; lock/disconnect/session expiry/CLI exit thu hồi read/save, clear browser content/draft và bỏ in-flight response theo epoch. Unsaved policy rõ, không cản owner lock.
     - Acceptance: Actual lock/exit/disconnect/restart và save/read races không phục vụ private stale response hoặc mất revision đã saved; browser reload/back không phục hồi quyền/nội dung bằng app cache. Đo CLI/service/browser resources khi indexing theo T1; không key tới browser. Không claim xóa tuyệt đối browser/managed memory, OS swap, extension hay copies đã disclosure; không sửa browser/host policy.
     - Check: Actual browser actions, lifecycle/race negatives và file/cache observations trong consent scope; ghi giới hạn đo thật.
@@ -65,4 +66,4 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
 
 ## Gate record
 
-S13-T1–T3 evidence and exact-snapshot checkpoints accepted at the links above; latest `f2a4c81c`. S13-T4 active; T5/T6, final differential and publication gates pending.
+S13-T1–T4 evidence and exact-snapshot checkpoints accepted at the links above; latest `25a3e4b7`. S13-T5 active; T6, final differential and publication gates pending.

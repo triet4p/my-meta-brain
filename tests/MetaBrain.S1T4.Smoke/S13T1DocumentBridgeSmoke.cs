@@ -171,7 +171,8 @@ internal static partial class OwnerServiceSmoke
             browser = await S13T1Browser.StartAsync(S13T1ChromePath(), chromeProfile, url)
                 .ConfigureAwait(false);
             var status = await browser.WaitForAsync("document.getElementById('status').textContent",
-                value => value.Length > 0, TimeSpan.FromSeconds(20)).ConfigureAwait(false);
+                value => value.Contains("Preview of the bound revision", StringComparison.Ordinal),
+                TimeSpan.FromSeconds(20)).ConfigureAwait(false);
             Require(status.Contains("Preview of the bound revision", StringComparison.Ordinal),
                 "The browser did not reach the bound-revision preview: " + status);
             var name = await browser.EvaluateStringAsync("document.getElementById('name').textContent").ConfigureAwait(false);
@@ -221,26 +222,48 @@ internal static partial class OwnerServiceSmoke
                 Encoding.UTF8.GetBytes("# external writer\r\nmarker " + S13T1ExternalMarker + "\r\n"), "conflict preserved bytes");
             Console.WriteLine("PASS a concurrent external revision conflicts in the browser and is not overwritten");
 
-            // The browser-managed renderer keeps its last DOM until told to reload;
-            // that is a browser persistence limit, not a bridge grant. After the
-            // owner locks, the next read/save and the reload both fail closed.
+            // Lock ends the foreground session, so a request racing the
+            // monitor is either refused while the service is locked or loses
+            // its listener when the bridge revokes the session.
             var lockedRead = await S13T1RequestAsync(url + "api/document", token).ConfigureAwait(false);
             Require(lockedRead.Status == 200, "The pre-lock document read did not succeed.");
             var lockResult = await RunOwnerCommandAsync(executable, "owner", "lock", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
             Require(lockResult.ExitCode == 0, "The owner vault did not lock (stderr=" + lockResult.StandardError.Trim() + ").");
-            var lockedGet = await S13T1RequestAsync(url + "api/document", token).ConfigureAwait(false);
-            var lockedSave = await S13T1SaveAsync(url, token, browserRevision, "never").ConfigureAwait(false);
-            Require(lockedGet.Status == 423 && lockedGet.JsonBody.GetProperty("error").GetString() == "vault_locked",
-                "A post-lock read was not refused with vault_locked.");
-            Require(lockedSave.Status == 423, "A post-lock save was not refused.");
-            await browser.EvaluateAsync("location.reload()").ConfigureAwait(false);
+            S13T1Response? lockedGet = null;
+            S13T1Response? lockedSave = null;
+            try
+            {
+                lockedGet = await S13T1RequestAsync(url + "api/document", token).ConfigureAwait(false);
+            }
+            catch (HttpRequestException)
+            {
+            }
+
+            try
+            {
+                lockedSave = await S13T1SaveAsync(url, token, browserRevision, "never").ConfigureAwait(false);
+            }
+            catch (HttpRequestException)
+            {
+            }
+
+            Require(lockedGet is null ||
+                    lockedGet.Status == 423 && lockedGet.JsonBody.GetProperty("error").GetString() == "vault_locked",
+                "A post-lock read returned private content instead of a refusal or a closed bridge.");
+            Require(lockedSave is null || lockedSave.Status == 423,
+                "A post-lock save was not refused or the bridge did not close.");
             var lockedStatus = await browser.WaitForAsync("document.getElementById('status').textContent",
-                value => value.Contains("vault is locked", StringComparison.Ordinal), TimeSpan.FromSeconds(20)).ConfigureAwait(false);
-            Require(lockedStatus.Contains("vault is locked", StringComparison.Ordinal),
-                "The browser did not show the lock refusal after reload.");
-            Console.WriteLine("OBS after lock: cliWorkingSet=" + openProcess.WorkingSet64.ToString(CultureInfo.InvariantCulture) +
-                "B serviceWorkingSet=" + service.Process.WorkingSet64.ToString(CultureInfo.InvariantCulture) + "B");
-            Console.WriteLine("PASS lock revokes read/save and the browser's reload fails closed");
+                value => value.Contains("session ended", StringComparison.Ordinal) ||
+                    value.Contains("no longer reachable", StringComparison.Ordinal), TimeSpan.FromSeconds(20)).ConfigureAwait(false);
+            var cleared = await browser.EvaluateStringAsync(
+                "document.getElementById('preview-view').textContent.length + " +
+                "document.getElementById('editor').value.length + document.getElementById('name').textContent.length + " +
+                "(document.querySelector('meta[name=mb-session]') === null ? 0 : 1)")
+                .ConfigureAwait(false);
+            Require((lockedStatus.Contains("session ended", StringComparison.Ordinal) ||
+                     lockedStatus.Contains("no longer reachable", StringComparison.Ordinal)) && cleared == "0",
+                "The lock did not clear browser document content, draft and capability.");
+            Console.WriteLine("PASS lock revokes reads/saves, stops the bridge, and clears actual browser content and draft");
 
             await browser.DisposeAsync().ConfigureAwait(false);
             browser = null;
@@ -571,6 +594,7 @@ internal static partial class OwnerServiceSmoke
             this.process = process;
             this.socket = socket;
         }
+        public int ProcessId => process.Id;
 
         public static async Task<S13T1Browser> StartAsync(string chromePath, string profileDirectory, string url)
         {
@@ -636,6 +660,18 @@ internal static partial class OwnerServiceSmoke
                 browser.Dispose();
                 throw;
             }
+        }
+        public async Task NavigateAsync(string url)
+        {
+            await CommandAsync("Page.navigate", new Dictionary<string, object?>
+            {
+                ["url"] = url,
+            }).ConfigureAwait(false);
+        }
+        public async Task ReloadAsync()
+        {
+            await CommandAsync("Page.reload", new Dictionary<string, object?> { ["ignoreCache"] = true })
+                .ConfigureAwait(false);
         }
 
         public async Task<string> EvaluateStringAsync(string expression)

@@ -141,6 +141,12 @@ public interface IManagedResourceStore : IManagedResourceReader
 public interface IVaultLifecycle
 {
     string State { get; }
+    /// <summary>
+    /// Persistent unlock generation. It changes on each successful unlock,
+    /// including after a process restart, so owner surfaces can discard stale
+    /// sessions without retaining a vault key.
+    /// </summary>
+    long UnlockEpoch { get; }
     bool Provision(string passphrase, out string? recoveryCode);
     bool Unlock(string credential, bool useRecoveryCode);
     Task LockAsync();

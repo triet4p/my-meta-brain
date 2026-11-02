@@ -39,6 +39,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
     private TaskCompletionSource? _operationsDrained;
     private CancellationTokenSource? _lockCancellation;
     private CancellationTokenSource _refreshCancellation = new();
+    private long _unlockEpoch;
     private long _lockEpoch;
     private volatile bool _sourceEnrollmentRecoveryRequired;
 
@@ -230,6 +231,20 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
             lock (_stateGate)
             {
                 return _lockEpoch;
+            }
+        }
+    }
+    /// <summary>
+    /// Persisted owner unlock generation, exposed without opening a new
+    /// operation so foreground sessions can observe lock/restart transitions.
+    /// </summary>
+    public long UnlockEpoch
+    {
+        get
+        {
+            lock (_stateGate)
+            {
+                return _unlockEpoch;
             }
         }
     }
@@ -1638,6 +1653,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
                 : state.Grants;
             var nextState = state with { UnlockEpoch = nextEpoch, Grants = grants };
             _store.SaveScopeGrantState(_manifest, _dataKey, nextState);
+            _unlockEpoch = nextEpoch;
         }
     }
 

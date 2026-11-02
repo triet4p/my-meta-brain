@@ -7,12 +7,13 @@ using System.Text.Json;
 
 namespace MetaBrain.Connections.DocumentBridge;
 
-/// <summary>
 /// A foreground loopback document bridge. It serves one bound document
 /// revision to one browser tab on an ephemeral 127.0.0.1 port, accepts only
-/// that tab's session capability and same-origin requests, and offers exactly
-/// two owner operations through the already-authorized service pipe: read and
-/// explicit revision-gated save.
+/// that tab's session capability and same-origin requests, and uses the
+/// existing owner-status operation to monitor the shared vault epoch. Its
+/// document authority remains the bound read and explicit revision-gated save
+/// over the already-authorized service pipe; the browser receives no general
+/// owner API.
 ///
 /// The bridge is deliberately a small HTTP/1.1 responder, not a web framework:
 /// one bounded request per connection, no chunked bodies, no cookies, no CORS,
@@ -45,6 +46,7 @@ internal sealed class DocumentBridgeServer : IDisposable
     private byte[] shellContent;
     private readonly HashSet<Task> clients = [];
     private readonly object clientsLock = new();
+    private readonly CancellationTokenSource shutdown = new();
     private int stopped;
 
     private DocumentBridgeServer(TcpListener listener, DocumentSession session, IDocumentOwnerGateway gateway, int port)
@@ -75,25 +77,28 @@ internal sealed class DocumentBridgeServer : IDisposable
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
+        using var run = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, shutdown.Token);
+        var runToken = run.Token;
+        var lifecycleMonitor = MonitorSessionAsync(runToken);
         try
         {
-            while (!cancellationToken.IsCancellationRequested)
+            while (!runToken.IsCancellationRequested)
             {
                 TcpClient client;
                 try
                 {
-                    client = await listener.AcceptTcpClientAsync(cancellationToken).ConfigureAwait(false);
+                    client = await listener.AcceptTcpClientAsync(runToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
                     break;
                 }
-                catch (SocketException) when (cancellationToken.IsCancellationRequested || Volatile.Read(ref stopped) != 0)
+                catch (SocketException) when (runToken.IsCancellationRequested || Volatile.Read(ref stopped) != 0)
                 {
                     break;
                 }
 
-                var task = HandleClientAsync(client, cancellationToken);
+                var task = HandleClientAsync(client, runToken);
                 lock (clientsLock)
                 {
                     clients.Add(task);
@@ -107,8 +112,6 @@ internal sealed class DocumentBridgeServer : IDisposable
                             clients.Remove(completed);
                         }
 
-                        // Observe a fault so an unexpected handler failure never
-                        // surfaces as an unobserved task exception.
                         _ = completed.Exception;
                     },
                     CancellationToken.None,
@@ -119,23 +122,34 @@ internal sealed class DocumentBridgeServer : IDisposable
         finally
         {
             Stop();
+            try
+            {
+                await lifecycleMonitor.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+
             await WaitForClientsAsync().ConfigureAwait(false);
         }
     }
 
     public void Stop()
     {
-        if (Interlocked.Exchange(ref stopped, 1) != 0)
+        if (Interlocked.Exchange(ref stopped, 1) == 0)
         {
-            return;
+            try
+            {
+                listener.Stop();
+            }
+            catch (SocketException)
+            {
+            }
         }
 
-        try
+        if (!shutdown.IsCancellationRequested)
         {
-            listener.Stop();
-        }
-        catch (SocketException)
-        {
+            shutdown.Cancel();
         }
     }
 
@@ -143,10 +157,50 @@ internal sealed class DocumentBridgeServer : IDisposable
     {
         Stop();
         documentGate.Dispose();
+        shutdown.Dispose();
         CryptographicOperations.ZeroMemory(shellContent);
         shellContent = [];
     }
 
+
+    private async Task MonitorSessionAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                if (session.IsExpired(DateTimeOffset.UtcNow))
+                {
+                    Stop();
+                    return;
+                }
+
+                using var probe = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                probe.CancelAfter(TimeSpan.FromSeconds(2));
+                var status = await gateway.GetStatusAsync(probe.Token).ConfigureAwait(false);
+                if (!status.Success ||
+                    !string.Equals(status.VaultState, "unlocked", StringComparison.Ordinal) ||
+                    status.UnlockEpoch != session.UnlockEpoch)
+                {
+                    Stop();
+                    return;
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                Stop();
+            }
+        }
+        catch (Exception exception) when (exception is IOException or SocketException or ObjectDisposedException or TimeoutException)
+        {
+            Stop();
+        }
+    }
     private async Task WaitForClientsAsync()
     {
         Task[] snapshot;
@@ -305,6 +359,17 @@ internal sealed class DocumentBridgeServer : IDisposable
                 await WriteAsync(stream, 200, "OK", DocumentBridgeAssets.CssContentType,
                     Encoding.UTF8.GetBytes(DocumentBridgeAssets.Css), cancellationToken).ConfigureAwait(false);
                 return;
+            case ("GET", "/api/session"):
+                if (!SessionAccepted(request))
+                {
+                    await WriteErrorAsync(stream, SessionError(request), cancellationToken).ConfigureAwait(false);
+                    return;
+                }
+
+                await WriteAsync(stream, 200, "OK", "application/json; charset=utf-8",
+                    JsonSerializer.SerializeToUtf8Bytes(new { status = "active" }, JsonOptions), cancellationToken)
+                    .ConfigureAwait(false);
+                return;
             case ("GET", "/api/document"):
                 if (!SessionAccepted(request))
                 {
@@ -381,7 +446,8 @@ internal sealed class DocumentBridgeServer : IDisposable
                 return;
             }
 
-            var read = await gateway.ReadAsync(session.FileId, session.ContentRevision, cancellationToken).ConfigureAwait(false);
+            var read = await gateway.ReadAsync(
+                session.FileId, session.ContentRevision, session.UnlockEpoch, cancellationToken).ConfigureAwait(false);
             if (!read.Success)
             {
                 await WriteErrorAsync(stream, read.ErrorCode ?? "service_rejected_request", cancellationToken).ConfigureAwait(false);
@@ -391,6 +457,11 @@ internal sealed class DocumentBridgeServer : IDisposable
             var content = read.Content;
             try
             {
+                if (read.UnlockEpoch != session.UnlockEpoch)
+                {
+                    await WriteErrorAsync(stream, "session_expired", cancellationToken).ConfigureAwait(false);
+                    return;
+                }
                 var analysis = DocumentSurface.Analyze(session.Name, content);
                 if (read.Revision != session.ContentRevision || read.Length != content.Length)
                 {
@@ -444,7 +515,8 @@ internal sealed class DocumentBridgeServer : IDisposable
                 return;
             }
 
-            var read = await gateway.ReadAsync(session.FileId, session.ContentRevision, cancellationToken).ConfigureAwait(false);
+            var read = await gateway.ReadAsync(
+                session.FileId, session.ContentRevision, session.UnlockEpoch, cancellationToken).ConfigureAwait(false);
             if (!read.Success)
             {
                 await WriteErrorAsync(stream, read.ErrorCode ?? "service_rejected_request", cancellationToken).ConfigureAwait(false);
@@ -454,6 +526,11 @@ internal sealed class DocumentBridgeServer : IDisposable
             var content = read.Content;
             try
             {
+                if (read.UnlockEpoch != session.UnlockEpoch)
+                {
+                    await WriteErrorAsync(stream, "session_expired", cancellationToken).ConfigureAwait(false);
+                    return;
+                }
                 var analysis = DocumentSurface.Analyze(session.Name, content);
                 if (read.Revision != session.ContentRevision || read.Length != content.Length)
                 {
@@ -673,7 +750,8 @@ internal sealed class DocumentBridgeServer : IDisposable
                     return;
                 }
 
-                var saved = await gateway.SaveAsync(session.FileId, payload.ExpectedRevision, encoded, cancellationToken)
+                var saved = await gateway.SaveAsync(
+                    session.FileId, payload.ExpectedRevision, session.UnlockEpoch, encoded, cancellationToken)
                     .ConfigureAwait(false);
                 if (!saved.Success)
                 {

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net;
+using System.Net.Http;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
@@ -366,16 +367,30 @@ internal static partial class OwnerServiceSmoke
                 var lockResult = await RunOwnerCommandAsync(
                     executable, "owner", "lock", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
                 Require(lockResult.ExitCode == 0, "The owner did not lock the synthetic vault for the S13-T2 negative.");
-                var lockedRead = await S13T2PageRequestAsync(url, token, 0, 0, "preview").ConfigureAwait(false);
-                Require(lockedRead.Status == 423 && lockedRead.JsonBody.GetProperty("error").GetString() == "vault_locked",
+                S13T1Response? lockedRead = null;
+                try
+                {
+                    lockedRead = await S13T2PageRequestAsync(url, token, 0, 0, "preview").ConfigureAwait(false);
+                }
+                catch (HttpRequestException)
+                {
+                }
+
+                Require(lockedRead is null ||
+                        lockedRead.Status == 423 && lockedRead.JsonBody.GetProperty("error").GetString() == "vault_locked",
                     "A locked vault still served a paged document response.");
-                await browser.EvaluateAsync("location.reload()").ConfigureAwait(false);
                 var lockedStatus = await browser.WaitForAsync("document.getElementById('status').textContent",
-                    value => value.Contains("vault is locked", StringComparison.Ordinal), TimeSpan.FromSeconds(20))
+                    value => value.Contains("session ended", StringComparison.Ordinal) ||
+                        value.Contains("no longer reachable", StringComparison.Ordinal), TimeSpan.FromSeconds(20))
                     .ConfigureAwait(false);
-                Require(lockedStatus.Contains("vault is locked", StringComparison.Ordinal),
-                    "The actual browser did not fail closed after the owner locked the vault.");
-                Console.WriteLine("PASS one-megabyte paging/cancel is per bound file, preserves bytes, and locked read refuses with 423");
+                var cleared = await browser.EvaluateStringAsync(
+                    "document.getElementById('preview-view').textContent.length + " +
+                    "document.getElementById('editor').value.length + document.getElementById('name').textContent.length")
+                    .ConfigureAwait(false);
+                Require((lockedStatus.Contains("session ended", StringComparison.Ordinal) ||
+                         lockedStatus.Contains("no longer reachable", StringComparison.Ordinal)) && cleared == "0",
+                    "The actual browser retained document content after the lock ended its session.");
+                Console.WriteLine("PASS one-megabyte paging/cancel preserves bytes; lock closes the bridge and clears the browser page");
             }).ConfigureAwait(false);
 
             Require(!externalProbe.Pending(), "An external Markdown resource request remained queued after preview sessions.");

@@ -982,7 +982,7 @@ internal static class OwnerControlCli
         }
 
         var gateway = new DocumentBridge.OwnerDocumentGateway(controlPipe);
-        var read = await gateway.ReadAsync(fileId, revision ?? 0, CancellationToken.None).ConfigureAwait(false);
+        var read = await gateway.ReadAsync(fileId, revision ?? 0, null, CancellationToken.None).ConfigureAwait(false);
         if (!read.Success)
         {
             Console.Error.WriteLine("ERROR " + (read.ErrorCode ?? "service_rejected_request") + ": the document revision could not be read.");
@@ -1072,6 +1072,7 @@ internal static class OwnerControlCli
                 read.Revision,
                 read.Length,
                 read.Sha256,
+                read.UnlockEpoch,
                 analysis.Profile,
                 now,
                 expiresUtc,

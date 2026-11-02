@@ -3,12 +3,12 @@ using System.Text;
 
 namespace MetaBrain.Connections.DocumentBridge;
 
-/// <summary>
 /// One foreground document session. It binds exactly one workspace file, the
-/// content revision the owner saw, the two operations the browser may perform
-/// (read and explicit save), and a lifetime. The session secret lives only in
-/// this CLI process and is handed to the served page as a request header; it
-/// is never in a URL, a cookie, a browser storage entry or a log.
+/// content revision and persisted unlock epoch the owner saw, the two
+/// operations the browser may perform (read and explicit save), and a lifetime.
+/// The session secret lives only in this CLI process and is handed to the served
+/// page as a request header; it is never in a URL, a cookie, a browser storage
+/// entry or a log.
 /// </summary>
 internal sealed class DocumentSession : IDisposable
 {
@@ -21,6 +21,7 @@ internal sealed class DocumentSession : IDisposable
         long contentRevision,
         long length,
         string sha256,
+        long unlockEpoch,
         DocumentSurfaceProfile profile,
         DateTimeOffset openedUtc,
         DateTimeOffset? expiresUtc,
@@ -41,6 +42,7 @@ internal sealed class DocumentSession : IDisposable
         ContentRevision = contentRevision;
         Length = length;
         Sha256 = sha256;
+        UnlockEpoch = unlockEpoch;
         Profile = profile;
         OpenedUtc = openedUtc;
         ExpiresUtc = expiresUtc;
@@ -58,6 +60,7 @@ internal sealed class DocumentSession : IDisposable
     public long Length { get; private set; }
 
     public string Sha256 { get; private set; }
+    public long UnlockEpoch { get; }
 
     public DocumentSurfaceProfile Profile { get; private set; }
 

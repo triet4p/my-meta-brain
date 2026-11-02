@@ -114,7 +114,7 @@ button:disabled { opacity: 0.5; }
 'use strict';
 (() => {
     const tokenElement = document.querySelector('meta[name="mb-session"]');
-    const token = tokenElement ? tokenElement.content : '';
+    let token = tokenElement ? tokenElement.content : '';
     const requestHeaders = { 'X-MetaBrain-Session': token, 'Accept': 'application/json' };
     const locationElement = document.querySelector('meta[name="mb-location"]');
     const locationParts = locationElement ? locationElement.content.split(',') : [];
@@ -141,7 +141,12 @@ button:disabled { opacity: 0.5; }
         previousOffsets: [],
         rawView: Number.isSafeInteger(selectedOffsetValue) && selectedOffsetValue >= 0,
         requestController: null,
-        requestId: 0
+        saveController: null,
+        requestId: 0,
+        generation: 0,
+        revoked: false,
+        sessionCheckInProgress: false,
+        sessionTimer: null
     };
 
     const element = (id) => document.getElementById(id);
@@ -184,6 +189,109 @@ button:disabled { opacity: 0.5; }
         element('next').hidden = true;
         element('previous-column').hidden = true;
         element('next-column').hidden = true;
+    }
+    function isSessionEndError(data) {
+        const code = data && (data.error || data.errorCode);
+        return ['vault_locked', 'session_expired', 'session_invalid', 'session_missing',
+            'service_unavailable', 'transport_unavailable', 'transport_timeout',
+            'unauthorized', 'forbidden'].includes(code);
+    }
+
+    function revokeSession(message) {
+        if (state.revoked) {
+            return;
+        }
+
+        state.revoked = true;
+        state.generation++;
+        state.requestId++;
+        if (state.requestController) {
+            state.requestController.abort();
+            state.requestController = null;
+        }
+        if (state.saveController) {
+            state.saveController.abort();
+            state.saveController = null;
+        }
+        if (state.sessionTimer !== null) {
+            clearInterval(state.sessionTimer);
+            state.sessionTimer = null;
+        }
+
+        token = '';
+        requestHeaders['X-MetaBrain-Session'] = '';
+        if (tokenElement) {
+            tokenElement.content = '';
+            tokenElement.remove();
+        }
+        state.revision = null;
+        state.editable = false;
+        state.editing = false;
+        state.editorInitialized = false;
+        state.editorBaseline = null;
+        state.format = null;
+        state.metadata = null;
+        state.page = null;
+        state.initialOffset = 0;
+        state.anchorStart = null;
+        state.anchorLength = null;
+        state.currentOffset = 0;
+        state.nextOffset = null;
+        state.currentColumnOffset = 0;
+        state.nextColumnOffset = null;
+        state.previousOffsets = [];
+        element('name').textContent = '';
+        element('meta').textContent = '';
+        element('preview-view').replaceChildren();
+        element('editor').value = '';
+        element('editor').hidden = true;
+        element('preview-view').hidden = false;
+        element('page-status').textContent = '';
+        element('discard-confirm').hidden = true;
+        element('edit').disabled = true;
+        element('save').hidden = true;
+        element('previous').hidden = true;
+        element('next').hidden = true;
+        element('previous-column').hidden = true;
+        element('next-column').hidden = true;
+        element('source').hidden = true;
+        element('cancel').hidden = true;
+        element('cancel-edit').hidden = true;
+        element('preview').disabled = true;
+        document.title = 'Document session ended — Meta Brain';
+        setStatus(message, true);
+    }
+
+    async function checkSession() {
+        if (state.revoked || state.sessionCheckInProgress) {
+            return;
+        }
+
+        state.sessionCheckInProgress = true;
+        const generation = state.generation;
+        try {
+            const response = await fetch('/api/session', {
+                method: 'GET',
+                headers: requestHeaders,
+                credentials: 'omit',
+                cache: 'no-store'
+            });
+            const data = await response.json();
+            if (generation !== state.generation || state.revoked) {
+                return;
+            }
+            if (!response.ok || data.status !== 'active') {
+                revokeSession('The document session ended. Its in-page content and draft were cleared.');
+            }
+        } catch (error) {
+            if (generation === state.generation && !state.revoked) {
+                revokeSession('The document session is no longer reachable. Its in-page content and draft were cleared.');
+            }
+        } finally {
+            if (generation === state.generation) {
+                state.sessionCheckInProgress = false;
+            }
+        }
     }
 
     function updateMetadata(data) {
@@ -625,10 +733,14 @@ button:disabled { opacity: 0.5; }
     }
 
     async function readPage(offset, columnOffset = 0) {
+        if (state.revoked) {
+            return;
+        }
         if (state.requestController) {
             state.requestController.abort();
         }
         const requestId = ++state.requestId;
+        const generation = state.generation;
         const controller = new AbortController();
         state.requestController = controller;
         element('cancel').hidden = false;
@@ -653,25 +765,29 @@ button:disabled { opacity: 0.5; }
                 signal: controller.signal
             });
             const data = await response.json();
-            if (requestId !== state.requestId) {
+            if (requestId !== state.requestId || generation !== state.generation || state.revoked) {
                 return;
             }
             if (!response.ok) {
-                setError(data.message || data.error || 'The document page is unavailable.');
+                if (isSessionEndError(data)) {
+                    revokeSession('The document session ended. Its in-page content and draft were cleared.');
+                } else {
+                    setError(data.message || data.error || 'The document page is unavailable.');
+                }
                 return;
             }
             renderPage(data);
         } catch (error) {
-            if (requestId !== state.requestId) {
+            if (requestId !== state.requestId || generation !== state.generation || state.revoked) {
                 return;
             }
             if (error && error.name === 'AbortError') {
                 setStatus('Preview page request cancelled. No document bytes were changed.', false);
             } else {
-                setError('The document session is not reachable.');
+                revokeSession('The document session is no longer reachable. Its in-page content and draft were cleared.');
             }
         } finally {
-            if (requestId === state.requestId) {
+            if (requestId === state.requestId && generation === state.generation && !state.revoked) {
                 state.requestController = null;
                 element('cancel').hidden = true;
                 element('previous').disabled = false;
@@ -774,15 +890,16 @@ button:disabled { opacity: 0.5; }
         state.previousOffsets = [];
         state.currentColumnOffset = 0;
         state.nextColumnOffset = null;
-        readPage(state.currentOffset, 0);
+        readPage(state.format === 'csv' ? 0 : state.currentOffset, 0);
     }
 
     async function showEditor() {
-        if (!state.editable) {
+        if (state.revoked || !state.editable) {
             return;
         }
         if (!state.editorInitialized) {
             const requestId = ++state.requestId;
+            const generation = state.generation;
             const controller = new AbortController();
             state.requestController = controller;
             element('cancel').hidden = false;
@@ -796,11 +913,15 @@ button:disabled { opacity: 0.5; }
                     signal: controller.signal
                 });
                 const data = await response.json();
-                if (requestId !== state.requestId) {
+                if (requestId !== state.requestId || generation !== state.generation || state.revoked) {
                     return;
                 }
                 if (!response.ok || typeof data.text !== 'string') {
-                    setError(data.message || data.error || 'This document has no editable text.');
+                    if (isSessionEndError(data)) {
+                        revokeSession('The document session ended. Its in-page content and draft were cleared.');
+                    } else {
+                        setError(data.message || data.error || 'This document has no editable text.');
+                    }
                     return;
                 }
                 updateMetadata(data);
@@ -808,23 +929,26 @@ button:disabled { opacity: 0.5; }
                 state.editorBaseline = element('editor').value;
                 state.editorInitialized = true;
             } catch (error) {
-                if (requestId !== state.requestId) {
+                if (requestId !== state.requestId || generation !== state.generation || state.revoked) {
                     return;
                 }
                 if (error && error.name === 'AbortError') {
                     setStatus('Document request cancelled. Nothing was saved.', false);
                 } else {
-                    setError('The document session is not reachable.');
+                    revokeSession('The document session is no longer reachable. Its in-page content and draft were cleared.');
                 }
                 return;
             } finally {
-                if (requestId === state.requestId) {
+                if (requestId === state.requestId && generation === state.generation && !state.revoked) {
                     state.requestController = null;
                     element('cancel').hidden = true;
                 }
             }
         }
 
+        if (state.revoked) {
+            return;
+        }
         state.editing = true;
         element('preview-view').hidden = true;
         element('editor').hidden = false;
@@ -840,7 +964,7 @@ button:disabled { opacity: 0.5; }
     }
 
     async function saveDocument() {
-        if (!state.editing || !state.editable || state.revision === null) {
+        if (state.revoked || !state.editing || !state.editable || state.revision === null || state.saveController) {
             return;
         }
 
@@ -850,49 +974,61 @@ button:disabled { opacity: 0.5; }
             return;
         }
 
+        const generation = state.generation;
+        const controller = new AbortController();
+        state.saveController = controller;
         setStatus('Saving the explicit revision…', false);
-        let response;
         try {
-            response = await fetch('/api/document/save', {
+            const response = await fetch('/api/document/save', {
                 method: 'POST',
                 headers: Object.assign({}, requestHeaders, { 'Content-Type': 'application/json' }),
                 body: JSON.stringify({ expectedRevision: state.revision, text: text }),
                 credentials: 'omit',
-                cache: 'no-store'
+                cache: 'no-store',
+                signal: controller.signal
             });
+            const data = await response.json();
+            if (generation !== state.generation || state.revoked) {
+                return;
+            }
+            if (!response.ok) {
+                if (isSessionEndError(data)) {
+                    revokeSession('The document session ended. Its in-page content and draft were cleared.');
+                } else {
+                    setStatus(data.message || data.error || 'The save was refused; the draft stays in this page.', true);
+                }
+                return;
+            }
+
+            state.editorBaseline = text;
+            updateRevision(data.contentRevision, data.length);
+            if (data.status !== 'unchanged') {
+                state.anchorStart = null;
+                state.anchorLength = null;
+                state.initialOffset = 0;
+            }
+            state.page = null;
+            state.nextOffset = null;
+            state.currentColumnOffset = 0;
+            state.nextColumnOffset = null;
+            state.previousOffsets = [];
+            setStatus(data.status === 'unchanged'
+                ? 'No change: the bound revision is still ' + data.contentRevision + '.'
+                : 'Saved revision ' + data.contentRevision + '.', false);
         } catch (error) {
-            setStatus('The document session is not reachable; the draft stays in this page.', true);
-            return;
+            if (generation !== state.generation || state.revoked) {
+                return;
+            }
+            if (error && error.name === 'AbortError') {
+                setStatus('The save was cancelled; the draft stays in this page.', true);
+            } else {
+                revokeSession('The document session is no longer reachable. Its in-page content and draft were cleared.');
+            }
+        } finally {
+            if (generation === state.generation && !state.revoked) {
+                state.saveController = null;
+            }
         }
-
-        let data;
-        try {
-            data = await response.json();
-        } catch (error) {
-            setStatus('The document session returned an unreadable save response.', true);
-            return;
-        }
-
-        if (!response.ok) {
-            setStatus(data.message || data.error || 'The save was refused; the draft stays in this page.', true);
-            return;
-        }
-
-        state.editorBaseline = text;
-        updateRevision(data.contentRevision, data.length);
-        if (data.status !== 'unchanged') {
-            state.anchorStart = null;
-            state.anchorLength = null;
-            state.initialOffset = 0;
-        }
-        state.page = null;
-        state.nextOffset = null;
-        state.currentColumnOffset = 0;
-        state.nextColumnOffset = null;
-        state.previousOffsets = [];
-        setStatus(data.status === 'unchanged'
-            ? 'No change: the bound revision is still ' + data.contentRevision + '.'
-            : 'Saved revision ' + data.contentRevision + '.', false);
     }
 
     element('preview').addEventListener('click', showPreview);
@@ -908,11 +1044,8 @@ button:disabled { opacity: 0.5; }
             ? 'Unsaved draft is held only in this page; nothing is saved until Save revision is selected.'
             : 'The draft matches the saved bound revision; nothing was saved.', false);
     });
-    window.addEventListener('beforeunload', (event) => {
-        if (hasUnsavedDraft()) {
-            event.preventDefault();
-            event.returnValue = '';
-        }
+    window.addEventListener('pagehide', () => {
+        revokeSession('The document session ended when this page was left; its in-page content and draft were cleared.');
     });
 
     element('previous').addEventListener('click', () => {
@@ -940,6 +1073,13 @@ button:disabled { opacity: 0.5; }
             readPage(state.currentOffset, state.nextColumnOffset);
         }
     });
+    window.addEventListener('pageshow', () => {
+        if (!state.revoked) {
+            checkSession();
+        }
+    });
+    checkSession();
+    state.sessionTimer = setInterval(checkSession, 500);
     readPage(state.initialOffset, 0);
 })();
 """;

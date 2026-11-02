@@ -852,3 +852,17 @@ the assignment can fail before the sentinel check or any child starts.
 **Root cause:** `HTMLTextAreaElement.value` normalizes CRLF/CR to LF, while the source string used as the editor baseline still contains the original newline convention.
 **Fix / workaround:** Assign the bound source text to the textarea first, then snapshot `textarea.value` as the in-page baseline. Keep the server's bound newline policy responsible for exact byte-preserving saves.
 **Watch out for:** Compare browser-edited values to the DOM-normalized baseline, not raw source text; never normalize the persisted source bytes to simplify dirty-state checks.
+
+## [2026-11-03] CSV row cursors are not source-text offsets
+
+**Symptom:** After paging a wide CSV table to a later row and column slice, switching to raw source began partway through a CSV row instead of at the header.
+**Root cause:** The table's row cursor and the source view's UTF-16 character offset shared `state.currentOffset`, so a CSV row number was incorrectly reused as a raw-text offset.
+**Fix / workaround:** When toggling a CSV between table and raw-source modes, begin at offset zero; retain the current offset only for formats whose preview/source cursors share the same text units.
+**Watch out for:** Any mode switch where cursors use different units (rows versus text characters) must reset or explicitly map the cursor rather than reusing the numeric value.
+
+## [2026-11-03] Browser smoke readiness must await the rendered state
+
+**Symptom:** A Chromium smoke intermittently failed its preview assertion while the browser was correctly showing the initial “Loading one bounded page” status.
+**Root cause:** The test waited only for a non-empty status field, which is true before the asynchronous page request renders the bound preview.
+**Fix / workaround:** Wait for the actual bound-preview status before inspecting the preview DOM.
+**Watch out for:** A non-empty DOM value is not an async completion signal; wait for the observable terminal state of the operation being asserted.

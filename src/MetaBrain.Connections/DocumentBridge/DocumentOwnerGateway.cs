@@ -9,12 +9,19 @@ internal sealed record DocumentReadResult(
     long Revision,
     long Length,
     string Sha256,
+    long UnlockEpoch,
     string? ErrorCode);
 
 internal sealed record DocumentSaveResult(
     bool Success,
     long Revision,
     string? Sha256,
+    string? ErrorCode);
+
+internal sealed record DocumentOwnerStatusResult(
+    bool Success,
+    string? VaultState,
+    long UnlockEpoch,
     string? ErrorCode);
 
 /// <summary>
@@ -25,40 +32,59 @@ internal sealed record DocumentSaveResult(
 /// </summary>
 internal interface IDocumentOwnerGateway
 {
-    Task<DocumentReadResult> ReadAsync(string fileId, long revision, CancellationToken cancellationToken);
+    Task<DocumentReadResult> ReadAsync(
+        string fileId,
+        long revision,
+        long? unlockEpoch,
+        CancellationToken cancellationToken);
 
-    Task<DocumentSaveResult> SaveAsync(string fileId, long expectedContentRevision, byte[] content, CancellationToken cancellationToken);
+    Task<DocumentSaveResult> SaveAsync(
+        string fileId,
+        long expectedContentRevision,
+        long unlockEpoch,
+        byte[] content,
+        CancellationToken cancellationToken);
+
+    Task<DocumentOwnerStatusResult> GetStatusAsync(CancellationToken cancellationToken);
 }
 
 internal sealed class OwnerDocumentGateway(string controlPipe) : IDocumentOwnerGateway
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    public async Task<DocumentReadResult> ReadAsync(string fileId, long revision, CancellationToken cancellationToken)
+    public async Task<DocumentReadResult> ReadAsync(
+        string fileId,
+        long revision,
+        long? unlockEpoch,
+        CancellationToken cancellationToken)
     {
         var request = new ServiceRequest(
             ServiceRequestHandler.CurrentProtocolVersion,
             ServiceRequestHandler.OwnerWorkspaceFileReadOperation,
             fileId,
-            WorkspaceContentRevision: revision);
+            WorkspaceContentRevision: revision,
+            WorkspaceUnlockEpoch: unlockEpoch);
         var result = await PipeClient.InvokeOwnerAsync(controlPipe, JsonSerializer.Serialize(request, JsonOptions), cancellationToken)
             .ConfigureAwait(false);
         using var document = ParseReply(result);
         if (document is null)
         {
-            return new DocumentReadResult(false, [], 0, 0, string.Empty, "service_unavailable");
+            return new DocumentReadResult(false, [], 0, 0, string.Empty, 0, "service_unavailable");
         }
 
         var root = document.RootElement;
         if (!result.Success)
         {
-            return new DocumentReadResult(false, [], 0, 0, string.Empty, ErrorCode(root) ?? "service_unavailable");
+            return new DocumentReadResult(
+                false, [], 0, 0, string.Empty, 0, ErrorCode(root) ?? "service_unavailable");
         }
 
         if (!root.TryGetProperty("contentBase64", out var contentValue) || contentValue.ValueKind != JsonValueKind.String ||
-            !root.TryGetProperty("workspaceFile", out var file) || file.ValueKind != JsonValueKind.Object)
+            !root.TryGetProperty("workspaceFile", out var file) || file.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("unlockEpoch", out var epochValue) ||
+            epochValue.ValueKind != JsonValueKind.Number || !epochValue.TryGetInt64(out var epoch) || epoch < 0)
         {
-            return new DocumentReadResult(false, [], 0, 0, string.Empty, ErrorCode(root) ?? "service_protocol_error");
+            return new DocumentReadResult(false, [], 0, 0, string.Empty, 0, ErrorCode(root) ?? "service_protocol_error");
         }
 
         byte[] content;
@@ -68,7 +94,7 @@ internal sealed class OwnerDocumentGateway(string controlPipe) : IDocumentOwnerG
         }
         catch (FormatException)
         {
-            return new DocumentReadResult(false, [], 0, 0, string.Empty, "service_protocol_error");
+            return new DocumentReadResult(false, [], 0, 0, string.Empty, 0, "service_protocol_error");
         }
 
         return new DocumentReadResult(
@@ -77,12 +103,14 @@ internal sealed class OwnerDocumentGateway(string controlPipe) : IDocumentOwnerG
             Number(file, "revision"),
             Number(file, "length"),
             Text(file, "sha256") ?? string.Empty,
+            epoch,
             null);
     }
 
     public async Task<DocumentSaveResult> SaveAsync(
         string fileId,
         long expectedContentRevision,
+        long unlockEpoch,
         byte[] content,
         CancellationToken cancellationToken)
     {
@@ -91,9 +119,10 @@ internal sealed class OwnerDocumentGateway(string controlPipe) : IDocumentOwnerG
             ServiceRequestHandler.OwnerWorkspaceFileReviseOperation,
             fileId,
             ContentBase64: Convert.ToBase64String(content),
-            WorkspaceContentRevision: expectedContentRevision);
-        var result = await PipeClient.InvokeOwnerAsync(controlPipe, JsonSerializer.Serialize(request, JsonOptions), cancellationToken)
-            .ConfigureAwait(false);
+            WorkspaceContentRevision: expectedContentRevision,
+            WorkspaceUnlockEpoch: unlockEpoch);
+        var result = await PipeClient.InvokeOwnerAsync(
+            controlPipe, JsonSerializer.Serialize(request, JsonOptions), cancellationToken).ConfigureAwait(false);
         using var document = ParseReply(result);
         if (document is null)
         {
@@ -111,6 +140,36 @@ internal sealed class OwnerDocumentGateway(string controlPipe) : IDocumentOwnerG
             : new DocumentSaveResult(false, 0, null, ErrorCode(root) ?? "service_protocol_error");
     }
 
+    public async Task<DocumentOwnerStatusResult> GetStatusAsync(CancellationToken cancellationToken)
+    {
+        var request = new ServiceRequest(
+            ServiceRequestHandler.CurrentProtocolVersion,
+            ServiceRequestHandler.OwnerStatusOperation);
+        var result = await PipeClient.InvokeOwnerAsync(
+            controlPipe, JsonSerializer.Serialize(request, JsonOptions), cancellationToken).ConfigureAwait(false);
+        using var document = ParseReply(result);
+        if (document is null)
+        {
+            return new DocumentOwnerStatusResult(false, null, 0, "service_unavailable");
+        }
+
+        var root = document.RootElement;
+        if (!result.Success)
+        {
+            return new DocumentOwnerStatusResult(false, null, 0, ErrorCode(root) ?? "service_unavailable");
+        }
+
+        if (!root.TryGetProperty("vaultState", out var stateValue) ||
+            stateValue.ValueKind != JsonValueKind.String ||
+            !root.TryGetProperty("unlockEpoch", out var epochValue) ||
+            epochValue.ValueKind != JsonValueKind.Number ||
+            !epochValue.TryGetInt64(out var epoch) || epoch < 0)
+        {
+            return new DocumentOwnerStatusResult(false, null, 0, "service_protocol_error");
+        }
+
+        return new DocumentOwnerStatusResult(true, stateValue.GetString(), epoch, null);
+    }
     private static JsonDocument? ParseReply(ClientResult result)
     {
         try
