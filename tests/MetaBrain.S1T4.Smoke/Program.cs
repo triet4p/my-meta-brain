@@ -84,7 +84,8 @@ internal static class Program
                 string.Equals(args[0], "s12-t4", StringComparison.Ordinal) ||
                 string.Equals(args[0], "s12-t5", StringComparison.Ordinal) ||
                 string.Equals(args[0], "s12-t5-legacy", StringComparison.Ordinal) ||
-                string.Equals(args[0], "s12-t5-install", StringComparison.Ordinal))
+                string.Equals(args[0], "s12-t5-install", StringComparison.Ordinal) ||
+                string.Equals(args[0], "s13-t1", StringComparison.Ordinal))
             ? args[0]
                 : args.Length == 5 &&
                   string.Equals(args[0], "s8-t5", StringComparison.Ordinal)
@@ -151,6 +152,7 @@ internal static class Program
             Console.Error.WriteLine("S12-T5 invocation: MetaBrain.S1T4.Smoke.exe s12-t5 <MetaBrain.Connections.exe>");
             Console.Error.WriteLine("S12-T5 legacy invocation: MetaBrain.S1T4.Smoke.exe s12-t5-legacy <MetaBrain.Connections.exe>");
             Console.Error.WriteLine("S12-T5 installer invocation: MetaBrain.S1T4.Smoke.exe s12-t5-install <MetaBrain.Installer.exe>");
+            Console.Error.WriteLine("S13-T1 invocation: MetaBrain.S1T4.Smoke.exe s13-t1 <MetaBrain.Connections.exe> (needs an installed Chromium browser or CHROME_PATH)");
             return 2;
         }
 
@@ -242,6 +244,9 @@ internal static class Program
                     break;
                 case "s12-t5-install":
                     await OwnerServiceSmoke.RunS12T5InstallerPreflightAsync(fullPath).ConfigureAwait(false);
+                    break;
+                case "s13-t1":
+                    await OwnerServiceSmoke.RunS13T1DocumentBridgeAsync(fullPath).ConfigureAwait(false);
                     break;
                 case "s4-t2":
                     await OwnerServiceSmoke.RunS4T2SearchAsync(fullPath).ConfigureAwait(false);

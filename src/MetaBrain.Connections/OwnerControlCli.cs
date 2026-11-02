@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -550,6 +551,213 @@ internal static class OwnerControlCli
         finally
         {
             CryptographicOperations.ZeroMemory(bytes);
+        }
+    }
+
+    /// <summary>
+    /// S13-T1 the foreground document surface. `open <file-id>` binds exactly
+    /// one workspace file and content revision to one browser session with a
+    /// private, same-origin capability, serves the document through the same
+    /// owner service read the CLI uses, and accepts an explicit save only with
+    /// the bound content revision. The command stays in the foreground until
+    /// Ctrl+C, the optional explicit lifetime, or a shutdown; a vault lock
+    /// makes every subsequent read or save fail closed. No document text is
+    /// written to a file, a URL or a log, and the browser receives no key,
+    /// file handle or general owner operation.
+    /// </summary>
+    public static async Task<int> RunOpenAsync(string[] args)
+    {
+        string? controlPipe = null;
+        string? fileId = null;
+        long? revision = null;
+        var noBrowser = false;
+        var lifetimeSeconds = (int?)null;
+        for (var index = 0; index < args.Length;)
+        {
+            var argument = args[index];
+            if (string.Equals(argument, "--no-browser", StringComparison.Ordinal))
+            {
+                noBrowser = true;
+                index++;
+                continue;
+            }
+
+            if (!argument.StartsWith("--", StringComparison.Ordinal))
+            {
+                if (fileId is not null)
+                {
+                    return OpenUsage();
+                }
+
+                fileId = argument;
+                index++;
+                continue;
+            }
+
+            if (index + 1 >= args.Length)
+            {
+                return OpenUsage();
+            }
+
+            var value = args[index + 1];
+            switch (argument)
+            {
+                case "--control-pipe" when controlPipe is null:
+                    controlPipe = value;
+                    break;
+                case "--revision" when long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedRevision) && parsedRevision >= 1:
+                    revision = parsedRevision;
+                    break;
+                case "--lifetime-seconds" when int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedLifetime) && parsedLifetime >= 1:
+                    lifetimeSeconds = parsedLifetime;
+                    break;
+                default:
+                    return OpenUsage();
+            }
+
+            index += 2;
+        }
+
+        if (string.IsNullOrWhiteSpace(controlPipe) || string.IsNullOrWhiteSpace(fileId))
+        {
+            return OpenUsage();
+        }
+
+        var tree = await InvokeOwnerAsync(
+            controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerWorkspaceTreeOperation))
+            .ConfigureAwait(false);
+        if (!tree.Success || (!HasStatus(tree.Reply, "workspace") && !HasStatus(tree.Reply, "workspace_empty")))
+        {
+            WriteServiceError(tree);
+            return 3;
+        }
+
+        string? name = null;
+        if (TryWorkspaceObject(tree.Reply, "workspaceTree", out var workspaceTree) &&
+            workspaceTree.TryGetProperty("nodes", out var nodes) && nodes.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var node in nodes.EnumerateArray())
+            {
+                if (node.TryGetProperty("id", out var idValue) && idValue.ValueKind == JsonValueKind.String &&
+                    string.Equals(idValue.GetString(), fileId, StringComparison.Ordinal) &&
+                    node.TryGetProperty("kind", out var kindValue) && kindValue.ValueKind == JsonValueKind.String &&
+                    string.Equals(kindValue.GetString(), WorkspaceNodeKinds.File, StringComparison.Ordinal) &&
+                    node.TryGetProperty("name", out var nameValue) && nameValue.ValueKind == JsonValueKind.String)
+                {
+                    name = nameValue.GetString();
+                    break;
+                }
+            }
+        }
+
+        if (name is null)
+        {
+            Console.Error.WriteLine("ERROR workspace_not_found: the selected live workspace file is not in the tree.");
+            return 3;
+        }
+
+        var gateway = new DocumentBridge.OwnerDocumentGateway(controlPipe);
+        var read = await gateway.ReadAsync(fileId, revision ?? 0, CancellationToken.None).ConfigureAwait(false);
+        if (!read.Success)
+        {
+            Console.Error.WriteLine("ERROR " + (read.ErrorCode ?? "service_rejected_request") + ": the document revision could not be read.");
+            if (read.ErrorCode is not null && OwnerGuidance.TryGetForCode(read.ErrorCode, out var guidance))
+            {
+                Console.Error.WriteLine("HINT " + guidance);
+            }
+
+            return 3;
+        }
+
+        try
+        {
+            var analysis = DocumentBridge.DocumentSurface.Analyze(name, read.Content);
+            var now = DateTimeOffset.UtcNow;
+            var expiresUtc = lifetimeSeconds is { } seconds
+                ? now.AddSeconds(seconds)
+                : (DateTimeOffset?)null;
+            using var session = new DocumentBridge.DocumentSession(
+                fileId,
+                name,
+                read.Revision,
+                read.Length,
+                read.Sha256,
+                analysis.Profile,
+                now,
+                expiresUtc);
+            using var server = DocumentBridge.DocumentBridgeServer.Start(session, gateway);
+            using var stop = new CancellationTokenSource();
+            var ended = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            ConsoleCancelEventHandler cancel = (_, eventArgs) =>
+            {
+                eventArgs.Cancel = true;
+                if (ended.TrySetResult("closed"))
+                {
+                    stop.Cancel();
+                }
+            };
+            Console.CancelKeyPress += cancel;
+            using var timer = lifetimeSeconds is { } lifetime
+                ? new Timer(
+                    _ =>
+                    {
+                        if (ended.TrySetResult("expired"))
+                        {
+                            stop.Cancel();
+                        }
+                    },
+                    null,
+                    TimeSpan.FromSeconds(lifetime),
+                    Timeout.InfiniteTimeSpan)
+                : null;
+            try
+            {
+                Console.WriteLine(
+                    $"OPEN document id={fileId} name={JsonSerializer.Serialize(name)} revision={read.Revision} " +
+                    $"format={analysis.Profile.FormatLabel} encoding={analysis.Profile.EncodingLabel} " +
+                    $"newlines={analysis.Profile.NewlineLabel} state={analysis.Profile.State} " +
+                    $"editable={analysis.Profile.Editable.ToString().ToLowerInvariant()} url={server.Url}");
+                if (!noBrowser)
+                {
+                    TryOpenBrowser(server.Url);
+                }
+
+                await server.RunAsync(stop.Token).ConfigureAwait(false);
+            }
+            finally
+            {
+                Console.CancelKeyPress -= cancel;
+            }
+
+            Console.WriteLine("OPEN " + (ended.Task.IsCompleted ? await ended.Task.ConfigureAwait(false) : "closed"));
+            return 0;
+        }
+        finally
+        {
+            if (read.Content.Length > 0)
+            {
+                CryptographicOperations.ZeroMemory(read.Content);
+            }
+        }
+    }
+
+    private static int OpenUsage()
+    {
+        Console.Error.WriteLine("Usage: MetaBrain.Cli.exe open <file-id> --control-pipe <pipe> [--revision <n>] [--no-browser] [--lifetime-seconds <n>]");
+        Console.Error.WriteLine("Serves one workspace file and revision to a local browser session; Ctrl+C, the explicit lifetime or lock ends document access.");
+        return 2;
+    }
+
+    private static void TryOpenBrowser(string url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
+        }
+        catch (Exception exception) when (exception is Win32Exception or InvalidOperationException or IOException)
+        {
+            Console.Error.WriteLine("WARN browser_launch_failed: " + exception.GetType().Name + "; open the printed URL in a browser.");
         }
     }
 
@@ -8717,6 +8925,7 @@ internal static class OwnerControlCli
             Console.Error.WriteLine("Owner commands (run `owner <verb> --help` for one command; `owner help --command <verb>` is the same):");
             Console.Error.WriteLine("  vault: status|provision|unlock|recover|lock|upgrade|upgrade-with-recovery-code|rollback|rollback-with-recovery-code|health|audit|diagnostics|retention|backup|restore|restore-with-recovery-code|export");
             Console.Error.WriteLine("  workspace: workspace-status|workspace-tree|workspace-mkdir|workspace-import|workspace-revise|workspace-read|workspace-rename|workspace-move|workspace-copy|workspace-delete-preview|workspace-delete|workspace-restore|workspace-tombstones|workspace-anchor-create|workspace-anchor-list|workspace-purge-preview|workspace-purge|workspace-export-preview|workspace-export");
+            Console.Error.WriteLine("  document (top-level): open <file-id> — foreground loopback browser preview/edit of one workspace file at one content revision");
             Console.Error.WriteLine("  capture: memory-create|memory-revise|memory-import|memory-read|read|write|source-create|source-revise|source-read|research-capture|research-read|feedback-create|feedback-read");
             Console.Error.WriteLine("  library: library|memory-read|source-read|research-read|relation-read|lifecycle-read|lifecycle-retained-read|recall-read|review-list|review-record|index-status|index-rebuild");
             Console.Error.WriteLine("  review: proposal-list|proposal-read|proposal-publish|proposal-reject|lifecycle-publish|lifecycle-reject|lifecycle-withdraw|lifecycle-repropose|lifecycle-question-resolve|lifecycle-question-reopen|relation-list|relation-read|relation-create|relation-accept|relation-reject|relation-unlink|relation-relink|declassify-preview|declassify-publish|declassify-proposal-publish");
@@ -8733,6 +8942,7 @@ internal static class OwnerControlCli
     }
     private static string? CommandHelpText(string verb) => verb switch
     {
+        "open" => "open <file-id> --control-pipe <pipe> [--revision <n>] [--no-browser] [--lifetime-seconds <n>]: foreground loopback browser session for exactly one workspace file and content revision. Requires the unlocked vault; Ctrl+C, the explicit lifetime or lock ends reads/saves. UTF-8 markdown/CSV/JSONL/plain text is editable with explicit expected-revision save; other encodings/formats are shown read-only. No key, file path or general owner API reaches the browser.",
         "status" => "owner status --control-pipe <pipe>: vault state of the running shared host (locked/unlocked/uninitialized), plus format/rollback state. Read-only.",
         "provision" => "owner provision --control-pipe <pipe>: first-time vault setup. Prompts twice for the new passphrase (min 12 chars); prints the recovery key once — store it outside the vault.",
         "unlock" => "owner unlock --control-pipe <pipe>: prompts for the vault passphrase and unlocks this host (process memory only). Wrong key fails closed.",

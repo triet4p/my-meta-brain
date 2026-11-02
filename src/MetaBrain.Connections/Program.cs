@@ -133,6 +133,7 @@ public static class OwnerCliProduct
         {
             "lifecycle" => await InstanceLifecycleCli.RunAsync(args[1..]).ConfigureAwait(false),
             "owner" => await OwnerControlCli.RunAsync(args[1..]).ConfigureAwait(false),
+            "open" => await OwnerControlCli.RunOpenAsync(args[1..]).ConfigureAwait(false),
             _ => UnknownCommand(args[0])
         };
     }
@@ -150,6 +151,7 @@ public static class OwnerCliProduct
         Console.Error.WriteLine("usage:");
         Console.Error.WriteLine("  MetaBrain.Cli.exe lifecycle {start|stop|restart|status|connect} --data-root <dir> | --config <service-settings.json>");
         Console.Error.WriteLine("  MetaBrain.Cli.exe owner <command> --control-pipe <pipe> [options]");
+        Console.Error.WriteLine("  MetaBrain.Cli.exe open <file-id> --control-pipe <pipe> [--revision <n>] [--no-browser] [--lifetime-seconds <n>]");
         Console.Error.WriteLine("  MetaBrain.Cli.exe owner --help            every owner workflow group");
         Console.Error.WriteLine("  MetaBrain.Cli.exe owner <verb> --help     the exact inputs of one command");
         Console.Error.WriteLine("release layout (one shared instance, one locked host, one vault):");
@@ -193,6 +195,7 @@ internal static class Program
                 // S9-T2 the one shared resolve/create/select/start/connect lifecycle every frontend uses.
                 "lifecycle" => await InstanceLifecycleCli.RunAsync(args[1..]).ConfigureAwait(false),
                 "owner" => await OwnerControlCli.RunAsync(args[1..]).ConfigureAwait(false),
+                "open" => await OwnerControlCli.RunOpenAsync(args[1..]).ConfigureAwait(false),
                 "agent-mcp" => await McpAgentBridge.RunAsync(args[1..]).ConfigureAwait(false),
                 _ => Usage()
             };
@@ -271,6 +274,7 @@ internal static class Program
         Console.Error.WriteLine("  product CLI: cli\\MetaBrain.Cli.exe lifecycle {start|stop|restart|status|connect} --config <service-settings.json> | --data-root <dir>");
         Console.Error.WriteLine("  setup: lifecycle start|status|connect|stop|restart — resolve/create/select the instance and start or connect the shared locked host");
         Console.Error.WriteLine("MetaBrain CLI: MetaBrain.Cli.exe owner <command> --control-pipe <pipe> [options]  (owner <command> --help shows one command)");
+        Console.Error.WriteLine("  document: MetaBrain.Cli.exe open <file-id> --control-pipe <pipe> [--revision <n>] [--no-browser] [--lifetime-seconds <n>] — foreground browser preview/edit of one workspace revision");
         Console.Error.WriteLine("  vault: owner {status|provision|unlock|recover|lock|upgrade|upgrade-with-recovery-code|rollback|rollback-with-recovery-code|health|audit|diagnostics|retention|backup|restore|restore-with-recovery-code|export} — provision/recovery/unlock/lock, audit/diagnostics/retention, encrypted backup/restore/export and supported upgrade");
         Console.Error.WriteLine("  capture: owner {memory-create|memory-revise|memory-import|memory-read|read|write|source-create|source-revise|source-read|research-capture|research-read|feedback-create|feedback-read} — capture and read-back with --body/--title/--note/--input-file (an advanced owner-owned file may carry the exact draft JSON instead)");
         Console.Error.WriteLine("  library: owner {library|memory-read|source-read|research-read|relation-read|lifecycle-read|lifecycle-retained-read|recall-read|review-list|review-record|index-status|index-rebuild} — filter/detail/evidence/current-history/revise/index recovery");

@@ -557,6 +557,42 @@ No package is added by this decision; any future dependency requires actual rele
 
 `provider-config --from-env` has been removed: a provider key is read only from the non-echo secure prompt or one redirected `--api-key-stdin` line, never from argv, the environment, a plaintext file or a log. Workspace relation evolution remains S16, and S17 sharing semantics need separate approval.
 
+### 13.5. S13-T1 document bridge contract — foreground `open`
+
+Status: this is the settled contract plus the executable S13-T1 slice; formatted Markdown, CSV table context, paging/progress/cancel and the full session lifecycle remain S13-T2–T5. It is not release 1.3.0 or publication evidence.
+
+- **CLI binding.** `MetaBrain.Cli.exe open <file-id> --control-pipe <pipe> [--revision <n>] [--no-browser] [--lifetime-seconds <n>]` runs in the foreground and serves exactly one live workspace file at the exact content revision read at open (latest when `--revision` is absent). The document session is bound to that file id, that content revision, the read and explicit-save operations, and the session lifetime. Memory items, registered sources, source sessions/snapshots, folders and a general owner API are not accepted by this surface; they remain CLI reads/exports or later tasks.
+- **Session binding.** The bridge listens on an ephemeral `127.0.0.1` port and mints a 256-bit capability per process. The served page receives it only in a `meta` element; every document request must present it in `X-MetaBrain-Session` and is compared in constant time. The capability is never in a URL, a cookie, browser storage, a log or a file. Loopback alone, `Origin` alone, a body field or the document id never grants authority.
+- **Transport and CSRF.** `Host` must be the exact loopback authority; a present `Origin` must equal it; `Sec-Fetch-Site` may only be `none` or `same-origin`; `Access-Control-Request-Method`, query strings and non-JSON saves are refused. No CORS headers, cookies, `OPTIONS` flow or cross-origin response reading exist. Responses are `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Cross-Origin-*-Policy: same-origin` and a `default-src 'none'` CSP with same-origin script/style and connect only.
+- **Operations.** The only routes are the static shell (`/`, `/app.js`, `/app.css`), one bound read (`GET /api/document`) and one explicit save (`POST /api/document/save`). Every read goes back through the same owner service workspace read, so a lock refuses it; no decrypted document is cached by the bridge. Save requires the exact expected content revision, creates one new content revision through the shared workspace service, refuses a stale revision with `workspace_conflict` (never overwriting and keeping the browser draft), and reports `unchanged` without a revision when the submitted bytes equal the bound revision.
+- **Encoding and newline policy (settled before writes).**
+
+| Document bytes | Preview | Edit | Save |
+|---|---|---|---|
+| UTF-8, valid, no NUL, LF/CRLF/CR consistently | exact text, escaped | yes | LF from the browser is restored to the document's original newline convention; exact bytes round-trip |
+| UTF-8 with BOM | exact text without the BOM | yes | BOM is prepended again and the original newline convention is restored |
+| UTF-8 mixing newline conventions | exact text, escaped | no | refused as `read_only_newlines`; switching would rewrite bytes |
+| UTF-16 LE/BE with BOM | decoded text, escaped | no | refused as `read_only_encoding` |
+| Invalid UTF-8, UTF-32, NUL-bearing or otherwise binary | no text | no | refused as `binary` |
+| A valid text encoding but a file name without a recognised text suffix | escaped text | no | refused as `read_only_format` |
+
+Unicode is never normalized; the editor sends LF and the save restores the bound convention. A no-op save does not create a revision.
+
+- **Format/editor matrix (target for S13, current T1 state).**
+
+| Suffix group | Preview | Edit |
+|---|---|---|
+| `.md`, `.markdown`, `.mdown`, `.mkd` | escaped raw text in T1; formatted sanitized Markdown is S13-T2 | raw UTF-8 text |
+| `.csv` | escaped raw text in T1; table/header context is S13-T2 | raw UTF-8 text, no grid rewrite |
+| `.jsonl`, `.ndjson` | escaped raw text, one bounded 1 MiB envelope | raw UTF-8 text for workspace files only; source sessions are never served |
+| `.txt`, `.text`, `.log`, `.json`, `.yaml`, `.yml`, `.xml`, `.toml`, `.ini`, `.cfg`, `.conf`, `.sql`, `.cs`, `.js`, `.ts`, `.css`, `.html`, `.htm` | escaped raw text | raw UTF-8 text |
+| any other suffix | escaped text when it decodes as UTF-8, otherwise a truthful state | no |
+
+- **Lifetime and shutdown.** The bridge lives only in the foreground CLI process. Ctrl+C, the optional explicit `--lifetime-seconds` and a vault lock end document access; the listener stops and the capability is zeroized. A browser tab may keep the last rendered DOM, DevTools, extension copies or OS swap until the owner closes/reloads it; the bridge can revoke reads and saves but cannot claim to retract content already rendered or read. T5 owns richer disconnect/expiry/cache semantics.
+- **Resource envelope.** S13-T1 adds no hard threshold and does not change R38/D086. The existing 1 MiB workspace per-act bound is the one-document envelope; the bridge retains no document bytes between requests. The T1 runtime observation is informational: about 43.5–44.2 MB CLI working set and 65.2–66.7 MB service working set while a document session was open on the target host.
+- **Dependency.** No package is added. The loopback responder is built on the BCL `TcpListener`, and the shell/JS/CSS are embedded product assets; a Markdown/CSV renderer dependency for T2 is not selected here and needs its own applicable review before use.
+- **Not in T1.** Formatted Markdown, CSV table/column context, bounded JSONL display rules, large-file paging/cancel, progress/cache/epoch cancellation, automatic browser-close detection, malicious-Markdown browser tests and the complete persistence/erasure disclosure are S13-T2–T5 work.
+
 ## 14. Chất lượng production và nghiệm thu
 
 Sản phẩm hoàn chỉnh cần cài đặt, khởi động lại, nâng cấp/migrate schema, rollback/recovery phù hợp, backup/restore, export và gỡ ứng dụng không xóa nguồn trái ý. Không reset kho để né migration; lỗi/crash không mất memory đã báo lưu thành công.
