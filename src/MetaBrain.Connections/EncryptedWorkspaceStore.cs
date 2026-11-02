@@ -176,7 +176,16 @@ internal sealed class EncryptedWorkspaceStore
     private const int MaximumStateBytes = 64 * 1024 * 1024;
     private const int MaximumHeadBytes = 64 * 1024;
     private const int MaximumStateEnvelopeBytes = MaximumStateBytes + (MaximumStateBytes / 3) + (64 * 1024);
-    private const int MaximumBlobEnvelopeBytes = MaximumContentBytes + (MaximumContentBytes / 3) + (64 * 1024);
+    // JsonSerializer's default encoder can expand a Base64 symbol to a
+    // six-byte JSON escape. Bound the largest ciphertext/nonce/tag strings
+    // plus the exact compact WorkspaceEnvelopeRecord JSON structure; the
+    // original-content ceiling remains MaximumContentBytes.
+    private const int MaximumBlobCiphertextBase64Bytes = 4 * ((MaximumContentBytes + 2) / 3);
+    private const int MaximumBlobEnvelopeStructureBytes = 55;
+    private const int MaximumBase64JsonCharacterBytes = 6;
+    private const int MaximumBlobEnvelopeBytes =
+        ((MaximumBlobCiphertextBase64Bytes + 16 + 24) * MaximumBase64JsonCharacterBytes) +
+        MaximumBlobEnvelopeStructureBytes;
     private const int NonceBytes = 12;
     private const int TagBytes = 16;
     private const int Sha256HexLength = 64;

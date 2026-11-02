@@ -180,6 +180,9 @@ internal static partial class OwnerServiceSmoke
                     preview.Contains(S13T1MarkdownMarker, StringComparison.Ordinal),
                 "The browser preview did not render the bound document text.");
             await browser.EvaluateAsync("document.getElementById('edit').click()").ConfigureAwait(false);
+            await browser.WaitForAsync(
+                "document.getElementById('editor').hidden ? 'hidden' : 'visible'",
+                value => value == "visible", TimeSpan.FromSeconds(20)).ConfigureAwait(false);
             await browser.EvaluateAsync(
                 "(() => { const editor = document.getElementById('editor'); editor.value = editor.value + 'browser-edit\\n'; return editor.value.length; })()")
                 .ConfigureAwait(false);
@@ -453,9 +456,18 @@ internal static partial class OwnerServiceSmoke
         try
         {
             var line = await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false);
-            Require(line is not null && line.StartsWith("OPEN document ", StringComparison.Ordinal),
-                "The document bridge did not announce a bound session: " + (line ?? "<no line>"));
-            var announcement = line!;
+            if (line is null)
+            {
+                var standardError = process.HasExited
+                    ? await process.StandardError.ReadToEndAsync().ConfigureAwait(false)
+                    : string.Empty;
+                throw new InvalidOperationException(
+                    "The document bridge did not announce a bound session: <no line>; stderr=" + standardError.Trim());
+            }
+
+            Require(line.StartsWith("OPEN document ", StringComparison.Ordinal),
+                "The document bridge did not announce a bound session: " + line);
+            var announcement = line;
             var urlMatch = Regex.Match(announcement, @"url=(\S+)$");
             Require(urlMatch.Success, "The document bridge announcement carried no URL: " + announcement);
             var url = urlMatch.Groups[1].Value;

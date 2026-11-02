@@ -196,14 +196,66 @@ internal sealed class DocumentBridgeServer : IDisposable
                     return;
                 }
 
-                await RouteAsync(stream, request, cancellationToken).ConfigureAwait(false);
+                if (string.Equals(request.Method, "POST", StringComparison.Ordinal) &&
+                    string.Equals(request.Target, "/api/document/page", StringComparison.Ordinal))
+                {
+                    using var pageCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    using var monitorCancellation = new CancellationTokenSource();
+                    var disconnectMonitor = MonitorPageDisconnectAsync(client.Client, pageCancellation, monitorCancellation.Token);
+                    try
+                    {
+                        await RouteAsync(stream, request, pageCancellation.Token).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        monitorCancellation.Cancel();
+                        await disconnectMonitor.ConfigureAwait(false);
+                    }
+                }
+                else
+                {
+                    await RouteAsync(stream, request, cancellationToken).ConfigureAwait(false);
+                }
             }
             catch (Exception) when (cancellationToken.IsCancellationRequested)
+            {
+            }
+            catch (OperationCanceledException)
             {
             }
             catch (Exception exception) when (exception is IOException or SocketException or ObjectDisposedException)
             {
             }
+        }
+    }
+    private static async Task MonitorPageDisconnectAsync(
+        Socket socket,
+        CancellationTokenSource pageCancellation,
+        CancellationToken stopToken)
+    {
+        try
+        {
+            while (!stopToken.IsCancellationRequested)
+            {
+                if (socket.Poll(0, SelectMode.SelectRead) && socket.Available == 0)
+                {
+                    pageCancellation.Cancel();
+                    return;
+                }
+
+                await Task.Delay(50, stopToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (stopToken.IsCancellationRequested)
+        {
+        }
+        catch (SocketException)
+        {
+            pageCancellation.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            pageCancellation.Cancel();
         }
     }
 
@@ -260,6 +312,23 @@ internal sealed class DocumentBridgeServer : IDisposable
                 }
 
                 await SaveDocumentAsync(stream, request, cancellationToken).ConfigureAwait(false);
+                return;
+            case ("POST", "/api/document/page"):
+                if (!SessionAccepted(request))
+                {
+                    await WriteErrorAsync(stream, SessionError(request), cancellationToken).ConfigureAwait(false);
+                    return;
+                }
+
+                if (!request.Headers.TryGetValue("Content-Type", out var pageContentType) ||
+                    !pageContentType.StartsWith("application/json", StringComparison.OrdinalIgnoreCase))
+                {
+                    await WriteAsync(stream, 415, "Unsupported Media Type", "application/json; charset=utf-8",
+                        JsonBody("unsupported_media_type", "A preview page requires application/json."), cancellationToken).ConfigureAwait(false);
+                    return;
+                }
+
+                await ReadDocumentPageAsync(stream, request, cancellationToken).ConfigureAwait(false);
                 return;
             default:
                 await WriteAsync(stream, 404, "Not Found", "text/plain; charset=utf-8",
@@ -339,6 +408,185 @@ internal sealed class DocumentBridgeServer : IDisposable
             documentGate.Release();
         }
     }
+
+    private async Task ReadDocumentPageAsync(NetworkStream stream, BridgeRequest request, CancellationToken cancellationToken)
+    {
+        if (!TryReadPageRequest(request.Body, out var pageRequest))
+        {
+            await WriteErrorAsync(stream, "invalid_request", cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        await documentGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (session.IsExpired(DateTimeOffset.UtcNow))
+            {
+                await WriteErrorAsync(stream, "session_expired", cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            var read = await gateway.ReadAsync(session.FileId, session.ContentRevision, cancellationToken).ConfigureAwait(false);
+            if (!read.Success)
+            {
+                await WriteErrorAsync(stream, read.ErrorCode ?? "service_rejected_request", cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            var content = read.Content;
+            try
+            {
+                var analysis = DocumentSurface.Analyze(session.Name, content);
+                if (read.Revision != session.ContentRevision || read.Length != content.Length)
+                {
+                    await WriteErrorAsync(stream, "workspace_not_found", cancellationToken).ConfigureAwait(false);
+                    return;
+                }
+
+                DocumentTextPreviewPage? textPage = null;
+                DocumentCsvPreviewPage? csvPage = null;
+                try
+                {
+                    if (analysis.Text is null)
+                    {
+                        if (pageRequest.Offset != 0 || pageRequest.ColumnOffset != 0)
+                        {
+                            throw new ArgumentOutOfRangeException(nameof(pageRequest));
+                        }
+                    }
+                    else if (analysis.Profile.Format == DocumentFormat.Csv &&
+                             string.Equals(pageRequest.Mode, "preview", StringComparison.Ordinal))
+                    {
+                        var rowLimit = Math.Min(pageRequest.Limit, DocumentPreview.MaximumCsvPageRows);
+                        csvPage = DocumentPreview.ReadCsvPage(
+                            analysis.Text,
+                            pageRequest.Offset,
+                            rowLimit,
+                            pageRequest.ColumnOffset,
+                            DocumentPreview.MaximumCsvPageColumns);
+                    }
+                    else
+                    {
+                        if (pageRequest.ColumnOffset != 0)
+                        {
+                            throw new ArgumentOutOfRangeException(nameof(pageRequest));
+                        }
+
+                        textPage = DocumentPreview.ReadTextPage(analysis.Text, pageRequest.Offset, pageRequest.Limit);
+                    }
+                    }
+                catch (ArgumentOutOfRangeException)
+                {
+                    await WriteErrorAsync(stream, "invalid_request", cancellationToken).ConfigureAwait(false);
+                    return;
+                }
+
+                var view = new
+                {
+                    fileId = session.FileId,
+                    name = session.Name,
+                    format = analysis.Profile.FormatLabel,
+                    encoding = analysis.Profile.EncodingLabel,
+                    newlines = analysis.Profile.NewlineLabel,
+                    state = analysis.Profile.State,
+                    editable = analysis.Profile.Editable,
+                    readOnlyReason = analysis.Profile.ReadOnlyReason,
+                    contentRevision = read.Revision,
+                    length = content.Length,
+                    sha256 = read.Sha256,
+                    offset = csvPage?.Offset ?? textPage?.Offset ?? pageRequest.Offset,
+                    nextOffset = csvPage?.NextOffset ?? textPage?.NextOffset,
+                    columnOffset = csvPage?.ColumnOffset ?? 0,
+                    nextColumnOffset = csvPage?.NextColumnOffset,
+                    csvColumnCount = csvPage?.ColumnCount,
+                    text = textPage?.Text,
+                    csvHeader = csvPage?.Header,
+                    csvRows = csvPage?.Rows,
+                };
+                await WriteAsync(stream, 200, "OK", "application/json; charset=utf-8",
+                    JsonSerializer.SerializeToUtf8Bytes(view, JsonOptions), cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(content);
+            }
+        }
+        finally
+        {
+            documentGate.Release();
+        }
+    }
+
+    private static bool TryReadPageRequest(byte[]? body, out PreviewPageRequest pageRequest)
+    {
+        pageRequest = new PreviewPageRequest(0, 0, string.Empty, 0);
+        if (body is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            var hasOffset = false;
+            var hasLimit = false;
+            var hasMode = false;
+            var hasColumnOffset = false;
+            var offset = 0;
+            var limit = 0;
+            var columnOffset = 0;
+            var mode = string.Empty;
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (string.Equals(property.Name, "offset", StringComparison.Ordinal) && !hasOffset &&
+                    property.Value.ValueKind == JsonValueKind.Number && property.Value.TryGetInt32(out offset))
+                {
+                    hasOffset = true;
+                }
+                else if (string.Equals(property.Name, "limit", StringComparison.Ordinal) && !hasLimit &&
+                         property.Value.ValueKind == JsonValueKind.Number && property.Value.TryGetInt32(out limit))
+                {
+                    hasLimit = true;
+                }
+                else if (string.Equals(property.Name, "mode", StringComparison.Ordinal) && !hasMode &&
+                         property.Value.ValueKind == JsonValueKind.String &&
+                         property.Value.GetString() is "preview" or "source")
+                {
+                    mode = property.Value.GetString()!;
+                    hasMode = true;
+                }
+                else if (string.Equals(property.Name, "columnOffset", StringComparison.Ordinal) && !hasColumnOffset &&
+                         property.Value.ValueKind == JsonValueKind.Number && property.Value.TryGetInt32(out columnOffset))
+                {
+                    hasColumnOffset = true;
+                }
+                else
+                {
+                    return false;
+                }
+            }
+
+            if (!hasOffset || !hasLimit || !hasMode || !hasColumnOffset || offset < 0 || columnOffset < 0 ||
+                limit is < 1 or > DocumentPreview.MaximumTextPageCharacters)
+            {
+                return false;
+            }
+
+            pageRequest = new PreviewPageRequest(offset, limit, mode, columnOffset);
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private sealed record PreviewPageRequest(int Offset, int Limit, string Mode, int ColumnOffset);
 
     private async Task SaveDocumentAsync(NetworkStream stream, BridgeRequest request, CancellationToken cancellationToken)
     {

@@ -559,15 +559,16 @@ No package is added by this decision; any future dependency requires actual rele
 
 ### 13.5. S13-T1 document bridge contract — foreground `open`
 
-Status: this is the settled contract plus the executable S13-T1 slice; formatted Markdown, CSV table context, paging/progress/cancel and the full session lifecycle remain S13-T2–T5. It is not release 1.3.0 or publication evidence.
+Status: this is the settled contract plus runnable S13-T1 and S13-T2 slices; explicit editor save remains T3 work, progress/cache/epoch cancellation and full session lifecycle remain T3–T5 work. It is not release 1.3.0 or publication evidence.
 
 - **CLI binding.** `MetaBrain.Cli.exe open <file-id> --control-pipe <pipe> [--revision <n>] [--no-browser] [--lifetime-seconds <n>]` runs in the foreground and serves exactly one live workspace file at the exact content revision read at open (latest when `--revision` is absent). The document session is bound to that file id, that content revision, the read and explicit-save operations, and the session lifetime. Memory items, registered sources, source sessions/snapshots, folders and a general owner API are not accepted by this surface; they remain CLI reads/exports or later tasks.
 - **Session binding.** The bridge listens on an ephemeral `127.0.0.1` port and mints a 256-bit capability per process. The served page receives it only in a `meta` element; every document request must present it in `X-MetaBrain-Session` and is compared in constant time. The capability is never in a URL, a cookie, browser storage, a log or a file. Loopback alone, `Origin` alone, a body field or the document id never grants authority.
 - **Transport and CSRF.** `Host` must be the exact loopback authority; a present `Origin` must equal it; `Sec-Fetch-Site` may only be `none` or `same-origin`; `Access-Control-Request-Method`, query strings and non-JSON saves are refused. No CORS headers, cookies, `OPTIONS` flow or cross-origin response reading exist. Responses are `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Cross-Origin-*-Policy: same-origin` and a `default-src 'none'` CSP with same-origin script/style and connect only.
-- **Operations.** The only routes are the static shell (`/`, `/app.js`, `/app.css`), one bound read (`GET /api/document`) and one explicit save (`POST /api/document/save`). Every read goes back through the same owner service workspace read, so a lock refuses it; no decrypted document is cached by the bridge. Save requires the exact expected content revision, creates one new content revision through the shared workspace service, refuses a stale revision with `workspace_conflict` (never overwriting and keeping the browser draft), and reports `unchanged` without a revision when the submitted bytes equal the bound revision.
+- **Operations.** The static shell is (`/`, `/app.js`, `/app.css`), one bound explicit-edit read is `GET /api/document`, one authenticated bounded preview read is `POST /api/document/page`, and one explicit revision-gated save is `POST /api/document/save`. A page request selects only a text/source character offset and limit or, for CSV table preview, a data-row offset and limit, plus preview/source mode and CSV column offset; it cannot select another id, revision or owner operation. Every page is re-read through the existing owner workspace read for the session's exact file id and content revision; a vault lock refuses it, the bridge enumerates no workspace, and no decrypted document bytes are cached between requests. Text/Markdown/source pages are at most 16 Ki UTF-16 code units; CSV table pages are at most 100 data rows by 64 columns, with independent row/column cursors and the first CSV record repeated as the column header. Aborting a page fetch cancels the associated owner read. Every response is `no-store`. Save requires the exact expected content revision, creates one new revision through the shared workspace service, refuses stale writes with `workspace_conflict`, and reports `unchanged` without a revision when submitted bytes equal the bound revision.
 - **Encoding and newline policy (settled before writes).**
+Decoded source text preserves original Unicode/newlines; the table below describes source decoding, while Markdown/CSV presentation follows the format matrix.
 
-| Document bytes | Preview | Edit | Save |
+| Document bytes | Decoded source view | Edit | Save |
 |---|---|---|---|
 | UTF-8, valid, no NUL, LF/CRLF/CR consistently | exact text, escaped | yes | LF from the browser is restored to the document's original newline convention; exact bytes round-trip |
 | UTF-8 with BOM | exact text without the BOM | yes | BOM is prepended again and the original newline convention is restored |
@@ -578,20 +579,20 @@ Status: this is the settled contract plus the executable S13-T1 slice; formatted
 
 Unicode is never normalized; the editor sends LF and the save restores the bound convention. A no-op save does not create a revision.
 
-- **Format/editor matrix (target for S13, current T1 state).**
+- **Format/editor matrix (current T1–T2 preview and T1 raw-edit behavior).**
 
 | Suffix group | Preview | Edit |
 |---|---|---|
-| `.md`, `.markdown`, `.mdown`, `.mkd` | escaped raw text in T1; formatted sanitized Markdown is S13-T2 | raw UTF-8 text |
-| `.csv` | escaped raw text in T1; table/header context is S13-T2 | raw UTF-8 text, no grid rewrite |
-| `.jsonl`, `.ndjson` | escaped raw text, one bounded 1 MiB envelope | raw UTF-8 text for workspace files only; source sessions are never served |
-| `.txt`, `.text`, `.log`, `.json`, `.yaml`, `.yml`, `.xml`, `.toml`, `.ini`, `.cfg`, `.conf`, `.sql`, `.cs`, `.js`, `.ts`, `.css`, `.html`, `.htm` | escaped raw text | raw UTF-8 text |
-| any other suffix | escaped text when it decodes as UTF-8, otherwise a truthful state | no |
+| `.md`, `.markdown`, `.mdown`, `.mkd` | Inert formatted Markdown (headings, paragraphs, emphasis, code, lists, blockquotes, fenced blocks and pipe tables); raw HTML is text, links are labels, images are alt-text only | raw UTF-8 text |
+| `.csv` | First record as header; paged table of at most 100 records × 64 columns, with a raw source toggle | raw UTF-8 text, no grid rewrite |
+| `.jsonl`, `.ndjson` | Escaped text in pages of at most 16 Ki UTF-16 code units within the existing one-file 1 MiB envelope | raw UTF-8 text for workspace files only; source sessions are never served |
+| `.txt`, `.text`, `.log`, `.json`, `.yaml`, `.yml`, `.xml`, `.toml`, `.ini`, `.cfg`, `.conf`, `.sql`, `.cs`, `.js`, `.ts`, `.css`, `.html`, `.htm` | Escaped text in pages of at most 16 Ki UTF-16 code units | raw UTF-8 text |
+| any other suffix | Escaped text in bounded pages when it decodes as UTF-8, otherwise a truthful state | no |
 
-- **Lifetime and shutdown.** The bridge lives only in the foreground CLI process. Ctrl+C, the optional explicit `--lifetime-seconds` and a vault lock end document access; the listener stops and the capability is zeroized. A browser tab may keep the last rendered DOM, DevTools, extension copies or OS swap until the owner closes/reloads it; the bridge can revoke reads and saves but cannot claim to retract content already rendered or read. T5 owns richer disconnect/expiry/cache semantics.
-- **Resource envelope.** S13-T1 adds no hard threshold and does not change R38/D086. The existing 1 MiB workspace per-act bound is the one-document envelope; the bridge retains no document bytes between requests. The T1 runtime observation is informational: about 43.5–44.2 MB CLI working set and 65.2–66.7 MB service working set while a document session was open on the target host.
-- **Dependency.** No package is added. The loopback responder is built on the BCL `TcpListener`, and the shell/JS/CSS are embedded product assets; a Markdown/CSV renderer dependency for T2 is not selected here and needs its own applicable review before use.
-- **Not in T1.** Formatted Markdown, CSV table/column context, bounded JSONL display rules, large-file paging/cancel, progress/cache/epoch cancellation, automatic browser-close detection, malicious-Markdown browser tests and the complete persistence/erasure disclosure are S13-T2–T5 work.
+- **Lifetime and shutdown.** The bridge lives only in the foreground CLI process. Ctrl+C, the optional explicit `--lifetime-seconds` and a vault lock end document access; the listener stops and the capability is zeroized. A browser tab may keep rendered DOM, DevTools, extension copies, browser-managed memory/cache or OS swap; reload/close is not proof of erasure. The bridge cannot retract content already rendered or read. The S13-T2 smoke checks no app-created browser storage/service worker and removes its temporary profile best-effort; it does not claim absolute browser-managed erasure. T5 owns richer disconnect/expiry/cache semantics.
+- **Resource envelope.** S13-T1/T2 add no hard R38/D086 threshold. The existing 1 MiB workspace per-act bound is the one-document envelope; a page request rereads only the exact bound file, slices it to one bounded text/CSV response and retains no decrypted bytes between requests. It does not enumerate or materialize the workspace. Browser cancellation aborts the page request and cancels its linked owner read.
+- **Dependency.** No external package was added for T2; the source project dependency audit found no package references. Markdown output is constructed from DOM nodes and text, and CSV parsing uses the existing runtime; raw HTML/link/image syntax cannot create active elements or remote fetches. A future external renderer requires its own pinned release/version/license/vulnerability review before use.
+- **Not in T1/T2.** T2 implements formatted Markdown/CSV previews, bounded JSONL/text paging/cancel, malicious-content and browser persistence-limit evidence. Explicit editor modes/save behavior remain T3; CLI search/open-at-location remains T4; richer disconnect/expiry/cache/epoch lifecycle remains T5.
 
 ## 14. Chất lượng production và nghiệm thu
 
