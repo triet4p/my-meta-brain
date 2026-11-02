@@ -169,6 +169,11 @@ internal static class DocumentSurface
             throw new DocumentSurfaceException("document_not_editable");
         }
 
+        if (text.Contains('\0'))
+        {
+            throw new DocumentSurfaceException("invalid_encoding");
+        }
+
         var normalized = NormalizeToLf(text);
         var encoded = profile.Newline switch
         {

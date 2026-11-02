@@ -35,6 +35,7 @@ internal static class DocumentBridgeAssets
 <button id="source" type="button">Source</button>
 <button id="edit" type="button">Edit</button>
 <button id="save" type="button" hidden>Save revision</button>
+<button id="cancel-edit" type="button" hidden>Cancel edit</button>
 <button id="cancel" type="button" hidden>Cancel loading</button>
 <div id="page-controls" aria-label="Preview pages">
 <button id="previous" type="button" hidden>Previous rows</button>
@@ -43,6 +44,11 @@ internal static class DocumentBridgeAssets
 <button id="next-column" type="button" hidden>Next columns</button>
 <button id="next" type="button" hidden>Next rows</button>
 </div>
+</div>
+<div id="discard-confirm" role="alert" hidden>
+<span>Discard this unsaved draft from this page?</span>
+<button id="keep-editing" type="button">Keep editing</button>
+<button id="confirm-discard" type="button">Discard draft</button>
 </div>
 <div id="preview-view" tabindex="0" aria-live="polite"></div>
 <textarea id="editor" spellcheck="false" hidden></textarea>
@@ -98,6 +104,8 @@ button:disabled { opacity: 0.5; }
 #status { min-height: 1.5rem; font-size: 0.9rem; }
 #status.error { color: #b00020; }
 .hidden { display: none; }
+#discard-confirm { display: flex; align-items: center; gap: 0.5rem; margin: 0.5rem 0; flex-wrap: wrap; }
+[hidden] { display: none !important; }
 """;
 
     public const string JavaScript = """
@@ -112,6 +120,7 @@ button:disabled { opacity: 0.5; }
         editable: false,
         editing: false,
         editorInitialized: false,
+        editorBaseline: null,
         format: null,
         metadata: null,
         page: null,
@@ -131,6 +140,30 @@ button:disabled { opacity: 0.5; }
         const status = element('status');
         status.textContent = text;
         status.classList.toggle('error', Boolean(isError));
+    }
+
+    function hasUnsavedDraft() {
+        return state.editorInitialized && element('editor').value !== state.editorBaseline;
+    }
+
+    function hasUnpairedSurrogate(text) {
+        for (let index = 0; index < text.length; index++) {
+            const code = text.charCodeAt(index);
+            if (code >= 0xD800 && code <= 0xDBFF) {
+                if (index + 1 >= text.length) {
+                    return true;
+                }
+                const next = text.charCodeAt(index + 1);
+                if (next < 0xDC00 || next > 0xDFFF) {
+                    return true;
+                }
+                index++;
+            } else if (code >= 0xDC00 && code <= 0xDFFF) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     function setError(text) {
@@ -551,6 +584,14 @@ button:disabled { opacity: 0.5; }
             setStatus('Bound source page. Previewing or switching views does not save or rewrite bytes.', false);
         }
 
+        if (!data.editable && data.text !== null) {
+            setStatus('Read-only: ' + (data.readOnlyReason || data.state) + '.', false);
+        }
+
+        if (hasUnsavedDraft()) {
+            setStatus('The preview shows the saved revision; your unsaved draft remains in this page.', false);
+        }
+
         setPageControls();
         element('edit').disabled = !state.editable;
     }
@@ -636,19 +677,67 @@ button:disabled { opacity: 0.5; }
     }
 
     function showPreview() {
+        const unsaved = hasUnsavedDraft();
         state.editing = false;
         element('preview-view').hidden = false;
         element('editor').hidden = true;
+        element('edit').hidden = false;
         element('save').hidden = true;
+        element('cancel-edit').hidden = true;
+        element('source').hidden = !['markdown', 'csv'].includes(state.format) ||
+            (state.page && state.page.text === null && !Array.isArray(state.page.csvHeader));
+        element('discard-confirm').hidden = true;
         if (!state.page) {
             state.rawView = false;
             state.previousOffsets = [];
             state.currentColumnOffset = 0;
             state.nextColumnOffset = null;
             readPage(0, 0);
+        } else if (unsaved) {
+            setStatus('Preview shows the saved revision; your unsaved draft remains in this page.', false);
         }
     }
 
+    function cancelEdit() {
+        if (!state.editing) {
+            return;
+        }
+        if (hasUnsavedDraft()) {
+            element('discard-confirm').hidden = false;
+            setStatus('This draft is unsaved. Choose Keep editing or Discard draft; nothing was saved.', false);
+            element('keep-editing').focus();
+            return;
+        }
+
+        discardDraft();
+    }
+
+    function keepEditing() {
+        element('discard-confirm').hidden = true;
+        element('editor').focus();
+        setStatus('The unsaved draft remains in this page; nothing is saved until Save revision is selected.', false);
+    }
+
+    function discardDraft() {
+        element('editor').value = '';
+        state.editorBaseline = null;
+        state.editorInitialized = false;
+        state.editing = false;
+        element('discard-confirm').hidden = true;
+        element('preview-view').hidden = false;
+        element('editor').hidden = true;
+        element('edit').hidden = false;
+        element('save').hidden = true;
+        element('cancel-edit').hidden = true;
+        if (!state.page) {
+            state.nextOffset = null;
+            state.currentColumnOffset = 0;
+            state.nextColumnOffset = null;
+            state.previousOffsets = [];
+            readPage(0, 0);
+        }
+        setStatus('Draft discarded from this page; stored document bytes were not changed.', false);
+    }
     function toggleSource() {
         if (state.format !== 'markdown' && state.format !== 'csv') {
             return;
@@ -688,6 +777,7 @@ button:disabled { opacity: 0.5; }
                 }
                 updateMetadata(data);
                 element('editor').value = data.text;
+                state.editorBaseline = element('editor').value;
                 state.editorInitialized = true;
             } catch (error) {
                 if (requestId !== state.requestId) {
@@ -710,17 +800,28 @@ button:disabled { opacity: 0.5; }
         state.editing = true;
         element('preview-view').hidden = true;
         element('editor').hidden = false;
+        element('edit').hidden = true;
+        element('source').hidden = true;
         element('save').hidden = false;
+        element('cancel-edit').hidden = false;
+        element('discard-confirm').hidden = true;
         element('editor').focus();
-        setStatus('Edit is explicit; nothing is saved until Save revision is selected.', false);
+        setStatus(hasUnsavedDraft()
+            ? 'Unsaved draft resumed from this page; nothing was saved until Save revision is selected.'
+            : 'Edit is explicit; nothing is saved until Save revision is selected.', false);
     }
 
     async function saveDocument() {
-        if (!state.editable || state.revision === null) {
+        if (!state.editing || !state.editable || state.revision === null) {
             return;
         }
 
         const text = element('editor').value;
+        if (text.includes('\0') || hasUnpairedSurrogate(text)) {
+            setStatus('The draft contains a NUL or unpaired Unicode surrogate and cannot be saved as supported UTF-8 text; correct it before saving. The draft stays in this page.', true);
+            return;
+        }
+
         setStatus('Saving the explicit revision…', false);
         let response;
         try {
@@ -749,6 +850,7 @@ button:disabled { opacity: 0.5; }
             return;
         }
 
+        state.editorBaseline = text;
         updateRevision(data.contentRevision, data.length);
         state.page = null;
         state.nextOffset = null;
@@ -765,6 +867,21 @@ button:disabled { opacity: 0.5; }
     element('edit').addEventListener('click', showEditor);
     element('save').addEventListener('click', saveDocument);
     element('cancel').addEventListener('click', cancelCurrentRequest);
+    element('cancel-edit').addEventListener('click', cancelEdit);
+    element('keep-editing').addEventListener('click', keepEditing);
+    element('confirm-discard').addEventListener('click', discardDraft);
+    element('editor').addEventListener('input', () => {
+        setStatus(hasUnsavedDraft()
+            ? 'Unsaved draft is held only in this page; nothing is saved until Save revision is selected.'
+            : 'The draft matches the saved bound revision; nothing was saved.', false);
+    });
+    window.addEventListener('beforeunload', (event) => {
+        if (hasUnsavedDraft()) {
+            event.preventDefault();
+            event.returnValue = '';
+        }
+    });
+
     element('previous').addEventListener('click', () => {
         if (state.previousOffsets.length > 0) {
             const previous = state.previousOffsets.pop();

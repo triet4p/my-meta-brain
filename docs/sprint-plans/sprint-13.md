@@ -2,7 +2,7 @@
 
 ## Goal và trạng thái
 
-- Status: **In progress — S13-T1 accepted; S13-T2 active**. Release mục tiêu cuối sprint: **1.3.0**; chưa build/publish.
+- Status: **In progress — S13-T1/T2 accepted; S13-T3 active**. Release mục tiêu cuối sprint: **1.3.0**; chưa build/publish.
 - Entry: Sprint 12 complete và 1.2.0 published.
 - Scope/trace: P2-03, P2-10, P2-12; R10, R23, R30, R32, R38, R39. Các P2 là candidates, không thay baseline khi chưa có approval.
 - Root: `F:/ai-ml/my-meta-brain`; target ref `main`; exact base/worktree/ownership resolve khi execution.
@@ -28,12 +28,13 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
     - Check: Runnable CLI/service + browser slice, observed authority negatives và limits; không dùng mockup hoặc test suite thay smoke.
     - [Evidence R2 PASS](../../artifacts/sprint-13/reviews/S13-T1-C1-R2.md), [checkpoint](../../artifacts/sprint-13/checkpoints/S13-T1-C1.md), commit `9e20589ef1c7a1a77672951fefe5e028509f1931`. Contract and actual CLI/service/browser slice accepted; downstream preview/edit/search/lifecycle gates remain separate.
 
-- [~] **S13-T2 — Scoped local bridge và safe preview.**
+- [x] **S13-T2 — Scoped local bridge và safe preview.**
     - Change: CLI mở browser qua local document bridge với private content serve khi unlocked, không tạo HTML chứa plaintext xuống disk. Preview Markdown có format, CSV có header/column context, JSONL/text bounded; unsupported binary có state thật. Không xây folder browser/tabs workbench.
     - Acceptance: Authenticate/bind mọi document read theo T1; không mở được document/revision ngoài phiên. Không script/raw active HTML, remote images/resources hoặc network egress ngầm; response không cache, không browser storage/service worker/private URL/log hay plaintext temp. Large file paging/cancel không materialize toàn workspace. Preview/toggle không đổi original bytes.
     - Check: Actual browser render và CLI open, malicious Markdown/cross-origin/out-of-session requests, unsupported/large-file/locked negatives; ghi browser-managed persistence/erasure limits.
+    - [Evidence R1 PASS](../../artifacts/sprint-13/reviews/S13-T2-C1-R1.md), [checkpoint](../../artifacts/sprint-13/checkpoints/S13-T2-C1.md), commit `6df38d502189bb485ab38c695416919604a55fbe`. Actual CLI/browser safe preview, paging/cancel and exact-cap read accepted; original-content cap unchanged.
 
-- [ ] **S13-T3 — Explicit revision-gated text editing.**
+- [~] **S13-T3 — Explicit revision-gated text editing.**
     - Change: Hai chế độ preview/edit cho supported text; Markdown/plain text và CSV raw-text editing trước, không WYSIWYG/grid rewrite. JSONL sessions nguồn luôn read-only; file workspace JSONL theo matrix T1. CLI có explicit content revision path không cần browser/editor ngoài.
     - Acceptance: Explicit save qua shared API với expected revision, tạo revision mới; edit/save/reopen/restart đúng nội dung. Conflict không overwrite; encoding/newline/CSV-invalid edits được giải thích và giữ draft trong memory khi phiên hợp lệ, không autosave plaintext. No-op preview/toggle không normalize/rewrite bytes; unsupported editing bị từ chối trung thực.
     - Check: CLI-only revise và actual browser preview → edit → save, concurrent conflict, invalid encoding, cancel/unsaved handling; giữ nguồn read-only.
@@ -63,4 +64,4 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
 
 ## Gate record
 
-S13-T1 evidence R2 PASS and exact-snapshot checkpoint `9e20589e` accepted at the links above. S13-T2 active; T3–T6, final differential and publication gates pending.
+S13-T1/T2 evidence and exact-snapshot checkpoints accepted at the links above; latest `6df38d50`. S13-T3 active; T4–T6, final differential and publication gates pending.

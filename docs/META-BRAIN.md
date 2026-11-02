@@ -559,7 +559,7 @@ No package is added by this decision; any future dependency requires actual rele
 
 ### 13.5. S13-T1 document bridge contract — foreground `open`
 
-Status: this is the settled contract plus runnable S13-T1 and S13-T2 slices; explicit editor save remains T3 work, progress/cache/epoch cancellation and full session lifecycle remain T3–T5 work. It is not release 1.3.0 or publication evidence.
+Status: the settled contract has runnable S13-T1/T2 preview slices and S13-T3 explicit workspace text editing with revision-gated save. Broader session lifecycle, cache and epoch cancellation remain T5 work. This is not release 1.3.0 or publication evidence.
 
 - **CLI binding.** `MetaBrain.Cli.exe open <file-id> --control-pipe <pipe> [--revision <n>] [--no-browser] [--lifetime-seconds <n>]` runs in the foreground and serves exactly one live workspace file at the exact content revision read at open (latest when `--revision` is absent). The document session is bound to that file id, that content revision, the read and explicit-save operations, and the session lifetime. Memory items, registered sources, source sessions/snapshots, folders and a general owner API are not accepted by this surface; they remain CLI reads/exports or later tasks.
 - **Session binding.** The bridge listens on an ephemeral `127.0.0.1` port and mints a 256-bit capability per process. The served page receives it only in a `meta` element; every document request must present it in `X-MetaBrain-Session` and is compared in constant time. The capability is never in a URL, a cookie, browser storage, a log or a file. Loopback alone, `Origin` alone, a body field or the document id never grants authority.
@@ -577,9 +577,11 @@ Decoded source text preserves original Unicode/newlines; the table below describ
 | Invalid UTF-8, UTF-32, NUL-bearing or otherwise binary | no text | no | refused as `binary` |
 | A valid text encoding but a file name without a recognised text suffix | escaped text | no | refused as `read_only_format` |
 
-Unicode is never normalized; the editor sends LF and the save restores the bound convention. A no-op save does not create a revision.
+Unicode is never normalized; the browser text box presents LF and an explicit save restores the bound document's newline convention. A no-op save does not create a revision.
 
-- **Format/editor matrix (current T1–T2 preview and T1 raw-edit behavior).**
+The editor keeps a draft only in the current page's memory; it does not autosave to browser storage. Preview/source toggles preserve the original bytes, and a failed or stale save keeps the draft in the page. Cancel on a dirty draft asks whether to keep editing or discard it; explicit discard clears only this page's draft. NUL and unpaired UTF-16 surrogate input is refused with an explanation. UTF-16 and mixed-newline source files remain read-only with a truthful reason. CSV stays raw text in Edit mode; malformed quoting or delimiter placement is refused without clearing the draft.
+
+- **Format/editor matrix (T1–T3 preview and edit support).**
 
 | Suffix group | Preview | Edit |
 |---|---|---|
@@ -592,7 +594,7 @@ Unicode is never normalized; the editor sends LF and the save restores the bound
 - **Lifetime and shutdown.** The bridge lives only in the foreground CLI process. Ctrl+C, the optional explicit `--lifetime-seconds` and a vault lock end document access; the listener stops and the capability is zeroized. A browser tab may keep rendered DOM, DevTools, extension copies, browser-managed memory/cache or OS swap; reload/close is not proof of erasure. The bridge cannot retract content already rendered or read. The S13-T2 smoke checks no app-created browser storage/service worker and removes its temporary profile best-effort; it does not claim absolute browser-managed erasure. T5 owns richer disconnect/expiry/cache semantics.
 - **Resource envelope.** S13-T1/T2 add no hard R38/D086 threshold. The existing 1 MiB workspace per-act bound is the one-document envelope; a page request rereads only the exact bound file, slices it to one bounded text/CSV response and retains no decrypted bytes between requests. It does not enumerate or materialize the workspace. Browser cancellation aborts the page request and cancels its linked owner read.
 - **Dependency.** No external package was added for T2; the source project dependency audit found no package references. Markdown output is constructed from DOM nodes and text, and CSV parsing uses the existing runtime; raw HTML/link/image syntax cannot create active elements or remote fetches. A future external renderer requires its own pinned release/version/license/vulnerability review before use.
-- **Not in T1/T2.** T2 implements formatted Markdown/CSV previews, bounded JSONL/text paging/cancel, malicious-content and browser persistence-limit evidence. Explicit editor modes/save behavior remain T3; CLI search/open-at-location remains T4; richer disconnect/expiry/cache/epoch lifecycle remains T5.
+- **Sprint boundary.** T3 adds explicit editor modes, CSV raw-text validation and revision-gated save; T4 owns CLI lexical search/open-at-location; T5 owns richer disconnect/expiry/cache/epoch lifecycle.
 
 ## 14. Chất lượng production và nghiệm thu
 

@@ -845,3 +845,10 @@ the assignment can fail before the sentinel check or any child starts.
 **Root cause:** The bridge's raw-bearer scan called `GetValue<string>()` on every argument node without first checking its JSON type.
 **Fix / workaround:** Scan actual JSON strings for bearer material, then return the existing `-32602 bridge_invalid_params` refusal for any non-string argument. Search all string values before rejecting a type so raw-bearer denial keeps precedence. Add a same-process regression with number, boolean, null, object and array values followed by ping and a valid tool call.
 **Watch out for:** JSON null is a null `JsonNode`, and numbers, booleans, objects and arrays must not be stringified or coerced when a tool schema requires strings.
+
+## [2026-11-03] Textarea line-ending normalization can mark an unchanged draft dirty
+
+**Symptom:** A CRLF-backed document can appear changed immediately after entering a browser textarea, so cancel prompts or dirty-draft handling can misclassify a no-op edit.
+**Root cause:** `HTMLTextAreaElement.value` normalizes CRLF/CR to LF, while the source string used as the editor baseline still contains the original newline convention.
+**Fix / workaround:** Assign the bound source text to the textarea first, then snapshot `textarea.value` as the in-page baseline. Keep the server's bound newline policy responsible for exact byte-preserving saves.
+**Watch out for:** Compare browser-edited values to the DOM-normalized baseline, not raw source text; never normalize the persisted source bytes to simplify dirty-state checks.

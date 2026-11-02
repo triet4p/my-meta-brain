@@ -635,6 +635,12 @@ internal sealed class DocumentBridgeServer : IDisposable
 
             try
             {
+                if (session.Profile.Format == DocumentFormat.Csv && !DocumentPreview.IsValidCsv(payload.Text))
+                {
+                    await WriteErrorAsync(stream, "invalid_csv", cancellationToken).ConfigureAwait(false);
+                    return;
+                }
+
                 var sha256 = Convert.ToHexStringLower(SHA256.HashData(encoded));
                 if (encoded.Length == session.Length && string.Equals(sha256, session.Sha256, StringComparison.Ordinal))
                 {
@@ -883,7 +889,7 @@ internal sealed class DocumentBridgeServer : IDisposable
         "workspace_not_found" => (404, "Not Found"),
         "workspace_conflict" => (409, "Conflict"),
         "workspace_too_large" => (413, "Content Too Large"),
-        "document_not_editable" or "invalid_encoding" => (422, "Unprocessable Content"),
+        "document_not_editable" or "invalid_encoding" or "invalid_csv" => (422, "Unprocessable Content"),
         "workspace_unreadable" or "workspace_unsupported_version" => (503, "Service Unavailable"),
         "invalid_request" => (400, "Bad Request"),
         _ => (502, "Bad Gateway"),
@@ -903,6 +909,7 @@ internal sealed class DocumentBridgeServer : IDisposable
         "workspace_too_large" => "The document is larger than one bounded document envelope.",
         "document_not_editable" => "This document is read-only under the settled support matrix.",
         "invalid_encoding" => "The edited text cannot be encoded in the document's original encoding; the draft stays in this page.",
+        "invalid_csv" => "The edited CSV has invalid quotes or delimiters; correct the draft before saving. The draft stays in this page.",
         "workspace_unreadable" => "The committed workspace could not be authenticated.",
         "workspace_unsupported_version" => "The workspace format is newer than this build.",
         "invalid_request" => "The request is not a valid document-session request.",

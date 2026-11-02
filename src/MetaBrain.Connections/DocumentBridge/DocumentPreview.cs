@@ -22,6 +22,90 @@ internal static class DocumentPreview
     public const int MaximumTextPageCharacters = 16 * 1024;
     public const int MaximumCsvPageColumns = 64;
     public const int MaximumCsvPageRows = 100;
+    /// <summary>
+    /// Validates CSV edits without rewriting rows or allocating parsed cells.
+    /// A quote may wrap one complete field, with doubled quotes inside it;
+    /// after the closing quote only a delimiter, record separator or EOF is valid.
+    /// </summary>
+    public static bool IsValidCsv(string text)
+    {
+        var inQuotedField = false;
+        var afterQuotedField = false;
+        var atFieldStart = true;
+        for (var index = 0; index < text.Length; index++)
+        {
+            var character = text[index];
+            if (inQuotedField)
+            {
+                if (character == '"')
+                {
+                    if (index + 1 < text.Length && text[index + 1] == '"')
+                    {
+                        index++;
+                    }
+                    else
+                    {
+                        inQuotedField = false;
+                        afterQuotedField = true;
+                    }
+                }
+
+                continue;
+            }
+
+            if (afterQuotedField)
+            {
+                if (character == ',')
+                {
+                    afterQuotedField = false;
+                    atFieldStart = true;
+                }
+                else if (character is '\r' or '\n')
+                {
+                    afterQuotedField = false;
+                    atFieldStart = true;
+                    if (character == '\r' && index + 1 < text.Length && text[index + 1] == '\n')
+                    {
+                        index++;
+                    }
+                }
+                else
+                {
+                    return false;
+                }
+
+                continue;
+            }
+
+            if (atFieldStart && character == '"')
+            {
+                inQuotedField = true;
+                atFieldStart = false;
+            }
+            else if (character == ',')
+            {
+                atFieldStart = true;
+            }
+            else if (character is '\r' or '\n')
+            {
+                atFieldStart = true;
+                if (character == '\r' && index + 1 < text.Length && text[index + 1] == '\n')
+                {
+                    index++;
+                }
+            }
+            else if (character == '"')
+            {
+                return false;
+            }
+            else
+            {
+                atFieldStart = false;
+            }
+        }
+
+        return !inQuotedField;
+    }
 
     public static DocumentTextPreviewPage ReadTextPage(string text, int offset, int requestedLength)
     {
