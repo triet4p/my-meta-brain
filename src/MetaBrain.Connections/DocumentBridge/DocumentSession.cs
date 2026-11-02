@@ -23,8 +23,19 @@ internal sealed class DocumentSession : IDisposable
         string sha256,
         DocumentSurfaceProfile profile,
         DateTimeOffset openedUtc,
-        DateTimeOffset? expiresUtc)
+        DateTimeOffset? expiresUtc,
+        int initialTextOffset = 0,
+        int? selectedTextOffset = null,
+        int? selectedTextLength = null)
     {
+        if (initialTextOffset < 0 ||
+            (selectedTextOffset is null) != (selectedTextLength is null) ||
+            selectedTextOffset is { } selectedOffset &&
+            (selectedOffset < initialTextOffset || selectedTextLength is not { } selectedLength || selectedLength < 1))
+        {
+            throw new ArgumentOutOfRangeException(nameof(initialTextOffset));
+        }
+
         FileId = fileId;
         Name = name;
         ContentRevision = contentRevision;
@@ -33,6 +44,9 @@ internal sealed class DocumentSession : IDisposable
         Profile = profile;
         OpenedUtc = openedUtc;
         ExpiresUtc = expiresUtc;
+        InitialTextOffset = initialTextOffset;
+        SelectedTextOffset = selectedTextOffset;
+        SelectedTextLength = selectedTextLength;
     }
 
     public string FileId { get; }
@@ -50,6 +64,11 @@ internal sealed class DocumentSession : IDisposable
     public DateTimeOffset OpenedUtc { get; }
 
     public DateTimeOffset? ExpiresUtc { get; }
+    public int InitialTextOffset { get; private set; }
+
+    public int? SelectedTextOffset { get; private set; }
+
+    public int? SelectedTextLength { get; private set; }
 
     /// <summary>The session capability, base64url without padding.</summary>
     public string Token => Convert.ToBase64String(token).TrimEnd('=').Replace('+', '-').Replace('/', '_');
@@ -63,6 +82,9 @@ internal sealed class DocumentSession : IDisposable
         Length = length;
         Sha256 = sha256;
         Profile = profile;
+        InitialTextOffset = 0;
+        SelectedTextOffset = null;
+        SelectedTextLength = null;
     }
 
     /// <summary>

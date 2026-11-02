@@ -2,7 +2,7 @@
 
 ## Goal và trạng thái
 
-- Status: **In progress — S13-T1/T2 accepted; S13-T3 active**. Release mục tiêu cuối sprint: **1.3.0**; chưa build/publish.
+- Status: **In progress — S13-T1–T3 accepted; S13-T4 active**. Release mục tiêu cuối sprint: **1.3.0**; chưa build/publish.
 - Entry: Sprint 12 complete và 1.2.0 published.
 - Scope/trace: P2-03, P2-10, P2-12; R10, R23, R30, R32, R38, R39. Các P2 là candidates, không thay baseline khi chưa có approval.
 - Root: `F:/ai-ml/my-meta-brain`; target ref `main`; exact base/worktree/ownership resolve khi execution.
@@ -34,12 +34,13 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
     - Check: Actual browser render và CLI open, malicious Markdown/cross-origin/out-of-session requests, unsupported/large-file/locked negatives; ghi browser-managed persistence/erasure limits.
     - [Evidence R1 PASS](../../artifacts/sprint-13/reviews/S13-T2-C1-R1.md), [checkpoint](../../artifacts/sprint-13/checkpoints/S13-T2-C1.md), commit `6df38d502189bb485ab38c695416919604a55fbe`. Actual CLI/browser safe preview, paging/cancel and exact-cap read accepted; original-content cap unchanged.
 
-- [~] **S13-T3 — Explicit revision-gated text editing.**
+- [x] **S13-T3 — Explicit revision-gated text editing.**
     - Change: Hai chế độ preview/edit cho supported text; Markdown/plain text và CSV raw-text editing trước, không WYSIWYG/grid rewrite. JSONL sessions nguồn luôn read-only; file workspace JSONL theo matrix T1. CLI có explicit content revision path không cần browser/editor ngoài.
     - Acceptance: Explicit save qua shared API với expected revision, tạo revision mới; edit/save/reopen/restart đúng nội dung. Conflict không overwrite; encoding/newline/CSV-invalid edits được giải thích và giữ draft trong memory khi phiên hợp lệ, không autosave plaintext. No-op preview/toggle không normalize/rewrite bytes; unsupported editing bị từ chối trung thực.
     - Check: CLI-only revise và actual browser preview → edit → save, concurrent conflict, invalid encoding, cancel/unsaved handling; giữ nguồn read-only.
+    - [Evidence R1 PASS](../../artifacts/sprint-13/reviews/S13-T3-C1-R1.md), [checkpoint](../../artifacts/sprint-13/checkpoints/S13-T3-C1.md), commit `f2a4c81cccfa404949bf48371ffc2087461cd58c`. CLI/browser editing, conflict/draft, encoding/CSV refusal and restart/reopen accepted.
 
-- [ ] **S13-T4 — CLI lexical search và open-at-location.**
+- [~] **S13-T4 — CLI lexical search và open-at-location.**
     - Change: Shared lexical filename/path/heading/content search, CLI folder filters và revision-pinned anchors; CLI trả đủ evidence/location dạng text/structured result, `open` có thể hiển thị đúng đoạn đã chọn.
     - Acceptance: Exact symbol/phrase/name khớp; hit anchor cùng revision preview, stale anchor không trỏ nhầm. Filter không cấp quyền; frontend không tự rank. Search usable hoàn toàn qua CLI trước hybrid sprint, không đưa search console vào browser.
     - Check: Actual CLI query-to-source và browser anchor rendering khi được mở; observe stale/missing/scope negatives.
@@ -64,4 +65,4 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
 
 ## Gate record
 
-S13-T1/T2 evidence and exact-snapshot checkpoints accepted at the links above; latest `6df38d50`. S13-T3 active; T4–T6, final differential and publication gates pending.
+S13-T1–T3 evidence and exact-snapshot checkpoints accepted at the links above; latest `f2a4c81c`. S13-T4 active; T5/T6, final differential and publication gates pending.

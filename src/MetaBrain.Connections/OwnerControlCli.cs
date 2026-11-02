@@ -139,6 +139,7 @@ internal static class OwnerControlCli
                 "lock" => await LockAsync(options).ConfigureAwait(false),
                 "workspace-status" => await WorkspaceStatusAsync(options).ConfigureAwait(false),
                 "workspace-tree" => await WorkspaceTreeAsync(options).ConfigureAwait(false),
+                "workspace-search" => await WorkspaceSearchAsync(options).ConfigureAwait(false),
                 "workspace-mkdir" => await WorkspaceMkdirAsync(options).ConfigureAwait(false),
                 "workspace-import" => await WorkspaceImportAsync(options).ConfigureAwait(false),
                 "workspace-revise" => await WorkspaceReviseAsync(options).ConfigureAwait(false),
@@ -371,6 +372,301 @@ internal static class OwnerControlCli
         Console.WriteLine($"WORKSPACE revision={DisplayText(tree, "revision")} nodes={nodes.GetArrayLength().ToString(CultureInfo.InvariantCulture)}");
         return 0;
     }
+    private static async Task<int> WorkspaceSearchAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--query", "--folder-id", "--format");
+        var controlPipe = ControlPipe(options);
+        var query = options.Required("--query");
+        var folderId = options.Optional("--folder-id");
+        var format = options.Optional("--format") ?? "text";
+        if (string.IsNullOrWhiteSpace(query) ||
+            (!string.Equals(format, "text", StringComparison.OrdinalIgnoreCase) &&
+             !string.Equals(format, "json", StringComparison.OrdinalIgnoreCase)))
+        {
+            return Usage();
+        }
+
+        var initial = await ReadWorkspaceSearchTreeAsync(controlPipe).ConfigureAwait(false);
+        if (!initial.Success)
+        {
+            WriteServiceError(initial.Response);
+            return 4;
+        }
+
+        if (initial.Snapshot is null)
+        {
+            if (folderId is not null)
+            {
+                Console.Error.WriteLine("ERROR workspace_folder_not_found: the selected folder is not in the live workspace tree.");
+                return 3;
+            }
+
+            WriteWorkspaceSearchResults(query, 0, null, [], format);
+            return 0;
+        }
+
+        var tree = initial.Snapshot;
+        Dictionary<string, string> paths;
+        try
+        {
+            paths = WorkspaceSearch.BuildPaths(tree.RootId, tree.Nodes);
+        }
+        catch (InvalidDataException)
+        {
+            Console.Error.WriteLine("ERROR workspace_tree_invalid: the committed workspace tree could not be resolved.");
+            return 4;
+        }
+
+        string? folderPath = null;
+        if (folderId is not null)
+        {
+            var folder = tree.Nodes.FirstOrDefault(node => string.Equals(node.Id, folderId, StringComparison.Ordinal));
+            if (folder is null)
+            {
+                Console.Error.WriteLine("ERROR workspace_folder_not_found: the selected folder is not in the live workspace tree.");
+                return 3;
+            }
+
+            if (folder.Kind != WorkspaceNodeKind.Folder)
+            {
+                Console.Error.WriteLine("ERROR workspace_filter_not_folder: --folder-id must identify a live folder.");
+                return 3;
+            }
+
+            folderPath = paths[folder.Id];
+        }
+
+        var files = new List<(WorkspaceNodeInfo Node, string Path)>();
+        foreach (var node in tree.Nodes)
+        {
+            if (node.Kind != WorkspaceNodeKind.File || !paths.TryGetValue(node.Id, out var path))
+            {
+                continue;
+            }
+
+            if (folderPath is not null &&
+                folderPath.Length > 0 &&
+                !(path.StartsWith(folderPath, StringComparison.Ordinal) &&
+                  path.Length > folderPath.Length &&
+                  path[folderPath.Length] == '/'))
+            {
+                continue;
+            }
+
+            files.Add((node, path));
+        }
+
+        var hits = new List<WorkspaceSearchHit>();
+        foreach (var (node, path) in files)
+        {
+            var descriptor = node.Revisions.FirstOrDefault(revision => revision.Revision == node.ContentRevision);
+            if (descriptor is null || node.ContentRevision < 1)
+            {
+                Console.Error.WriteLine("ERROR workspace_search_snapshot_changed: a file has no current content revision in the tree snapshot.");
+                return 4;
+            }
+
+            var read = await InvokeOwnerAsync(controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.OwnerWorkspaceFileReadOperation,
+                    node.Id,
+                    WorkspaceContentRevision: node.ContentRevision)).ConfigureAwait(false);
+            if (!read.Success || !HasStatus(read.Reply, "content") ||
+                !TryWorkspaceObject(read.Reply, "workspaceFile", out var fileInfo) ||
+                !read.Reply.TryGetProperty("contentBase64", out var contentValue) ||
+                contentValue.ValueKind != JsonValueKind.String)
+            {
+                WriteServiceError(read);
+                return 4;
+            }
+
+            byte[] content;
+            try
+            {
+                content = Convert.FromBase64String(contentValue.GetString() ?? string.Empty);
+            }
+            catch (FormatException)
+            {
+                Console.Error.WriteLine("ERROR service_protocol_error: the workspace read did not contain valid encoded bytes.");
+                return 4;
+            }
+
+            try
+            {
+                if (!long.TryParse(JsonValueText(fileInfo, "revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var readRevision) ||
+                    !long.TryParse(JsonValueText(fileInfo, "length"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var readLength) ||
+                    !string.Equals(JsonValueText(fileInfo, "sha256"), descriptor.Sha256, StringComparison.OrdinalIgnoreCase) ||
+                    readRevision != node.ContentRevision ||
+                    readLength != descriptor.Length ||
+                    content.LongLength != descriptor.Length)
+                {
+                    Console.Error.WriteLine("ERROR workspace_search_snapshot_changed: file content no longer matches the committed search snapshot.");
+                    return 4;
+                }
+
+                hits.AddRange(WorkspaceSearch.SearchFile(query, node, path, descriptor.Sha256, content));
+            }
+            finally
+            {
+                if (content.Length > 0)
+                {
+                    CryptographicOperations.ZeroMemory(content);
+                }
+            }
+        }
+
+        var current = await ReadWorkspaceSearchTreeAsync(controlPipe).ConfigureAwait(false);
+        if (!current.Success)
+        {
+            WriteServiceError(current.Response);
+            return 4;
+        }
+
+        if (current.Snapshot is null || current.Snapshot.Revision != tree.Revision)
+        {
+            Console.Error.WriteLine("ERROR workspace_search_snapshot_changed: the workspace tree changed while the search was running.");
+            return 4;
+        }
+
+        var currentNodes = current.Snapshot.Nodes.ToDictionary(node => node.Id, StringComparer.Ordinal);
+        Dictionary<string, string> currentPaths;
+        try
+        {
+            currentPaths = WorkspaceSearch.BuildPaths(current.Snapshot.RootId, current.Snapshot.Nodes);
+        }
+        catch (InvalidDataException)
+        {
+            Console.Error.WriteLine("ERROR workspace_tree_invalid: the committed workspace tree could not be resolved.");
+            return 4;
+        }
+
+        foreach (var (node, path) in files)
+        {
+            if (!currentNodes.TryGetValue(node.Id, out var currentNode) ||
+                !currentPaths.TryGetValue(node.Id, out var currentPath) ||
+                currentNode.Kind != WorkspaceNodeKind.File ||
+                currentNode.ContentRevision != node.ContentRevision ||
+                !string.Equals(currentNode.Name, node.Name, StringComparison.Ordinal) ||
+                !string.Equals(currentNode.ParentId, node.ParentId, StringComparison.Ordinal) ||
+                !string.Equals(path, currentPath, StringComparison.Ordinal))
+            {
+                Console.Error.WriteLine("ERROR workspace_search_snapshot_changed: a searched file changed during the search.");
+                return 4;
+            }
+        }
+
+        WorkspaceSearch.Rank(hits);
+        WriteWorkspaceSearchResults(query, tree.Revision, folderId, hits, format);
+        return 0;
+    }
+
+    private static async Task<(bool Success, WorkspaceSnapshot? Snapshot, (bool Success, JsonElement Reply) Response)>
+        ReadWorkspaceSearchTreeAsync(string controlPipe)
+    {
+        var response = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerWorkspaceTreeOperation))
+            .ConfigureAwait(false);
+        if (!response.Success ||
+            (!HasStatus(response.Reply, "workspace") && !HasStatus(response.Reply, "workspace_empty")))
+        {
+            return (false, null, response);
+        }
+
+        if (HasStatus(response.Reply, "workspace_empty"))
+        {
+            return (true, null, response);
+        }
+
+        try
+        {
+            if (!TryWorkspaceObject(response.Reply, "workspaceTree", out var treeElement))
+            {
+                return (false, null, response);
+            }
+
+            var wire = treeElement.Deserialize<WorkspaceTreeWire>(JsonOptions);
+            if (wire is null || wire.Nodes is null || string.IsNullOrWhiteSpace(wire.RootId))
+            {
+                return (false, null, response);
+            }
+
+            var nodes = new WorkspaceNodeInfo[wire.Nodes.Length];
+            for (var index = 0; index < wire.Nodes.Length; index++)
+            {
+                var node = wire.Nodes[index];
+                var kind = node.Kind switch
+                {
+                    WorkspaceNodeKinds.Folder => WorkspaceNodeKind.Folder,
+                    WorkspaceNodeKinds.File => WorkspaceNodeKind.File,
+                    _ => (WorkspaceNodeKind)0,
+                };
+                if (kind == 0 || node.Revisions is null)
+                {
+                    return (false, null, response);
+                }
+
+                nodes[index] = new WorkspaceNodeInfo(
+                    node.Id,
+                    kind,
+                    node.ParentId,
+                    node.Name,
+                    node.Revision,
+                    node.ContentRevision,
+                    node.Revisions.Select(revision =>
+                        new WorkspaceContentRevisionInfo(revision.Revision, revision.Length, revision.Sha256)).ToArray());
+            }
+
+            return (true, new WorkspaceSnapshot(
+                wire.WorkspaceId,
+                wire.FormatVersion,
+                wire.MetadataSchemaVersion,
+                wire.Revision,
+                wire.RootId,
+                nodes), response);
+        }
+        catch (JsonException)
+        {
+            return (false, null, response);
+        }
+    }
+
+    private static void WriteWorkspaceSearchResults(
+        string query,
+        long workspaceRevision,
+        string? folderId,
+        List<WorkspaceSearchHit> hits,
+        string format)
+    {
+        if (string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine(JsonSerializer.Serialize(new
+            {
+                query,
+                workspaceRevision,
+                folderId,
+                total = hits.Count,
+                hits,
+            }, JsonOptions));
+            return;
+        }
+
+        Console.WriteLine(
+            $"SEARCH query={JsonSerializer.Serialize(query)} workspaceRevision={workspaceRevision.ToString(CultureInfo.InvariantCulture)} " +
+            $"folderId={JsonSerializer.Serialize(folderId)} total={hits.Count.ToString(CultureInfo.InvariantCulture)}");
+        for (var index = 0; index < hits.Count; index++)
+        {
+            var hit = hits[index];
+            var location = hit.ByteOffset is { } offset && hit.ByteLength is { } length
+                ? $"line={hit.Line?.ToString(CultureInfo.InvariantCulture)} byteOffset={offset.ToString(CultureInfo.InvariantCulture)} " +
+                  $"byteLength={length.ToString(CultureInfo.InvariantCulture)} anchorSha256={hit.AnchorSha256}"
+                : "location=metadata";
+            Console.WriteLine(
+                $"HIT rank={(index + 1).ToString(CultureInfo.InvariantCulture)} fileId={hit.FileId} " +
+                $"path={JsonSerializer.Serialize(hit.Path)} revision={hit.ContentRevision.ToString(CultureInfo.InvariantCulture)} " +
+                $"fileSha256={hit.FileSha256} field={hit.Field} {location} evidence={JsonSerializer.Serialize(hit.Evidence ?? query)}");
+        }
+    }
 
     private static async Task<int> WorkspaceMkdirAsync(CommandOptions options)
     {
@@ -570,6 +866,9 @@ internal static class OwnerControlCli
         string? controlPipe = null;
         string? fileId = null;
         long? revision = null;
+        long? anchorOffset = null;
+        long? anchorLength = null;
+        string? anchorSha256 = null;
         var noBrowser = false;
         var lifetimeSeconds = (int?)null;
         for (var index = 0; index < args.Length;)
@@ -611,6 +910,17 @@ internal static class OwnerControlCli
                 case "--lifetime-seconds" when int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedLifetime) && parsedLifetime >= 1:
                     lifetimeSeconds = parsedLifetime;
                     break;
+                case "--anchor-offset" when anchorOffset is null &&
+                    long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedAnchorOffset) && parsedAnchorOffset >= 0:
+                    anchorOffset = parsedAnchorOffset;
+                    break;
+                case "--anchor-length" when anchorLength is null &&
+                    long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedAnchorLength) && parsedAnchorLength > 0:
+                    anchorLength = parsedAnchorLength;
+                    break;
+                case "--anchor-sha256" when anchorSha256 is null && IsSha256(value):
+                    anchorSha256 = value;
+                    break;
                 default:
                     return OpenUsage();
             }
@@ -619,6 +929,12 @@ internal static class OwnerControlCli
         }
 
         if (string.IsNullOrWhiteSpace(controlPipe) || string.IsNullOrWhiteSpace(fileId))
+        {
+            return OpenUsage();
+        }
+
+        var hasAnchor = anchorOffset is not null || anchorLength is not null || anchorSha256 is not null;
+        if (hasAnchor && (anchorOffset is null || anchorLength is null || anchorSha256 is null || revision is null))
         {
             return OpenUsage();
         }
@@ -634,6 +950,7 @@ internal static class OwnerControlCli
         }
 
         string? name = null;
+        long? currentRevision = null;
         if (TryWorkspaceObject(tree.Reply, "workspaceTree", out var workspaceTree) &&
             workspaceTree.TryGetProperty("nodes", out var nodes) && nodes.ValueKind == JsonValueKind.Array)
         {
@@ -643,9 +960,11 @@ internal static class OwnerControlCli
                     string.Equals(idValue.GetString(), fileId, StringComparison.Ordinal) &&
                     node.TryGetProperty("kind", out var kindValue) && kindValue.ValueKind == JsonValueKind.String &&
                     string.Equals(kindValue.GetString(), WorkspaceNodeKinds.File, StringComparison.Ordinal) &&
-                    node.TryGetProperty("name", out var nameValue) && nameValue.ValueKind == JsonValueKind.String)
+                    node.TryGetProperty("name", out var nameValue) && nameValue.ValueKind == JsonValueKind.String &&
+                    node.TryGetProperty("contentRevision", out var revisionValue) && revisionValue.TryGetInt64(out var liveRevision))
                 {
                     name = nameValue.GetString();
+                    currentRevision = liveRevision;
                     break;
                 }
             }
@@ -654,6 +973,11 @@ internal static class OwnerControlCli
         if (name is null)
         {
             Console.Error.WriteLine("ERROR workspace_not_found: the selected live workspace file is not in the tree.");
+            return 3;
+        }
+        if (hasAnchor && currentRevision != revision)
+        {
+            Console.Error.WriteLine("ERROR workspace_anchor_stale: the selected search anchor no longer names the current file revision.");
             return 3;
         }
 
@@ -669,10 +993,75 @@ internal static class OwnerControlCli
 
             return 3;
         }
-
         try
         {
+
+            var initialTextOffset = 0;
+            WorkspaceSearchTextRange? selectedTextRange = null;
+            if (hasAnchor)
+            {
+                var selectedOffset = anchorOffset!.Value;
+                var selectedLength = anchorLength!.Value;
+                if (read.Revision != revision ||
+                    selectedOffset > read.Content.LongLength ||
+                    selectedLength > read.Content.LongLength - selectedOffset)
+                {
+                    Console.Error.WriteLine("ERROR workspace_anchor_invalid: the selected byte range is not present in the pinned revision.");
+                    return 3;
+                }
+
+                Span<byte> actualDigest = stackalloc byte[32];
+                SHA256.HashData(read.Content.AsSpan(checked((int)selectedOffset), checked((int)selectedLength)), actualDigest);
+                if (!string.Equals(Convert.ToHexString(actualDigest), anchorSha256, StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.Error.WriteLine("ERROR workspace_anchor_mismatch: the selected byte range does not match its pinned digest.");
+                    return 3;
+                }
+
+
+                var current = await ReadWorkspaceSearchTreeAsync(controlPipe).ConfigureAwait(false);
+                if (!current.Success)
+                {
+                    WriteServiceError(current.Response);
+                    return 3;
+                }
+
+                var currentNode = current.Snapshot?.Nodes.FirstOrDefault(node =>
+                    string.Equals(node.Id, fileId, StringComparison.Ordinal) && node.Kind == WorkspaceNodeKind.File);
+                if (currentNode is null)
+                {
+                    Console.Error.WriteLine("ERROR workspace_not_found: the selected live workspace file is not in the tree.");
+                    return 3;
+                }
+
+                if (currentNode.ContentRevision != revision)
+                {
+                    Console.Error.WriteLine("ERROR workspace_anchor_stale: the selected search anchor no longer names the current file revision.");
+                    return 3;
+                }
+
+                name = currentNode.Name;
+            }
+
             var analysis = DocumentBridge.DocumentSurface.Analyze(name, read.Content);
+            if (hasAnchor)
+            {
+                if (analysis.Text is null ||
+                    !WorkspaceSearch.TryMapByteRange(
+                        read.Content,
+                        analysis.Text,
+                        anchorOffset!.Value,
+                        anchorLength!.Value,
+                        out selectedTextRange) ||
+                    selectedTextRange is null)
+                {
+                    Console.Error.WriteLine("ERROR workspace_anchor_invalid: the selected byte range is not a valid text anchor.");
+                    return 3;
+                }
+
+                initialTextOffset = WorkspaceSearch.LineStart(analysis.Text, selectedTextRange.Offset);
+            }
+
             var now = DateTimeOffset.UtcNow;
             var expiresUtc = lifetimeSeconds is { } seconds
                 ? now.AddSeconds(seconds)
@@ -685,7 +1074,10 @@ internal static class OwnerControlCli
                 read.Sha256,
                 analysis.Profile,
                 now,
-                expiresUtc);
+                expiresUtc,
+                initialTextOffset,
+                selectedTextRange?.Offset,
+                selectedTextRange?.Length);
             using var server = DocumentBridge.DocumentBridgeServer.Start(session, gateway);
             using var stop = new CancellationTokenSource();
             var ended = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -713,11 +1105,16 @@ internal static class OwnerControlCli
                 : null;
             try
             {
+                var location = selectedTextRange is null
+                    ? string.Empty
+                    : $" anchorOffset={anchorOffset!.Value.ToString(CultureInfo.InvariantCulture)} " +
+                      $"anchorLength={anchorLength!.Value.ToString(CultureInfo.InvariantCulture)} anchorSha256={anchorSha256} " +
+                      $"textOffset={selectedTextRange.Offset.ToString(CultureInfo.InvariantCulture)}";
                 Console.WriteLine(
                     $"OPEN document id={fileId} name={JsonSerializer.Serialize(name)} revision={read.Revision} " +
                     $"format={analysis.Profile.FormatLabel} encoding={analysis.Profile.EncodingLabel} " +
                     $"newlines={analysis.Profile.NewlineLabel} state={analysis.Profile.State} " +
-                    $"editable={analysis.Profile.Editable.ToString().ToLowerInvariant()} url={server.Url}");
+                    $"editable={analysis.Profile.Editable.ToString().ToLowerInvariant()}{location} url={server.Url}");
                 if (!noBrowser)
                 {
                     TryOpenBrowser(server.Url);
@@ -744,10 +1141,12 @@ internal static class OwnerControlCli
 
     private static int OpenUsage()
     {
-        Console.Error.WriteLine("Usage: MetaBrain.Cli.exe open <file-id> --control-pipe <pipe> [--revision <n>] [--no-browser] [--lifetime-seconds <n>]");
-        Console.Error.WriteLine("Serves one workspace file and revision to a local browser session; Ctrl+C, the explicit lifetime or lock ends document access.");
+        Console.Error.WriteLine("Usage: MetaBrain.Cli.exe open <file-id> --control-pipe <pipe> [--revision <n>] [--anchor-offset <bytes> --anchor-length <bytes> --anchor-sha256 <digest>] [--no-browser] [--lifetime-seconds <n>]");
+        Console.Error.WriteLine("An anchored open requires the current revision and matching byte-range digest; the browser starts at that exact selected source location.");
         return 2;
     }
+    private static bool IsSha256(string value) =>
+        value.Length == 64 && value.All(Uri.IsHexDigit);
 
     private static void TryOpenBrowser(string url)
     {
@@ -7819,7 +8218,7 @@ internal static class OwnerControlCli
         // contextual help above (`owner --help` / `owner <verb> --help`) is
         // the product surface. Usage-only paths exit 2 and change nothing.
         Console.Error.WriteLine("Owner: `owner --help` lists every workflow group; `owner <verb> --help` shows the exact inputs of one command.");
-        Console.Error.WriteLine("Groups: vault | capture | library | review | sharing | sources | planning | models. Every owner command needs --control-pipe <pipe>; agent-scoped reads use --agent-pipe plus --session-file instead.");
+        Console.Error.WriteLine("Groups: vault | workspace | capture | library | review | sharing | sources | planning | models. Every owner command needs --control-pipe <pipe>; agent-scoped reads use --agent-pipe plus --session-file instead.");
         return 2;
     }
 
@@ -8924,7 +9323,7 @@ internal static class OwnerControlCli
         {
             Console.Error.WriteLine("Owner commands (run `owner <verb> --help` for one command; `owner help --command <verb>` is the same):");
             Console.Error.WriteLine("  vault: status|provision|unlock|recover|lock|upgrade|upgrade-with-recovery-code|rollback|rollback-with-recovery-code|health|audit|diagnostics|retention|backup|restore|restore-with-recovery-code|export");
-            Console.Error.WriteLine("  workspace: workspace-status|workspace-tree|workspace-mkdir|workspace-import|workspace-revise|workspace-read|workspace-rename|workspace-move|workspace-copy|workspace-delete-preview|workspace-delete|workspace-restore|workspace-tombstones|workspace-anchor-create|workspace-anchor-list|workspace-purge-preview|workspace-purge|workspace-export-preview|workspace-export");
+            Console.Error.WriteLine("  workspace: workspace-status|workspace-tree|workspace-search|workspace-mkdir|workspace-import|workspace-revise|workspace-read|workspace-rename|workspace-move|workspace-copy|workspace-delete-preview|workspace-delete|workspace-restore|workspace-tombstones|workspace-anchor-create|workspace-anchor-list|workspace-purge-preview|workspace-purge|workspace-export-preview|workspace-export");
             Console.Error.WriteLine("  document (top-level): open <file-id> — foreground loopback browser preview/edit of one workspace file at one content revision");
             Console.Error.WriteLine("  capture: memory-create|memory-revise|memory-import|memory-read|read|write|source-create|source-revise|source-read|research-capture|research-read|feedback-create|feedback-read");
             Console.Error.WriteLine("  library: library|memory-read|source-read|research-read|relation-read|lifecycle-read|lifecycle-retained-read|recall-read|review-list|review-record|index-status|index-rebuild");
@@ -8942,7 +9341,7 @@ internal static class OwnerControlCli
     }
     private static string? CommandHelpText(string verb) => verb switch
     {
-        "open" => "open <file-id> --control-pipe <pipe> [--revision <n>] [--no-browser] [--lifetime-seconds <n>]: foreground loopback browser session for exactly one workspace file and content revision. Requires the unlocked vault; Ctrl+C, the explicit lifetime or lock ends reads/saves. UTF-8 markdown/CSV/JSONL/plain text is editable with explicit expected-revision save; other encodings/formats are shown read-only. No key, file path or general owner API reaches the browser.",
+        "open" => "open <file-id> --control-pipe <pipe> [--revision <n>] [--anchor-offset <bytes> --anchor-length <bytes> --anchor-sha256 <digest>] [--no-browser] [--lifetime-seconds <n>]: foreground loopback browser session for exactly one workspace file and content revision. An anchor must match the live revision and its exact byte-range digest; the browser starts at that selected location. Requires the unlocked vault; Ctrl+C, the explicit lifetime or lock ends reads/saves. UTF-8 markdown/CSV/JSONL/plain text is editable with explicit expected-revision save; other encodings/formats are shown read-only. No key, file path or general owner API reaches the browser.",
         "status" => "owner status --control-pipe <pipe>: vault state of the running shared host (locked/unlocked/uninitialized), plus format/rollback state. Read-only.",
         "provision" => "owner provision --control-pipe <pipe>: first-time vault setup. Prompts twice for the new passphrase (min 12 chars); prints the recovery key once — store it outside the vault.",
         "unlock" => "owner unlock --control-pipe <pipe>: prompts for the vault passphrase and unlocks this host (process memory only). Wrong key fails closed.",
@@ -9050,6 +9449,7 @@ internal static class OwnerControlCli
         "export" => "owner export --control-pipe <pipe> --resource-ids <id,...> --output-file <new-file> [--include-relations true] [--include-lifecycle-states true]: explicit readable plaintext copy of exactly the selected records (create-only; cannot be revoked afterwards). Citations outside the scope are withheld whole.",
         "workspace-status" => "owner workspace-status --control-pipe <pipe>: committed workspace state (ready/uninitialized), format/schema versions, tree revision and counts. An unreadable or newer workspace is refused, never shown as empty.",
         "workspace-tree" => "owner workspace-tree --control-pipe <pipe>: every logical folder/file with stable id, parent, exact name, tree revision and (for files) the latest content revision, bytes and SHA-256. Names print as JSON strings.",
+        "workspace-search" => "owner workspace-search --control-pipe <pipe> --query <exact-literal> [--folder-id <live-folder-id>] [--format text|json]: case-insensitive exact lexical search of live workspace file names, paths, Markdown headings and valid UTF-8/UTF-16 text. No stemming, synonyms or semantic expansion. Results pin the file id, content revision, file digest and (for text hits) byte range digest/offset; --folder-id only narrows the owner's workspace search and grants no access.",
         "workspace-mkdir" => "owner workspace-mkdir --control-pipe <pipe> --parent-id <id|root> --name <exact-name> --expected-tree-revision <n>: create one logical folder at the tree revision you last saw. Revision 0 initializes an empty workspace. Sibling names are compared ordinals, case-sensitively.",
         "workspace-import" => "owner workspace-import --control-pipe <pipe> --parent-id <id|root> [--name <exact-name>] --input-file <file> --expected-tree-revision <n>: store the file's exact original bytes (empty and non-UTF-8 included) as content revision 1 under your structural precondition. Defaults to the source file name; an unrepresentable name or an occupied sibling name is refused, never renamed or overwritten.",
         "workspace-revise" => "owner workspace-revise --control-pipe <pipe> --file-id <id> --expected-content-revision <live> --input-file <file>: store the exact bytes as the next retained content revision. A stale revision is refused; earlier revisions stay readable.",

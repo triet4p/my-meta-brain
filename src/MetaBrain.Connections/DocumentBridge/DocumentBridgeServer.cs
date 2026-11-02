@@ -40,9 +40,9 @@ internal sealed class DocumentBridgeServer : IDisposable
     private readonly TcpListener listener;
     private readonly DocumentSession session;
     private readonly IDocumentOwnerGateway gateway;
-    private readonly byte[] shell;
     private readonly string origin;
     private readonly SemaphoreSlim documentGate = new(1, 1);
+    private byte[] shellContent;
     private readonly HashSet<Task> clients = [];
     private readonly object clientsLock = new();
     private int stopped;
@@ -54,7 +54,11 @@ internal sealed class DocumentBridgeServer : IDisposable
         this.gateway = gateway;
         Port = port;
         origin = "http://127.0.0.1:" + port.ToString(CultureInfo.InvariantCulture);
-        shell = DocumentBridgeAssets.Shell(session.Token);
+        shellContent = DocumentBridgeAssets.Shell(
+            session.Token,
+            session.InitialTextOffset,
+            session.SelectedTextOffset,
+            session.SelectedTextLength);
     }
 
     public int Port { get; }
@@ -139,6 +143,8 @@ internal sealed class DocumentBridgeServer : IDisposable
     {
         Stop();
         documentGate.Dispose();
+        CryptographicOperations.ZeroMemory(shellContent);
+        shellContent = [];
     }
 
     private async Task WaitForClientsAsync()
@@ -277,8 +283,20 @@ internal sealed class DocumentBridgeServer : IDisposable
         switch (request.Method, request.Target)
         {
             case ("GET", "/"):
-                await WriteAsync(stream, 200, "OK", DocumentBridgeAssets.HtmlContentType, shell, cancellationToken).ConfigureAwait(false);
+            {
+                await documentGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await WriteAsync(stream, 200, "OK", DocumentBridgeAssets.HtmlContentType, shellContent, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                finally
+                {
+                    documentGate.Release();
+                }
+
                 return;
+            }
             case ("GET", "/app.js"):
                 await WriteAsync(stream, 200, "OK", DocumentBridgeAssets.JavaScriptContentType,
                     Encoding.UTF8.GetBytes(DocumentBridgeAssets.JavaScript), cancellationToken).ConfigureAwait(false);
@@ -665,6 +683,13 @@ internal sealed class DocumentBridgeServer : IDisposable
                 }
 
                 session.Advance(saved.Revision, encoded.Length, saved.Sha256 ?? sha256, session.Profile);
+                var updatedShell = DocumentBridgeAssets.Shell(
+                    session.Token,
+                    session.InitialTextOffset,
+                    session.SelectedTextOffset,
+                    session.SelectedTextLength);
+                CryptographicOperations.ZeroMemory(shellContent);
+                shellContent = updatedShell;
                 await WriteAsync(stream, 200, "OK", "application/json; charset=utf-8",
                     JsonSerializer.SerializeToUtf8Bytes(new
                     {

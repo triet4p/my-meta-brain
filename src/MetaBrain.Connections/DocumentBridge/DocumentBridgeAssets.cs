@@ -21,6 +21,7 @@ internal static class DocumentBridgeAssets
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="mb-session" content="__SESSION_TOKEN__">
+<meta name="mb-location" content="__LOCATION__">
 <title>Meta Brain document</title>
 <link rel="stylesheet" href="/app.css">
 </head>
@@ -102,6 +103,7 @@ button:disabled { opacity: 0.5; }
 #preview-view :not(pre) > code { padding: 0.05rem 0.2rem; background: #8882; }
 #editor { resize: vertical; font-family: Consolas, "Cascadia Mono", monospace; font-size: 0.9rem; white-space: pre; }
 #status { min-height: 1.5rem; font-size: 0.9rem; }
+#preview-view mark { outline: 2px solid currentColor; }
 #status.error { color: #b00020; }
 .hidden { display: none; }
 #discard-confirm { display: flex; align-items: center; gap: 0.5rem; margin: 0.5rem 0; flex-wrap: wrap; }
@@ -114,6 +116,11 @@ button:disabled { opacity: 0.5; }
     const tokenElement = document.querySelector('meta[name="mb-session"]');
     const token = tokenElement ? tokenElement.content : '';
     const requestHeaders = { 'X-MetaBrain-Session': token, 'Accept': 'application/json' };
+    const locationElement = document.querySelector('meta[name="mb-location"]');
+    const locationParts = locationElement ? locationElement.content.split(',') : [];
+    const initialOffsetValue = Number(locationParts[0] || '0');
+    const selectedOffsetValue = locationParts[1] ? Number(locationParts[1]) : null;
+    const selectedLengthValue = locationParts[2] ? Number(locationParts[2]) : null;
     const textPageCharacters = 16 * 1024;
     const state = {
         revision: null,
@@ -124,12 +131,15 @@ button:disabled { opacity: 0.5; }
         format: null,
         metadata: null,
         page: null,
+        initialOffset: Number.isSafeInteger(initialOffsetValue) && initialOffsetValue >= 0 ? initialOffsetValue : 0,
+        anchorStart: Number.isSafeInteger(selectedOffsetValue) && selectedOffsetValue >= 0 ? selectedOffsetValue : null,
+        anchorLength: Number.isSafeInteger(selectedLengthValue) && selectedLengthValue > 0 ? selectedLengthValue : null,
         currentOffset: 0,
         nextOffset: null,
         currentColumnOffset: 0,
         nextColumnOffset: null,
         previousOffsets: [],
-        rawView: false,
+        rawView: Number.isSafeInteger(selectedOffsetValue) && selectedOffsetValue >= 0,
         requestController: null,
         requestId: 0
     };
@@ -522,6 +532,20 @@ button:disabled { opacity: 0.5; }
 
     function renderRawText(source) {
         const pre = document.createElement('pre');
+        const relativeStart = state.anchorStart === null ? -1 : state.anchorStart - state.currentOffset;
+        if (relativeStart >= 0 && relativeStart < source.length && state.anchorLength > 0) {
+            const visibleLength = Math.min(state.anchorLength, source.length - relativeStart);
+            appendText(pre, source.slice(0, relativeStart));
+            const selected = document.createElement('mark');
+            selected.id = 'selected-anchor';
+            selected.textContent = source.slice(relativeStart, relativeStart + visibleLength);
+            pre.appendChild(selected);
+            appendText(pre, source.slice(relativeStart + visibleLength));
+            element('preview-view').replaceChildren(pre);
+            selected.scrollIntoView({ block: 'center' });
+            return;
+        }
+
         pre.textContent = source;
         element('preview-view').replaceChildren(pre);
     }
@@ -581,9 +605,13 @@ button:disabled { opacity: 0.5; }
             setStatus('Preview of the bound revision — formatted Markdown. Raw HTML, links and images stay inert.', false);
         } else {
             renderRawText(data.text);
-            setStatus('Bound source page. Previewing or switching views does not save or rewrite bytes.', false);
-        }
+            const selectedHitVisible = state.anchorStart !== null && state.anchorLength !== null &&
+                state.anchorStart >= data.offset && state.anchorStart < data.offset + data.text.length;
+            setStatus(selectedHitVisible
+                ? 'Showing the selected revision-pinned search hit in the exact bound source revision.'
+                : 'Bound source page. Previewing or switching views does not save or rewrite bytes.', false);
 
+        }
         if (!data.editable && data.text !== null) {
             setStatus('Read-only: ' + (data.readOnlyReason || data.state) + '.', false);
         }
@@ -692,7 +720,7 @@ button:disabled { opacity: 0.5; }
             state.previousOffsets = [];
             state.currentColumnOffset = 0;
             state.nextColumnOffset = null;
-            readPage(0, 0);
+            readPage(state.initialOffset, 0);
         } else if (unsaved) {
             setStatus('Preview shows the saved revision; your unsaved draft remains in this page.', false);
         }
@@ -734,7 +762,7 @@ button:disabled { opacity: 0.5; }
             state.currentColumnOffset = 0;
             state.nextColumnOffset = null;
             state.previousOffsets = [];
-            readPage(0, 0);
+            readPage(state.initialOffset, 0);
         }
         setStatus('Draft discarded from this page; stored document bytes were not changed.', false);
     }
@@ -746,7 +774,7 @@ button:disabled { opacity: 0.5; }
         state.previousOffsets = [];
         state.currentColumnOffset = 0;
         state.nextColumnOffset = null;
-        readPage(0, 0);
+        readPage(state.currentOffset, 0);
     }
 
     async function showEditor() {
@@ -852,6 +880,11 @@ button:disabled { opacity: 0.5; }
 
         state.editorBaseline = text;
         updateRevision(data.contentRevision, data.length);
+        if (data.status !== 'unchanged') {
+            state.anchorStart = null;
+            state.anchorLength = null;
+            state.initialOffset = 0;
+        }
         state.page = null;
         state.nextOffset = null;
         state.currentColumnOffset = 0;
@@ -907,10 +940,20 @@ button:disabled { opacity: 0.5; }
             readPage(state.currentOffset, state.nextColumnOffset);
         }
     });
-    readPage(0, 0);
+    readPage(state.initialOffset, 0);
 })();
 """;
 
-    public static byte[] Shell(string token) =>
-        Encoding.UTF8.GetBytes(ShellTemplate.Replace("__SESSION_TOKEN__", token, StringComparison.Ordinal));
+    public static byte[] Shell(string token, int initialTextOffset, int? selectedTextOffset, int? selectedTextLength)
+    {
+        var location = selectedTextOffset is { } offset && selectedTextLength is { } length
+            ? initialTextOffset.ToString(System.Globalization.CultureInfo.InvariantCulture) + "," +
+              offset.ToString(System.Globalization.CultureInfo.InvariantCulture) + "," +
+              length.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : initialTextOffset.ToString(System.Globalization.CultureInfo.InvariantCulture) + ",,";
+        var html = ShellTemplate
+            .Replace("__SESSION_TOKEN__", token, StringComparison.Ordinal)
+            .Replace("__LOCATION__", location, StringComparison.Ordinal);
+        return Encoding.UTF8.GetBytes(html);
+    }
 }

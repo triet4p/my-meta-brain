@@ -18,5 +18,6 @@
          console implicit usings. -->
     <ProjectReference Include="..\..\src\MetaBrain.Connections\MetaBrain.Connections.csproj" />
     <ProjectReference Include="..\..\src\MetaBrain.OwnerUi\MetaBrain.OwnerUi.csproj" />
+    <ProjectReference Include="..\..\src\MetaBrain.Cli\MetaBrain.Cli.csproj" />
   </ItemGroup>
 </Project>
