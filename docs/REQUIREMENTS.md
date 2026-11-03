@@ -6,7 +6,7 @@ Baseline 2026-09-28 được owner thay security scope bằng CR01/D016 ngày 20
 
 Mỗi requirement có một sprint chịu trách nhiệm chính và có thể cần nhiều task bảo toàn nó. Sprint sau không được làm hỏng requirement đã pass. Các yêu cầu cross-cutting vẫn áp dụng trước sprint nghiệm thu chính nếu surface tương ứng đã xuất hiện.
 
-**Current scope:** 1.1.0/Sprint 11 đã published/Complete theo [PLAN](PLAN.md); các trạng thái cũ trong baseline/change records là lịch sử. Owner-approved **CR03/D089 (2026-11-01)** thay owner surface/support contract từ Sprint 12/1.2.0: CLI owner-complete + MCP, browser document preview/edit từ Sprint 13; WPF 1.1.0 frozen. Không coi planning này là implementation hoặc gate PASS.
+**Current scope:** 1.3.0/Sprint 13 published/Complete theo [PLAN](PLAN.md); các trạng thái cũ trong baseline/change records là lịch sử. Owner-approved **CR03/D089 (2026-11-01)** thay owner surface/support contract từ Sprint 12/1.2.0: CLI owner-complete + MCP, browser document preview/edit từ Sprint 13; WPF 1.1.0 frozen. Không coi planning này là implementation hoặc gate PASS.
 
 ## Requirement Registry
 

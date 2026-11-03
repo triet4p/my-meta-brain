@@ -2,7 +2,7 @@
 
 ## Goal và trạng thái
 
-- Status: **In progress — S13-T1–T5 accepted; T6 prepublication gates accepted**. Candidate `1184282a4204`; final differential and publication/public smoke pending. Release mục tiêu **1.3.0** chưa published.
+- Status: **Complete — 1.3.0 published**. Candidate `1184282a4204`, source/tag `35c764c74e0f50a251614a1c8c0b0a72ae85c412`; all task evidence/checkpoints, final differential and independent public smoke PASS.
 - Entry: Sprint 12 complete và 1.2.0 published.
 - Scope/trace: P2-03, P2-10, P2-12; R10, R23, R30, R32, R38, R39. Các P2 là candidates, không thay baseline khi chưa có approval.
 - Root: `F:/ai-ml/my-meta-brain`; target ref `main`; exact base/worktree/ownership resolve khi execution.
@@ -52,11 +52,11 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
     - Check: Actual browser actions, lifecycle/race negatives và file/cache observations trong consent scope; ghi giới hạn đo thật.
     - [Evidence R1 PASS](../../artifacts/sprint-13/reviews/S13-T5-C1-R1.md), [checkpoint](../../artifacts/sprint-13/checkpoints/S13-T5-C1.md), commit `928e02d1c4f3ed0a2009835a9d91e2ea26c533d9`. Actual lifecycle/race/resource proof accepted, with unmanaged/browser erasure limitations retained.
 
-- [~] **S13-T6 — Release 1.3.0.**
+- [x] **S13-T6 — Release 1.3.0.**
     - Change: Publish CLI installer + MCP ZIP mang bundled document assets/bridge, open/edit support matrix, secure-rendering/lock/browser limits và CLI-only guides; không package UI product riêng.
     - Acceptance: Packaged CLI search/read/revise/restart/unlock không cần browser; optional open → preview/edit → save → conflict/lock chạy trên browser thật. Exact candidate không plaintext HTML/temp, không general web console; release contract chung đạt.
     - Check: Exercise installed CLI, launched browser document surface và MCP khi affected; không WPF proof hoặc provider replay ngoài scope.
-    - Prepublication [evidence R1 PASS](../../artifacts/sprint-13/reviews/S13-T6-C1-R1.md), [checkpoint](../../artifacts/sprint-13/checkpoints/S13-T6-C1.md), commit `35c764c74e0f50a251614a1c8c0b0a72ae85c412`; candidate `1184282a4204`. Task remains [~] until required differential and publication/public smoke pass.
+    - Prepublication [evidence R1 PASS](../../artifacts/sprint-13/reviews/S13-T6-C1-R1.md), [checkpoint](../../artifacts/sprint-13/checkpoints/S13-T6-C1.md), commit `35c764c74e0f50a251614a1c8c0b0a72ae85c412`; candidate `1184282a4204`. [Publication record](../../artifacts/sprint-13/publication/S13-PUBLISH-P1.md), [independent public review PASS](../../artifacts/sprint-13/reviews/S13-PUBLIC-C1-R1.md), [publication-docs checkpoint](../../artifacts/sprint-13/checkpoints/S13-PUBLISH-C1.md) `6de84bae`; [release](https://github.com/triet4p/my-meta-brain/releases/tag/v1.3.0), [site](https://triet4p.github.io/my-meta-brain/).
 
 ## Exit và release boundary
 
@@ -68,4 +68,4 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
 
 ## Gate record
 
-S13-T1–T5 accepted; T6 prepublication evidence/checkpoint PASS, latest `35c764c7`. Final differential active; publication/public-smoke gates pending, no commit_pending.
+S13-T1–T6 Complete: task evidence and exact-snapshot checkpoints PASS, [final differential D1 PASS](../../artifacts/sprint-13/reviews/S13-DEEP-D1.md), [independent public smoke PASS](../../artifacts/sprint-13/reviews/S13-PUBLIC-C1-R1.md), zero actionable findings and no commit_pending. Public tag/source `35c764c7`, candidate `1184282a4204`, publication-docs checkpoint `6de84bae`. Sprint 14 not launched; authorization remains separate.
