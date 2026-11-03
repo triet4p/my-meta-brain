@@ -2,7 +2,7 @@
 
 ## Goal và trạng thái
 
-- Status: **In progress — S13-T1–T4 accepted; S13-T5 active**. Release mục tiêu cuối sprint: **1.3.0**; chưa build/publish.
+- Status: **In progress — S13-T1–T5 accepted; S13-T6 active**. Release mục tiêu cuối sprint: **1.3.0**; chưa build/publish.
 - Entry: Sprint 12 complete và 1.2.0 published.
 - Scope/trace: P2-03, P2-10, P2-12; R10, R23, R30, R32, R38, R39. Các P2 là candidates, không thay baseline khi chưa có approval.
 - Root: `F:/ai-ml/my-meta-brain`; target ref `main`; exact base/worktree/ownership resolve khi execution.
@@ -46,12 +46,13 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
     - Check: Actual CLI query-to-source và browser anchor rendering khi được mở; observe stale/missing/scope negatives.
     - [Evidence R1 PASS](../../artifacts/sprint-13/reviews/S13-T4-C1-R1.md), [checkpoint](../../artifacts/sprint-13/checkpoints/S13-T4-C1.md), commit `25a3e4b7efddca5a8a79ecfffac0ecfaade8e155`. Actual CLI search/source locations and Chromium pinned highlights accepted; stale/missing/mismatch fail closed.
 
-- [~] **S13-T5 — Document session lifecycle và bounded work.**
+- [x] **S13-T5 — Document session lifecycle và bounded work.**
     - Change: Nối bounded cache/progress/cancel với foreground CLI bridge; lock/disconnect/session expiry/CLI exit thu hồi read/save, clear browser content/draft và bỏ in-flight response theo epoch. Unsaved policy rõ, không cản owner lock.
     - Acceptance: Actual lock/exit/disconnect/restart và save/read races không phục vụ private stale response hoặc mất revision đã saved; browser reload/back không phục hồi quyền/nội dung bằng app cache. Đo CLI/service/browser resources khi indexing theo T1; không key tới browser. Không claim xóa tuyệt đối browser/managed memory, OS swap, extension hay copies đã disclosure; không sửa browser/host policy.
     - Check: Actual browser actions, lifecycle/race negatives và file/cache observations trong consent scope; ghi giới hạn đo thật.
+    - [Evidence R1 PASS](../../artifacts/sprint-13/reviews/S13-T5-C1-R1.md), [checkpoint](../../artifacts/sprint-13/checkpoints/S13-T5-C1.md), commit `928e02d1c4f3ed0a2009835a9d91e2ea26c533d9`. Actual lifecycle/race/resource proof accepted, with unmanaged/browser erasure limitations retained.
 
-- [ ] **S13-T6 — Release 1.3.0.**
+- [~] **S13-T6 — Release 1.3.0.**
     - Change: Publish CLI installer + MCP ZIP mang bundled document assets/bridge, open/edit support matrix, secure-rendering/lock/browser limits và CLI-only guides; không package UI product riêng.
     - Acceptance: Packaged CLI search/read/revise/restart/unlock không cần browser; optional open → preview/edit → save → conflict/lock chạy trên browser thật. Exact candidate không plaintext HTML/temp, không general web console; release contract chung đạt.
     - Check: Exercise installed CLI, launched browser document surface và MCP khi affected; không WPF proof hoặc provider replay ngoài scope.
@@ -66,4 +67,4 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
 
 ## Gate record
 
-S13-T1–T4 evidence and exact-snapshot checkpoints accepted at the links above; latest `25a3e4b7`. S13-T5 active; T6, final differential and publication gates pending.
+S13-T1–T5 evidence and exact-snapshot checkpoints accepted at the links above; latest `928e02d1`. S13-T6 active; final differential and publication/public-smoke gates pending.

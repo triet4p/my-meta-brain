@@ -17,7 +17,7 @@
         installer/MetaBrain.Installer.exe  per-user install/upgrade/uninstall
 
     The payload layout is exactly what `MetaBrain.Installer.exe install --payload
-    <bundle>` expects. The 1.2.0 release ships the CLI and the MCP server only
+    <bundle>` expects. Releases from 1.2.0 ship the CLI and the MCP server only
     (CR03/D089); the frozen 1.1.0 WPF Owner UI is not published by this script. The script also writes release-manifest.json (product
     version, runtime identifier, every file with its size and SHA-256) and a
     .zip beside the stage directory. It writes only under the output root

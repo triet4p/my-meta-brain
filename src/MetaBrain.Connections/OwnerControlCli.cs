@@ -15,9 +15,10 @@ internal static class OwnerControlCli
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     /// <summary>
-    /// The largest original file one workspace act carries in 1.2.0. The
-    /// service enforces the same bound; checking it before the request keeps a
-    /// too-large file a clear refusal instead of a cut-off owner request.
+    /// The largest original file one workspace act carries in the current
+    /// release line. The service enforces the same bound; checking it before
+    /// the request keeps a too-large file a clear refusal instead of a cut-off
+    /// owner request.
     /// </summary>
     private const int WorkspaceMaximumContentBytes = 1024 * 1024;
 
@@ -1765,7 +1766,7 @@ internal static class OwnerControlCli
         if (new FileInfo(inputPath).Length > WorkspaceMaximumContentBytes)
         {
             Console.Error.WriteLine("ERROR workspace_too_large");
-            Console.Error.WriteLine("HINT one workspace act carries at most " + WorkspaceMaximumContentBytes.ToString(CultureInfo.InvariantCulture) + " original bytes in 1.2.0; the file was not stored or modified.");
+            Console.Error.WriteLine("HINT one workspace act carries at most " + WorkspaceMaximumContentBytes.ToString(CultureInfo.InvariantCulture) + " original bytes in " + ProductInfo.Version + "; the file was not stored or modified.");
             return null;
         }
 
@@ -1774,7 +1775,7 @@ internal static class OwnerControlCli
         {
             CryptographicOperations.ZeroMemory(content);
             Console.Error.WriteLine("ERROR workspace_too_large");
-            Console.Error.WriteLine("HINT one workspace act carries at most " + WorkspaceMaximumContentBytes.ToString(CultureInfo.InvariantCulture) + " original bytes in 1.2.0; the file was not stored or modified.");
+            Console.Error.WriteLine("HINT one workspace act carries at most " + WorkspaceMaximumContentBytes.ToString(CultureInfo.InvariantCulture) + " original bytes in " + ProductInfo.Version + "; the file was not stored or modified.");
             return null;
         }
 

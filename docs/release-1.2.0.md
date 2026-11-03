@@ -1,10 +1,10 @@
 # Meta Brain 1.2.0 — release record
 
-**Status: prepared release candidate; publication NOT authorized and NOT performed.** No `v1.2.0`
-tag, GitHub Release, public download URL or website deployment exists for 1.2.0. The owner must
-authorize publication and execute the checklist below before any public claim is true. If a `v1.2.0`
-tag, Release, download URL or matching asset appears without that authorization, or a downloaded
-file does not match the size and SHA-256 listed here, treat 1.2.0 as not verified and report it
+**Status: published 2026-11-01 as `v1.2.0`.** The owner authorized publication after this reviewed
+candidate; tag, GitHub Release, the two assets and the website were published, and an independent
+public smoke verified the public bytes against the sizes and SHA-256 listed here. The prepublication
+verification text below is retained unchanged as the evidence that was assessed. If a downloaded
+1.2.0 file does not match the size and SHA-256 listed here, treat 1.2.0 as not verified and report it
 instead of guessing.
 
 This is the prepublication release record for the two Meta Brain 1.2.0 products: the CLI setup and
@@ -47,8 +47,8 @@ is overwritten or renamed by this release.
 
 | Product | Public asset name | Bytes | SHA-256 | Public download URL |
 | --- | --- | ---: | --- | --- |
-| CLI setup | `MetaBrain-CLI-1.2.0.exe` | 187,202,450 | `808d80fd52d34e704f57f1e12f42f00206b4bc0fc1d745fa96835da9230a08b2` | **pending** — `https://github.com/triet4p/my-meta-brain/releases/download/v1.2.0/MetaBrain-CLI-1.2.0.exe` becomes valid only after the authorized checklist below |
-| MCP package | `MetaBrain-MCP-1.2.0.zip` | 73,598,029 | `f542ca7672211fb1bde57c37acc7592e7144b3d05ab388f118a5d797cb946e3b` | **pending** — `https://github.com/triet4p/my-meta-brain/releases/download/v1.2.0/MetaBrain-MCP-1.2.0.zip` becomes valid only after the authorized checklist below |
+| CLI setup | `MetaBrain-CLI-1.2.0.exe` | 187,202,450 | `808d80fd52d34e704f57f1e12f42f00206b4bc0fc1d745fa96835da9230a08b2` | **published** — `https://github.com/triet4p/my-meta-brain/releases/download/v1.2.0/MetaBrain-CLI-1.2.0.exe` (public smoke matched this size and SHA-256) |
+| MCP package | `MetaBrain-MCP-1.2.0.zip` | 73,598,029 | `f542ca7672211fb1bde57c37acc7592e7144b3d05ab388f118a5d797cb946e3b` | **published** — `https://github.com/triet4p/my-meta-brain/releases/download/v1.2.0/MetaBrain-MCP-1.2.0.zip` (public smoke matched this size and SHA-256) |
 
 There is no 1.2.0 Owner UI asset, and neither public name may be reused for a UI build.
 
@@ -205,15 +205,16 @@ or publication is claimed.**
   newly extracted packaged MCP entrypoint and its `--data-root` argument in `codex mcp list`. No
   profile/global config was edited, no provider call or model-driven client request was made, and no
   OMP client call is claimed.
-- **Not exercised or authorized.** WPF behaviour beyond the 1.1 legacy refusal, provider/model flows
-  and publication steps remain outside this evidence. No tag, upload, deployment, public 1.2.0 URL
-  or public release claim exists.
+- **Not exercised in this prepublication evidence.** WPF behaviour beyond the 1.1 legacy refusal and
+  provider/model flows remain outside this evidence. Publication was authorized and executed
+  separately after the reviewed candidate; its actions and public smoke are recorded in
+  `artifacts/sprint-12/publication/S12-PUBLISH-P1.md`, not claimed by this prepublication section.
 
 ## Publication checklist and exact commands
 
-Publication is **not authorized**. After technical evidence review, publication still requires the
-owner's explicit authorization and the checklist below; the candidate URLs remain pending. When the
-owner authorizes it, these actions are ordered so the public claim becomes true only at the end:
+This checklist was executed after the owner's explicit authorization on 2026-11-01; it is retained
+as the ordered procedure that was run. The actions are ordered so the public claim becomes true only
+at the end:
 
 1. Re-verify the two internal candidate assets and the manifest against the frozen sizes and SHA-256
    values above. Do not rebuild the candidate, change its manifest or reuse a 1.0.0/1.1.0 name.
@@ -254,13 +255,13 @@ owner authorizes it, these actions are ordered so the public claim becomes true 
   the final documentation/link/whitespace checks passed, and the post-docs `-VerifyOnly` run printed
   `VERIFIED`. No payload byte changed afterward.
 - The product fix, permanent regression and all runtime/package proofs passed on the exact new
-  candidate. The candidate is complete prepublication candidate evidence; it is not published and no
-  `gatePASS` is claimed. `ready_for_review` is submitted with this record.
+  candidate. The candidate was complete prepublication candidate evidence and was published after
+  the owner's authorization; no `gatePASS` is claimed by this record.
 - Packaged CLI lifecycle, `s12-t4`/`s12-t5`/`s12-t5-legacy`, `s12-t5-install` on its supported local
   Release fixture, the packaged 1.1 transition, the typed-input packaged MCP stdio proof and local
   site asset integrity checks all passed.
-- No 1.2.0 public URL, GitHub Release, tag or deployment exists; candidate URLs are pending owner
-  authorization and subsequent publication checks.
+- Tag `v1.2.0`, the GitHub Release, both assets and the website are published; the public smoke
+  matched the sizes and SHA-256 above and confirmed the legacy 1.0.0/1.1.0 links still resolve.
 - The documentation/site snapshot in the working tree is newer than the assembly-instant source
   snapshot and is deliberately not presented as the frozen tree (Known limits 9).
 - No product, client, provider, security or performance flow beyond the verification actually

@@ -4,7 +4,7 @@
 .DESCRIPTION
     Reuses the existing self-contained win-x64 bundle. The CLI becomes a
     standalone setup embedding the exact component/runtime payload; MCP remains
-    independently consumable. The 1.2.0 release ships the CLI and the MCP server
+    independently consumable. Releases from 1.2.0 ship the CLI and the MCP server
     only (CR03/D089); no Owner UI asset is assembled. Identity binds HEAD and a
     digest of tracked source plus tracked working-tree content. Output is never
     overwritten.

@@ -49,7 +49,9 @@ internal static class InstallCommand
         // running host is stopped or any file changes. A pre-1.2 WPF
         // installation, an unknown component set and an in-place upgrade from
         // a release before 1.2.0 are all mixed candidates; the owner installs
-        // 1.2 beside them with its own install root, data root and endpoints.
+        // the current release beside them with its own install root, data root
+        // and endpoints. An existing 1.2 CLI/MCP installation is upgraded in
+        // place as the release contract requires.
         if (existing is null && HasLegacyWpfMarkers(installRoot))
         {
             throw new InvalidOperationException(LegacyInstallRefusal(installRoot, dataRoot));
@@ -308,7 +310,7 @@ internal static class InstallCommand
     /// existing one, never a replacement, uninstall or shared data root.
     /// </summary>
     private static string LegacyRemediation(string installRoot, string dataRoot) =>
-        "Install 1.2 into a separate install root and a distinct data root with distinct control/agent endpoints (for example a new root outside " +
+        "Install " + ProductInfo.Version + " into a separate install root and a distinct data root with distinct control/agent endpoints (for example a new root outside " +
         installRoot + " and a new data root instead of " + dataRoot +
         "); the existing 1.1 installation and data stay untouched. " +
         "This build does not replace, uninstall or edit the old installation.";

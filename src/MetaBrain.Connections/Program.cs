@@ -159,7 +159,7 @@ public static class OwnerCliProduct
         Console.Error.WriteLine("  mcp\\MetaBrain.Mcp.exe               agent MCP server over stdio: same instance, agent-scoped tools only");
         Console.Error.WriteLine("  service\\MetaBrain.Connections.exe   shared runtime host: started by lifecycle, never a product entrypoint");
         Console.Error.WriteLine("  installer\\MetaBrain.Installer.exe   per-user install/upgrade/uninstall; always keeps the data root");
-        Console.Error.WriteLine("The 1.1.0 Owner UI is the frozen legacy WPF product and is not part of the 1.2 release.");
+        Console.Error.WriteLine("The 1.1.0 Owner UI is the frozen legacy WPF product and is not part of the " + ProductInfo.Version + " release.");
         Console.Error.WriteLine("A clean --data-root receives only the nonsensitive service-settings.json; an existing root keeps its");
         Console.Error.WriteLine("settings, endpoints, vault, sources and backups. Starting a frontend never provisions, unlocks, publishes,");
         Console.Error.WriteLine("approves or purges anything.");

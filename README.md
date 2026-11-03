@@ -73,10 +73,10 @@ The release bundle carries one shared runtime and two supported product entrypoi
 └────────────────────────────────────────────────────────┘
 ```
 
-The two 1.2 products share one instance, one locked host, one vault and one policy implementation.
+The two supported products share one instance, one locked host, one vault and one policy implementation.
 Each runs when the other is closed; opening one never restarts or unlocks the instance in use, and
 closing one never stops the host the other is using. The WPF Owner UI is the frozen 1.1.0 legacy
-product and is neither packaged nor upgraded by 1.2.
+product and is neither packaged nor upgraded by this release.
 
 ### Components
 
@@ -84,7 +84,7 @@ product and is neither packaged nor upgraded by 1.2.
 2. **`MetaBrain.Application` (`net10.0`)**: The mediation and application-service layer. Dispatches typed operations between channels while strictly enforcing owner vs. agent policy boundaries.
 3. **`MetaBrain.Connections` (`net10.0-windows`)**: The shared runtime: Windows named-pipe host and service control, the shared instance lifecycle every frontend uses, the owner management CLI, and the vault-blind stdio MCP agent bridge.
 4. **`MetaBrain.Cli` (`net10.0-windows`)**: The packaged owner CLI entrypoint (`cli/MetaBrain.Cli.exe`): `--help`/`--version`, the shared `lifecycle` verbs and every `owner` workflow, with no second implementation.
-5. **`MetaBrain.OwnerUi` (`net10.0-windows`)** — **frozen 1.1.0 legacy source**: the WPF owner console (`owner-ui/MetaBrain.OwnerUi.exe`) as published in 1.1.0. It is retained for history and transition proof only; 1.2 packages no UI component and offers no 1.2 compatibility. `MetaBrain.OwnerUi.Setup` is the matching frozen 1.1.0 graphical setup source.
+5. **`MetaBrain.OwnerUi` (`net10.0-windows`)** — **frozen 1.1.0 legacy source**: the WPF owner console (`owner-ui/MetaBrain.OwnerUi.exe`) as published in 1.1.0. It is retained for history and transition proof only; 1.3 packages no UI component and makes no compatibility claim for the frozen console against the 1.3 runtime. `MetaBrain.OwnerUi.Setup` is the matching frozen 1.1.0 graphical setup source.
 6. **`MetaBrain.Mcp` (`net10.0-windows`)**: The packaged MCP server entrypoint (`mcp/MetaBrain.Mcp.exe`) that starts/connects the shared locked host and serves the existing agent-scoped tools over stdio.
 7. **`MetaBrain.Installer` (`net10.0-windows`)**: The per-user installer (`installer/MetaBrain.Installer.exe`) for install/upgrade/uninstall; it always keeps the data root.
 8. **`MetaBrain.S1T4.Smoke` (`net10.0-windows`)**: Comprehensive end-to-end integration and smoke verification suite for IPC, crypto, session lifecycles, catalog discovery, installation and MCP communication.
@@ -140,12 +140,13 @@ the owner approves or narrows requests in the CLI or the Owner console, never in
 ## Prerequisites
 
 - **Operating System:** 64-bit Windows releases that Microsoft lists as supported for .NET 10 at
-  release time. The 1.2 CLI and MCP server need no desktop/WPF capability. The product is not
+  release time. The 1.3 CLI and MCP server need no desktop/WPF capability. The product is not
   verified on every supported Windows SKU; Linux, macOS, ARM, Server Core and Nano Server are out
-  of scope for this release (uses Windows Named Pipes and DPAPI).
-- **Running the 1.2 candidate:** use the dedicated CLI setup executable and/or the standalone MCP
+  of scope for this release (uses Windows Named Pipes and DPAPI). The optional `open` document
+  session needs an installed Chromium-based browser (Chrome or Edge); the rest of the CLI does not.
+- **Running the 1.3 candidate:** use the dedicated CLI setup executable and/or the standalone MCP
   ZIP. They are self-contained `win-x64` distributions, so no .NET SDK, installed .NET runtime,
-  source checkout or PowerShell is required. The 1.2 candidate has no Owner UI installer; 1.1.0
+  source checkout or PowerShell is required. The 1.3 candidate has no Owner UI installer; 1.1.0
   keeps its own unchanged WPF downloads. The repository payload bundle described below is
   developer tooling, not the end-user installation path.
 - **Building from source:** [.NET 10 SDK](https://dotnet.microsoft.com/) (`net10.0` /
@@ -176,13 +177,23 @@ and
 [`MetaBrain-MCP-1.0.0.zip`](https://github.com/triet4p/my-meta-brain/releases/download/v1.0.0/MetaBrain-MCP-1.0.0.zip),
 with its frozen hashes in the [1.0.0 release record](docs/release-1.0.0.md).
 
-**1.2.0 is a prepared candidate, not a published release.** It ships two assets — a CLI setup and
-the standalone MCP ZIP — and no Owner UI installer; the public names are
-`MetaBrain-CLI-1.2.0.exe` and `MetaBrain-MCP-1.2.0.zip` once the owner authorizes publication. The
-[candidate release record](docs/release-1.2.0.md) lists the exact frozen candidate identity, byte
-sizes, SHA-256 hashes, dependency/license notices, unsigned status and known limits; its download
-links resolve only after authorized upload. The WPF Owner UI 1.1.0 is the frozen legacy product:
-1.2 refuses to change its installation in place and makes no 1.2 compatibility claim.
+**1.2.0 is published** at [`v1.2.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.2.0):
+[`MetaBrain-CLI-1.2.0.exe`](https://github.com/triet4p/my-meta-brain/releases/download/v1.2.0/MetaBrain-CLI-1.2.0.exe)
+and
+[`MetaBrain-MCP-1.2.0.zip`](https://github.com/triet4p/my-meta-brain/releases/download/v1.2.0/MetaBrain-MCP-1.2.0.zip),
+with its frozen hashes in the [1.2.0 release record](docs/release-1.2.0.md). It added the encrypted
+owner workspace, original read/export, backup/restore/purge and the CLI-complete owner path.
+
+**1.3.0 is a prepared candidate, not a published release.** It ships the same two assets — a CLI
+setup and the standalone MCP ZIP, with the document bridge compiled into the CLI/shared runtime —
+and no Owner UI installer; the public names are `MetaBrain-CLI-1.3.0.exe` and
+`MetaBrain-MCP-1.3.0.zip` once the owner authorizes publication. The
+[candidate release record](docs/release-1.3.0.md) lists the exact frozen candidate identity, byte
+sizes, SHA-256 hashes, dependency/license notices, unsigned status and known limits.
+1.3.0 adds CLI lexical workspace search, the optional foreground `open` document
+preview/edit session, and fail-closed lock/exit/disconnect/expiry revocation. The WPF Owner UI
+1.1.0 is the frozen legacy product: this release refuses to change its installation in place and
+makes no compatibility claim for it.
 
 ### Developer bundle: build the payload from a checkout
 
@@ -267,11 +278,41 @@ service refuses as `request_invalid` when the request did not ask for that opera
 `APPROVE` mints the one-time token there, and the agent redeems that path with
 `metabrain_redeem`.
 
-### 4. Owner console
+### 3.1 Workspace search and the optional document session
+
+The encrypted workspace is searched and read entirely through the CLI; no browser is needed:
+
+```text
+cli\MetaBrain.Cli.exe owner workspace-search --control-pipe <control pipe> --query "cache miss" [--folder-id <folder id>] [--format json]
+cli\MetaBrain.Cli.exe owner workspace-read --control-pipe <control pipe> --file-id <file id> [--revision <n>] --output-file <new file>
+cli\MetaBrain.Cli.exe owner workspace-revise --control-pipe <control pipe> --file-id <file id> --expected-content-revision <live> --input-file <new content file>
+```
+
+Search is exact and local: it matches file names, logical paths, Markdown headings and decoded
+UTF-8/UTF-16 text, returns the file revision and byte-range digest of each hit, and adds no
+semantic ranking. A hit can be opened at its exact location with
+`open <file-id> --revision <n> --anchor-offset <bytes> --anchor-length <bytes> --anchor-sha256 <digest>`;
+a stale or mismatched anchor is refused.
+
+`open` is optional and foreground-only: it starts an ephemeral `127.0.0.1` bridge for exactly one
+workspace file at one content revision, hands the page a per-process capability (never a key, path
+or owner API), and offers inert Markdown/CSV/text preview plus raw-text editing with an explicit
+revision-gated save. Ctrl+C, CLI exit, `--lifetime-seconds`, vault lock or a service restart stops
+the bridge and clears the page. No plaintext HTML, draft, cache or private URL is written to disk.
+The settled support matrix, encoding/newline policy and erasure limits are in
+[`docs/META-BRAIN.md` §13.5](docs/META-BRAIN.md#135-s13-t1-document-bridge-contract--foreground-open)
+and the operational steps are in [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+
+### 4. Owner console (frozen 1.1.0 legacy — not part of 1.3)
 
 ```text
 owner-ui\MetaBrain.OwnerUi.exe
 ```
+
+This console is the 1.1.0 WPF product. It is documented for history only: 1.2 and 1.3 ship no UI
+installer and do not upgrade, replace or edit a 1.1.0 installation, and no 1.3 compatibility is
+claimed for it. Use the CLI for every owner workflow; the optional `open` document session covers
+preview and explicit editing.
 
 The console opens on the **Owner session** view with no instance selected: it starts nothing,
 provisions nothing and unlocks nothing. Pick the data-root folder (`Choose folder…` or type the
