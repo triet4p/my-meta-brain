@@ -1,11 +1,10 @@
 # Meta Brain 1.3.0 — release record
 
-**Status: prepared release candidate; publication NOT authorized and NOT performed.** No `v1.3.0`
-tag, GitHub Release, public download URL or website deployment exists for 1.3.0. The owner must
-authorize publication and execute the checklist below before any public claim is true. If a
-`v1.3.0` tag, Release, download URL or matching asset appears without that authorization, or a
-downloaded file does not match the size and SHA-256 listed here, treat 1.3.0 as not verified and
-report it instead of guessing.
+**Status: published 2026-11-03 as `v1.3.0`.** The owner authorized publication after the reviewed
+candidate, evidence review, exact-snapshot checkpoint and final differential, and the checklist
+below was executed in order against the frozen candidate bytes. The tag, the GitHub Release and the
+website are public. If a downloaded file does not match the size and SHA-256 listed here, treat it
+as not verified and report it instead of guessing.
 
 This is the prepublication release record for the two Meta Brain 1.3.0 products: the CLI setup and
 the standalone MCP server package. Product behavior for the workspace, search and document-session
@@ -41,15 +40,15 @@ documentation/site snapshot, not the assembly-instant tree.
 
 ## Assets and public download mapping
 
-| Product | Public asset name (pending publication) | Bytes | SHA-256 |
-| --- | --- | ---: | --- |
-| CLI setup | `MetaBrain-CLI-1.3.0.exe` | 187,729,298 | `1dae0fe0509c57081bf13ec81e7fe51ca88e95eecd61ba9375df135d34cc909b` |
-| MCP package | `MetaBrain-MCP-1.3.0.zip` | 73,739,482 | `246790377a07f739604e686bd5d1d91617bd6b4f7ba70fd3bc386a8bace94781` |
+| Product | Public asset name | Bytes | SHA-256 | Public URL |
+| --- | --- | ---: | --- | --- |
+| CLI setup | `MetaBrain-CLI-1.3.0.exe` | 187,729,298 | `1dae0fe0509c57081bf13ec81e7fe51ca88e95eecd61ba9375df135d34cc909b` | `https://github.com/triet4p/my-meta-brain/releases/download/v1.3.0/MetaBrain-CLI-1.3.0.exe` |
+| MCP package | `MetaBrain-MCP-1.3.0.zip` | 73,739,482 | `246790377a07f739604e686bd5d1d91617bd6b4f7ba70fd3bc386a8bace94781` | `https://github.com/triet4p/my-meta-brain/releases/download/v1.3.0/MetaBrain-MCP-1.3.0.zip` |
 
-The public URLs `https://github.com/triet4p/my-meta-brain/releases/download/v1.3.0/<name>` become
-valid only after the authorized checklist below runs. There is no 1.3.0 Owner UI asset, no
-`owner-ui` component and no separate document-console download; neither public name may be reused
-for a UI build.
+The public URLs `https://github.com/triet4p/my-meta-brain/releases/download/v1.3.0/<name>` are live
+for the two products and the three adjunct files and serve the exact candidate bytes above. There is
+no 1.3.0 Owner UI asset, no `owner-ui` component and no separate document-console download; neither
+public name may be reused for a UI build.
 
 ### Internal candidate filenames (provenance-bound; not public names)
 
@@ -159,13 +158,50 @@ was involved, and no real host installation was mutated.
   exactly, and reinstalling the same candidate reopened the same vault/workspace and read the same
   bytes.
 - **Local static site.** `scripts/site/build.ps1` verified the 1.3.0 manifest provenance, both asset
-  sizes and SHA-256 and built the ignored local preview; its download actions resolve only to those
-  verified candidate copies, its release framing says the candidate is not a public release, and
-  the historical 1.0.0/1.1.0/1.2.0 links stay unchanged. The local pages were opened in a real
-  browser and checked for unresolved placeholders, wrong download bytes and stale product labels.
+  sizes and SHA-256 and built the ignored local preview; in that preview the download actions
+  resolve only to those verified candidate copies, the framing presented the candidate as not yet a
+  public release, and the historical 1.0.0/1.1.0/1.2.0 links stayed unchanged. The local pages were
+  opened in a real browser and checked for unresolved placeholders, wrong download bytes and stale
+  product labels.
 - **Not exercised.** WPF behavior beyond the 1.1 refusal, provider/model flows, official-client
   model calls, non-Chromium browsers and every supported Windows SKU remain outside this evidence.
-  No tag, upload, deployment, public 1.3.0 URL or public release claim exists.
+  This evidence ends at the prepublication candidate; the tag, upload, deployment and public smoke
+  are recorded under [Publication result](#publication-result) below.
+
+## Publication result (2026-11-03)
+
+Publication was executed after the owner's explicit authorization and the completed prepublication
+gates (task evidence, independent evidence reviews, exact-snapshot checkpoints and the final
+differential PASS). Nothing was rebuilt, renamed or patched.
+
+| Item | Value |
+| --- | --- |
+| Source commit pushed to `origin/main` | `35c764c74e0f50a251614a1c8c0b0a72ae85c412` (fast-forward from `dec95431d96bfdd55ead880e53f1a781a30ebdf2`) |
+| Tag | annotated `v1.3.0` (tag object `b95f7722ce91b8e70f090b208281dd3555380982`) bound to the reviewed commit above |
+| Release | `https://github.com/triet4p/my-meta-brain/releases/tag/v1.3.0`, published 2026-11-03, marked latest |
+| CLI setup | `https://github.com/triet4p/my-meta-brain/releases/download/v1.3.0/MetaBrain-CLI-1.3.0.exe` — 187,729,298 bytes, SHA-256 `1dae0fe0509c57081bf13ec81e7fe51ca88e95eecd61ba9375df135d34cc909b` |
+| MCP package | `https://github.com/triet4p/my-meta-brain/releases/download/v1.3.0/MetaBrain-MCP-1.3.0.zip` — 73,739,482 bytes, SHA-256 `246790377a07f739604e686bd5d1d91617bd6b4f7ba70fd3bc386a8bace94781` |
+| Manifest | `https://github.com/triet4p/my-meta-brain/releases/download/v1.3.0/candidate-manifest.json` — 402,963 bytes, SHA-256 `d42b7b676f14924608b658db59ce27302e6dfc3bbf3ebbf860107ced627a7683` |
+| Adjuncts | `SHA256SUMS.txt` (180 bytes, two lines) and `LICENSE` (1,064 bytes, SHA-256 `b623a3c47894f85a2a48029b580e6ee0fec70830401fcb39a2e1567b21322ec9`) |
+| Website | `https://triet4p.github.io/my-meta-brain/` deployed from `gh-pages` commit `e6625011e1906bd827a2cf04eb495f713692d192` (`chore(site): correct published runbook status for Meta Brain 1.3.0`), which carries the published site and the corrected runbook |
+
+Public smoke, performed from outside the checkout and without authentication:
+
+1. The site returned HTTP 200 with the published-status framing, the two `v1.3.0` download actions and
+   the 1.3.0 candidate identity; no preview banner, local `downloads/` link or unresolved placeholder
+   remained, and the guide, Codex, OMP and runbook pages returned HTTP 200.
+2. The Release page returned HTTP 200 and the five asset URLs were publicly reachable. The public
+   downloads returned HTTP 200 with exactly the recorded sizes and SHA-256 values; the GitHub asset
+   digests recorded at upload were identical before publication.
+3. The downloaded CLI setup printed `MetaBrain CLI Setup 1.3.0`. The downloaded MCP ZIP carried
+   `package-manifest.json` with `productVersion 1.3.0` and 395 files, and its `mcp\MetaBrain.Mcp.exe`
+   printed `MetaBrain.Mcp 1.3.0` (stderr, stdout reserved for JSON-RPC).
+4. The historical `v1.0.0`, `v1.1.0` and `v1.2.0` release pages returned HTTP 200, and every recorded
+   1.0.0/1.1.0/1.2.0 asset kept its published name, size and SHA-256; the 1.1.0 WPF Owner UI asset was
+   not rebuilt, renamed or withdrawn.
+
+No candidate byte changed, no historical asset was overwritten, and no host, browser, provider or
+permission state was touched. `gh-pages` received only the generated site files.
 
 ## Compatibility and upgrade contract
 
@@ -206,9 +242,8 @@ was involved, and no real host installation was mutated.
 
 ## Publication checklist and exact delta
 
-Publication is **not authorized**. After the required evidence review, checkpoint and final
-differential, publication still requires the owner's explicit authorization and performs exactly
-this ordered delta:
+This checklist was executed after the owner's explicit authorization on 2026-11-03; it is retained
+as the ordered procedure that was run. It performs exactly this ordered delta:
 
 1. Re-verify the two internal candidate assets and the manifest against the frozen sizes and
    SHA-256 values above; do not rebuild the candidate, change its manifest or reuse a historical
@@ -249,11 +284,16 @@ this ordered delta:
 
 ## Current status
 
-- Candidate `1184282a4204` and its manifest/assets were frozen at the sizes and hashes above and
-  re-verified with `-VerifyOnly` after the documentation was written. No payload byte changed.
+- Candidate `1184282a4204` and its manifest/assets are frozen at the sizes and hashes above and were
+  re-verified with `-VerifyOnly` after the documentation was written. No payload byte changed before
+  or after publication.
 - The packaged CLI, real-browser document session, packaged MCP, 1.2.0 in-place upgrade,
-  1.2.0-backup restore, uninstall data preservation and local site checks passed on those bytes.
-- The candidate is complete prepublication candidate evidence; it is not published, and no
-  `gatePASS`, checkpoint or final differential is claimed by this record.
-- No source commit, tag, upload, deployment, provider call or host/browser policy change was made by
-  this release task.
+  1.2.0-backup restore, uninstall data preservation and local site checks passed on those bytes and
+  remain the prepublication evidence.
+- The release is published as `v1.3.0` on 2026-11-03: the reviewed source commit and the annotated
+  tag are pushed, the Release carries the exact two assets plus `candidate-manifest.json`,
+  `SHA256SUMS.txt` and `LICENSE`, and the published site links those public URLs.
+- The public smoke in [Publication result](#publication-result) re-downloaded the public bytes and
+  matched their sizes, SHA-256 values, packaged versions and manifest. The historical
+  1.0.0/1.1.0/1.2.0 assets were not changed.
+- No provider call and no host/browser policy change was made by this release task.

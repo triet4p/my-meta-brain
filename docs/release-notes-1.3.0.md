@@ -3,11 +3,12 @@
 Windows x64, self-contained, **unsigned**. SHA-256 verifies downloaded bytes only; it does not
 authenticate the publisher.
 
-**Status: prepared release candidate, not published.** This page describes the 1.3.0 candidate that
-was assembled and verified locally. No `v1.3.0` tag, GitHub Release, download URL or website
-download for 1.3.0 exists until the owner authorizes publication and executes the checklist in the
-[`1.3.0 release record`](release-1.3.0.md). Do not treat a filename or hash on this page as a
-download claim.
+**Status: published 2026-11-03 as `v1.3.0`.** The owner authorized publication after the reviewed
+candidate, evidence review, exact-snapshot checkpoint and final differential; the public assets were
+uploaded from the exact frozen candidate bytes under the public names below, and the sizes and
+SHA-256 values are recorded in the [`1.3.0 release record`](release-1.3.0.md). The verification
+described here was performed on the prepublication candidate and is retained unchanged; publication
+and the public smoke are recorded separately.
 
 ## Downloads
 

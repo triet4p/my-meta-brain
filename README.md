@@ -184,12 +184,13 @@ and
 with its frozen hashes in the [1.2.0 release record](docs/release-1.2.0.md). It added the encrypted
 owner workspace, original read/export, backup/restore/purge and the CLI-complete owner path.
 
-**1.3.0 is a prepared candidate, not a published release.** It ships the same two assets — a CLI
-setup and the standalone MCP ZIP, with the document bridge compiled into the CLI/shared runtime —
-and no Owner UI installer; the public names are `MetaBrain-CLI-1.3.0.exe` and
-`MetaBrain-MCP-1.3.0.zip` once the owner authorizes publication. The
-[candidate release record](docs/release-1.3.0.md) lists the exact frozen candidate identity, byte
-sizes, SHA-256 hashes, dependency/license notices, unsigned status and known limits.
+**1.3.0 is published** at [`v1.3.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.3.0):
+[`MetaBrain-CLI-1.3.0.exe`](https://github.com/triet4p/my-meta-brain/releases/download/v1.3.0/MetaBrain-CLI-1.3.0.exe)
+and
+[`MetaBrain-MCP-1.3.0.zip`](https://github.com/triet4p/my-meta-brain/releases/download/v1.3.0/MetaBrain-MCP-1.3.0.zip),
+with its frozen hashes in the [1.3.0 release record](docs/release-1.3.0.md). It ships the same two
+assets — a CLI setup and the standalone MCP ZIP, with the document bridge compiled into the
+CLI/shared runtime — and no Owner UI installer.
 1.3.0 adds CLI lexical workspace search, the optional foreground `open` document
 preview/edit session, and fail-closed lock/exit/disconnect/expiry revocation. The WPF Owner UI
 1.1.0 is the frozen legacy product: this release refuses to change its installation in place and
