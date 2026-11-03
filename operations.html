@@ -7,7 +7,7 @@ administrator rights, an AppContainer, a patched agent runtime, or an account of
 - Product scope and requirements: [`META-BRAIN.md`](META-BRAIN.md), [`REQUIREMENTS.md`](REQUIREMENTS.md).
 - Sprint plan and acceptance for this work: [`sprint-plans/sprint-8.md`](sprint-plans/sprint-8.md).
 
-**Version boundary:** From 1.2.0 the supported products are the **CLI installer** and the **standalone MCP ZIP** (owner-approved [CR03](REQUIREMENTS.md#approved-change-record--cr03-2026-11-01) and the [workspace contract D090](META-BRAIN.md#134-approved-workspace-contract--d090)). The CLI covers every owner workflow; MCP remains the scoped agent surface; browser document preview/edit is a Sprint 13 surface and is not shipped, so no plaintext HTML/temp or guessed `open` syntax applies. **WPF Owner UI 1.1.0 is the frozen legacy product**: this 1.2 candidate publishes no UI installer, does not upgrade a 1.1 installation in place, and does not promise that the 1.1 console can use 1.2 runtime or data. Its 1.0.0/1.1.0 downloads, bytes and acceptance stay unchanged. Sections that describe WPF console surfaces are kept as 1.1.0 history and are marked as such.
+**Version boundary:** From 1.2.0 the supported products are the **CLI installer** and the **standalone MCP ZIP** (owner-approved [CR03](REQUIREMENTS.md#approved-change-record--cr03-2026-11-01) and the [workspace contract D090](META-BRAIN.md#134-approved-workspace-contract--d090)). The CLI covers every owner workflow; MCP remains the scoped agent surface. From 1.3.0 the CLI also offers lexical workspace search and the optional foreground `open` document preview/edit session; its browser assets and bridge are compiled into the same CLI/shared runtime, so there is still no separate web console or UI installer, and no plaintext HTML/temp file is written. **WPF Owner UI 1.1.0 is the frozen legacy product**: this release publishes no UI installer, does not upgrade a 1.1 installation in place, and does not promise that the 1.1 console can use the current runtime or data. Its 1.0.0/1.1.0 downloads, bytes and acceptance stay unchanged. Sections that describe WPF console surfaces are kept as 1.1.0 history and are marked as such.
 
 ## 1. The two roots
 
@@ -83,12 +83,19 @@ application files; the data root, the vault and the pipe endpoints are kept.
 
 **A 1.1.0 installation is refused in place.** The current installer refuses an existing installation
 whose recorded product version is older than 1.2.0 — including a real 1.1.0 installation — before it
-stops that host or changes any file or data. It names the supported transition: install 1.2 into a
-separate install root with its own data root and distinct `--control-pipe` / `--agent-pipe`
-endpoints, and leave the 1.1 application and data untouched. The same refusal covers an unknown or
-mixed component registration, a data root owned by another installation, an unowned data root that
-already holds Meta Brain data, overlapping roots, and a live endpoint that speaks another protocol
-revision. No refusal replaces, uninstalls or edits the old installation.
+stops that host or changes any file or data. It names the supported transition: install the current
+release (1.3.0) into a separate install root with its own data root and distinct `--control-pipe` /
+`--agent-pipe` endpoints, and leave the 1.1 application and data untouched. The same refusal covers
+an unknown or mixed component registration, a data root owned by another installation, an unowned
+data root that already holds Meta Brain data, overlapping roots, and a live endpoint that speaks
+another protocol revision. No refusal replaces, uninstalls or edits the old installation.
+
+**An existing 1.2.0 CLI/MCP installation is upgraded in place.** The 1.3.0 setup drains and stops the
+shared host, replaces the application files, keeps the recorded data root, settings, pipe endpoints,
+vault, workspace and backups byte-unchanged, and records the 1.3.0 version and candidate identity.
+No automatic vault or workspace migration runs: the workspace format stays version 1. A shared
+installation that registers only one of the two components needs the matching complete candidate to
+update the shared runtime, exactly as in 1.2.0.
 
 ### 2.1 The release bundle (S9-T6)
 
@@ -103,11 +110,12 @@ installer\MetaBrain.Installer.exe   per-user CLI/MCP install/upgrade/uninstall
 release-manifest.json               product version, runtime identifier, every file&#39;s size and SHA-256
 ```
 
-The 1.2.0 bundle ships the CLI and the MCP server (CR03/D089); the frozen 1.1.0 WPF Owner UI is not
-published here. The bundle is a `--self-contained true -r win-x64` publish, so the target machine
-needs no .NET SDK, no installed .NET runtime, no repository and no PowerShell: unpack it and run
-the entrypoints. Its product version is the version every 1.2 entrypoint reports (`--version`; the
-installer records it in `install-state.json`).
+The 1.3.0 bundle ships the CLI and the MCP server (CR03/D089); the frozen 1.1.0 WPF Owner UI is not
+published here, and the document bridge/browser shell is compiled into the shared runtime rather
+than shipped as a separate static asset. The bundle is a `--self-contained true -r win-x64` publish,
+so the target machine needs no .NET SDK, no installed .NET runtime, no repository and no PowerShell:
+unpack it and run the entrypoints. Its product version is the version every 1.3 entrypoint reports
+(`--version`; the installer records it in `install-state.json`).
 
 A developer builds the bundle from a checkout with
 `powershell.exe -NoProfile -File scripts\release\publish-release-bundle.ps1`. That script is
@@ -138,30 +146,31 @@ preserving the selected data root.
 It does not change PATH, profiles, autostart, services, registry, permissions or environment
 settings. The self-contained single-file .NET host may extract runtime support under
 `%TEMP%\.net\&lt;bundle&gt;\&lt;hash&gt;` on launch; this is runtime temp data, not an install or profile
-registration. There is no 1.2 UI setup asset to download or run.
+registration. There is no 1.3 UI setup asset to download or run.
 
-### 2.3 Support transition from the 1.1.0 WPF product (S12-T6)
+### 2.3 Support transition from the 1.1.0 WPF product (S12-T6, carried by 1.3.0)
 
-1.2.0 ships the CLI and the MCP server only. It publishes no `MetaBrain-UI-&lt;version&gt;.exe`, has no
+1.3.0 ships the CLI and the MCP server only. It publishes no `MetaBrain-UI-&lt;version&gt;.exe`, has no
 `owner-ui` component, and builds no WPF installer. The installer refuses to change an installed
 pre-1.2 (1.1.0 WPF) or unknown/mixed installation in place, before it stops that host or writes
-into either root, and names the supported transition: install 1.2 into a **separate install root**
-with its own **data root** and distinct `--control-pipe`/`--agent-pipe` endpoints. The 1.1
-application, its data, its endpoints and any running 1.1 host are left untouched, and nothing is
-uninstalled, replaced or migrated automatically. Sharing one live data root or running two writers
-is refused.
+into either root, and names the supported transition: install the current release into a **separate
+install root** with its own **data root** and distinct `--control-pipe`/`--agent-pipe` endpoints.
+The 1.1 application, its data, its endpoints and any running 1.1 host are left untouched, and
+nothing is uninstalled, replaced or migrated automatically. Sharing one live data root or running
+two writers is refused. An installed 1.2 CLI/MCP layout is upgraded in place by the 1.3 setup with
+its data root, settings and endpoints preserved (&#167;2).
 
 An installed 1.1 layout is detected from its recorded `install-state.json` product version, its
 `owner-ui/` directory or its root-level `MetaBrain.OwnerUi.exe`/`MetaBrain.OwnerUi.Setup.exe`
-markers. A 1.2 installation has neither that directory nor that component; naming
+markers. A 1.2+ installation has neither that directory nor that component; naming
 `--component owner-ui` fails with the same support-transition message. The 1.1.0 Owner UI remains
-downloadable from its own unchanged release; it is not updated by 1.2 and makes no 1.2
+downloadable from its own unchanged release; it is not updated by 1.2 or 1.3 and makes no current
 runtime/data compatibility claim.
 
 **A separately confirmed manual transition** is the owner&#39;s own act, not an installer feature:
-stop the 1.1 host explicitly, keep both 1.1 roots as they are, install 1.2 beside them with the
-separate roots and endpoints, then create or unlock the 1.2 vault and copy only what the owner
-chooses. 1.2 never reads, converts, deletes or migrates a 1.1 vault.
+stop the 1.1 host explicitly, keep both 1.1 roots as they are, install the current release beside
+them with the separate roots and endpoints, then create or unlock the current vault and copy only
+what the owner chooses. The product never reads, converts, deletes or migrates a 1.1 vault.
 
 ### 2.4 Candidate identity and verification (S10-T2/T3)
 
@@ -232,11 +241,12 @@ recycled pid is never mistaken for the running host.
 
 ### 3.1 The shared instance lifecycle (S9-T2)
 
-Every 1.2 frontend — the packaged CLI and the agent MCP bridge — resolves the same
+Every current frontend — the packaged CLI and the agent MCP bridge — resolves the same
 instance (one data root, one settings file, one pair of pipe endpoints) and starts or connects
 the same locked host through one shared implementation. The installer service commands above
 delegate to that same lifecycle, so no frontend keeps a second start/stop/status path. (The frozen
-1.1.0 console used the same shared internals; it is not part of the 1.2 runtime.)
+1.1.0 console used the same shared internals; it is not part of the current runtime. The `open`
+document session is a foreground CLI mode over this same instance, not another frontend.)
 
 ```text
 cli\MetaBrain.Cli.exe lifecycle start --data-root &lt;dir&gt;     # create (clean root only) or select, then start the shared locked host
@@ -545,11 +555,46 @@ The store keeps names, paths, node metadata, the citation anchors, tombstone sta
 
 The authenticated workspace format and metadata schema are both version 1. Version 1 is the workspace shape first released in 1.2.0, and the node lifecycle state, the deletion group and the anchors are optional members of that same shape: a state that omits them means &quot;every node is live and there are no anchors&quot;. A workspace therefore never changes version as a side effect of an ordinary act, and no automatic migration or conversion exists; an unknown or newer version is refused before any mutation instead. 1.1.0 and earlier have no workspace store at all, so no released build wrote a different workspace version. Purge of retained tombstones, scoped plaintext export, encrypted backup/restore and the remaining CLI coverage are delivered by S12-T4/T5 and were exercised in the accepted sprint evidence; the 1.2.0 candidate repeats the packaged end-to-end path.
 
-### 3.3 The Owner console (S9-T4) — 1.1.0 legacy, not shipped in 1.2
+### 3.2.8 Workspace search and the optional `open` document session (S13-T4–T6)
 
-This section documents the frozen 1.1.0 WPF console for history and transition proof. The 1.2.0
-release ships no Owner UI executable or installer; every workflow below is available through the
-CLI commands in &#167;3.2 and &#167;3.2.3–&#167;3.2.7, and the console is not compatible with 1.2 workspace data.
+Both surfaces are owner CLI features of the 1.3 runtime. Search and revision-gated editing work
+with no browser at all; `open` is an optional convenience that serves exactly one document to a
+local browser.
+
+```text
+cli\MetaBrain.Cli.exe owner workspace-search --control-pipe &lt;pipe&gt; --query &lt;literal&gt; [--folder-id &lt;live folder id&gt;] [--format text|json]
+cli\MetaBrain.Cli.exe open &lt;file-id&gt; --control-pipe &lt;pipe&gt; [--revision &lt;n&gt;] [--anchor-offset &lt;bytes&gt; --anchor-length &lt;bytes&gt; --anchor-sha256 &lt;digest&gt;] [--no-browser] [--lifetime-seconds &lt;n&gt;]
+```
+
+- Search is exact and deterministic: case-insensitive literal filename, logical-path, Markdown
+  heading and decoded-text matches with identifier boundaries for symbols, optional descendant
+  folder narrowing, and no stemming, synonym or semantic expansion. `--folder-id` narrows but never
+  grants anything; every hit reports the live file revision and byte-range digest, and an anchor
+  from a different revision is refused (`workspace_anchor_stale`/`workspace_anchor_mismatch`).
+- `open` requires the unlocked vault and the running shared host. It binds one live file, one
+  content revision, read plus explicit save, and one lifetime; the bridge listens on an ephemeral
+  `127.0.0.1` port and the browser receives only a per-process capability in the served page. A
+  foreign Origin/Host, cross-site metadata, a missing capability or a query string is refused.
+  Responses are `no-store` with a restrictive CSP; no cookies, browser storage, service worker or
+  private URL is used and no document HTML, draft or temp file is written to disk.
+- The browser page offers inert Markdown (raw HTML stays text, no remote assets/network egress),
+  a paged CSV table with a raw-source toggle, bounded text/JSONL pages and an explicit raw-text
+  editor. Save uses the shared expected-revision API: a stale save is reported as a conflict and
+  the draft stays in the page, never overwriting the concurrent revision. UTF-8 text with LF,
+  CRLF or CR (BOM preserved) is editable; UTF-16, mixed newlines, binary, NUL-bearing and
+  unrecognised suffixes are truthful read-only states, and source JSONL sessions are never served.
+- Ctrl+C, foreground CLI exit, `--lifetime-seconds`, vault lock, service restart/disconnect or a
+  changed unlock epoch stop the listener and clear the page; the browser&#39;s back/reload cannot
+  revive the capability. Browser-managed memory/cache, extensions, DevTools, OS swap and any
+  copies the browser or OS made cannot be erased by the product, and the product never changes
+  browser or host policy. Chrome/Edge is required only for this optional surface.
+
+### 3.3 The Owner console (S9-T4) — 1.1.0 legacy, not shipped in 1.2+
+
+This section documents the frozen 1.1.0 WPF console for history and transition proof. Releases
+1.2.0 and 1.3.0 ship no Owner UI executable or installer; every workflow below is available through
+the CLI commands in &#167;3.2, &#167;3.2.3–&#167;3.2.7 and &#167;3.2.8, and the console is not compatible with the
+current runtime or workspace data.
 
 The packaged console is `owner-ui/MetaBrain.OwnerUi.exe`. It opens on the **Owner session**
 view with no instance selected: it starts nothing, provisions nothing and unlocks nothing, so
@@ -812,7 +857,7 @@ re-reads the new format and rollback state.
 - **The 1.1.0 packaged console was its launcher (legacy)**: no install, script, autostart, service
   registration, profile or permission change was needed. Open `owner-ui\MetaBrain.OwnerUi.exe`,
   select the data-root folder and start/connect the shared host on the **Owner session** view
-  (&#167;3.3). The 1.2 CLI needs neither: `cli\MetaBrain.Cli.exe lifecycle start --data-root &lt;dir&gt;`. A
+  (&#167;3.3). The current CLI needs neither: `cli\MetaBrain.Cli.exe lifecycle start --data-root &lt;dir&gt;`. A
   throwaway review instance is just another repository-ignored data root. The old scripted review
   launchers were retired in S9-T6 once the packaged path was accepted; there is no runtime
   PowerShell prerequisite for either entrypoint.
@@ -856,7 +901,7 @@ The installed shared installer removes the full shared installation by default; 
 keeps the shared runtime while another component remains registered. When the final component is
 removed, application/runtime files are removed but the data root is always kept: the vault,
 source snapshots, backups and recovery material are never deleted by the installer. A 1.1.0
-installation is never removed or edited by the 1.2 installer; it stays under its own installer.
+installation is never removed or edited by the current installer; it stays under its own installer.
 
 Uninstall refuses with an actionable error if the shared host could not drain cleanly; it does not
 claim removal succeeded or replace live binaries.
@@ -1718,14 +1763,23 @@ removes the fixture when the run ends.
 - A real logout or reboot, and a connection from the official Codex/OMP clients,
   need the owner in front of the machine; they cannot be proved by a headless run.
 - The installer is Windows-only and per-user. There is no multi-account or shared-machine install.
-- 1.2.0 ships the CLI and the MCP server only. There is no Owner UI installer or UI component in
-  1.2, and the frozen 1.1.0 console is not guaranteed to read 1.2 runtime or workspace data. A
-  1.1 installation is refused in place; install 1.2 beside it with separate roots and endpoints
-  (&#167;2.3). The local 1.2.0 candidate is not a published release until the owner authorizes
-  publication and the public assets/links are smoke-verified.
-- One workspace act carries at most 1 MiB of original bytes in 1.2.0 (`workspace_too_large`), and
+- 1.3.0 ships the CLI and the MCP server only. There is no Owner UI installer or UI component in
+  1.3, and the frozen 1.1.0 console is not guaranteed to read the current runtime or workspace data.
+  A 1.1 installation is refused in place; install 1.3 beside it with separate roots and endpoints
+  (&#167;2.3). An existing 1.2 CLI/MCP installation upgrades in place. The local 1.3.0 candidate is not a
+  published release until the owner authorizes publication and the public assets/links are
+  smoke-verified.
+- One workspace act carries at most 1 MiB of original bytes in 1.3.0 (`workspace_too_large`), and
   an encrypted backup/restore carries the workspace identity, tree, retained bytes and anchors
   together with the rest of the vault.
+- The optional `open` document session needs an installed Chromium-based browser (Chrome or Edge)
+  on the same Windows x64 machine; search, read, revise, restart and unlock never do. The product
+  cannot erase browser-managed memory/cache, extensions, DevTools, OS swap or copies made outside
+  it, and it never changes browser or host policy. Only one document revision is served per
+  foreground session; there is no folder browser, tab set, search console or general web UI, and a
+  non-Chromium browser is not covered by the evidence.
+- Workspace search is lexical (exact names/paths/headings/text) with deterministic ranking; it is not
+  semantic retrieval and does not rank by a model.
 - The vault is lost if the owner loses both the passphrase and the recovery key. There is no reset
   and no back door.
 - The same owner account can read the owner&#39;s own files. The boundary is the key, the lock and the
