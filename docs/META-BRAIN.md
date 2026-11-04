@@ -71,6 +71,15 @@ Tầng cao không mặc nhiên đúng hơn. L0 có thể chứa phỏng đoán s
 
 Một item có nhiều nguồn và nhiều item dẫn xuất. Dùng mạng quan hệ nhẹ; riêng derived_from không được có chu trình. Tổng hợp nhiều tầng phải truy được về bằng chứng khả dụng, không chỉ lặp summary của summary và làm mất ngoại lệ.
 
+### 2.4. Cognitive facets (S14-T1)
+
+Owner-reviewed facets are independent, potentially overlapping perspectives on a passage: **World** (claims and questions about the world), **Experience** (attributed events and attempts), **Opinion** (attributed stances and choices), **Habit** (declared practices or patterns needing review), **Intention** (intended future action), and **Action–Effect** (action, conditions and reported or observed outcome). A passage may have zero or multiple facets; no file needs one type. `owner taxonomy` lists the vocabulary and safeguards without opening the vault.
+
+Facets do not replace existing kinds or assign them automatically. A decision may relate to Opinion or Intention; a lesson to Experience or Action–Effect; a question or synthesis can span facets while retaining its original kind. L0 is source/passage, L1 a concrete memory, L2 a conditional lesson/pattern and L3+ a broader synthesis; these are not mandatory stages or truth levels. Source, occurrence time, author, executor, creation method and evidence remain independent; absent source or occurrence time is unknown, not inferred from recording time. Reported claims are not verified facts and retaining assistant content does not make it user-authored or confirmed.
+
+The shared in-memory passage contract refers to an existing workspace anchor (file ID, content revision, byte range, digest and live/stale state) and multiple facets. It does not persist annotations, classify content, review suggestions, search facets or change authority. A stale anchor is not silently rebound. Registered-source citation spans retain their own source/revision and offset semantics; source and workspace permissions remain separate. Durable reviewable annotations and cognitive querying are later Sprint 14 tasks.
+
+
 ## 3. Nguồn tác giả và tính chất nhận thức
 
 Không dùng một trường confidence để thay thế xuất xứ và kiểm chứng. Phải tách:

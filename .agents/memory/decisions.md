@@ -1267,3 +1267,13 @@ The encrypted workspace-blob read bound covers the six-byte JSON-escape worst ca
 **Reason:** A persistent unlock epoch distinguishes the exact unlocked authority that opened the document from every later unlock, including after service restart, using the existing encrypted state and shared owner operations. The foreground bridge remains bound to the one file and revision; the browser receives neither the epoch as authority nor a vault key. Polling existing status is sufficient for lifecycle revocation without changing the owner API or moving private content into a cache.
 
 **Consequences:** Lock, service disconnect/restart, epoch mismatch, CLI exit and expiry fail closed for subsequent reads/saves; the browser removes its own in-page content and rejects stale asynchronous replies without presenting an unload prompt that could delay owner lock. The document remains reread per request, the 1 MiB workspace one-act bound is unchanged, and R38/D086 gain no threshold. Synthetic runtime observations can measure selected process working/private bytes and project/application storage, but cannot establish managed-heap attribution, erase browser/extension/DevTools/swap/external copies or prove absolute erasure.
+
+## [2026-11-04] D095 — Use overlapping cognitive facets on revision-pinned passages
+
+**Decision:** The owner approved six independent World, Experience, Opinion, Habit, Intention and Action–Effect facets, with zero or more facets per revision-pinned passage, separate from existing memory kinds, provenance, evidence, authority and L0–L3+ abstraction.
+
+**Alternatives considered:** Exclusive file types, replacing existing kinds with fact categories, separate facet stores, and automatic classification.
+
+**Reason:** The owner-reviewed S14-T1 contract preserves mixed content and existing question/decision/lesson/synthesis meanings without converting reported claims or AI suggestions into verified facts or owner beliefs; file organization and abstraction do not determine truth.
+
+**Consequences:** Workspace passage references reuse the existing file/revision/byte-range/digest anchor and preserve stale status; source citations retain their separate span and permission semantics. Missing source and occurrence time stay unknown. T1 provides the in-memory contract and local vocabulary command, not persistence, review, jobs, lifecycle changes or cognitive querying; these remain in their assigned downstream tasks. Approval was conveyed by Main for S14-T1 on 2026-11-04; it is not provider, publication or push authorization.

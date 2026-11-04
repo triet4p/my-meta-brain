@@ -113,7 +113,7 @@ Chỉ dùng làm tham khảo ý tưởng. Chưa audit source, kiểm chứng ben
 | Intention / dự định | Muốn làm gì, còn mở hay đã hoàn thành | Coi đã nhắc/đã nhắc lại là đã làm xong |
 | Action–Effect / hành động–kết quả | Cách làm, điều kiện và kết quả quan sát được | Suy quan hệ nhân quả chắc chắn từ tương quan |
 
-Decision, lesson, question và synthesis vẫn cần biểu diễn; không xóa các khái niệm có ích hiện có chỉ để ép vào sáu nhãn. Taxonomy cuối cùng và mapping từ 1.0.0 chưa được chốt.
+Decision, lesson, question và synthesis vẫn giữ như kind độc lập, không bị ép thành một trong sáu nhãn. Owner đã duyệt taxonomy facets và mapping trong S14-T1; xem [contract](META-BRAIN.md#24-cognitive-facets-s14-t1). Lưu/review annotation và truy vấn facets chưa được cung cấp bởi T1.
 
 ### Phân loại là trợ giúp, không phải biểu mẫu bắt buộc
 

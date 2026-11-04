@@ -45,6 +45,7 @@ internal static class OwnerControlCli
             return args[0] switch
             {
                 "help" => CommandHelp(options.Optional("--command")),
+                "taxonomy" => Taxonomy(options),
                 "library" => await LibrarySearchAsync(options).ConfigureAwait(false),
                 "proposal-publish" => await ProposalPublishAsync(options).ConfigureAwait(false),
                 "proposal-reject" => await ProposalRejectAsync(options).ConfigureAwait(false),
@@ -222,6 +223,19 @@ internal static class OwnerControlCli
         {
             return Usage();
         }
+    }
+
+    private static int Taxonomy(CommandOptions options)
+    {
+        options.RequireOnly();
+        foreach (var definition in CognitiveTaxonomy.Definitions)
+        {
+            Console.WriteLine($"{definition.Facet}: {definition.Meaning}. {definition.Safeguard}");
+        }
+
+        Console.WriteLine("Facets can overlap on a revision-pinned passage; they do not replace kind, provenance, evidence or abstraction level.");
+        Console.WriteLine("This command describes the vocabulary; it does not classify, save, review or search passages.");
+        return 0;
     }
 
     private static async Task<int> StatusAsync(CommandOptions options)
@@ -9327,6 +9341,7 @@ internal static class OwnerControlCli
             Console.Error.WriteLine("  vault: status|provision|unlock|recover|lock|upgrade|upgrade-with-recovery-code|rollback|rollback-with-recovery-code|health|audit|diagnostics|retention|backup|restore|restore-with-recovery-code|export");
             Console.Error.WriteLine("  workspace: workspace-status|workspace-tree|workspace-search|workspace-mkdir|workspace-import|workspace-revise|workspace-read|workspace-rename|workspace-move|workspace-copy|workspace-delete-preview|workspace-delete|workspace-restore|workspace-tombstones|workspace-anchor-create|workspace-anchor-list|workspace-purge-preview|workspace-purge|workspace-export-preview|workspace-export");
             Console.Error.WriteLine("  document (top-level): open <file-id> — foreground loopback browser preview/edit of one workspace file at one content revision");
+            Console.Error.WriteLine("  taxonomy: taxonomy — explain the cognitive facet vocabulary (local, no vault required)");
             Console.Error.WriteLine("  capture: memory-create|memory-revise|memory-import|memory-read|read|write|source-create|source-revise|source-read|research-capture|research-read|feedback-create|feedback-read");
             Console.Error.WriteLine("  library: library|memory-read|source-read|research-read|relation-read|lifecycle-read|lifecycle-retained-read|recall-read|review-list|review-record|index-status|index-rebuild");
             Console.Error.WriteLine("  review: proposal-list|proposal-read|proposal-publish|proposal-reject|lifecycle-publish|lifecycle-reject|lifecycle-withdraw|lifecycle-repropose|lifecycle-question-resolve|lifecycle-question-reopen|relation-list|relation-read|relation-create|relation-accept|relation-reject|relation-unlink|relation-relink|declassify-preview|declassify-publish|declassify-proposal-publish");
@@ -9334,7 +9349,7 @@ internal static class OwnerControlCli
             Console.Error.WriteLine("  sources: collections|source-list|source-status|source-enroll|source-folder-enroll|source-folder-refresh-optin|source-folder-refresh-optout|source-relocate|source-revoke|source-ingest|source-pause|source-resume|source-refresh-optin|source-refresh-optout|source-raw-preservation-optin|source-raw-preservation-optout|source-preserved-record-read|source-refresh|source-mapping-submit|source-mapping-resolve|source-snapshot-list|source-snapshot-preserve|source-snapshot-read|source-snapshot-retain|source-snapshot-purge");
             Console.Error.WriteLine("  planning: lifecycle-create|lifecycle-validity-set|lifecycle-retain|lifecycle-intention-complete|lifecycle-intention-cancel|lifecycle-intention-supersede|lifecycle-intention-notify|lifecycle-intention-acknowledge|intentions|intention-trigger-set|intention-trigger-clear|intention-context-set|intention-context-disable|intention-schedule-run|recall-apply|purge-preview|purge-confirm|purge-resume");
             Console.Error.WriteLine("  models: provider-config|provider-status|job-create|job-start|job-cancel|job-status|job-list|job-ledger|schedule-set|schedule-disable|schedule-status|schedule-run");
-            Console.Error.WriteLine("Every owner command needs --control-pipe <pipe>; agent-scoped reads use --agent-pipe plus --session-file instead. Credentials are interactive prompts only, never options. Destructive or authority-minting acts print a frozen preview and require a typed confirmation.");
+            Console.Error.WriteLine("Owner service commands need --control-pipe <pipe>; taxonomy is local, and agent-scoped reads use --agent-pipe plus --session-file instead. Credentials are interactive prompts only, never options. Destructive or authority-minting acts print a frozen preview and require a typed confirmation.");
             return 2;
         }
 
@@ -9343,6 +9358,7 @@ internal static class OwnerControlCli
     }
     private static string? CommandHelpText(string verb) => verb switch
     {
+        "taxonomy" => "owner taxonomy: describe the six cognitive facets and safeguards locally; no classifications are saved or searched.",
         "open" => "open <file-id> --control-pipe <pipe> [--revision <n>] [--anchor-offset <bytes> --anchor-length <bytes> --anchor-sha256 <digest>] [--no-browser] [--lifetime-seconds <n>]: foreground loopback browser session for exactly one workspace file and content revision. An anchor must match the live revision and its exact byte-range digest; the browser starts at that selected location. Requires the unlocked vault; Ctrl+C, the explicit lifetime or lock ends reads/saves. UTF-8 markdown/CSV/JSONL/plain text is editable with explicit expected-revision save; other encodings/formats are shown read-only. No key, file path or general owner API reaches the browser.",
         "status" => "owner status --control-pipe <pipe>: vault state of the running shared host (locked/unlocked/uninitialized), plus format/rollback state. Read-only.",
         "provision" => "owner provision --control-pipe <pipe>: first-time vault setup. Prompts twice for the new passphrase (min 12 chars); prints the recovery key once — store it outside the vault.",

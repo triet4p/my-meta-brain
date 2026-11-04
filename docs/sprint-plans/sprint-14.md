@@ -2,7 +2,7 @@
 
 ## Goal và trạng thái
 
-- Status: **In progress — prerequisite documentation sync**. Release mục tiêu cuối sprint: **1.4.0**; chưa build/publish.
+- Status: **In progress — S14-T1 taxonomy/provenance contract**. Release mục tiêu cuối sprint: **1.4.0**; chưa build/publish.
 - Entry: Sprint 13 complete và 1.3.0 published.
 - Scope/trace: P2-04, P2-05, P2-12; R01, R12, R13, R19–R22, R26–R30. Các P2 là candidates, không thay baseline khi chưa có approval.
 - Root: `F:/ai-ml/my-meta-brain`; target ref `main`; exact base/worktree/ownership resolve khi execution.
@@ -22,13 +22,14 @@ Không host mutation/ACL/permissions/profile edits; synthetic data mặc định
 
 Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [release contract](../ROADMAP-2.0.md#7-definition-of-release-mỗi-sprint). Status `[ ]` pending; `[~]` active/blocked; `[x]` chỉ sau acceptance và gates.
 
-- [~] **S14-P0 — Đồng bộ trạng thái tài liệu sau release 1.3.0.**
+- [x] **S14-P0 — Đồng bộ trạng thái tài liệu sau release 1.3.0.**
     - Change: Correct stale planning/prepublication wording in current project documentation using accepted Sprint 12/13 release records; preserve historical decisions/evidence and normative contracts.
     - Acceptance: Current status consistently distinguishes shipped 1.2/1.3 behavior, frozen WPF 1.1 and pending Sprint 14+; no feature, requirement, budget or authority changes; no product changelog entry for docs-only sync.
     - Check: Targeted stale-status and Markdown/link checks against accepted release records; no runtime replay or fabricated fresh product PASS.
     - Gate: Independent evidence review and separate Bronze exact-snapshot checkpoint before T1.
+    - Accepted: [evidence PASS](../../artifacts/sprint-14/reviews/S14-P0-C1-R1.md), [checkpoint](../../artifacts/sprint-14/checkpoints/S14-P0-C1.md), commit `8734bf06`; no push.
 
-- [ ] **S14-T1 — Taxonomy và provenance contract.**
+- [~] **S14-T1 — Taxonomy và provenance contract.**
     - Change: Chốt World/Experience/Opinion/Habit/Intention/Action–Effect dưới dạng facets, multi-label passage anchors, uncertainty/author/executor và mapping decision/lesson/question/synthesis/L0–L3 hiện có.
     - Acceptance: Owner review taxonomy; không ép một file một type, không xóa existing kinds hoặc coi reported claim là verified fact. Mapping thể hiện thiếu nguồn/thời gian là unknown.
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
@@ -68,4 +69,4 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
 
 ## Gate record
 
-Chưa có worker/evidence/checkpoint/deep/publication result. Xem [roadmap](../ROADMAP-2.0.md) để biết dependency tiếp theo; không tự advance bởi completion message.
+S14-P0 accepted with [independent evidence PASS](../../artifacts/sprint-14/reviews/S14-P0-C1-R1.md) and [exact-snapshot checkpoint](../../artifacts/sprint-14/checkpoints/S14-P0-C1.md), commit `8734bf06`. S14-T1 in progress; taxonomy owner review remains required. No T1–T6 evidence/checkpoint, final deep or 1.4.0 publication result yet.
