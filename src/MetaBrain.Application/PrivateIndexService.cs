@@ -523,6 +523,23 @@ public sealed class PrivateIndexAuthority
                 LinkedIds(linked));
         }
 
+        if (CognitiveAnnotationTryRead(content, out var annotation) && annotation is not null &&
+            string.Equals(annotation.Id, resource.ResourceId, StringComparison.Ordinal))
+        {
+            // S14-T2 annotations are durable owner metadata, not searchable
+            // content. Their canonical resource revision and anchor reference
+            // are projected without copying the workspace file or labels into
+            // the index.
+            return new PrivateIndexRow(
+                resource.ResourceId,
+                resource.ZoneId,
+                resource.Revision,
+                annotation.SchemaVersion,
+                PrivateIndexRecordKind.CognitiveAnnotation,
+                StateName(annotation.ReviewStatus),
+                new[] { annotation.Anchor.FileId });
+        }
+
         return new PrivateIndexRow(
             resource.ResourceId,
             resource.ZoneId,
@@ -710,6 +727,20 @@ public sealed class PrivateIndexAuthority
             return false;
         }
     }
+    private static bool CognitiveAnnotationTryRead(byte[] content, out StoredCognitiveAnnotation? annotation)
+    {
+        try
+        {
+            annotation = CognitiveAnnotationCodec.DecodeStored(content);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            annotation = null;
+            return false;
+        }
+    }
+
 
     private static string[] LinkedIds(IEnumerable<string?> ids)
     {

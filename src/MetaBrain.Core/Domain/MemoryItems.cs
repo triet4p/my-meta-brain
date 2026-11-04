@@ -586,14 +586,11 @@ public static class MemoryItemValidator
 /// <summary>
 /// One opaque-identifier grammar shared by every domain envelope so an ID
 /// can never carry path or traversal text. Identifiers are stable keys: they
-/// never derive from titles or paths (R10). Four namespaces are reserved for
-/// records that are not plain memory items or registered sources: typed
-/// relations (<see cref="RelationIdPrefix"/>), lifecycle records
-/// (<see cref="LifecycleIdPrefix"/>), retained historical revisions
-/// (<see cref="ArchiveIdPrefix"/>), and S4-T5 proposals
-/// (<see cref="ProposalIdPrefix"/>). An item or a registered source ID in
-/// one of those namespaces would collide with its derived record, so they
-/// are refused here.
+/// never derive from titles or paths (R10). Reserved namespaces keep canonical
+/// resource records that are not plain memory items or registered sources
+/// distinct, including relations, lifecycle state, retained revisions,
+/// proposals and cognitive annotations. An item or source ID in one of those
+/// namespaces would collide with its typed record and is refused here.
 /// </summary>
 internal static class DomainIdentifiers
 {
@@ -657,6 +654,14 @@ internal static class DomainIdentifiers
     /// proposal.
     /// </summary>
     public const string ProposalIdPrefix = "prop-";
+    /// <summary>
+    /// Reserved resource-ID prefix for durable owner cognitive annotations.
+    /// Annotation records live in the encrypted canonical resource store,
+    /// independently of the rebuildable index, and name an exact workspace
+    /// anchor without copying its file.
+    /// </summary>
+    public const string CognitiveAnnotationIdPrefix = "ann-";
+
 
     /// <summary>
     /// Reserved resource-ID prefix for the canonical memory item a pending
@@ -713,13 +718,17 @@ internal static class DomainIdentifiers
 
     public static bool IsProposalId(string? value) =>
         value is not null && value.StartsWith(ProposalIdPrefix, StringComparison.Ordinal) && IsSafeIdentifier(value);
+    public static bool IsCognitiveAnnotationId(string? value) =>
+        value is not null && value.StartsWith(CognitiveAnnotationIdPrefix, StringComparison.Ordinal) && IsSafeIdentifier(value);
+
     public static bool IsJobId(string? value) =>
         value is not null && value.StartsWith(JobIdPrefix, StringComparison.Ordinal) && IsSafeIdentifier(value);
 
     /// <summary>
     /// An identifier that names a memory item or a registered source: never a
     /// relation, lifecycle record, retained revision, ingestion journal,
-    /// preserved source snapshot, feedback record, or proposal.
+    /// preserved source snapshot, feedback record, proposal, annotation,
+    /// model job, or internal system record.
     /// </summary>
     public static bool IsDomainIdentifier(string? value) =>
         IsSafeIdentifier(value) &&
@@ -730,6 +739,7 @@ internal static class DomainIdentifiers
         !value.StartsWith(SourceSnapshotIdPrefix, StringComparison.Ordinal) &&
         !value.StartsWith(FeedbackIdPrefix, StringComparison.Ordinal) &&
         !value.StartsWith(ProposalIdPrefix, StringComparison.Ordinal) &&
+        !value.StartsWith(CognitiveAnnotationIdPrefix, StringComparison.Ordinal) &&
         !value.StartsWith(JobIdPrefix, StringComparison.Ordinal) &&
         !value.StartsWith(SystemResourceIdPrefix, StringComparison.Ordinal);
 

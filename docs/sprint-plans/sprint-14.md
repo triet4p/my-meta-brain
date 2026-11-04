@@ -2,7 +2,7 @@
 
 ## Goal và trạng thái
 
-- Status: **In progress — S14-T1 taxonomy/provenance contract**. Release mục tiêu cuối sprint: **1.4.0**; chưa build/publish.
+- Status: **In progress — S14-T2 durable annotations/review**. Release mục tiêu cuối sprint: **1.4.0**; chưa build/publish.
 - Entry: Sprint 13 complete và 1.3.0 published.
 - Scope/trace: P2-04, P2-05, P2-12; R01, R12, R13, R19–R22, R26–R30. Các P2 là candidates, không thay baseline khi chưa có approval.
 - Root: `F:/ai-ml/my-meta-brain`; target ref `main`; exact base/worktree/ownership resolve khi execution.
@@ -29,12 +29,13 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
     - Gate: Independent evidence review and separate Bronze exact-snapshot checkpoint before T1.
     - Accepted: [evidence PASS](../../artifacts/sprint-14/reviews/S14-P0-C1-R1.md), [checkpoint](../../artifacts/sprint-14/checkpoints/S14-P0-C1.md), commit `8734bf06`; no push.
 
-- [~] **S14-T1 — Taxonomy và provenance contract.**
+- [x] **S14-T1 — Taxonomy và provenance contract.**
     - Change: Chốt World/Experience/Opinion/Habit/Intention/Action–Effect dưới dạng facets, multi-label passage anchors, uncertainty/author/executor và mapping decision/lesson/question/synthesis/L0–L3 hiện có.
     - Acceptance: Owner review taxonomy; không ép một file một type, không xóa existing kinds hoặc coi reported claim là verified fact. Mapping thể hiện thiếu nguồn/thời gian là unknown.
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
+    - Accepted: Owner approved six-facet proposal; [evidence PASS](../../artifacts/sprint-14/reviews/S14-T1-C1-R1.md), [checkpoint](../../artifacts/sprint-14/checkpoints/S14-T1-C1.md), commit `0afb0015`; in-memory contract and local CLI vocabulary, persistence remains T2.
 
-- [ ] **S14-T2 — Durable annotations và owner review.**
+- [~] **S14-T2 — Durable annotations và owner review.**
     - Change: Persist owner annotations/classification corrections versioned encrypted, độc lập derived index, review/accept/reject và export/backup.
     - Acceptance: Rebuild index giữ owner edits, multi-view không nhân bản file; AI suggestion khác owner-confirmed, passage source đổi báo stale; optimistic conflicts không overwrite.
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
@@ -69,4 +70,4 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
 
 ## Gate record
 
-S14-P0 accepted with [independent evidence PASS](../../artifacts/sprint-14/reviews/S14-P0-C1-R1.md) and [exact-snapshot checkpoint](../../artifacts/sprint-14/checkpoints/S14-P0-C1.md), commit `8734bf06`. S14-T1 in progress; taxonomy owner review remains required. No T1–T6 evidence/checkpoint, final deep or 1.4.0 publication result yet.
+S14-P0 accepted with [review](../../artifacts/sprint-14/reviews/S14-P0-C1-R1.md) and [checkpoint](../../artifacts/sprint-14/checkpoints/S14-P0-C1.md) `8734bf06`. S14-T1 owner-approved taxonomy accepted with [review](../../artifacts/sprint-14/reviews/S14-T1-C1-R1.md) and [checkpoint](../../artifacts/sprint-14/checkpoints/S14-T1-C1.md) `0afb0015`. S14-T2 in progress; no T2–T6 gates, final deep or 1.4.0 publication result yet. No push.

@@ -1159,6 +1159,44 @@ public sealed record WorkspaceAnchorWire(
     long Length,
     string Sha256,
     string State);
+public sealed record CognitiveAnnotationIdentityWire(string Id, long Revision, string ZoneId);
+
+public sealed record CognitiveAnnotationVersionWire(
+    long Revision,
+    string Action,
+    string PreviousReviewStatus,
+    string[] Facets,
+    string Kind,
+    string Author,
+    string Executor,
+    string CreationMethod,
+    string Evidence,
+    string Level,
+    string Origin,
+    string ReviewStatus,
+    string Actor,
+    DateTimeOffset RecordedAtUtc,
+    string? Reason);
+
+public sealed record CognitiveAnnotationWire(
+    string Id,
+    string ZoneId,
+    long Revision,
+    int SchemaVersion,
+    WorkspaceAnchorWire Anchor,
+    string[] Facets,
+    string Kind,
+    string Author,
+    string Executor,
+    string CreationMethod,
+    string Evidence,
+    string Level,
+    string Origin,
+    string ReviewStatus,
+    DateTimeOffset RecordedAtUtc,
+    string SourceAvailability,
+    CognitiveAnnotationVersionWire[] History);
+
 
 /// <summary>One original file a pending export would write, at its pinned revision.</summary>
 public sealed record WorkspaceExportFileWire(
@@ -1299,6 +1337,8 @@ public sealed record ServiceReply(
     WorkspaceExportWire? WorkspaceExport = null,
     WorkspacePurgePreviewWire? WorkspacePurgePreview = null,
     WorkspacePurgeWire? WorkspacePurge = null,
+    CognitiveAnnotationWire? CognitiveAnnotation = null,
+    CognitiveAnnotationIdentityWire[]? CognitiveAnnotations = null,
     string? ErrorCode = null,
     long? UnlockEpoch = null);
 
@@ -1337,6 +1377,12 @@ public sealed class ServiceRequestHandler
     public const string OwnerWorkspaceNodePurgeOperation = "owner.workspace.node.purge";
     public const string OwnerWorkspaceExportPreviewOperation = "owner.workspace.export.preview";
     public const string OwnerWorkspaceExportOperation = "owner.workspace.export";
+    public const string OwnerCognitiveAnnotationCreateOperation = "owner.cognitive.annotation.create";
+    public const string OwnerCognitiveAnnotationListOperation = "owner.cognitive.annotation.list";
+    public const string OwnerCognitiveAnnotationReadOperation = "owner.cognitive.annotation.read";
+    public const string OwnerCognitiveAnnotationCorrectOperation = "owner.cognitive.annotation.correct";
+    public const string OwnerCognitiveAnnotationAcceptOperation = "owner.cognitive.annotation.accept";
+    public const string OwnerCognitiveAnnotationRejectOperation = "owner.cognitive.annotation.reject";
     public const string ResourceReadOperation = "resource.read";
     public const string SourceReadOperation = "source.read";
     public const string ResourceWriteOperation = "resource.write";
@@ -1511,6 +1557,7 @@ public sealed class ServiceRequestHandler
     private readonly IntentionScheduleService _intentionSchedule;
     private readonly IVaultBackupService? _vaultBackup;
     private readonly IVaultMaintenanceService? _vaultMaintenance;
+    private readonly CognitiveAnnotationService _cognitiveAnnotations;
     private readonly OwnerExportService _exports = new();
     private readonly OperationsService _operations;
     private readonly OperationsAuditRecorder _auditRecorder;
@@ -1536,6 +1583,7 @@ public sealed class ServiceRequestHandler
         _modelJobs = new ModelJobService(vault, modelProvider);
         _synthesisSchedule = new SynthesisScheduleService(_modelJobs);
         _intentionSchedule = new IntentionScheduleService(timeProvider);
+        _cognitiveAnnotations = new CognitiveAnnotationService(timeProvider);
         _grantAuthority = grantAuthority ?? throw new ArgumentNullException(nameof(grantAuthority));
         _vault = vault ?? throw new ArgumentNullException(nameof(vault));
         _ownerScopeGrants = ownerScopeGrants ?? throw new ArgumentNullException(nameof(ownerScopeGrants));
@@ -1798,6 +1846,8 @@ public sealed class ServiceRequestHandler
         OwnerWorkspaceNodeDeletePreviewOperation,
         OwnerWorkspaceTombstonesOperation,
         OwnerWorkspaceAnchorListOperation,
+        OwnerCognitiveAnnotationListOperation,
+        OwnerCognitiveAnnotationReadOperation,
         OwnerWorkspaceExportPreviewOperation,
         OwnerWorkspaceNodePurgePreviewOperation,
         OwnerLibrarySearchOperation,
@@ -2023,6 +2073,36 @@ public sealed class ServiceRequestHandler
         if (context.Kind != PrincipalKind.Owner)
         {
             return Error("forbidden");
+        }
+
+        if (string.Equals(request.Operation, OwnerCognitiveAnnotationCreateOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerCognitiveAnnotationCreate(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerCognitiveAnnotationListOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerCognitiveAnnotationList(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerCognitiveAnnotationReadOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerCognitiveAnnotationRead(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerCognitiveAnnotationCorrectOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerCognitiveAnnotationCorrect(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerCognitiveAnnotationAcceptOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerCognitiveAnnotationReview(context, request, operation, accept: true);
+        }
+
+        if (string.Equals(request.Operation, OwnerCognitiveAnnotationRejectOperation, StringComparison.Ordinal))
+        {
+            return HandleOwnerCognitiveAnnotationReview(context, request, operation, accept: false);
         }
 
         if (string.Equals(request.Operation, OwnerLibrarySearchOperation, StringComparison.Ordinal))
@@ -6897,6 +6977,340 @@ public sealed class ServiceRequestHandler
     private static bool HasOnlyIntentionTriggerSetFields(ServiceRequest request) =>
         (request with { ResourceId = null, ContentBase64 = null }) ==
         new ServiceRequest(request.ProtocolVersion, request.Operation);
+
+    private ServiceReply HandleOwnerCognitiveAnnotationCreate(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasCognitiveAnnotationExtras(request, allowResourceId: true, allowContentBase64: true) ||
+            string.IsNullOrEmpty(request.ResourceId) ||
+            string.IsNullOrEmpty(request.ContentBase64))
+        {
+            return Error("invalid_request");
+        }
+
+        byte[]? draft = null;
+        try
+        {
+            draft = Convert.FromBase64String(request.ContentBase64);
+            var annotation = _cognitiveAnnotations.Create(context, request.ResourceId, draft, operation);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "cognitive_annotation_created",
+                "owner",
+                null,
+                ResourceRevision: annotation.Revision,
+                CognitiveAnnotation: ToCognitiveAnnotationWire(annotation));
+        }
+        catch (FormatException)
+        {
+            return Error("invalid_request");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (WorkspaceRefusalException refusal)
+        {
+            return WorkspaceRefusal(refusal.Code);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException)
+        {
+            return Error("resource_unavailable");
+        }
+        finally
+        {
+            if (draft is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(draft);
+            }
+        }
+    }
+
+    private ServiceReply HandleOwnerCognitiveAnnotationList(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasCognitiveAnnotationExtras(request))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var annotations = _cognitiveAnnotations.List(context, operation)
+                .Select(identity => new CognitiveAnnotationIdentityWire(
+                    identity.Id,
+                    identity.Revision,
+                    identity.ZoneId))
+                .ToArray();
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "cognitive_annotations",
+                "owner",
+                null,
+                CognitiveAnnotations: annotations);
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException)
+        {
+            return Error("resource_unavailable");
+        }
+    }
+
+    private ServiceReply HandleOwnerCognitiveAnnotationRead(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasCognitiveAnnotationExtras(request, allowResourceId: true, allowResourceRevision: true) ||
+            string.IsNullOrEmpty(request.ResourceId))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var annotation = _cognitiveAnnotations.Read(context, request.ResourceId, request.ResourceRevision, operation);
+            if (annotation is null)
+            {
+                return Error("invalid_request");
+            }
+
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "cognitive_annotation",
+                "owner",
+                null,
+                ResourceRevision: annotation.Revision,
+                CognitiveAnnotation: ToCognitiveAnnotationWire(annotation));
+        }
+        catch (CognitiveAnnotationConflictException)
+        {
+            return Error("revision_conflict");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (WorkspaceRefusalException refusal)
+        {
+            return WorkspaceRefusal(refusal.Code);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException)
+        {
+            return Error("resource_unavailable");
+        }
+    }
+
+    private ServiceReply HandleOwnerCognitiveAnnotationCorrect(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasCognitiveAnnotationExtras(
+                request,
+                allowResourceId: true,
+                allowResourceRevision: true,
+                allowContentBase64: true) ||
+            string.IsNullOrEmpty(request.ResourceId) ||
+            request.ResourceRevision is not { } expectedRevision || expectedRevision < 1 ||
+            string.IsNullOrEmpty(request.ContentBase64))
+        {
+            return Error("invalid_request");
+        }
+
+        byte[]? correction = null;
+        try
+        {
+            correction = Convert.FromBase64String(request.ContentBase64);
+            var annotation = _cognitiveAnnotations.Correct(
+                context, request.ResourceId, expectedRevision, correction, operation);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "cognitive_annotation_corrected",
+                "owner",
+                null,
+                ResourceRevision: annotation.Revision,
+                CognitiveAnnotation: ToCognitiveAnnotationWire(annotation));
+        }
+        catch (FormatException)
+        {
+            return Error("invalid_request");
+        }
+        catch (CognitiveAnnotationConflictException)
+        {
+            return Error("revision_conflict");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (WorkspaceRefusalException refusal)
+        {
+            return WorkspaceRefusal(refusal.Code);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException)
+        {
+            return Error("resource_unavailable");
+        }
+        finally
+        {
+            if (correction is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(correction);
+            }
+        }
+    }
+
+    private ServiceReply HandleOwnerCognitiveAnnotationReview(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation,
+        bool accept)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasCognitiveAnnotationExtras(
+                request,
+                allowResourceId: true,
+                allowResourceRevision: true,
+                allowContentBase64: true) ||
+            string.IsNullOrEmpty(request.ResourceId) ||
+            request.ResourceRevision is not { } expectedRevision || expectedRevision < 1)
+        {
+            return Error("invalid_request");
+        }
+
+        byte[]? review = null;
+        try
+        {
+            if (request.ContentBase64 is not null)
+            {
+                review = Convert.FromBase64String(request.ContentBase64);
+            }
+
+            var annotation = _cognitiveAnnotations.Review(
+                context, request.ResourceId, expectedRevision, accept, review, operation);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                accept ? "cognitive_annotation_accepted" : "cognitive_annotation_rejected",
+                "owner",
+                null,
+                ResourceRevision: annotation.Revision,
+                CognitiveAnnotation: ToCognitiveAnnotationWire(annotation));
+        }
+        catch (FormatException)
+        {
+            return Error("invalid_request");
+        }
+        catch (CognitiveAnnotationConflictException)
+        {
+            return Error("revision_conflict");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (WorkspaceRefusalException refusal)
+        {
+            return WorkspaceRefusal(refusal.Code);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException)
+        {
+            return Error("resource_unavailable");
+        }
+        finally
+        {
+            if (review is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(review);
+            }
+        }
+    }
+
+    private static CognitiveAnnotationWire ToCognitiveAnnotationWire(CognitiveAnnotation annotation) =>
+        new(
+            annotation.Id,
+            annotation.ZoneId,
+            annotation.Revision,
+            annotation.SchemaVersion,
+            ProjectWorkspaceAnchor(annotation.Anchor),
+            annotation.Facets.Select(facet => facet.ToString()).ToArray(),
+            annotation.Kind.ToString(),
+            annotation.Author.ToString(),
+            annotation.Executor.ToString(),
+            annotation.CreationMethod.ToString(),
+            annotation.Evidence.ToString(),
+            annotation.Level.ToString(),
+            annotation.Origin.ToString(),
+            annotation.ReviewStatus.ToString(),
+            annotation.RecordedAtUtc,
+            annotation.SourceAvailability.ToString(),
+            annotation.History.Select(version => new CognitiveAnnotationVersionWire(
+                version.Revision,
+                version.Action.ToString(),
+                version.PreviousReviewStatus.ToString(),
+                version.State.Facets.Select(facet => facet.ToString()).ToArray(),
+                version.State.Kind.ToString(),
+                version.State.Author.ToString(),
+                version.State.Executor.ToString(),
+                version.State.CreationMethod.ToString(),
+                version.State.Evidence.ToString(),
+                version.State.Level.ToString(),
+                version.State.Origin.ToString(),
+                version.State.ReviewStatus.ToString(),
+                version.Actor.ToString(),
+                version.RecordedAtUtc,
+                version.Reason)).ToArray());
 
     /// <summary>
     /// S2-T5 owner lifecycle create. The subject item ID is the only identity
@@ -12344,6 +12758,23 @@ public sealed class ServiceRequestHandler
         request.CatalogIds is not null || request.Purpose is not null ||
         request.AgentId is not null || request.AgentContext is not null ||
         request.DisclosureContext is not null || request.RequestId is not null;
+    /// <summary>
+    /// Annotation operations accept only their identity, optional optimistic
+    /// revision and optional canonical draft body. Every other request field is
+    /// rejected instead of silently ignored.
+    /// </summary>
+    private static bool HasCognitiveAnnotationExtras(
+        ServiceRequest request,
+        bool allowResourceId = false,
+        bool allowResourceRevision = false,
+        bool allowContentBase64 = false) =>
+        (request with
+        {
+            ResourceId = allowResourceId ? null : request.ResourceId,
+            ResourceRevision = allowResourceRevision ? null : request.ResourceRevision,
+            ContentBase64 = allowContentBase64 ? null : request.ContentBase64
+        }) != new ServiceRequest(request.ProtocolVersion, request.Operation);
+
 
     /// <summary>
     /// Owner lifecycle transitions carry only the subject item ID, the live

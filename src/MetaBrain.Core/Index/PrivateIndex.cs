@@ -20,7 +20,8 @@ public enum PrivateIndexRecordKind
     RetainedRevision = 5,
     PreservedSourceSnapshot = 6,
     Feedback = 7,
-    Proposal = 8
+    Proposal = 8,
+    CognitiveAnnotation = 9
 }
 
 /// <summary>

@@ -119,6 +119,12 @@ internal static class OwnerControlCli
                 "relation-relink" => await RelationRelinkAsync(options).ConfigureAwait(false),
                 "relation-read" => await RelationReadAsync(options).ConfigureAwait(false),
                 "relation-list" => await RelationListAsync(options).ConfigureAwait(false),
+                "cognitive-annotation-create" => await CognitiveAnnotationCreateAsync(options).ConfigureAwait(false),
+                "cognitive-annotation-list" => await CognitiveAnnotationListAsync(options).ConfigureAwait(false),
+                "cognitive-annotation-read" => await CognitiveAnnotationReadAsync(options).ConfigureAwait(false),
+                "cognitive-annotation-correct" => await CognitiveAnnotationCorrectAsync(options).ConfigureAwait(false),
+                "cognitive-annotation-accept" => await CognitiveAnnotationReviewAsync(options, accept: true).ConfigureAwait(false),
+                "cognitive-annotation-reject" => await CognitiveAnnotationReviewAsync(options, accept: false).ConfigureAwait(false),
                 "lifecycle-create" => await LifecycleCreateAsync(options).ConfigureAwait(false),
                 "lifecycle-read" => await LifecycleReadAsync(options).ConfigureAwait(false),
                 "lifecycle-retained-read" => await LifecycleRetainedReadAsync(options).ConfigureAwait(false),
@@ -1493,6 +1499,288 @@ internal static class OwnerControlCli
 
     private static void WriteWorkspaceAnchor(JsonElement anchor) =>
         Console.WriteLine($"ANCHOR id={DisplayText(anchor, "anchorId")} file={DisplayText(anchor, "fileId")} contentRevision={DisplayText(anchor, "contentRevision")} offset={DisplayText(anchor, "offset")} length={DisplayText(anchor, "length")} sha256={DisplayText(anchor, "sha256")} state={DisplayText(anchor, "state")}");
+
+    private static async Task<int> CognitiveAnnotationCreateAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--file-id", "--input-file");
+        var controlPipe = ControlPipe(options);
+        var fileId = options.Required("--file-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(fileId))
+        {
+            return Usage();
+        }
+
+        var draft = await ReadCognitiveAnnotationInputAsync(options.Required("--input-file")).ConfigureAwait(false);
+        if (draft is null)
+        {
+            Console.Error.WriteLine("ERROR cognitive_annotation_input_unreadable");
+            return 4;
+        }
+
+        try
+        {
+            if (draft.Length is <= 0 or > CognitiveAnnotationCodec.MaximumPayloadBytes)
+            {
+                Console.Error.WriteLine("ERROR cognitive_annotation_input_size");
+                return 4;
+            }
+
+            var result = await InvokeOwnerAsync(controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.OwnerCognitiveAnnotationCreateOperation,
+                    ResourceId: fileId,
+                    ContentBase64: Convert.ToBase64String(draft))).ConfigureAwait(false);
+            if (!result.Success || !HasStatus(result.Reply, "cognitive_annotation_created") ||
+                !TryCognitiveAnnotationObject(result.Reply, out var annotation))
+            {
+                WriteServiceError(result);
+                return 4;
+            }
+
+            WriteCognitiveAnnotation(annotation);
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(draft);
+        }
+    }
+
+    private static async Task<int> CognitiveAnnotationListAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerCognitiveAnnotationListOperation)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "cognitive_annotations") ||
+            !result.Reply.TryGetProperty("cognitiveAnnotations", out var annotations) ||
+            annotations.ValueKind != JsonValueKind.Array)
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        foreach (var annotation in annotations.EnumerateArray())
+        {
+            Console.WriteLine(
+                $"ANNOTATION id={DisplayText(annotation, "id")} revision={DisplayText(annotation, "revision")} " +
+                $"zone={DisplayText(annotation, "zoneId")}");
+        }
+
+        Console.WriteLine($"ANNOTATIONS count={annotations.GetArrayLength().ToString(CultureInfo.InvariantCulture)}");
+        return 0;
+    }
+
+    private static async Task<int> CognitiveAnnotationReadAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--resource-revision");
+        var resourceId = options.Required("--resource-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId))
+        {
+            return Usage();
+        }
+
+        long? revision = null;
+        if (options.Optional("--resource-revision") is { } revisionText)
+        {
+            if (!long.TryParse(revisionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) || parsed < 1)
+            {
+                return Usage();
+            }
+
+            revision = parsed;
+        }
+
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerCognitiveAnnotationReadOperation,
+                ResourceId: resourceId,
+                ResourceRevision: revision)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "cognitive_annotation") ||
+            !TryCognitiveAnnotationObject(result.Reply, out var annotation))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        WriteCognitiveAnnotation(annotation);
+        return 0;
+    }
+
+    private static async Task<int> CognitiveAnnotationCorrectAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--expected-revision", "--input-file");
+        var resourceId = options.Required("--resource-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId) ||
+            !long.TryParse(options.Required("--expected-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var expectedRevision) ||
+            expectedRevision < 1)
+        {
+            return Usage();
+        }
+
+        var correction = await ReadCognitiveAnnotationInputAsync(options.Required("--input-file")).ConfigureAwait(false);
+        if (correction is null)
+        {
+            Console.Error.WriteLine("ERROR cognitive_annotation_input_unreadable");
+            return 4;
+        }
+
+        try
+        {
+            if (correction.Length is <= 0 or > CognitiveAnnotationCodec.MaximumPayloadBytes)
+            {
+                Console.Error.WriteLine("ERROR cognitive_annotation_input_size");
+                return 4;
+            }
+
+            var result = await InvokeOwnerAsync(ControlPipe(options),
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.OwnerCognitiveAnnotationCorrectOperation,
+                    ResourceId: resourceId,
+                    ContentBase64: Convert.ToBase64String(correction),
+                    ResourceRevision: expectedRevision)).ConfigureAwait(false);
+            if (!result.Success || !HasStatus(result.Reply, "cognitive_annotation_corrected") ||
+                !TryCognitiveAnnotationObject(result.Reply, out var annotation))
+            {
+                WriteServiceError(result);
+                return 4;
+            }
+
+            WriteCognitiveAnnotation(annotation);
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(correction);
+        }
+    }
+
+    private static async Task<int> CognitiveAnnotationReviewAsync(CommandOptions options, bool accept)
+    {
+        options.RequireOnly("--control-pipe", "--resource-id", "--expected-revision", "--reason");
+        var resourceId = options.Required("--resource-id");
+        var reason = options.Optional("--reason");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId) ||
+            !long.TryParse(options.Required("--expected-revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var expectedRevision) ||
+            expectedRevision < 1 ||
+            (!accept && string.IsNullOrWhiteSpace(reason)))
+        {
+            return Usage();
+        }
+
+        byte[]? review = reason is null
+            ? null
+            : JsonSerializer.SerializeToUtf8Bytes(new { reason }, JsonOptions);
+        try
+        {
+            var result = await InvokeOwnerAsync(ControlPipe(options),
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    accept
+                        ? ServiceRequestHandler.OwnerCognitiveAnnotationAcceptOperation
+                        : ServiceRequestHandler.OwnerCognitiveAnnotationRejectOperation,
+                    ResourceId: resourceId,
+                    ContentBase64: review is null ? null : Convert.ToBase64String(review),
+                    ResourceRevision: expectedRevision)).ConfigureAwait(false);
+            var status = accept ? "cognitive_annotation_accepted" : "cognitive_annotation_rejected";
+            if (!result.Success || !HasStatus(result.Reply, status) ||
+                !TryCognitiveAnnotationObject(result.Reply, out var annotation))
+            {
+                WriteServiceError(result);
+                return 4;
+            }
+
+            WriteCognitiveAnnotation(annotation);
+            return 0;
+        }
+        finally
+        {
+            if (review is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(review);
+            }
+        }
+    }
+
+    private static async Task<byte[]?> ReadCognitiveAnnotationInputAsync(string inputPath)
+    {
+        try
+        {
+            return await File.ReadAllBytesAsync(inputPath).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    private static bool TryCognitiveAnnotationObject(JsonElement reply, out JsonElement annotation)
+    {
+        if (reply.ValueKind == JsonValueKind.Object &&
+            reply.TryGetProperty("cognitiveAnnotation", out annotation) &&
+            annotation.ValueKind == JsonValueKind.Object)
+        {
+            return true;
+        }
+
+        annotation = default;
+        return false;
+    }
+
+    private static void WriteCognitiveAnnotation(JsonElement annotation)
+    {
+        Console.WriteLine(
+            $"ANNOTATION id={DisplayText(annotation, "id")} revision={DisplayText(annotation, "revision")} " +
+            $"schema={DisplayText(annotation, "schemaVersion")} origin={DisplayText(annotation, "origin")} " +
+            $"review={DisplayText(annotation, "reviewStatus")} kind={DisplayText(annotation, "kind")} " +
+            $"author={DisplayText(annotation, "author")} executor={DisplayText(annotation, "executor")} " +
+            $"method={DisplayText(annotation, "creationMethod")} evidence={DisplayText(annotation, "evidence")} " +
+            $"level={DisplayText(annotation, "level")}");
+        Console.WriteLine("FACETS " + CognitiveAnnotationFacetList(annotation, "facets"));
+
+        if (annotation.TryGetProperty("anchor", out var anchor) && anchor.ValueKind == JsonValueKind.Object)
+        {
+            Console.WriteLine(
+                $"ANCHOR id={DisplayText(anchor, "anchorId")} file={DisplayText(anchor, "fileId")} " +
+                $"contentRevision={DisplayText(anchor, "contentRevision")} offset={DisplayText(anchor, "offset")} " +
+                $"length={DisplayText(anchor, "length")} sha256={DisplayText(anchor, "sha256")} " +
+                $"state={DisplayText(anchor, "state")} availability={DisplayText(annotation, "sourceAvailability")}");
+        }
+
+        if (annotation.TryGetProperty("history", out var history) && history.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var version in history.EnumerateArray())
+            {
+                Console.WriteLine(
+                    $"HISTORY revision={DisplayText(version, "revision")} action={DisplayText(version, "action")} " +
+                    $"previousReview={DisplayText(version, "previousReviewStatus")} " +
+                    $"review={DisplayText(version, "reviewStatus")} origin={DisplayText(version, "origin")} " +
+                    $"facets={CognitiveAnnotationFacetList(version, "facets")} kind={DisplayText(version, "kind")} " +
+                    $"author={DisplayText(version, "author")} executor={DisplayText(version, "executor")} " +
+                    $"method={DisplayText(version, "creationMethod")} evidence={DisplayText(version, "evidence")} " +
+                    $"level={DisplayText(version, "level")} actor={DisplayText(version, "actor")} " +
+                    $"recordedAtUtc={DisplayText(version, "recordedAtUtc")} reason={JsonSerializer.Serialize(JsonValueText(version, "reason"))}");
+            }
+        }
+    }
+
+    private static string CognitiveAnnotationFacetList(JsonElement annotation, string property)
+    {
+        if (!annotation.TryGetProperty(property, out var facets) || facets.ValueKind != JsonValueKind.Array)
+        {
+            return "unknown";
+        }
+
+        var values = facets.EnumerateArray()
+            .Where(facet => facet.ValueKind == JsonValueKind.String)
+            .Select(facet => facet.GetString() ?? "unknown")
+            .ToArray();
+        return values.Length == 0 ? "none" : string.Join(",", values);
+    }
 
     /// <summary>
     /// S12-T4 prints exactly what a plaintext export of the selected file or
@@ -9343,8 +9631,8 @@ internal static class OwnerControlCli
             Console.Error.WriteLine("  document (top-level): open <file-id> — foreground loopback browser preview/edit of one workspace file at one content revision");
             Console.Error.WriteLine("  taxonomy: taxonomy — explain the cognitive facet vocabulary (local, no vault required)");
             Console.Error.WriteLine("  capture: memory-create|memory-revise|memory-import|memory-read|read|write|source-create|source-revise|source-read|research-capture|research-read|feedback-create|feedback-read");
-            Console.Error.WriteLine("  library: library|memory-read|source-read|research-read|relation-read|lifecycle-read|lifecycle-retained-read|recall-read|review-list|review-record|index-status|index-rebuild");
-            Console.Error.WriteLine("  review: proposal-list|proposal-read|proposal-publish|proposal-reject|lifecycle-publish|lifecycle-reject|lifecycle-withdraw|lifecycle-repropose|lifecycle-question-resolve|lifecycle-question-reopen|relation-list|relation-read|relation-create|relation-accept|relation-reject|relation-unlink|relation-relink|declassify-preview|declassify-publish|declassify-proposal-publish");
+            Console.Error.WriteLine("  library: library|memory-read|source-read|research-read|relation-read|lifecycle-read|lifecycle-retained-read|cognitive-annotation-list|cognitive-annotation-read|recall-read|review-list|review-record|index-status|index-rebuild");
+            Console.Error.WriteLine("  review: cognitive-annotation-create|cognitive-annotation-correct|cognitive-annotation-accept|cognitive-annotation-reject|proposal-list|proposal-read|proposal-publish|proposal-reject|lifecycle-publish|lifecycle-reject|lifecycle-withdraw|lifecycle-repropose|lifecycle-question-resolve|lifecycle-question-reopen|relation-list|relation-read|relation-create|relation-accept|relation-reject|relation-unlink|relation-relink|declassify-preview|declassify-publish|declassify-proposal-publish");
             Console.Error.WriteLine("  sharing: catalog-preview|catalog-publish|catalog-list|catalog-withdraw|collections|collection-set|grants|grant|requests|request-preview|request-approve|request-reject|sessions|session|revoke-session|redeem (+ agent-mcp transport)");
             Console.Error.WriteLine("  sources: collections|source-list|source-status|source-enroll|source-folder-enroll|source-folder-refresh-optin|source-folder-refresh-optout|source-relocate|source-revoke|source-ingest|source-pause|source-resume|source-refresh-optin|source-refresh-optout|source-raw-preservation-optin|source-raw-preservation-optout|source-preserved-record-read|source-refresh|source-mapping-submit|source-mapping-resolve|source-snapshot-list|source-snapshot-preserve|source-snapshot-read|source-snapshot-retain|source-snapshot-purge");
             Console.Error.WriteLine("  planning: lifecycle-create|lifecycle-validity-set|lifecycle-retain|lifecycle-intention-complete|lifecycle-intention-cancel|lifecycle-intention-supersede|lifecycle-intention-notify|lifecycle-intention-acknowledge|intentions|intention-trigger-set|intention-trigger-clear|intention-context-set|intention-context-disable|intention-schedule-run|recall-apply|purge-preview|purge-confirm|purge-resume");
@@ -9398,6 +9686,12 @@ internal static class OwnerControlCli
         "relation-relink" => "owner relation-relink --control-pipe <pipe> --resource-id <rel-id> --expected-revision <live>: undo a removal back to proposed (no rationale).",
         "relation-read" => "owner relation-read --control-pipe <pipe> --resource-id <rel-id> [--resource-revision N]: one link with provenance and review state.",
         "relation-list" => "owner relation-list --control-pipe <pipe>: every relation with live revision, provenance and review state.",
+        "cognitive-annotation-create" => "owner cognitive-annotation-create --control-pipe <pipe> --file-id <workspace-file-id> --input-file <draft.json>: create an encrypted annotation for one existing live workspace anchor; JSON supplies anchorId, optional facets/kind/author/creationMethod/evidence/level, and suggestion=true creates a pending AI suggestion. Omitted classification axes stay Unknown.",
+        "cognitive-annotation-list" => "owner cognitive-annotation-list --control-pipe <pipe>: list annotation IDs, live revisions and zones without reading annotation contents.",
+        "cognitive-annotation-read" => "owner cognitive-annotation-read --control-pipe <pipe> --resource-id <ann-id> [--resource-revision N]: show one annotation, its review/history and exact pinned anchor; a revised or deleted source is reported stale/unavailable, never rebound.",
+        "cognitive-annotation-correct" => "owner cognitive-annotation-correct --control-pipe <pipe> --resource-id <ann-id> --expected-revision <live> --input-file <correction.json>: change only supplied facets/kind/author/creationMethod/evidence/level fields; omitted fields, including Unknown axes, stay unchanged. A stale revision is refused.",
+        "cognitive-annotation-accept" => "owner cognitive-annotation-accept --control-pipe <pipe> --resource-id <ann-id> --expected-revision <live> [--reason text]: accept one pending AI suggestion as an owner review act; AI origin remains recorded.",
+        "cognitive-annotation-reject" => "owner cognitive-annotation-reject --control-pipe <pipe> --resource-id <ann-id> --expected-revision <live> --reason text: reject one pending AI suggestion with a reason. A stale revision is refused.",
         "lifecycle-create" => "owner lifecycle-create --control-pipe <pipe> --resource-id <subject> [--reason text --method M] | --input-file <draft.json>: create the subject lifecycle record (proposal state).",
         "lifecycle-read" => "owner lifecycle-read --control-pipe <pipe> --resource-id <subject> [--resource-revision N]: states, history and retained revisions.",
         "lifecycle-retained-read" => "owner lifecycle-retained-read --control-pipe <pipe> --resource-id <subject> --resource-revision <rev>: archived historical revision.",

@@ -46,7 +46,7 @@ public sealed class OwnerExportService
 
     public OwnerExportDocument Build(
         AuthenticatedContext context,
-        IManagedResourceStore store,
+        IVaultOperation store,
         OwnerExportScope scope)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -208,7 +208,7 @@ public sealed class OwnerExportService
 
     private static string? RenderRecord(
         AuthenticatedContext context,
-        IManagedResourceStore store,
+        IVaultOperation store,
         string resourceId,
         IReadOnlySet<string> selectedSet,
         OwnerExportScope scope,
@@ -354,6 +354,91 @@ public sealed class OwnerExportService
                 builder.Append("- Question: ").Append(lifecycle.Question?.ToString() ?? "none").AppendLine();
                 builder.Append("- Intention: ").Append(lifecycle.Intention?.ToString() ?? "none").AppendLine();
                 builder.Append("- Retained revisions: ").Append(lifecycle.RetainedRevisions.Length.ToString(CultureInfo.InvariantCulture)).AppendLine();
+                builder.AppendLine();
+                return builder.ToString();
+            }
+            catch (ArgumentException)
+            {
+            }
+
+            try
+            {
+                var annotation = CognitiveAnnotationCodec.DecodeStored(raw);
+                if (!string.Equals(annotation.Id, resourceId, StringComparison.Ordinal))
+                {
+                    return null;
+                }
+
+                var anchorState = "unavailable";
+                var availability = SourceAvailability.Unavailable;
+                try
+                {
+                    var currentAnchor = store.ReadWorkspaceAnchors(annotation.Anchor.FileId)
+                        .FirstOrDefault(anchor => string.Equals(
+                            anchor.AnchorId, annotation.Anchor.AnchorId, StringComparison.Ordinal));
+                    if (currentAnchor is not null)
+                    {
+                        if (!string.Equals(currentAnchor.FileId, annotation.Anchor.FileId, StringComparison.Ordinal) ||
+                            currentAnchor.ContentRevision != annotation.Anchor.ContentRevision ||
+                            currentAnchor.Offset != annotation.Anchor.Offset ||
+                            currentAnchor.Length != annotation.Anchor.Length ||
+                            !string.Equals(currentAnchor.Sha256, annotation.Anchor.Sha256, StringComparison.Ordinal))
+                        {
+                            return null;
+                        }
+
+                        anchorState = currentAnchor.State;
+                        availability = SourceAvailability.Available;
+                    }
+                }
+                catch (WorkspaceRefusalException ex) when (
+                    ex.Code is WorkspaceErrorCodes.NotFound or WorkspaceErrorCodes.Deleted)
+                {
+                    availability = SourceAvailability.Unavailable;
+                }
+
+                builder.Append("- Record: cognitive annotation").AppendLine();
+                builder.Append("- Zone: ").Append(annotation.ZoneId).AppendLine();
+                builder.Append("- Revision: ").Append(annotation.History[^1].Revision.ToString(CultureInfo.InvariantCulture)).AppendLine();
+                builder.Append("- Origin: ").Append(annotation.Origin.ToString()).AppendLine();
+                builder.Append("- Review: ").Append(annotation.ReviewStatus.ToString()).AppendLine();
+                builder.Append("- Facets: ").Append(annotation.Facets.Length == 0
+                    ? "none"
+                    : string.Join(",", annotation.Facets)).AppendLine();
+                builder.Append("- Kind: ").Append(annotation.Kind.ToString()).AppendLine();
+                builder.Append("- Author: ").Append(annotation.Author.ToString()).AppendLine();
+                builder.Append("- Executor: ").Append(annotation.Executor.ToString()).AppendLine();
+                builder.Append("- Creation method: ").Append(annotation.CreationMethod.ToString()).AppendLine();
+                builder.Append("- Evidence: ").Append(annotation.Evidence.ToString()).AppendLine();
+                builder.Append("- Level: ").Append(annotation.Level.ToString()).AppendLine();
+                builder.Append("- Anchor: file=").Append(annotation.Anchor.FileId)
+                    .Append(" contentRevision=").Append(annotation.Anchor.ContentRevision.ToString(CultureInfo.InvariantCulture))
+                    .Append(" offset=").Append(annotation.Anchor.Offset.ToString(CultureInfo.InvariantCulture))
+                    .Append(" length=").Append(annotation.Anchor.Length.ToString(CultureInfo.InvariantCulture))
+                    .Append(" sha256=").Append(annotation.Anchor.Sha256)
+                    .Append(" state=").Append(anchorState)
+                    .Append(" availability=").Append(availability.ToString()).AppendLine();
+                builder.Append("- Source bytes: not included; the anchor remains a reference.").AppendLine();
+                builder.AppendLine("Revision history:");
+                foreach (var version in annotation.History)
+                {
+                    builder.Append("- ").Append(version.Revision.ToString(CultureInfo.InvariantCulture))
+                        .Append(" action=").Append(version.Action.ToString())
+                        .Append(" previousReview=").Append(version.PreviousReviewStatus.ToString())
+                        .Append(" origin=").Append(version.State.Origin.ToString())
+                        .Append(" review=").Append(version.State.ReviewStatus.ToString())
+                        .Append(" facets=").Append(version.State.Facets.Length == 0 ? "none" : string.Join(",", version.State.Facets))
+                        .Append(" kind=").Append(version.State.Kind.ToString())
+                        .Append(" author=").Append(version.State.Author.ToString())
+                        .Append(" executor=").Append(version.State.Executor.ToString())
+                        .Append(" method=").Append(version.State.CreationMethod.ToString())
+                        .Append(" evidence=").Append(version.State.Evidence.ToString())
+                        .Append(" level=").Append(version.State.Level.ToString())
+                        .Append(" actor=").Append(version.Actor.ToString())
+                        .Append(" recordedAtUtc=").Append(version.RecordedAtUtc.ToString("O", CultureInfo.InvariantCulture))
+                        .Append(" reason=").AppendLine(version.Reason ?? "(none)");
+                }
+
                 builder.AppendLine();
                 return builder.ToString();
             }

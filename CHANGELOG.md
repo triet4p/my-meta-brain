@@ -6,7 +6,8 @@ All notable changes to Meta Brain are documented here.
 
 ### Added
 
-- Added `owner taxonomy` to describe the six owner-reviewed cognitive facets and their safeguards locally. The shared passage contract supports overlapping facets on an existing revision-pinned workspace anchor; saving, reviewing and searching annotations remain future work.
+- Added `owner taxonomy` to describe the six owner-reviewed cognitive facets and their safeguards locally. The shared passage contract supports overlapping facets on an existing revision-pinned workspace anchor; it does not classify or search passages.
+- Added `owner cognitive-annotation-create/list/read/correct/accept/reject` for durable, encrypted, versioned passage annotations. Owner edits retain Unknown axes and review history; AI suggestions remain distinct until accepted or rejected, stale anchors keep their original revision, optimistic conflicts refuse overwrite, rebuildable indexes do not replace canonical state, backups carry annotations, and selected owner exports include annotation history without source bytes.
 
 - Added the 1.2.0 release candidate (S12-T6): exactly two self-contained Windows x64 assets — a dedicated CLI setup with an embedded, candidate-bound payload, and a standalone MCP server ZIP — assembled with one candidate identity, per-file and embedded-payload SHA-256 values, dependency and license inventories, source provenance and truthful unsigned status. The candidate was assembled and verified locally and was published as `v1.2.0` on 2026-11-01 after the owner authorized publication.
 - Added version-matched 1.2.0 release notes and a release record that bind the candidate's exact internal filenames, sizes, SHA-256 values, provenance, compatibility and known limits, together with a local static-site preview whose CLI and MCP download actions resolve only to verified candidate copies.
