@@ -483,7 +483,7 @@ Hai câu hỏi phải trả lời được từ owner surface: “Vì sao hệ t
 
 ### 13.1. Planned CLI-first và document browser — CR03/D089
 
-Owner đã approve thay đổi planning/support contract ngày 2026-11-01; [CR03](REQUIREMENTS.md#approved-change-record--cr03-2026-11-01) là traceability đầy đủ. Chưa implementation hoặc có runtime PASS cho surface mới.
+Owner đã approve thay đổi planning/support contract ngày 2026-11-01; [CR03](REQUIREMENTS.md#approved-change-record--cr03-2026-11-01) là traceability đầy đủ. S12/1.2.0 và S13/1.3.0 đã shipped với CLI owner surface và optional foreground document browser; WPF 1.1 remains frozen. Runtime PASS/evidence cho các surface đã shipped được ghi nhận trong sprint records, không fabricate thêm ở đây.
 
 - S12/1.2: CLI owner-complete, không browser/WPF prerequisite; giữ capture/library/evidence/proposals/review, sources, relations, jobs/synthesis, lifecycle/intentions, catalog/request/token/session, recovery/backup/export/purge. MCP tiếp tục scoped agent API, không owner authority.
 - S13/1.3: `metabrain open <id>` là tên lệnh dự kiến, foreground local bridge mở browser cho một document/revision/operations/lifetime. Browser chỉ preview/edit, không folder/search/review/sharing/settings console; không direct vault/file access, key hoặc generic owner APIs.
@@ -491,7 +491,7 @@ Owner đã approve thay đổi planning/support contract ngày 2026-11-01; [CR03
 - Markdown formatted preview, CSV table preview + raw-text edit trước; text editor không WYSIWYG/grid rewrite. Encoding/newline/support matrix chốt S13-T1; source sessions read-only, unsupported format không giả editable. Preview/toggle không rewrite original bytes, save explicit expected revision tạo revision mới, conflict không overwrite; CLI có read/revise độc lập.
 - Lock/disconnect/expiry/CLI exit revoke reads/saves, clear document/draft và bỏ in-flight stale responses; không unsaved prompt chặn lock. Giới hạn browser/managed-memory/OS swap/extensions/copies đã disclosure phải nói thật, không claim absolute erasure hoặc sửa browser/host policy.
 - S12+ chỉ CLI installer + MCP ZIP; bridge/assets từ S13 bundle trong CLI/shared runtime, không UI installer hay desktop shell. WPF 1.1 frozen, downloads và evidence 1.0/1.1 giữ nguyên; không promise dùng old UI với runtime/data mới. S12 chốt và exercise explicit installed-component transition/version refusal/remediation, không auto-uninstall UI hoặc silent runtime replacement.
-- CR03 không tự chọn storage/key/share/engine/migration; riêng storage/key và installed transition nay được owner duyệt theo [D090](#134-approved-workspace-contract--d090). Sharing/engine/migration còn cần approval riêng. S12 CLI parity/transition, S13 actual browser security/render/edit/lock và S18 CLI daily-use acceptance vẫn là gates tương lai, không evidence đã thực hiện.
+- CR03 không tự chọn storage/key/share/engine/migration; riêng storage/key và installed transition nay được owner duyệt theo [D090](#134-approved-workspace-contract--d090). Sharing/engine/migration còn cần approval riêng. S12 CLI parity/transition và S13 browser security/render/edit/lock đã shipped với evidence trong sprint records; S18 CLI daily-use acceptance vẫn là gate tương lai.
 
 ### 13.2. Released WPF implementation — 1.0/1.1 history
 
@@ -559,7 +559,7 @@ No package is added by this decision; any future dependency requires actual rele
 
 ### 13.5. S13-T1 document bridge contract — foreground `open`
 
-Status: S13-T1–T5 are implemented and accepted with independent evidence review and exact-snapshot checkpoints; S13-T6 prepares the 1.3.0 candidate and its packaged proof. This section is the settled behavior contract, not a published release, publication authorization or fresh evidence for another task's surface.
+Status: S13-T1–T6 are implemented and accepted with independent evidence review and exact-snapshot checkpoints; 1.3.0 is published. This section is the settled behavior contract of shipped 1.3.0, not a published-release authorization or fresh evidence for another task's surface.
 
 - **CLI binding.** `MetaBrain.Cli.exe open <file-id> --control-pipe <pipe> [--revision <n>] [--anchor-offset <bytes> --anchor-length <bytes> --anchor-sha256 <digest>] [--no-browser] [--lifetime-seconds <n>]` runs in the foreground and serves exactly one live workspace file at the exact content revision read at open (latest when `--revision` is absent). The document session is bound to that file id, that content revision, the read and explicit-save operations, and the session lifetime. An optional selected-hit anchor requires the matching live revision and byte-range SHA-256; missing, invalid, mismatched or stale anchors are refused rather than redirected to another revision. Memory items, registered sources, source sessions/snapshots, folders and a general owner API are not accepted by this surface; they remain CLI reads/exports or later tasks.
 - **Session binding.** The bridge listens on an ephemeral `127.0.0.1` port and mints a 256-bit capability per process. The served page receives it only in a `meta` element; every document request must present it in `X-MetaBrain-Session` and is compared in constant time. The capability is never in a URL, a cookie, browser storage, a log or a file. Loopback alone, `Origin` alone, a body field or the document id never grants authority.

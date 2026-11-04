@@ -1,0 +1,71 @@
+# Sprint 14 — Cognitive memory và owner-controlled lifecycle
+
+## Goal và trạng thái
+
+- Status: **In progress — prerequisite documentation sync**. Release mục tiêu cuối sprint: **1.4.0**; chưa build/publish.
+- Entry: Sprint 13 complete và 1.3.0 published.
+- Scope/trace: P2-04, P2-05, P2-12; R01, R12, R13, R19–R22, R26–R30. Các P2 là candidates, không thay baseline khi chưa có approval.
+- Root: `F:/ai-ml/my-meta-brain`; target ref `main`; exact base/worktree/ownership resolve khi execution.
+- Contract chung: [roadmap 2.0](../ROADMAP-2.0.md), [direction](../POST-1.0-DIRECTION.md), [requirements](../REQUIREMENTS.md), [PLAN](../PLAN.md).
+
+- CR03/D089: CLI owner-complete + MCP; browser từ Sprint 13 chỉ preview/edit tài liệu, không cognitive/review console. WPF frozen ở 1.1.0, không UI installer mới.
+
+## Execution và gates
+
+Full OMP route; prerequisite P0 → task tuần tự T1 → T6. Mỗi task cần worker evidence, independent evidence-review PASS và Bronze exact-snapshot checkpoint trước task độc lập kế tiếp. Cuối sprint assigned differential deep review trước owner-authorized publication; publication smoke trước Complete. Current global flow điều khiển async lifecycle và review rounds. Main không implement/Git hoặc viết evidence records.
+
+Owner authorized Sprint 14 execution, prerequisite documentation sync and per-task reviewed-snapshot checkpoints. Selected workers: Bronze P0; Gold T1/T4/T6; Silver T2/T3/T5. Routing choices remain task-specific; replacement/correction uses the selected role. No push/tag/upload/deploy or provider access is authorized; taxonomy owner review and provider consent/budget remain separate gates. Tối đa hai active agents, một implementation task. Worker đọc implement-atomic-task và mọi regular file trực tiếp dưới ~/.agents/rules/. Artifacts tại `artifacts/sprint-14/task-<M>.md` (P0: `task-P0.md`), reviews/checkpoints dưới cùng sprint; không tạo trước PASS giả.
+
+Không host mutation/ACL/permissions/profile edits; synthetic data mặc định. Không downgrade baseline security, reset data hoặc lấy test suite thay runtime smoke. Decision còn mở/contract thay đổi phải owner-approved và sync docs trước implementation affected path.
+
+## Atomic tasks
+
+Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [release contract](../ROADMAP-2.0.md#7-definition-of-release-mỗi-sprint). Status `[ ]` pending; `[~]` active/blocked; `[x]` chỉ sau acceptance và gates.
+
+- [~] **S14-P0 — Đồng bộ trạng thái tài liệu sau release 1.3.0.**
+    - Change: Correct stale planning/prepublication wording in current project documentation using accepted Sprint 12/13 release records; preserve historical decisions/evidence and normative contracts.
+    - Acceptance: Current status consistently distinguishes shipped 1.2/1.3 behavior, frozen WPF 1.1 and pending Sprint 14+; no feature, requirement, budget or authority changes; no product changelog entry for docs-only sync.
+    - Check: Targeted stale-status and Markdown/link checks against accepted release records; no runtime replay or fabricated fresh product PASS.
+    - Gate: Independent evidence review and separate Bronze exact-snapshot checkpoint before T1.
+
+- [ ] **S14-T1 — Taxonomy và provenance contract.**
+    - Change: Chốt World/Experience/Opinion/Habit/Intention/Action–Effect dưới dạng facets, multi-label passage anchors, uncertainty/author/executor và mapping decision/lesson/question/synthesis/L0–L3 hiện có.
+    - Acceptance: Owner review taxonomy; không ép một file một type, không xóa existing kinds hoặc coi reported claim là verified fact. Mapping thể hiện thiếu nguồn/thời gian là unknown.
+    - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
+
+- [ ] **S14-T2 — Durable annotations và owner review.**
+    - Change: Persist owner annotations/classification corrections versioned encrypted, độc lập derived index, review/accept/reject và export/backup.
+    - Acceptance: Rebuild index giữ owner edits, multi-view không nhân bản file; AI suggestion khác owner-confirmed, passage source đổi báo stale; optimistic conflicts không overwrite.
+    - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
+
+- [ ] **S14-T3 — Grounded structuring vào workspace.**
+    - Change: Nối coding/research/trend/synthesis jobs hiện có vào source file revisions và pending annotations/proposals; giữ raw-first capture trước model.
+    - Acceptance: Real bounded job khi có provider consent/budget, output trỏ đúng source; malformed/inference sai bị từ chối, AI không thành owner belief; provider lỗi/cancel không mất raw hoặc owner edits. Không mock model proof.
+    - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
+
+- [ ] **S14-T4 — Temporal/intention/recall-policy mapping.**
+    - Change: Nối history/as-of/validity/review-after, intention due/context/ack/done và pin/demote/archive/restore vào file/passage memory theo mapping.
+    - Acceptance: Restart/offline/lock không duplicate due notifications; mentioned/acknowledged khác completed; reads không nâng truth; history giữ nguồn và superseded semantics.
+    - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
+
+- [ ] **S14-T5 — Cognitive queries và review qua CLI.**
+    - Change: CLI list/query/filter cho sáu facets, decisions/questions/lessons và review queue; inspect nguồn/revision rồi sửa/bác phân loại qua shared APIs, tạo ghi chú không cần model. `open` chỉ hiển thị tài liệu đã chọn, không chứa review controls.
+    - Acceptance: Owner tìm trải nghiệm/dự định/quan điểm, đọc đúng nguồn và sửa nhãn/review hoàn toàn bằng CLI; source availability và AI-origin rõ, không bắt điền taxonomy trước lưu file.
+    - Check: Actual CLI query → source inspect → correction/accept/reject → restart/rebuild; browser chỉ exercise nếu document path thay đổi.
+
+- [ ] **S14-T6 — Release 1.4.0.**
+    - Change: Publish cognitive/lifecycle workflows và attribution/review guides, nối jobs/source/operations hiện có.
+    - Acceptance: Changed flows chạy thật trên candidate; nếu provider consent thiếu thì model task/release blocked, không dùng mocked echo làm acceptance; release contract chung đạt.
+    - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
+
+## Exit và release boundary
+
+- User outcome: Owner tìm trải nghiệm/dự định/quan điểm, inspect nguồn và sửa nhãn/review bằng CLI; source availability/AI-origin rõ, không yêu cầu browser/WPF.
+- Tất cả task gates/checkpoints PASS, final differential không actionable findings; không commit_pending.
+- Candidate chuẩn bị ở release task; review/checkpoint rồi differential trước publication. Owner authorize external actions riêng; exact public artifacts/links/version smoke hoàn tất rồi Main mới Complete. Release pending chặn sprint sau.
+- CLI installer + MCP ZIP và guides version 1.4.0, không UI installer mới; browser document assets không là product riêng. Install/upgrade/data preservation theo CR03/shared contract, không overwrite assets.
+- Kế thừa unchanged acceptance có trace; kiểm tra changed surfaces thực, không blanket replay 1.0 hoặc giả fresh PASS.
+
+## Gate record
+
+Chưa có worker/evidence/checkpoint/deep/publication result. Xem [roadmap](../ROADMAP-2.0.md) để biết dependency tiếp theo; không tự advance bởi completion message.
