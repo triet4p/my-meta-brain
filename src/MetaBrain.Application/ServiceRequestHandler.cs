@@ -939,7 +939,8 @@ public sealed record JobWire(
     string[]? OutputProposalIds,
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset? StartedAtUtc,
-    DateTimeOffset? CompletedAtUtc);
+    DateTimeOffset? CompletedAtUtc,
+    JobOutputAnnotationLink[]? OutputAnnotations = null);
 
 public sealed record SpendLedgerWire(
     decimal HistoricalReservationUsd,
@@ -4614,7 +4615,8 @@ public sealed class ServiceRequestHandler
         OutputProposalIds: job.OutputProposalIds,
         CreatedAtUtc: job.CreatedAtUtc,
         StartedAtUtc: job.StartedAtUtc,
-        CompletedAtUtc: job.CompletedAtUtc);
+        CompletedAtUtc: job.CompletedAtUtc,
+        OutputAnnotations: job.OutputAnnotations);
 
     private ServiceReply HandleMemoryCreate(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
     {

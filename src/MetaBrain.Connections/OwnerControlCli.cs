@@ -9568,7 +9568,17 @@ internal static class OwnerControlCli
         var failure = job.TryGetProperty("failure", out var f) && f.ValueKind == JsonValueKind.Object
             ? $" fail={JsonValueText(f, "code")}: {JsonValueText(f, "message")}"
             : "";
-        Console.WriteLine($"JOB id={id} state={state}{profileStr}{selectionStr} provider={provider} model={model} {usageStr}{failure}");
+        var proposalIds = job.TryGetProperty("outputProposalIds", out var proposals) && proposals.ValueKind == JsonValueKind.Array
+            ? string.Join(",", proposals.EnumerateArray().Select(proposal => proposal.GetString()))
+            : string.Empty;
+        var annotationLinks = job.TryGetProperty("outputAnnotations", out var annotations) && annotations.ValueKind == JsonValueKind.Array
+            ? string.Join(",", annotations.EnumerateArray().Select(annotation =>
+                JsonValueText(annotation, "proposalId") + "=[" +
+                (annotation.TryGetProperty("annotationIds", out var ids) && ids.ValueKind == JsonValueKind.Array
+                    ? string.Join("|", ids.EnumerateArray().Select(id => id.GetString()))
+                    : string.Empty) + "]"))
+            : string.Empty;
+        Console.WriteLine($"JOB id={id} state={state}{profileStr}{selectionStr} provider={provider} model={model} {usageStr} proposals=[{proposalIds}] annotations=[{annotationLinks}]{failure}");
     }
 
     /// <summary>
@@ -9586,7 +9596,8 @@ internal static class OwnerControlCli
         }
 
         var pinned = inputs.EnumerateArray()
-            .Select(input => JsonValueText(input, "resourceId") + "@" + JsonValueText(input, "revision"))
+            .Select(input => JsonValueText(input, "resourceId") + "@" + JsonValueText(input, "revision") +
+                "#" + JobInputKindText(input))
             .ToArray();
         var selection = " inputs=" + inputs.GetArrayLength().ToString(CultureInfo.InvariantCulture) +
             "[" + string.Join(",", pinned) + "]";
@@ -9603,6 +9614,30 @@ internal static class OwnerControlCli
         }
 
         return selection;
+    }
+    private static string JobInputKindText(JsonElement input)
+    {
+        if (!input.TryGetProperty("kind", out var kind))
+        {
+            return "managedResource";
+        }
+
+        if (kind.ValueKind == JsonValueKind.String)
+        {
+            return kind.GetString() ?? "unknown";
+        }
+
+        if (kind.ValueKind == JsonValueKind.Number && kind.TryGetInt32(out var value))
+        {
+            return value switch
+            {
+                0 => "managedResource",
+                1 => "workspaceFile",
+                _ => "unknown"
+            };
+        }
+
+        return "unknown";
     }
 
     // S9-T3 contextual CLI help. `owner --help` names every workflow group;
@@ -9741,7 +9776,7 @@ internal static class OwnerControlCli
         "review-record" => "owner review-record --control-pipe <pipe> --resource-id <id> --reason text: record that the owner looked (content/evidence/citations/states unchanged).",
         "provider-config" => "owner provider-config --control-pipe <pipe> --provider <p> --model <m> [--base-url <url>|auto] [--api-key-stdin true]: save egress settings. The API key is a non-echo secure prompt by default (never an option value, argv, environment variable or plaintext file); --api-key-stdin true reads one line from redirected standard input for an automated owner run.",
         "provider-status" => "owner provider-status --control-pipe <pipe>: configured provider/model/endpoint + frozen caps. Never the key.",
-        "job-create" => "owner job-create --control-pipe <pipe> --zone-id <zone> --destination-id <id> --destination-revision <rev> --provider <p> --model <m> [--max-cost-usd N] [--profile name] (--source-id <id> --source-revision <rev> | --input-file <selection.json>): bounded job with immutable scope snapshot (inputs pinned to revisions). The file form is the explicit selection draft (advanced, owner-owned).",
+        "job-create" => "owner job-create --control-pipe <pipe> --zone-id <zone> --destination-id <id> --destination-revision <rev> --provider <p> --model <m> [--max-cost-usd N] [--profile name] (--source-id <id> --source-revision <rev> | --input-file <selection.json>): bounded job with exact input revisions. Selection JSON may identify a live encrypted workspace file with kind workspaceFile; the default kind is managedResource. AI results remain pending owner-review proposals and, for workspace passages, pending anchored annotations.",
         "job-start" => "owner job-start --control-pipe <pipe> --job-id <id>: run to completed/failed/cancelled (exit 5 unless completed). No provider call without consent/budget.",
         "job-cancel" => "owner job-cancel --control-pipe <pipe> --job-id <id>: cancel a queued job (releases its reservation; sends nothing).",
         "job-status" => "owner job-status --control-pipe <pipe> --job-id <id>: real state, recorded scope, usage/failure.",

@@ -75,11 +75,26 @@ public static class SynthesisLevels
 }
 
 /// <summary>
+/// The namespace an explicitly selected input belongs to. Managed resources
+/// keep their registered-source citation semantics; workspace files are read
+/// at their exact encrypted content revision and cited through workspace
+/// anchors instead.
+/// </summary>
+public enum JobInputKind
+{
+    ManagedResource = 0,
+    WorkspaceFile = 1
+}
+
+/// <summary>
 /// One input the owner explicitly selected for a job, pinned to the exact
 /// revision that job may read. A selection is an explicit owner choice: no
 /// query, glob, or discovery step ever adds an input to a job (R13/R21).
 /// </summary>
-public sealed record JobInputReference(string ResourceId, long Revision);
+public sealed record JobInputReference(
+    string ResourceId,
+    long Revision,
+    JobInputKind Kind = JobInputKind.ManagedResource);
 
 /// <summary>
 /// One selected input together with the exact text a synthesis item may ground
@@ -87,9 +102,15 @@ public sealed record JobInputReference(string ResourceId, long Revision);
 /// source's own verbatim text (directly or through a preserved snapshot), in
 /// which case a committed citation can carry a span into it; a memory item's
 /// body is not source text, so its citation pins the item revision alone.
+/// Workspace file text is instead linked through revision-pinned workspace
+/// anchors.
 /// </summary>
-public sealed record JobInputText(string ResourceId, long Revision, string Text, bool IsSourceText);
-
+public sealed record JobInputText(
+    string ResourceId,
+    long Revision,
+    string Text,
+    bool IsSourceText,
+    JobInputKind Kind = JobInputKind.ManagedResource);
 /// <summary>
 /// Owner-supplied synthesis selection: the explicit input set, the objective
 /// the owner asks the bounded job to address, and the level the owner requests
@@ -138,6 +159,19 @@ public static class JobSelectionCodec
 
         return draft ?? throw new ArgumentException("The job selection draft schema is invalid.");
     }
+
+    public static byte[] EncodeDraft(JobSelectionDraft draft)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+        var json = JsonSerializer.SerializeToUtf8Bytes(draft, JsonOptions);
+        if (json.Length is <= 0 or > MaximumPayloadBytes)
+        {
+            CryptographicOperations.ZeroMemory(json);
+            throw new ArgumentException("The job selection draft exceeds its size limit.");
+        }
+
+        return json;
+    }
 }
 
 /// <summary>
@@ -169,6 +203,7 @@ public sealed record JobUsage(
 public sealed record JobFailureReason(
     string Code,
     string Message);
+public sealed record JobOutputAnnotationLink(string ProposalId, string[] AnnotationIds);
 
 /// <summary>
 /// Server-persisted encrypted job record stored in the vault via IManagedResourceStore.
@@ -186,7 +221,8 @@ public sealed record StoredJobRecord(
     string[]? OutputProposalIds,
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset? StartedAtUtc,
-    DateTimeOffset? CompletedAtUtc);
+    DateTimeOffset? CompletedAtUtc,
+    JobOutputAnnotationLink[]? OutputAnnotations = null);
 
 /// <summary>
 /// Owner-facing read model: stored job record joined with live revision.
@@ -204,7 +240,8 @@ public sealed record JobRecord(
     string[]? OutputProposalIds,
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset? StartedAtUtc,
-    DateTimeOffset? CompletedAtUtc);
+    DateTimeOffset? CompletedAtUtc,
+    JobOutputAnnotationLink[]? OutputAnnotations = null);
 
 /// <summary>
 /// One grounded passage of a synthesis item: the exact selected input it was
@@ -225,10 +262,12 @@ public sealed record ModelJobStructuredItem(
     MemoryApplicability? Applicability = null,
     string? OccurredAtSourceText = null,
     ModelJobGrounding[]? Grounding = null,
-    bool CrossSource = false);
+    bool CrossSource = false,
+    CognitiveFacet[]? Facets = null);
 public sealed record ModelJobOutput(
     string Summary,
     ModelJobStructuredItem[] Items);
+
 
 public static class JobCodec
 {
@@ -365,7 +404,8 @@ public static class JobOutputValidator
         string sourceText,
         out ModelJobOutput? validatedOutput,
         out string? errorCode,
-        out string? errorMessage)
+        out string? errorMessage,
+        bool requireFacets = false)
     {
         validatedOutput = null;
         errorCode = null;
@@ -399,11 +439,38 @@ public static class JobOutputValidator
                 return false;
             }
 
-            // Excerpt grounding: excerpt must be present and exist verbatim in the input source text
-            if (string.IsNullOrWhiteSpace(item.Excerpt) || !sourceText.Contains(item.Excerpt, StringComparison.Ordinal))
+            // Excerpt grounding: a bounded excerpt must be present verbatim in the selected input.
+            if (string.IsNullOrWhiteSpace(item.Excerpt) ||
+                item.Excerpt.Length > MaximumExcerptLength ||
+                !sourceText.Contains(item.Excerpt, StringComparison.Ordinal))
             {
                 errorCode = "grounding_failure";
-                errorMessage = "Item excerpt is not grounded in verbatim source text.";
+                errorMessage = "Item excerpt is not a bounded, verbatim passage from the selected source revision.";
+                return false;
+            }
+
+            // Managed-resource outputs retain their existing verbatim title/body contract.
+            // Workspace outputs instead keep prose unverified and pending owner review.
+            if (!requireFacets &&
+                (!item.Excerpt.Contains(item.Title, StringComparison.Ordinal) ||
+                 !item.Excerpt.Contains(item.Body, StringComparison.Ordinal)))
+            {
+                errorCode = "unverified_inference";
+                errorMessage = "Managed-resource item title and body must be copied from its evidence excerpt.";
+                return false;
+            }
+
+            if (requireFacets && item.Facets is null)
+            {
+                errorCode = "schema_violation";
+                errorMessage = "A workspace-backed job requires an explicit facet set for each output item.";
+                return false;
+            }
+
+            if (item.Facets is { } facets && !IsValidFacets(facets))
+            {
+                errorCode = "schema_violation";
+                errorMessage = "An output item contains an unknown or duplicate cognitive facet.";
                 return false;
             }
 
@@ -421,50 +488,53 @@ public static class JobOutputValidator
                 return false;
             }
 
+            var evidenceText = requireFacets ? item.Excerpt : sourceText;
             if (item.Applicability is not null)
             {
                 if (!string.IsNullOrWhiteSpace(item.Applicability.Version) &&
-                    !sourceText.Contains(item.Applicability.Version, StringComparison.Ordinal))
+                    !evidenceText.Contains(item.Applicability.Version, StringComparison.Ordinal))
                 {
                     errorCode = "applicability_ungrounded";
-                    errorMessage = $"Item applicability version '{item.Applicability.Version}' is not grounded in verbatim source text.";
+                    errorMessage = "Item applicability version is not grounded in its evidence excerpt.";
                     return false;
                 }
 
                 if (!string.IsNullOrWhiteSpace(item.Applicability.Project) &&
-                    !sourceText.Contains(item.Applicability.Project, StringComparison.OrdinalIgnoreCase))
+                    !evidenceText.Contains(item.Applicability.Project, StringComparison.OrdinalIgnoreCase))
                 {
                     errorCode = "applicability_ungrounded";
-                    errorMessage = $"Item applicability project '{item.Applicability.Project}' is not grounded in source text.";
+                    errorMessage = "Item applicability project is not grounded in its evidence excerpt.";
                     return false;
                 }
 
                 if (!string.IsNullOrWhiteSpace(item.Applicability.Environment) &&
-                    !sourceText.Contains(item.Applicability.Environment, StringComparison.OrdinalIgnoreCase))
+                    !evidenceText.Contains(item.Applicability.Environment, StringComparison.OrdinalIgnoreCase))
                 {
                     errorCode = "applicability_ungrounded";
-                    errorMessage = $"Item applicability environment '{item.Applicability.Environment}' is not grounded in source text.";
+                    errorMessage = "Item applicability environment is not grounded in its evidence excerpt.";
                     return false;
                 }
             }
 
-            // No deployed inference from test pass:
-            // A result item cannot claim deployed / deployment if source text only contains test execution without deployment tool evidence.
+            // No deployed inference from a test pass:
+            // for workspace inputs the evidence boundary is the item's excerpt,
+            // not another part of the file.
             if (string.Equals(item.Kind, "result", StringComparison.OrdinalIgnoreCase) &&
                 (item.Title.Contains("deployed", StringComparison.OrdinalIgnoreCase) ||
                  item.Body.Contains("deployed to production", StringComparison.OrdinalIgnoreCase) ||
                  item.Body.Contains("deployed and active", StringComparison.OrdinalIgnoreCase)))
             {
-                var containsDeploymentToolOutput = sourceText.Contains("[TOOL: deploy", StringComparison.OrdinalIgnoreCase) ||
-                                                    sourceText.Contains("deployment succeeded", StringComparison.OrdinalIgnoreCase) ||
-                                                    sourceText.Contains("published to production", StringComparison.OrdinalIgnoreCase);
+                var containsDeploymentToolOutput = evidenceText.Contains("[TOOL: deploy", StringComparison.OrdinalIgnoreCase) ||
+                                                    evidenceText.Contains("deployment succeeded", StringComparison.OrdinalIgnoreCase) ||
+                                                    evidenceText.Contains("published to production", StringComparison.OrdinalIgnoreCase);
                 if (!containsDeploymentToolOutput)
                 {
                     errorCode = "unverified_inference";
-                    errorMessage = "Item describes deployment as an observed result, but source text only records test execution without deployment tool evidence.";
+                    errorMessage = "Item describes deployment as an observed result, but its evidence excerpt contains no deployment tool evidence.";
                     return false;
                 }
             }
+
 
             // Note on authority boundary: Output cannot gain shell, grant, or key authority.
             // Security is enforced structurally at the proposal sink: output is converted
@@ -547,10 +617,13 @@ public static class JobOutputValidator
             return false;
         }
 
-        if (parsed.Items is null || parsed.Items.Length == 0)
+        if (string.IsNullOrWhiteSpace(parsed.Summary) ||
+            parsed.Summary.Length > MaximumBodyLength ||
+            parsed.Items is null ||
+            parsed.Items.Length == 0)
         {
             errorCode = "schema_violation";
-            errorMessage = "Model output contains no structured items.";
+            errorMessage = "Model output requires a bounded summary and at least one structured item.";
             return false;
         }
 
@@ -562,11 +635,11 @@ public static class JobOutputValidator
     /// set. Every item must carry an item-local grounding set whose entries name
     /// a selected input at its pinned revision and copy a verbatim passage from
     /// that input: the grounding set is the item's complete evidence boundary,
-    /// so an item declared to span inputs must ground in at least two distinct
-    /// inputs. A synthesis item carries no source occurrence time, because it is
-    /// a derived statement about its inputs rather than an observed event. The
-    /// validator checks verbatim presence within the named input, not semantic
-    /// support, and never reads a level or an input count as evidence.
+    /// so a cross-source item must ground in at least two distinct inputs. A
+    /// synthesis item has no source occurrence time. Exact excerpts establish
+    /// provenance, not semantic entailment of free-form title/body; workspace output
+    /// remains an unverified AI suggestion pending owner review. Level and input count
+    /// are not evidence.
     /// </summary>
     public static bool TryValidateSynthesis(
         string rawOutput,
@@ -631,7 +704,24 @@ public static class JobOutputValidator
                 return false;
             }
 
+            if (inputs.Any(input => input.Kind == JobInputKind.WorkspaceFile) && item.Facets is null)
+            {
+                errorCode = "schema_violation";
+                errorMessage = "A workspace-backed synthesis requires an explicit facet set for each output item.";
+                return false;
+            }
+
+            if (item.Facets is { } facets && !IsValidFacets(facets))
+            {
+                errorCode = "schema_violation";
+                errorMessage = "A synthesis item contains an unknown or duplicate cognitive facet.";
+                return false;
+            }
+
             var groundedInputs = new HashSet<string>(StringComparer.Ordinal);
+            var hasWorkspaceGrounding = false;
+            var titleIsVerbatim = false;
+            var bodyIsVerbatim = false;
             var seenExcerpts = new HashSet<string>(StringComparer.Ordinal);
             foreach (var grounding in item.Grounding)
             {
@@ -672,6 +762,22 @@ public static class JobOutputValidator
                 }
 
                 groundedInputs.Add(grounding.InputId);
+                if (input.Kind == JobInputKind.WorkspaceFile)
+                {
+                    hasWorkspaceGrounding = true;
+                }
+                else
+                {
+                    titleIsVerbatim |= grounding.Excerpt.Contains(item.Title, StringComparison.Ordinal);
+                    bodyIsVerbatim |= grounding.Excerpt.Contains(item.Body, StringComparison.Ordinal);
+                }
+            }
+
+            if (!hasWorkspaceGrounding && (!titleIsVerbatim || !bodyIsVerbatim))
+            {
+                errorCode = "unverified_inference";
+                errorMessage = "A managed-resource synthesis title and body must be copied from selected evidence excerpts.";
+                return false;
             }
 
             if (item.CrossSource && groundedInputs.Count < 2)
@@ -690,6 +796,25 @@ public static class JobOutputValidator
         }
 
         validatedOutput = parsed;
+        return true;
+    }
+
+    private static bool IsValidFacets(CognitiveFacet[] facets)
+    {
+        if (facets.Length > CognitiveTaxonomy.Definitions.Count)
+        {
+            return false;
+        }
+
+        var seen = new HashSet<CognitiveFacet>();
+        foreach (var facet in facets)
+        {
+            if (!Enum.IsDefined(facet) || !seen.Add(facet))
+            {
+                return false;
+            }
+        }
+
         return true;
     }
 

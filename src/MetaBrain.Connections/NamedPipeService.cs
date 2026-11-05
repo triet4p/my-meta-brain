@@ -399,6 +399,7 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerJobStatusOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerJobListOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerJobLedgerOperation, StringComparison.Ordinal) ||
+
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerProviderConfigOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerProviderStatusOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerScheduleSetOperation, StringComparison.Ordinal) ||
@@ -437,15 +438,14 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceExportPreviewOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceExportOperation, StringComparison.Ordinal);
                 using var operation = needsVaultOperation ? _vault.TryBeginOperation() : null;
-                if (needsVaultOperation && operation is not null)
+                var serializeWithBackgroundRefresh =
+                    needsVaultOperation &&
+                    operation is not null &&
+                    !string.Equals(request.Operation, ServiceRequestHandler.OwnerJobCancelOperation, StringComparison.Ordinal);
+                if (serializeWithBackgroundRefresh)
                 {
-                    // Owner request/reply traffic wins over the background pass: wait
-                    // out (not alongside) an in-flight background refresh so two
-                    // leases never race on the same journal revision. The wait is
-                    // bounded by the 10-second request guard through the linked
-                    // timeout token; the background pass itself observes the same
-                    // lock-cancellation signal, so a requested lock still stops it
-                    // promptly instead of blocking the owner.
+                    // Cancellation updates the job, spend ledger, and audit state.
+                    // It bypasses this gate so it can interrupt a provider wait.
                     await BackgroundRefreshGate.WaitAsync(timeout.Token).ConfigureAwait(false);
                 }
 
@@ -472,7 +472,7 @@ internal sealed class NamedPipeService
                 }
                 finally
                 {
-                    if (needsVaultOperation && operation is not null)
+                    if (serializeWithBackgroundRefresh)
                     {
                         BackgroundRefreshGate.Release();
                     }

@@ -90,6 +90,7 @@ internal static class Program
                 string.Equals(args[0], "s13-t3", StringComparison.Ordinal) ||
                 string.Equals(args[0], "s13-t4", StringComparison.Ordinal) ||
                 string.Equals(args[0], "s14-t2", StringComparison.Ordinal) ||
+                string.Equals(args[0], "s14-t3", StringComparison.Ordinal) ||
                 string.Equals(args[0], "s13-t5", StringComparison.Ordinal))
             ? args[0]
                 : args.Length == 5 &&
@@ -163,6 +164,7 @@ internal static class Program
             Console.Error.WriteLine("S13-T4 invocation: MetaBrain.S1T4.Smoke.exe s13-t4 <MetaBrain.Connections.exe> (needs an installed Chromium browser or CHROME_PATH)");
             Console.Error.WriteLine("S13-T5 invocation: MetaBrain.S1T4.Smoke.exe s13-t5 <MetaBrain.Connections.exe> (needs an installed Chromium browser or CHROME_PATH)");
             Console.Error.WriteLine("S14-T2 invocation: MetaBrain.S1T4.Smoke.exe s14-t2 <MetaBrain.Connections.exe>");
+            Console.Error.WriteLine("S14-T3 invocation: MetaBrain.S1T4.Smoke.exe s14-t3 <MetaBrain.Connections.exe>");
             return 2;
         }
 
@@ -272,6 +274,9 @@ internal static class Program
                     break;
                 case "s14-t2":
                     await OwnerServiceSmoke.RunS14T2CognitiveAnnotationsAsync(fullPath).ConfigureAwait(false);
+                    break;
+                case "s14-t3":
+                    await OwnerServiceSmoke.RunS14T3WorkspaceJobsAsync(fullPath).ConfigureAwait(false);
                     break;
                 case "s4-t2":
                     await OwnerServiceSmoke.RunS4T2SearchAsync(fullPath).ConfigureAwait(false);

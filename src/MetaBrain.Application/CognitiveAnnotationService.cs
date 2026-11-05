@@ -34,7 +34,42 @@ public sealed class CognitiveAnnotationService
         IVaultOperation store)
     {
         ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(draftJson);
+        var draft = CognitiveAnnotationCodec.DecodeDraft(draftJson);
+        return Create(context, fileId, draft, store, ExecutorOf(context));
+    }
+
+    internal CognitiveAnnotation CreateModelSuggestion(
+        AuthenticatedContext context,
+        string fileId,
+        string anchorId,
+        CognitiveFacet[] facets,
+        IVaultOperation store)
+    {
+        ArgumentNullException.ThrowIfNull(facets);
+        var draft = new CognitiveAnnotationDraft(
+            anchorId,
+            facets,
+            Kind: null,
+            Author: null,
+            CreationMethod: null,
+            Evidence: null,
+            Level: null,
+            Suggestion: true);
+        CognitiveAnnotationValidator.ValidateDraft(draft);
+        return Create(context, fileId, draft, store, ExecutorKind.StructuringJob);
+    }
+
+    private CognitiveAnnotation Create(
+        AuthenticatedContext context,
+        string fileId,
+        CognitiveAnnotationDraft draft,
+        IVaultOperation store,
+        ExecutorKind executor)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(draft);
         ArgumentNullException.ThrowIfNull(store);
         EnsureOwner(context);
         if (!DomainIdentifiers.IsDomainIdentifier(fileId))
@@ -42,7 +77,7 @@ public sealed class CognitiveAnnotationService
             throw new ArgumentException("A cognitive annotation names an existing workspace file.");
         }
 
-        var draft = CognitiveAnnotationCodec.DecodeDraft(draftJson);
+        CognitiveAnnotationValidator.ValidateDraft(draft);
         var anchor = RequireLiveAnchor(store, fileId, draft.AnchorId!);
         var facets = CognitiveAnnotationValidator.NormalizeFacets(draft.Facets);
         var origin = draft.Suggestion == true
@@ -51,7 +86,6 @@ public sealed class CognitiveAnnotationService
         var reviewStatus = origin == CognitiveAnnotationOrigin.AiSuggestion
             ? CognitiveAnnotationReviewStatus.Pending
             : CognitiveAnnotationReviewStatus.Accepted;
-        var executor = ExecutorOf(context);
         var now = _timeProvider.GetUtcNow().ToUniversalTime();
         var id = CognitiveAnnotationId();
         var initial = new StoredCognitiveAnnotation(

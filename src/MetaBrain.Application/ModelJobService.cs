@@ -23,6 +23,8 @@ public sealed class ModelJobService
 
     public const decimal ApprovedReservationCostUsd = 0.0054m;
 
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+    private readonly CognitiveAnnotationService _cognitiveAnnotations;
     private readonly IModelProviderAdapter _providerAdapter;
     private readonly IVaultLifecycle _vault;
     private readonly object _gate = new();
@@ -31,10 +33,12 @@ public sealed class ModelJobService
 
     public ModelJobService(
         IVaultLifecycle vault,
-        IModelProviderAdapter? providerAdapter = null)
+        IModelProviderAdapter? providerAdapter = null,
+        CognitiveAnnotationService? cognitiveAnnotations = null)
     {
         _vault = vault ?? throw new ArgumentNullException(nameof(vault));
         _providerAdapter = providerAdapter ?? new OpenAiCompatibleProviderAdapter();
+        _cognitiveAnnotations = cognitiveAnnotations ?? new CognitiveAnnotationService();
     }
 
     public JobRecord CreateJob(
@@ -62,12 +66,19 @@ public sealed class ModelJobService
             throw new ServiceRefusalException("invalid_request", "The destination zone and destination resource ID are required.");
         }
 
-        // Every selected input must be registered in a zone and still enrolled:
-        // an input the vault cannot name, or one that is revoked or quarantined,
-        // fails closed before any text is read.
+        // Managed resources retain source-enrollment checks. Workspace inputs
+        // instead bind directly to an existing, live file content revision.
         foreach (var input in selectedInputs)
         {
-            if (!store.TryGetZone(input.ResourceId, out var registeredSourceZone) || string.IsNullOrEmpty(registeredSourceZone))
+            if (input.Kind == JobInputKind.WorkspaceFile)
+            {
+                ValidateWorkspaceFileRevision(input, store);
+                continue;
+            }
+
+            if (input.Kind != JobInputKind.ManagedResource ||
+                !store.TryGetZone(input.ResourceId, out var registeredSourceZone) ||
+                string.IsNullOrEmpty(registeredSourceZone))
             {
                 throw new ServiceRefusalException("source_unavailable", $"The input resource '{input.ResourceId}' is not registered in any zone.");
             }
@@ -158,6 +169,10 @@ public sealed class ModelJobService
 
         // 3. Grounded framing-inclusive input token estimation with documented tokenizer upper bound
         var systemPrompt = ResolveSystemPrompt(effectiveProfile, effectiveTargetLevel);
+        if (selectedInputs.Any(input => input.Kind == JobInputKind.WorkspaceFile))
+        {
+            systemPrompt = AppendWorkspaceAnnotationInstructions(systemPrompt);
+        }
         var estimatedInputTokens = EstimateFramedInputTokens(provider, model, systemPrompt, userPrompt, (int)SpendLedger.MaximumJobOutputTokens);
         if (estimatedInputTokens > SpendLedger.MaximumJobInputTokens)
         {
@@ -166,11 +181,13 @@ public sealed class ModelJobService
         var maxOutputTokens = SpendLedger.MaximumJobOutputTokens;
         var now = DateTimeOffset.UtcNow;
 
-        // Use the approved full-cap reservation cost of $0.0054 (covers 10k in / 2k out at peak cache-miss prices)
+        // Reserve the exact full-cap peak cost before send; the recorded job cap
+        // may be lower, but can never exceed the frozen per-job ceiling.
         var reservationCost = ApprovedReservationCostUsd;
-        if (maxCostUsd.HasValue && maxCostUsd.Value < reservationCost)
+        var maximumCostUsd = maxCostUsd ?? SpendLedger.MaximumJobCostUsd;
+        if (maximumCostUsd < reservationCost || maximumCostUsd > SpendLedger.MaximumJobCostUsd)
         {
-            throw new ServiceRefusalException("cost_limit_exceeded", $"The specified maximum cost (${maxCostUsd.Value}) is less than the required pre-send reservation (${reservationCost}).");
+            throw new ServiceRefusalException("cost_limit_exceeded", $"The job maximum cost must cover the pre-send reservation (${reservationCost}) and remain at or below the per-job ceiling (${SpendLedger.MaximumJobCostUsd}).");
         }
 
         // 3. Pre-send budget & rolling ledger check
@@ -195,7 +212,7 @@ public sealed class ModelJobService
             DestinationRevision: destinationRevision,
             Provider: provider,
             Model: model,
-            MaximumCostUsd: maxCostUsd ?? SpendLedger.MaximumJobCostUsd,
+            MaximumCostUsd: maximumCostUsd,
             MaxInputTokens: SpendLedger.MaximumJobInputTokens,
             MaxOutputTokens: maxOutputTokens,
             Profile: effectiveProfile,
@@ -255,9 +272,24 @@ public sealed class ModelJobService
         EnsureUnlocked();
         foreach (var input in stored.Scope.Inputs)
         {
-            if (!store.TryGetZone(input.ResourceId, out var registeredSourceZone) || string.IsNullOrEmpty(registeredSourceZone))
+            try
             {
-                return ReleaseAndFail(stored, liveRevision, "source_unavailable", $"The input resource '{input.ResourceId}' is not registered in any zone.", store);
+                if (input.Kind == JobInputKind.WorkspaceFile)
+                {
+                    ValidateWorkspaceFileRevision(input, store);
+                    continue;
+                }
+
+                if (input.Kind != JobInputKind.ManagedResource ||
+                    !store.TryGetZone(input.ResourceId, out var registeredSourceZone) ||
+                    string.IsNullOrEmpty(registeredSourceZone))
+                {
+                    return ReleaseAndFail(stored, liveRevision, "source_unavailable", $"The input resource '{input.ResourceId}' is not registered in any zone.", store);
+                }
+            }
+            catch (ServiceRefusalException refusal)
+            {
+                return ReleaseAndFail(stored, liveRevision, refusal.Code, refusal.Message, store);
             }
         }
 
@@ -294,7 +326,14 @@ public sealed class ModelJobService
         {
             foreach (var input in stored.Scope.Inputs)
             {
-                ValidateSourceEnrollment(input.ResourceId, store);
+                if (input.Kind == JobInputKind.WorkspaceFile)
+                {
+                    ValidateWorkspaceFileRevision(input, store);
+                }
+                else
+                {
+                    ValidateSourceEnrollment(input.ResourceId, store);
+                }
             }
         }
         catch (ServiceRefusalException refusal)
@@ -371,6 +410,10 @@ public sealed class ModelJobService
             }
 
             var systemPrompt = ResolveSystemPrompt(stored.Scope.Profile, stored.Scope.TargetLevel);
+            if (stored.Scope.Inputs.Any(input => input.Kind == JobInputKind.WorkspaceFile))
+            {
+                systemPrompt = AppendWorkspaceAnnotationInstructions(systemPrompt);
+            }
             var userPrompt = isSynthesis
                 ? RenderSynthesisInputs(stored.Scope.Inputs, inputTexts, stored.Scope.Objective!)
                 : inputTexts[0].Text;
@@ -427,6 +470,15 @@ public sealed class ModelJobService
 
                 lock (_gate)
                 {
+                    if (isCancelled)
+                    {
+                        var current = ReadStoredJob(jobId, store, out var currentRevision);
+                        if (current.State == JobState.Cancelled)
+                        {
+                            return ToJobRecord(current, currentRevision);
+                        }
+                    }
+
                     var ledger = LoadSpendLedger(store);
                     if (response.RequestSent)
                     {
@@ -440,22 +492,25 @@ public sealed class ModelJobService
                         ledger.ReleaseReservation(jobId);
                     }
                     SaveSpendLedger(ledger, store);
+                    stored = stored with
+                    {
+                        State = isCancelled ? JobState.Cancelled : JobState.Failed,
+                        Failure = new JobFailureReason(response.ErrorCode ?? "provider_error", response.ErrorMessage ?? "Provider request failed."),
+                        CompletedAtUtc = completedAt
+                    };
+                    liveRevision = WriteJobRecord(stored, liveRevision, store);
                 }
 
-                stored = stored with
-                {
-                    State = isCancelled ? JobState.Cancelled : JobState.Failed,
-                    Failure = new JobFailureReason(response.ErrorCode ?? "provider_error", response.ErrorMessage ?? "Provider request failed."),
-                    CompletedAtUtc = completedAt
-                };
-                liveRevision = WriteJobRecord(stored, liveRevision, store);
                 return ToJobRecord(stored, liveRevision);
             }
+
+
 
             // 4. Update rolling spend ledger with actual tokens & cost
             ModelPricingCatalog.TryGetPrice(stored.Scope.Provider, stored.Scope.Model, out var priceCard);
             var actualCost = priceCard?.ComputeCost(response.InputTokens, response.OutputTokens, response.CachedInputTokens) ?? 0m;
 
+            var postSettlementRollingSpend = 0m;
             lock (_gate)
             {
                 var spendLedger = LoadSpendLedger(store);
@@ -467,11 +522,21 @@ public sealed class ModelJobService
                     outputTokens: response.OutputTokens,
                     actualCost: actualCost,
                     now: completedAt);
+                postSettlementRollingSpend = spendLedger.CalculateRollingSpend(completedAt);
                 SaveSpendLedger(spendLedger, store);
             }
 
             var usage = new JobUsage(response.InputTokens, response.OutputTokens, actualCost);
             stored = stored with { Usage = usage };
+
+            if (actualCost > stored.Scope.MaximumCostUsd || actualCost > SpendLedger.MaximumJobCostUsd)
+            {
+                return FailJob(stored, liveRevision, "cost_limit_exceeded", "Actual provider cost exceeded the recorded job cost cap; the settled spend remains in the ledger.", store);
+            }
+            if (postSettlementRollingSpend > SpendLedger.MaximumRolling30DayCostUsd)
+            {
+                return FailJob(stored, liveRevision, "rolling_budget_exceeded", "Settled provider spend exceeded the rolling budget cap; the spend remains in the ledger.", store);
+            }
 
             // 5. Cap check on actual reported usage: cap violations do not erase spend
             if (response.InputTokens > stored.Scope.MaxInputTokens)
@@ -495,6 +560,21 @@ public sealed class ModelJobService
             // recorded.
             foreach (var input in stored.Scope.Inputs)
             {
+                if (input.Kind == JobInputKind.WorkspaceFile)
+                {
+                    try
+                    {
+                        ValidateWorkspaceFileRevision(input, store);
+                        _ = ReadInputText(input, store);
+                    }
+                    catch (Exception ex)
+                    {
+                        return FailJob(stored, liveRevision, "source_unavailable", $"Workspace file '{input.ResourceId}' is unavailable at its pinned revision before commit: {ex.Message}", store);
+                    }
+
+                    continue;
+                }
+
                 if (!store.TryGetZone(input.ResourceId, out var currentSourceZone) || string.IsNullOrEmpty(currentSourceZone))
                 {
                     return FailJob(stored, liveRevision, "source_unavailable", $"Input resource '{input.ResourceId}' was removed before commit.", store);
@@ -503,14 +583,6 @@ public sealed class ModelJobService
                 try
                 {
                     _ = ReadInputText(input, store);
-                }
-                catch (Exception ex)
-                {
-                    return FailJob(stored, liveRevision, "source_unavailable", $"Input resource '{input.ResourceId}' is unavailable before commit: {ex.Message}", store);
-                }
-
-                try
-                {
                     ValidateSourceEnrollment(input.ResourceId, store);
                 }
                 catch (Exception ex)
@@ -526,12 +598,19 @@ public sealed class ModelJobService
             // 6. Validated output boundary. A synthesis output is validated
             // against the owner-selected input set as a whole; every other profile
             // keeps the single-input verbatim-excerpt boundary.
+
             ModelJobOutput? output = null;
             string? errorCode = null;
             string? errorMessage = null;
             var outputIsValid = isSynthesis
                 ? JobOutputValidator.TryValidateSynthesis(response.Content ?? string.Empty, inputTexts, out output, out errorCode, out errorMessage)
-                : JobOutputValidator.TryValidate(response.Content ?? string.Empty, inputTexts[0].Text, out output, out errorCode, out errorMessage);
+                : JobOutputValidator.TryValidate(
+                    response.Content ?? string.Empty,
+                    inputTexts[0].Text,
+                    out output,
+                    out errorCode,
+                    out errorMessage,
+                    requireFacets: inputTexts[0].Kind == JobInputKind.WorkspaceFile);
             if (!outputIsValid || output is null)
             {
                 stored = stored with
@@ -553,12 +632,26 @@ public sealed class ModelJobService
 
         // 7. Commit structured items into proposals inside the destination zone/inbox
         var proposalIds = new List<string>();
+        var outputAnnotations = new List<JobOutputAnnotationLink>();
         var itemIndex = 0;
         foreach (var item in output.Items)
         {
             itemIndex++;
             var idempotencyKey = $"job-{jobId}-item-{itemIndex}";
             var proposalId = ProposalValidator.DeriveProposalId(jobId, stored.Scope.DestinationResourceId, idempotencyKey);
+            string[] annotationIds;
+            try
+            {
+                annotationIds = CreateWorkspaceAnnotationSuggestions(context, item, inputTexts, isSynthesis, store);
+            }
+            catch (ServiceRefusalException refusal)
+            {
+                return FailJob(stored, liveRevision, refusal.Code, refusal.Message, store);
+            }
+            catch (Exception ex) when (ex is ArgumentException or IOException or InvalidOperationException)
+            {
+                return FailJob(stored, liveRevision, "source_unavailable", "The workspace passage could not be anchored for annotation.", store);
+            }
 
             var memoryKind = MapToMemoryKind(item.Kind);
             var evidence = memoryKind == MemoryKind.Question ? EvidenceLevel.Unverified : EvidenceLevel.ReportedSource;
@@ -566,16 +659,18 @@ public sealed class ModelJobService
             MemorySourceReference[] sources;
             if (isSynthesis)
             {
-                // Synthesis lineage: one citation per distinct grounded input,
-                // pinned to the revision this job read, carrying the enclosing span
-                // of the excerpts copied from a registered source's own text. A
-                // citation naming a memory item pins that item's revision without a
-                // span, because a span is only meaningful against a source's text.
+                // Registered-source citations use SourceSpan; workspace inputs
+                // are represented by their separate cognitive anchor suggestions.
                 var citations = new List<MemorySourceReference>();
                 foreach (var group in item.Grounding!.GroupBy(grounding => grounding.InputId, StringComparer.Ordinal))
                 {
                     var inputText = inputTexts.First(candidate => string.Equals(candidate.ResourceId, group.Key, StringComparison.Ordinal));
-                    var input = new JobInputReference(inputText.ResourceId, inputText.Revision);
+                    if (inputText.Kind == JobInputKind.WorkspaceFile)
+                    {
+                        continue;
+                    }
+
+                    var input = new JobInputReference(inputText.ResourceId, inputText.Revision, inputText.Kind);
                     if (!TryResolveCitationIdentity(input, store, out var citationId, out var citationRevision, out var resolveFailure))
                     {
                         return FailJob(stored, liveRevision, "source_unavailable", resolveFailure!, store);
@@ -595,9 +690,13 @@ public sealed class ModelJobService
 
                 sources = citations.ToArray();
             }
+            else if (inputTexts[0].Kind == JobInputKind.WorkspaceFile)
+            {
+                sources = Array.Empty<MemorySourceReference>();
+            }
             else
             {
-                var input = new JobInputReference(inputTexts[0].ResourceId, inputTexts[0].Revision);
+                var input = new JobInputReference(inputTexts[0].ResourceId, inputTexts[0].Revision, inputTexts[0].Kind);
                 if (!TryResolveCitationIdentity(input, store, out var citationId, out var citationRevision, out var resolveFailure))
                 {
                     return FailJob(stored, liveRevision, "source_unavailable", resolveFailure!, store);
@@ -614,10 +713,20 @@ public sealed class ModelJobService
                 };
             }
 
+            var creationMethod = isSynthesis
+                ? CreationMethod.Synthesis
+                : CreationMethod.VerbatimExtract;
+            if (creationMethod == CreationMethod.VerbatimExtract &&
+                inputTexts[0].Kind == JobInputKind.WorkspaceFile &&
+                (!item.Excerpt.Contains(item.Title, StringComparison.Ordinal) ||
+                 !item.Excerpt.Contains(item.Body, StringComparison.Ordinal)))
+            {
+                creationMethod = CreationMethod.Paraphrase;
+            }
             var memoryDraft = new MemoryItemDraft(
                 Kind: memoryKind,
                 Author: SpeakerRole.Assistant,
-                CreationMethod: isSynthesis ? CreationMethod.Synthesis : CreationMethod.VerbatimExtract,
+                CreationMethod: creationMethod,
                 Evidence: evidence,
                 Level: isSynthesis ? stored.Scope.TargetLevel!.Value : AbstractionLevel.L1,
                 Title: item.Title,
@@ -653,12 +762,18 @@ public sealed class ModelJobService
             {
                 CryptographicOperations.ZeroMemory(proposalPayload);
             }
+
+            if (annotationIds.Length > 0)
+            {
+                outputAnnotations.Add(new JobOutputAnnotationLink(proposalId, annotationIds));
+            }
         }
 
         stored = stored with
         {
             State = JobState.Succeeded,
             OutputProposalIds = proposalIds.ToArray(),
+            OutputAnnotations = outputAnnotations.Count == 0 ? null : outputAnnotations.ToArray(),
             CompletedAtUtc = completedAt
         };
 
@@ -696,6 +811,11 @@ public sealed class ModelJobService
         }
         lock (_gate)
         {
+            stored = ReadStoredJob(jobId, store, out liveRevision);
+            if (stored.State is JobState.Succeeded or JobState.Failed or JobState.Cancelled)
+            {
+                return ToJobRecord(stored, liveRevision);
+            }
             var ledger = LoadSpendLedger(store);
             if (stored.State == JobState.Executing)
             {
@@ -707,15 +827,15 @@ public sealed class ModelJobService
                 ledger.ReleaseReservation(jobId);
             }
             SaveSpendLedger(ledger, store);
+            stored = stored with
+            {
+                State = JobState.Cancelled,
+                Failure = new JobFailureReason("cancelled", "The job was cancelled by owner request."),
+                CompletedAtUtc = DateTimeOffset.UtcNow
+            };
+            liveRevision = WriteJobRecord(stored, liveRevision, store);
         }
-        stored = stored with
-        {
-            State = JobState.Cancelled,
-            Failure = new JobFailureReason("cancelled", "The job was cancelled by owner request."),
-            CompletedAtUtc = DateTimeOffset.UtcNow
-        };
 
-        liveRevision = WriteJobRecord(stored, liveRevision, store);
         return ToJobRecord(stored, liveRevision);
     }
 
@@ -836,6 +956,7 @@ public sealed class ModelJobService
     }
 
     /// <summary>
+
     /// Validates one owner-selected input set: bounded, distinct, well-formed
     /// opaque identifiers each pinned to a positive revision. A repeated input
     /// is refused because reading the same resource again is not a second
@@ -859,10 +980,16 @@ public sealed class ModelJobService
                 throw new ServiceRefusalException("invalid_job_inputs", "A job input reference is invalid.");
             }
 
-            if (string.IsNullOrWhiteSpace(input.ResourceId) ||
-                (!DomainIdentifiers.IsDomainIdentifier(input.ResourceId) && !SourceSnapshotIds.IsSnapshotId(input.ResourceId)))
+            var validKind = input.Kind is JobInputKind.ManagedResource or JobInputKind.WorkspaceFile;
+            var validId = input.Kind switch
             {
-                throw new ServiceRefusalException("invalid_job_inputs", "Each job input must be an opaque domain identifier or source snapshot identifier.");
+                JobInputKind.ManagedResource => DomainIdentifiers.IsDomainIdentifier(input.ResourceId) || SourceSnapshotIds.IsSnapshotId(input.ResourceId),
+                JobInputKind.WorkspaceFile => DomainIdentifiers.IsDomainIdentifier(input.ResourceId),
+                _ => false
+            };
+            if (!validKind || !validId)
+            {
+                throw new ServiceRefusalException("invalid_job_inputs", "Each job input must be a valid managed-resource or workspace-file reference.");
             }
 
             if (input.Revision < 1)
@@ -900,13 +1027,49 @@ public sealed class ModelJobService
 
     private static JobInputText ReadInputText(JobInputReference input, IManagedResourceStore store)
     {
+        if (input.Kind == JobInputKind.WorkspaceFile)
+        {
+            ValidateWorkspaceFileRevision(input, store);
+            if (store is not IWorkspacePersistence workspace)
+            {
+                throw new ServiceRefusalException("source_unavailable", "Workspace file input is unavailable through this vault operation.");
+            }
+
+            byte[]? workspaceBytes = null;
+            try
+            {
+                workspaceBytes = workspace.ReadWorkspaceFile(input.ResourceId, input.Revision).Content;
+                var text = StrictUtf8.GetString(workspaceBytes);
+                return new JobInputText(input.ResourceId, input.Revision, text, IsSourceText: false, Kind: JobInputKind.WorkspaceFile);
+            }
+            catch (DecoderFallbackException ex)
+            {
+                throw new ServiceRefusalException("input_not_readable", $"Workspace file '{input.ResourceId}' is not valid UTF-8 text.", ex);
+            }
+            catch (WorkspaceRefusalException ex)
+            {
+                throw new ServiceRefusalException("source_unavailable", $"Workspace file '{input.ResourceId}' is unavailable at its pinned revision.", ex);
+            }
+            finally
+            {
+                if (workspaceBytes is { Length: > 0 })
+                {
+                    CryptographicOperations.ZeroMemory(workspaceBytes);
+                }
+            }
+        }
+
+        if (input.Kind != JobInputKind.ManagedResource)
+        {
+            throw new ServiceRefusalException("invalid_job_inputs", "The selected input kind is unsupported.");
+        }
+
         var content = store.ReadContent(input.ResourceId, input.Revision);
         if (SourceSnapshotIds.IsSnapshotId(input.ResourceId))
         {
             var snapshot = SourceSnapshotCodec.DecodeStored(content, input.Revision);
             return new JobInputText(input.ResourceId, input.Revision, Encoding.UTF8.GetString(snapshot.Content), IsSourceText: true);
         }
-
         StoredRegisteredSource? source = null;
         try
         {
@@ -933,6 +1096,120 @@ public sealed class ModelJobService
             throw new ServiceRefusalException("input_not_readable", $"The input resource '{input.ResourceId}' is neither a registered source with text nor a memory item.", ex);
         }
     }
+    private static void ValidateWorkspaceFileRevision(JobInputReference input, IManagedResourceStore store)
+    {
+        if (input.Kind != JobInputKind.WorkspaceFile || store is not IWorkspacePersistence workspace)
+        {
+            throw new ServiceRefusalException("source_unavailable", "Workspace file input is unavailable through this vault operation.");
+        }
+
+        WorkspaceSnapshot? snapshot;
+        try
+        {
+            snapshot = workspace.ReadWorkspaceTree();
+        }
+        catch (WorkspaceRefusalException ex)
+        {
+            throw new ServiceRefusalException("source_unavailable", "The workspace tree is unavailable, so the selected file revision cannot be verified.", ex);
+        }
+
+        var node = snapshot?.Nodes.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, input.ResourceId, StringComparison.Ordinal));
+        if (node is null ||
+            node.Kind != WorkspaceNodeKind.File ||
+            node.ContentRevision != input.Revision)
+        {
+            throw new ServiceRefusalException("source_revision_changed", $"Workspace file '{input.ResourceId}' is not live at the selected content revision {input.Revision}.");
+        }
+    }
+
+    private string[] CreateWorkspaceAnnotationSuggestions(
+        AuthenticatedContext context,
+        ModelJobStructuredItem item,
+        IReadOnlyList<JobInputText> inputTexts,
+        bool isSynthesis,
+        IManagedResourceStore store)
+    {
+        var passages = isSynthesis
+            ? item.Grounding!
+                .Where(grounding => inputTexts.Any(input =>
+                    input.Kind == JobInputKind.WorkspaceFile &&
+                    string.Equals(input.ResourceId, grounding.InputId, StringComparison.Ordinal)))
+                .Select(grounding => (
+                    Input: inputTexts.First(input => string.Equals(input.ResourceId, grounding.InputId, StringComparison.Ordinal)),
+                    Excerpt: grounding.Excerpt))
+                .ToArray()
+            : inputTexts[0].Kind == JobInputKind.WorkspaceFile
+                ? new[] { (Input: inputTexts[0], Excerpt: item.Excerpt) }
+                : Array.Empty<(JobInputText Input, string Excerpt)>();
+        if (passages.Length == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        if (store is not IVaultOperation workspace)
+        {
+            throw new ServiceRefusalException("source_unavailable", "Workspace annotations require an active owner vault operation.");
+        }
+
+        var annotationIds = new List<string>();
+        foreach (var passage in passages)
+        {
+            ValidateWorkspaceFileRevision(
+                new JobInputReference(passage.Input.ResourceId, passage.Input.Revision, JobInputKind.WorkspaceFile),
+                store);
+            var characterOffset = passage.Input.Text.IndexOf(passage.Excerpt, StringComparison.Ordinal);
+            if (characterOffset < 0 || passage.Excerpt.Length == 0)
+            {
+                throw new ServiceRefusalException("grounding_failure", "A workspace annotation passage is not an exact substring of its pinned source revision.");
+            }
+
+            var byteOffset = Encoding.UTF8.GetByteCount(passage.Input.Text.AsSpan(0, characterOffset));
+            var byteLength = Encoding.UTF8.GetByteCount(passage.Excerpt);
+            WorkspaceAnchorInfo anchor;
+            try
+            {
+                var snapshot = workspace.ReadWorkspaceTree();
+                var node = snapshot?.Nodes.FirstOrDefault(candidate =>
+                    string.Equals(candidate.Id, passage.Input.ResourceId, StringComparison.Ordinal));
+                if (snapshot is null || node is null ||
+                    node.Kind != WorkspaceNodeKind.File ||
+                    node.ContentRevision != passage.Input.Revision)
+                {
+                    throw new ServiceRefusalException("source_revision_changed", "The workspace source changed before its annotation could be anchored.");
+                }
+
+                anchor = workspace.CreateWorkspaceAnchor(
+                    passage.Input.ResourceId,
+                    passage.Input.Revision,
+                    byteOffset,
+                    byteLength,
+                    snapshot.Revision);
+            }
+            catch (WorkspaceRefusalException ex)
+            {
+                throw new ServiceRefusalException("source_unavailable", "The workspace source could not be anchored at its selected revision.", ex);
+            }
+
+            var annotation = _cognitiveAnnotations.CreateModelSuggestion(
+                context,
+                passage.Input.ResourceId,
+                anchor.AnchorId,
+                item.Facets ?? Array.Empty<CognitiveFacet>(),
+                workspace);
+            annotationIds.Add(annotation.Id);
+        }
+
+        return annotationIds.ToArray();
+    }
+
+    private static string AppendWorkspaceAnnotationInstructions(string systemPrompt) =>
+        systemPrompt +
+        "\nFor every item include a `facets` array with zero or more of: world, experience, opinion, habit, intention, actionEffect. These are overlapping perspectives, not truth labels. " +
+        "For workspace-backed items, title and body may paraphrase only the exact excerpt (or the selected item-local excerpts for synthesis); the excerpts and anchors establish provenance, not semantic entailment. " +
+        "Every item remains an unverified AI suggestion pending explicit owner review, never an owner-confirmed belief or verified fact. Keep applicability and timestamp strictly supported by its own verbatim excerpt (or each item-local synthesis grounding excerpt); leave unknown axes absent/null. " +
+        "Never infer that one mention establishes a habit, that reported claims are verified, that correlation establishes causation, or that a question/plan/opinion is an owner belief or completed action.";
+
 
     /// <summary>
     /// Rejects an input set whose cited lineage revisits the same pinned
@@ -1212,7 +1489,8 @@ public sealed class ModelJobService
         OutputProposalIds: stored.OutputProposalIds,
         CreatedAtUtc: stored.CreatedAtUtc,
         StartedAtUtc: stored.StartedAtUtc,
-        CompletedAtUtc: stored.CompletedAtUtc);
+        CompletedAtUtc: stored.CompletedAtUtc,
+        OutputAnnotations: stored.OutputAnnotations);
 
     private static JobRecord AbortJob(StoredJobRecord stored, long liveRevision, string code, string message, IManagedResourceStore store)
     {

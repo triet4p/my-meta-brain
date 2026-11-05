@@ -1277,3 +1277,13 @@ The encrypted workspace-blob read bound covers the six-byte JSON-escape worst ca
 **Reason:** The owner-reviewed S14-T1 contract preserves mixed content and existing question/decision/lesson/synthesis meanings without converting reported claims or AI suggestions into verified facts or owner beliefs; file organization and abstraction do not determine truth.
 
 **Consequences:** Workspace passage references reuse the existing file/revision/byte-range/digest anchor and preserve stale status; source citations retain their separate span and permission semantics. Missing source and occurrence time stay unknown. T1 provides the in-memory contract and local vocabulary command, not persistence, review, jobs, lifecycle changes or cognitive querying; these remain in their assigned downstream tasks. Approval was conveyed by Main for S14-T1 on 2026-11-04; it is not provider, publication or push authorization.
+
+## [2026-11-05] D096 — Keep workspace paraphrases pending owner review
+
+**Decision:** Workspace-grounded single-input and synthesis outputs may paraphrase only their exact selected excerpts, but remain unverified AI suggestions pending explicit owner review before publication; managed-resource title/body checks remain verbatim.
+
+**Alternatives considered:** Keep the blanket title/body verbatim refusal; add a versioned byte-span output contract and derive fields only from selected source spans; or allow workspace paraphrases while retaining exact provenance and explicit owner review.
+
+**Reason:** After the bounded live diagnosis showed that the previous substring rule refused a paraphrase-like output whose selected excerpt passed, the owner said the policy need not be so strict and chose the pending-review option. Exact source anchors prove which revision and passage the suggestion cites, not semantic entailment; adding a span schema would constrain output without deciding whether paraphrased prose is true. The chosen policy follows the owner’s review boundary instead of claiming a mechanical guarantee that the system cannot establish.
+
+**Consequences:** Workspace prose may be non-verbatim and is not automatically verified, promoted to owner belief, or published. Exact selected inputs, revisions, verbatim excerpts, byte-range anchors, schema, malformed-output, scope, stale-source, timestamp/applicability and other existing explicit refusals remain. Managed-resource outputs retain their verbatim title/body checks; no new output schema or entailment validator is introduced.
