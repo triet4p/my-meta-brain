@@ -2,7 +2,7 @@
 
 ## Goal và trạng thái
 
-- Status: **In progress — S14-T3 complete, S14-T4 active, S14-T5–T6 pending**. Release mục tiêu cuối sprint: **1.4.0**; chưa build/publish. T3 evidence review round 1 PASS and exact-snapshot checkpoint `a89b1bd6` complete. Provider usage: 5/10 requests, $0.002741448 settled, zero active reservations. No push.
+- Status: **In progress — S14-T4 complete, S14-T5 active, S14-T6 pending**. Release mục tiêu cuối sprint: **1.4.0**; chưa build/publish. T4 evidence review round 1 PASS and exact-snapshot checkpoint `867a87ec` complete. T3 provider usage remains 5/10 requests, $0.002741448 settled; no T4 provider calls. No push.
 - Entry: Sprint 13 complete và 1.3.0 published.
 - Scope/trace: P2-04, P2-05, P2-12; R01, R12, R13, R19–R22, R26–R30. Các P2 là candidates, không thay baseline khi chưa có approval.
 - Root: `F:/ai-ml/my-meta-brain`; target ref `main`; exact base/worktree/ownership resolve khi execution.
@@ -47,12 +47,13 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
     - Accepted: Owner-approved unverified AI paraphrases pending review implemented; D096/spec/changelog synced; temporary capture removed. [Worker evidence](../../artifacts/sprint-14/task-3.md), [independent round-1 PASS](../../artifacts/sprint-14/reviews/S14-T3-C1-R1.md), [exact-snapshot checkpoint](../../artifacts/sprint-14/checkpoints/S14-T3-C1.md), commit `a89b1bd6`. Final-source CLI/service smoke passed and real job #5 succeeded; 5/10 requests/$0.002741448 settled, zero active reservations. Disclosed historical live-proposal method label accepted by reviewer; candidate correction locally verified. No push.
 
-- [~] **S14-T4 — Temporal/intention/recall-policy mapping.**
+- [x] **S14-T4 — Temporal/intention/recall-policy mapping.**
     - Change: Nối history/as-of/validity/review-after, intention due/context/ack/done và pin/demote/archive/restore vào file/passage memory theo mapping.
     - Acceptance: Restart/offline/lock không duplicate due notifications; mentioned/acknowledged khác completed; reads không nâng truth; history giữ nguồn và superseded semantics.
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
+    - Accepted: [worker evidence](../../artifacts/sprint-14/task-4.md), [round-1 PASS](../../artifacts/sprint-14/reviews/S14-T4-C1-R1.md), [checkpoint](../../artifacts/sprint-14/checkpoints/S14-T4-C1.md), commit `867a87ec`. Shared file/passage lifecycle and recall; actual CLI/service notification dedup, lock/restart, acknowledge/complete, temporal/history, supersession and owner-only boundaries verified. No provider/browser/MCP proof claimed; unchanged WPF assertion failure disclosed in evidence.
 
-- [ ] **S14-T5 — Cognitive queries và review qua CLI.**
+- [~] **S14-T5 — Cognitive queries và review qua CLI.**
     - Change: CLI list/query/filter cho sáu facets, decisions/questions/lessons và review queue; inspect nguồn/revision rồi sửa/bác phân loại qua shared APIs, tạo ghi chú không cần model. `open` chỉ hiển thị tài liệu đã chọn, không chứa review controls.
     - Acceptance: Owner tìm trải nghiệm/dự định/quan điểm, đọc đúng nguồn và sửa nhãn/review hoàn toàn bằng CLI; source availability và AI-origin rõ, không bắt điền taxonomy trước lưu file.
     - Check: Actual CLI query → source inspect → correction/accept/reject → restart/rebuild; browser chỉ exercise nếu document path thay đổi.
@@ -72,4 +73,6 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
 
 ## Gate record
 
-S14-P0 accepted with [review](../../artifacts/sprint-14/reviews/S14-P0-C1-R1.md) and [checkpoint](../../artifacts/sprint-14/checkpoints/S14-P0-C1.md) `8734bf06`; S14-T1 owner-approved taxonomy with [review](../../artifacts/sprint-14/reviews/S14-T1-C1-R1.md) and [checkpoint](../../artifacts/sprint-14/checkpoints/S14-T1-C1.md) `0afb0015`; S14-T2 with [review](../../artifacts/sprint-14/reviews/S14-T2-C1-R1.md) and [checkpoint](../../artifacts/sprint-14/checkpoints/S14-T2-C1.md) `5ee77fb9`; S14-T3 [round-1 PASS](../../artifacts/sprint-14/reviews/S14-T3-C1-R1.md) and [checkpoint](../../artifacts/sprint-14/checkpoints/S14-T3-C1.md) `a89b1bd6`, zero actionable findings. T3 final-source smoke and bounded real job passed; 5/10 requests/$0.002741448 settled. T4–T6 pending; no final deep or 1.4.0 publication result. No push.
+S14-P0 accepted with [review](../../artifacts/sprint-14/reviews/S14-P0-C1-R1.md) and [checkpoint](../../artifacts/sprint-14/checkpoints/S14-P0-C1.md) `8734bf06`; S14-T1 owner-approved taxonomy with [review](../../artifacts/sprint-14/reviews/S14-T1-C1-R1.md) and [checkpoint](../../artifacts/sprint-14/checkpoints/S14-T1-C1.md) `0afb0015`; S14-T2 with [review](../../artifacts/sprint-14/reviews/S14-T2-C1-R1.md) and [checkpoint](../../artifacts/sprint-14/checkpoints/S14-T2-C1.md) `5ee77fb9`; S14-T3 [round-1 PASS](../../artifacts/sprint-14/reviews/S14-T3-C1-R1.md) and [checkpoint](../../artifacts/sprint-14/checkpoints/S14-T3-C1.md) `a89b1bd6`, zero actionable findings. T3 final-source smoke and bounded real job passed; 5/10 requests/$0.002741448 settled. No push.
+
+S14-T4 accepted with [round-1 PASS](../../artifacts/sprint-14/reviews/S14-T4-C1-R1.md) and [checkpoint](../../artifacts/sprint-14/checkpoints/S14-T4-C1.md) `867a87ec`; T5–T6 pending. No final differential review or 1.4.0 publication yet.

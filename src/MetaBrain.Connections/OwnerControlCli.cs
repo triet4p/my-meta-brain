@@ -122,6 +122,7 @@ internal static class OwnerControlCli
                 "cognitive-annotation-create" => await CognitiveAnnotationCreateAsync(options).ConfigureAwait(false),
                 "cognitive-annotation-list" => await CognitiveAnnotationListAsync(options).ConfigureAwait(false),
                 "cognitive-annotation-read" => await CognitiveAnnotationReadAsync(options).ConfigureAwait(false),
+                "cognitive-annotation-query" => await CognitiveAnnotationQueryAsync(options).ConfigureAwait(false),
                 "cognitive-annotation-correct" => await CognitiveAnnotationCorrectAsync(options).ConfigureAwait(false),
                 "cognitive-annotation-accept" => await CognitiveAnnotationReviewAsync(options, accept: true).ConfigureAwait(false),
                 "cognitive-annotation-reject" => await CognitiveAnnotationReviewAsync(options, accept: false).ConfigureAwait(false),
@@ -1573,6 +1574,97 @@ internal static class OwnerControlCli
         return 0;
     }
 
+    private static async Task<int> CognitiveAnnotationQueryAsync(CommandOptions options)
+    {
+        options.RequireOnly(
+            "--control-pipe",
+            "--facet",
+            "--kind",
+            "--review-status",
+            "--origin",
+            "--source-availability");
+
+        CognitiveFacet? facet = null;
+        if (options.Optional("--facet") is { } facetText)
+        {
+            if (!TryParseCognitiveFilter(facetText, out CognitiveFacet parsed))
+            {
+                return Usage();
+            }
+
+            facet = parsed;
+        }
+
+        MemoryKind? kind = null;
+        if (options.Optional("--kind") is { } kindText)
+        {
+            if (!TryParseCognitiveFilter(kindText, out MemoryKind parsed))
+            {
+                return Usage();
+            }
+
+            kind = parsed;
+        }
+
+        CognitiveAnnotationReviewStatus? reviewStatus = null;
+        if (options.Optional("--review-status") is { } reviewText)
+        {
+            if (!TryParseCognitiveFilter(reviewText, out CognitiveAnnotationReviewStatus parsed))
+            {
+                return Usage();
+            }
+
+            reviewStatus = parsed;
+        }
+
+        CognitiveAnnotationOrigin? origin = null;
+        if (options.Optional("--origin") is { } originText)
+        {
+            if (!TryParseCognitiveFilter(originText, out CognitiveAnnotationOrigin parsed))
+            {
+                return Usage();
+            }
+
+            origin = parsed;
+        }
+
+        SourceAvailability? sourceAvailability = null;
+        if (options.Optional("--source-availability") is { } availabilityText)
+        {
+            if (!TryParseCognitiveFilter(availabilityText, out SourceAvailability parsed))
+            {
+                return Usage();
+            }
+
+            sourceAvailability = parsed;
+        }
+
+        var filter = new CognitiveAnnotationFilter(facet, kind, reviewStatus, origin, sourceAvailability);
+        var rows = await QueryCognitiveAnnotationRowsAsync(ControlPipe(options), filter).ConfigureAwait(false);
+        if (rows is null)
+        {
+            return 4;
+        }
+
+        Console.WriteLine(
+            $"ANNOTATION QUERY count={rows.Count.ToString(CultureInfo.InvariantCulture)} " +
+            $"facet={filter.Facet?.ToString() ?? "any"} kind={filter.Kind?.ToString() ?? "any"} " +
+            $"reviewStatus={filter.ReviewStatus?.ToString() ?? "any"} origin={filter.Origin?.ToString() ?? "any"} " +
+            $"sourceAvailability={filter.SourceAvailability?.ToString() ?? "any"}");
+        foreach (var row in rows)
+        {
+            Console.WriteLine(row);
+        }
+
+        if (rows.Count == 0)
+        {
+            Console.WriteLine("ANNOTATION QUERY no_match");
+        }
+
+        return 0;
+    }
+
+
     private static async Task<int> CognitiveAnnotationReadAsync(CommandOptions options)
     {
         options.RequireOnly("--control-pipe", "--resource-id", "--resource-revision");
@@ -1781,6 +1873,176 @@ internal static class OwnerControlCli
             .ToArray();
         return values.Length == 0 ? "none" : string.Join(",", values);
     }
+
+    private sealed record CognitiveAnnotationFilter(
+        CognitiveFacet? Facet,
+        MemoryKind? Kind,
+        CognitiveAnnotationReviewStatus? ReviewStatus,
+        CognitiveAnnotationOrigin? Origin,
+        SourceAvailability? SourceAvailability);
+
+    private static async Task<List<string>?> QueryCognitiveAnnotationRowsAsync(
+        string controlPipe,
+        CognitiveAnnotationFilter filter,
+        string rowPrefix = "ANNOTATION")
+    {
+        var listing = await InvokeOwnerAsync(
+            controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerCognitiveAnnotationListOperation)).ConfigureAwait(false);
+        if (!listing.Success || !HasStatus(listing.Reply, "cognitive_annotations") ||
+            !listing.Reply.TryGetProperty("cognitiveAnnotations", out var annotations) ||
+            annotations.ValueKind != JsonValueKind.Array)
+        {
+            WriteServiceError(listing);
+            return null;
+        }
+
+        var rows = new List<string>();
+        foreach (var identity in annotations.EnumerateArray())
+        {
+            if (identity.ValueKind != JsonValueKind.Object)
+            {
+                Console.Error.WriteLine("ERROR cognitive_annotation_list_invalid");
+                return null;
+            }
+
+            var annotationId = JsonValueText(identity, "id");
+            if (!long.TryParse(JsonValueText(identity, "revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var revision) ||
+                revision < 1 ||
+                !ServiceSettingsLoader.IsSafeIdentifier(annotationId))
+            {
+                Console.Error.WriteLine("ERROR cognitive_annotation_list_invalid");
+                return null;
+            }
+
+            var read = await InvokeOwnerAsync(
+                controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.OwnerCognitiveAnnotationReadOperation,
+                    ResourceId: annotationId,
+                    ResourceRevision: revision)).ConfigureAwait(false);
+            if (!read.Success || !HasStatus(read.Reply, "cognitive_annotation") ||
+                !TryCognitiveAnnotationObject(read.Reply, out var annotation))
+            {
+                WriteServiceError(read);
+                return null;
+            }
+
+            if (CognitiveAnnotationMatches(annotation, filter))
+            {
+                rows.Add(FormatCognitiveAnnotationQueryRow(annotation, rowPrefix));
+            }
+        }
+
+        return rows;
+    }
+
+    private static bool CognitiveAnnotationMatches(JsonElement annotation, CognitiveAnnotationFilter filter)
+    {
+        if (filter.Facet is { } facet)
+        {
+            if (!annotation.TryGetProperty("facets", out var facets) || facets.ValueKind != JsonValueKind.Array)
+            {
+                return false;
+            }
+
+            var foundFacet = false;
+            foreach (var value in facets.EnumerateArray())
+            {
+                if (value.ValueKind == JsonValueKind.String &&
+                    TryParseCognitiveFilter(value.GetString() ?? string.Empty, out CognitiveFacet actual) &&
+                    actual == facet)
+                {
+                    foundFacet = true;
+                    break;
+                }
+            }
+
+            if (!foundFacet)
+            {
+                return false;
+            }
+        }
+
+        return (filter.Kind is null ||
+                (TryParseCognitiveFilter(JsonValueText(annotation, "kind"), out MemoryKind kind) && kind == filter.Kind)) &&
+            (filter.ReviewStatus is null ||
+                (TryParseCognitiveFilter(JsonValueText(annotation, "reviewStatus"), out CognitiveAnnotationReviewStatus review) &&
+                 review == filter.ReviewStatus)) &&
+            (filter.Origin is null ||
+                (TryParseCognitiveFilter(JsonValueText(annotation, "origin"), out CognitiveAnnotationOrigin origin) &&
+                 origin == filter.Origin)) &&
+            (filter.SourceAvailability is null ||
+                (TryParseCognitiveFilter(JsonValueText(annotation, "sourceAvailability"), out SourceAvailability availability) &&
+                 availability == filter.SourceAvailability));
+    }
+
+    private static bool TryParseCognitiveFilter<TEnum>(string value, out TEnum parsed)
+        where TEnum : struct, Enum
+    {
+        if (typeof(TEnum) == typeof(CognitiveFacet) &&
+            (string.Equals(value, "action-effect", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(value, "action–effect", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(value, "action—effect", StringComparison.OrdinalIgnoreCase)))
+        {
+            parsed = (TEnum)(object)CognitiveFacet.ActionEffect;
+            return true;
+        }
+
+        if (typeof(TEnum) == typeof(CognitiveAnnotationOrigin) &&
+            string.Equals(value, "ai-suggestion", StringComparison.OrdinalIgnoreCase))
+        {
+            parsed = (TEnum)(object)CognitiveAnnotationOrigin.AiSuggestion;
+            return true;
+        }
+
+        if (value.Length == 0)
+        {
+            parsed = default;
+            return false;
+        }
+
+        foreach (var character in value)
+        {
+            if (!char.IsAsciiLetter(character))
+            {
+                parsed = default;
+                return false;
+            }
+        }
+
+        if (!Enum.TryParse(value, ignoreCase: true, out parsed))
+        {
+            parsed = default;
+            return false;
+        }
+
+        return Enum.IsDefined(parsed);
+    }
+
+    private static string FormatCognitiveAnnotationQueryRow(JsonElement annotation, string prefix)
+    {
+        var anchor = annotation.TryGetProperty("anchor", out var anchorValue) && anchorValue.ValueKind == JsonValueKind.Object
+            ? anchorValue
+            : default;
+        return
+            $"{prefix} id={DisplayText(annotation, "id")} revision={DisplayText(annotation, "revision")} " +
+            $"zone={DisplayText(annotation, "zoneId")} facets=[{CognitiveAnnotationFacetList(annotation, "facets")}] " +
+            $"kind={DisplayText(annotation, "kind")} origin={DisplayText(annotation, "origin")} " +
+            $"review={DisplayText(annotation, "reviewStatus")} author={DisplayText(annotation, "author")} " +
+            $"executor={DisplayText(annotation, "executor")} method={DisplayText(annotation, "creationMethod")} " +
+            $"evidence={DisplayText(annotation, "evidence")} level={DisplayText(annotation, "level")} " +
+            $"anchor={DisplayText(anchor, "anchorId")} file={DisplayText(anchor, "fileId")} " +
+            $"contentRevision={DisplayText(anchor, "contentRevision")} offset={DisplayText(anchor, "offset")} " +
+            $"length={DisplayText(anchor, "length")} sha256={DisplayText(anchor, "sha256")} " +
+            $"state={DisplayText(anchor, "state")} availability={DisplayText(annotation, "sourceAvailability")}";
+    }
+
+
+
 
     /// <summary>
     /// S12-T4 prints exactly what a plaintext export of the selected file or
@@ -7974,11 +8236,10 @@ internal static class OwnerControlCli
     }
 
     /// <summary>
-    /// S7-T6 owner review queue: prints every item the service reports as
-    /// needing the owner's attention, with the reasons, the review-after
-    /// stamp exactly as it was recorded, and each cited source's exact ID,
-    /// cited revision, live revision and availability. The command reads only:
-    /// it changes nothing in the vault.
+    /// S7-T6 owner review queue: lists the service's existing lifecycle/source
+    /// review entries and pending AI-origin passage annotations. The annotation
+    /// rows use the canonical annotation read operation, so their pinned source
+    /// availability and revision remain explicit; the command changes nothing.
     /// </summary>
     private static async Task<int> ReviewListAsync(CommandOptions options)
     {
@@ -7995,7 +8256,21 @@ internal static class OwnerControlCli
             return 3;
         }
 
-        PrintReviewQueue(result.Reply);
+        var annotationRows = await QueryCognitiveAnnotationRowsAsync(
+            controlPipe,
+            new CognitiveAnnotationFilter(
+                null,
+                null,
+                CognitiveAnnotationReviewStatus.Pending,
+                CognitiveAnnotationOrigin.AiSuggestion,
+                null),
+            "ANNOTATION REVIEW").ConfigureAwait(false);
+        if (annotationRows is null)
+        {
+            return 3;
+        }
+
+        PrintReviewQueue(result.Reply, annotationRows);
         return 0;
     }
 
@@ -8042,7 +8317,7 @@ internal static class OwnerControlCli
         return 0;
     }
 
-    private static void PrintReviewQueue(JsonElement reply)
+    private static void PrintReviewQueue(JsonElement reply, IReadOnlyList<string> annotationRows)
     {
         if (!reply.TryGetProperty("reviewQueue", out var queue) || queue.ValueKind != JsonValueKind.Object)
         {
@@ -8050,36 +8325,45 @@ internal static class OwnerControlCli
             return;
         }
 
+        var entries = queue.TryGetProperty("entries", out var entryElements) && entryElements.ValueKind == JsonValueKind.Array
+            ? entryElements
+            : default;
+        var memoryCount = entries.ValueKind == JsonValueKind.Array ? entries.GetArrayLength() : 0;
         Console.WriteLine(
-            $"REVIEW QUEUE entries={(queue.TryGetProperty("entries", out var entries) && entries.ValueKind == JsonValueKind.Array ? entries.GetArrayLength() : 0)} " +
+            $"REVIEW QUEUE memoryEntries={memoryCount.ToString(CultureInfo.InvariantCulture)} " +
+            $"annotationSuggestions={annotationRows.Count.ToString(CultureInfo.InvariantCulture)} " +
+            $"total={(memoryCount + annotationRows.Count).ToString(CultureInfo.InvariantCulture)} " +
             $"scanned={JsonValueText(queue, "scannedItems")} truncated={JsonFlagText(queue, "truncated")}");
-        if (!queue.TryGetProperty("entries", out var entryElements) || entryElements.ValueKind != JsonValueKind.Array)
+        if (entries.ValueKind == JsonValueKind.Array)
         {
-            return;
-        }
-
-        foreach (var entry in entryElements.EnumerateArray())
-        {
-            Console.WriteLine(
-                $"REVIEW id={JsonValueText(entry, "resourceId")} revision={JsonValueText(entry, "resourceRevision")} " +
-                $"kind={JsonValueText(entry, "kind")} state={JsonValueText(entry, "state")} " +
-                $"reasons=[{JsonStringList(entry, "reasons")}] " +
-                $"undetermined=[{JsonStringList(entry, "undeterminedReasons")}] " +
-                $"pending=[{JsonStringList(entry, "pendingReasons")}] " +
-                $"reviewAfter={LifecycleStampText(entry, "reviewAfter")} " +
-                $"lastReviewed={JsonValueText(entry, "lastReviewedAtUtc")}");
-            if (entry.TryGetProperty("citations", out var citations) && citations.ValueKind == JsonValueKind.Array)
+            foreach (var entry in entries.EnumerateArray())
             {
-                foreach (var citation in citations.EnumerateArray())
+                Console.WriteLine(
+                    $"REVIEW id={JsonValueText(entry, "resourceId")} revision={JsonValueText(entry, "resourceRevision")} " +
+                    $"kind={JsonValueText(entry, "kind")} state={JsonValueText(entry, "state")} " +
+                    $"reasons=[{JsonStringList(entry, "reasons")}] " +
+                    $"undetermined=[{JsonStringList(entry, "undeterminedReasons")}] " +
+                    $"pending=[{JsonStringList(entry, "pendingReasons")}] " +
+                    $"reviewAfter={LifecycleStampText(entry, "reviewAfter")} " +
+                    $"lastReviewed={JsonValueText(entry, "lastReviewedAtUtc")}");
+                if (entry.TryGetProperty("citations", out var citations) && citations.ValueKind == JsonValueKind.Array)
                 {
-                    Console.WriteLine(
-                        $"CITATION source={JsonValueText(citation, "sourceId")} " +
-                        $"cited={JsonValueText(citation, "citedRevision")} " +
-                        $"live={JsonValueText(citation, "liveRevision")} " +
-                        $"availability={JsonValueText(citation, "availability")} " +
-                        $"sourceRecorded={JsonValueText(citation, "sourceRecordedAtUtc")}");
+                    foreach (var citation in citations.EnumerateArray())
+                    {
+                        Console.WriteLine(
+                            $"CITATION source={JsonValueText(citation, "sourceId")} " +
+                            $"cited={JsonValueText(citation, "citedRevision")} " +
+                            $"live={JsonValueText(citation, "liveRevision")} " +
+                            $"availability={JsonValueText(citation, "availability")} " +
+                            $"sourceRecorded={JsonValueText(citation, "sourceRecordedAtUtc")}");
+                    }
                 }
             }
+        }
+
+        foreach (var row in annotationRows)
+        {
+            Console.WriteLine(row);
         }
     }
 
@@ -9666,7 +9950,7 @@ internal static class OwnerControlCli
             Console.Error.WriteLine("  document (top-level): open <file-id> — foreground loopback browser preview/edit of one workspace file at one content revision");
             Console.Error.WriteLine("  taxonomy: taxonomy — explain the cognitive facet vocabulary (local, no vault required)");
             Console.Error.WriteLine("  capture: memory-create|memory-revise|memory-import|memory-read|read|write|source-create|source-revise|source-read|research-capture|research-read|feedback-create|feedback-read");
-            Console.Error.WriteLine("  library: library|memory-read|source-read|research-read|relation-read|lifecycle-read|lifecycle-retained-read|cognitive-annotation-list|cognitive-annotation-read|recall-read|review-list|review-record|index-status|index-rebuild");
+            Console.Error.WriteLine("  library: library|memory-read|source-read|research-read|relation-read|lifecycle-read|lifecycle-retained-read|cognitive-annotation-list|cognitive-annotation-query|cognitive-annotation-read|recall-read|review-list|review-record|index-status|index-rebuild");
             Console.Error.WriteLine("  review: cognitive-annotation-create|cognitive-annotation-correct|cognitive-annotation-accept|cognitive-annotation-reject|proposal-list|proposal-read|proposal-publish|proposal-reject|lifecycle-publish|lifecycle-reject|lifecycle-withdraw|lifecycle-repropose|lifecycle-question-resolve|lifecycle-question-reopen|relation-list|relation-read|relation-create|relation-accept|relation-reject|relation-unlink|relation-relink|declassify-preview|declassify-publish|declassify-proposal-publish");
             Console.Error.WriteLine("  sharing: catalog-preview|catalog-publish|catalog-list|catalog-withdraw|collections|collection-set|grants|grant|requests|request-preview|request-approve|request-reject|sessions|session|revoke-session|redeem (+ agent-mcp transport)");
             Console.Error.WriteLine("  sources: collections|source-list|source-status|source-enroll|source-folder-enroll|source-folder-refresh-optin|source-folder-refresh-optout|source-relocate|source-revoke|source-ingest|source-pause|source-resume|source-refresh-optin|source-refresh-optout|source-raw-preservation-optin|source-raw-preservation-optout|source-preserved-record-read|source-refresh|source-mapping-submit|source-mapping-resolve|source-snapshot-list|source-snapshot-preserve|source-snapshot-read|source-snapshot-retain|source-snapshot-purge");
@@ -9681,7 +9965,7 @@ internal static class OwnerControlCli
     }
     private static string? CommandHelpText(string verb) => verb switch
     {
-        "taxonomy" => "owner taxonomy: describe the six cognitive facets and safeguards locally; no classifications are saved or searched.",
+        "taxonomy" => "owner taxonomy: describe the six cognitive facets and safeguards locally; this command does not save classifications.",
         "open" => "open <file-id> --control-pipe <pipe> [--revision <n>] [--anchor-offset <bytes> --anchor-length <bytes> --anchor-sha256 <digest>] [--no-browser] [--lifetime-seconds <n>]: foreground loopback browser session for exactly one workspace file and content revision. An anchor must match the live revision and its exact byte-range digest; the browser starts at that selected location. Requires the unlocked vault; Ctrl+C, the explicit lifetime or lock ends reads/saves. UTF-8 markdown/CSV/JSONL/plain text is editable with explicit expected-revision save; other encodings/formats are shown read-only. No key, file path or general owner API reaches the browser.",
         "status" => "owner status --control-pipe <pipe>: vault state of the running shared host (locked/unlocked/uninitialized), plus format/rollback state. Read-only.",
         "provision" => "owner provision --control-pipe <pipe>: first-time vault setup. Prompts twice for the new passphrase (min 12 chars); prints the recovery key once — store it outside the vault.",
@@ -9723,6 +10007,7 @@ internal static class OwnerControlCli
         "relation-list" => "owner relation-list --control-pipe <pipe>: every relation with live revision, provenance and review state.",
         "cognitive-annotation-create" => "owner cognitive-annotation-create --control-pipe <pipe> --file-id <workspace-file-id> --input-file <draft.json>: create an encrypted annotation for one existing live workspace anchor; JSON supplies anchorId, optional facets/kind/author/creationMethod/evidence/level, and suggestion=true creates a pending AI suggestion. Omitted classification axes stay Unknown.",
         "cognitive-annotation-list" => "owner cognitive-annotation-list --control-pipe <pipe>: list annotation IDs, live revisions and zones without reading annotation contents.",
+        "cognitive-annotation-query" => "owner cognitive-annotation-query --control-pipe <pipe> [--facet world|experience|opinion|habit|intention|action-effect] [--kind claim|observation|question|hypothesis|decision|lesson|procedure|synthesis|preference|intention|unknown] [--review-status pending|accepted|rejected|unknown] [--origin owner|ai-suggestion|unknown] [--source-availability available|unavailable|unknown]: AND-filters annotations and reports exact annotation/source revisions, facet/kind, origin/review, author/executor/evidence, anchor range/digest/state and availability; no passage text is copied.",
         "cognitive-annotation-read" => "owner cognitive-annotation-read --control-pipe <pipe> --resource-id <ann-id> [--resource-revision N]: show one annotation, its review/history and exact pinned anchor; a revised or deleted source is reported stale/unavailable, never rebound.",
         "cognitive-annotation-correct" => "owner cognitive-annotation-correct --control-pipe <pipe> --resource-id <ann-id> --expected-revision <live> --input-file <correction.json>: change only supplied facets/kind/author/creationMethod/evidence/level fields; omitted fields, including Unknown axes, stay unchanged. A stale revision is refused.",
         "cognitive-annotation-accept" => "owner cognitive-annotation-accept --control-pipe <pipe> --resource-id <ann-id> --expected-revision <live> [--reason text]: accept one pending AI suggestion as an owner review act; AI origin remains recorded.",
@@ -9772,7 +10057,7 @@ internal static class OwnerControlCli
         "purge-preview" => "owner purge-preview --control-pipe <pipe> --resource-id <id> --resource-revision <rev> --reason text: exact impacted canonical set a confirm would delete (a reason is required for the ledger).",
         "purge-confirm" => "owner purge-confirm --control-pipe <pipe> --purge-id <N-hex> --resource-id <id> --resource-revision <rev> --target-zone <zone> --target-kind <kind> --impacted <id|rev|kind|reason,...> --live-generation N [--catalog-ids ...] --reason text: rebind the exact previewed set after typed PURGE. Retained backups keep ciphertext until their own retention.",
         "purge-resume" => "owner purge-resume --control-pipe <pipe> --purge-id <N-hex>: resume a confirmed-but-incomplete purge.",
-        "review-list" => "owner review-list --control-pipe <pipe>: items needing attention (due review-after, moved/missing/unavailable sources). Read-only.",
+        "review-list" => "owner review-list --control-pipe <pipe>: read-only lifecycle/source attention queue plus pending AI-origin passage annotations; inspect and decide annotations with cognitive-annotation-read/correct/accept/reject.",
         "review-record" => "owner review-record --control-pipe <pipe> --resource-id <id> --reason text: record that the owner looked (content/evidence/citations/states unchanged).",
         "provider-config" => "owner provider-config --control-pipe <pipe> --provider <p> --model <m> [--base-url <url>|auto] [--api-key-stdin true]: save egress settings. The API key is a non-echo secure prompt by default (never an option value, argv, environment variable or plaintext file); --api-key-stdin true reads one line from redirected standard input for an automated owner run.",
         "provider-status" => "owner provider-status --control-pipe <pipe>: configured provider/model/endpoint + frozen caps. Never the key.",

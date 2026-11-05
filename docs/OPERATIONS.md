@@ -589,6 +589,44 @@ cli\MetaBrain.Cli.exe open <file-id> --control-pipe <pipe> [--revision <n>] [--a
   copies the browser or OS made cannot be erased by the product, and the product never changes
   browser or host policy. Chrome/Edge is required only for this optional surface.
 
+### 3.2.9 Cognitive annotation query and review (S14-T5)
+
+Use the owner CLI to find and review passage annotations; no browser or model call is required.
+`open` remains an optional document session and does not provide annotation review controls.
+
+```text
+cli\MetaBrain.Cli.exe owner cognitive-annotation-query --control-pipe <pipe> [--facet world|experience|opinion|habit|intention|action-effect] [--kind claim|observation|question|hypothesis|decision|lesson|procedure|synthesis|preference|intention|unknown] [--review-status pending|accepted|rejected|unknown] [--origin owner|ai-suggestion|unknown] [--source-availability available|unavailable|unknown]
+cli\MetaBrain.Cli.exe owner review-list --control-pipe <pipe>
+cli\MetaBrain.Cli.exe owner cognitive-annotation-read --control-pipe <pipe> --resource-id <annotation-id> [--resource-revision <n>]
+cli\MetaBrain.Cli.exe owner workspace-read --control-pipe <pipe> --file-id <file-id> --revision <n>
+cli\MetaBrain.Cli.exe owner cognitive-annotation-correct --control-pipe <pipe> --resource-id <annotation-id> --expected-revision <live> --input-file <correction.json>
+cli\MetaBrain.Cli.exe owner cognitive-annotation-accept --control-pipe <pipe> --resource-id <annotation-id> --expected-revision <live> [--reason <text>]
+cli\MetaBrain.Cli.exe owner cognitive-annotation-reject --control-pipe <pipe> --resource-id <annotation-id> --expected-revision <live> --reason <text>
+cli\MetaBrain.Cli.exe owner cognitive-annotation-create --control-pipe <pipe> --file-id <workspace-file-id> --input-file <draft.json>
+```
+
+- Query filters combine with AND and return every matching annotation, not a relevance-ranked
+  subset. The six facets are independent of existing kinds; questions, decisions and lessons are
+  filtered with `--kind`, not converted into facets. Each row includes its annotation revision,
+  origin/review state, author, executor, method, evidence and level, plus the exact anchor ID, file
+  ID, retained content revision, byte range, digest, anchor state and source availability. No
+  passage text is copied into query output. If a listed annotation changes before its revision-pinned
+  read, the query fails with `revision_conflict` rather than returning a stale or partial result.
+- `review-list` is a read-only queue that includes pending AI-origin passage annotations alongside
+  the existing lifecycle/source attention entries. Inspect a selected annotation with
+  `cognitive-annotation-read`, then pass its `file` and `contentRevision` to `workspace-read
+  --revision` to inspect those exact original bytes. `available` does not mean the anchor is current:
+  a revised source remains `state=stale` at its original revision; a deleted source reports
+  `availability=Unavailable`.
+- Correct, accept and reject are owner-only shared service operations guarded by the current
+  annotation revision; a stale expected revision is refused. Correction preserves omitted axes and
+  keeps origin, review state, author, executor and evidence separate; accept/reject records the
+  owner's decision without erasing AI origin. An owner-authored note can omit facets and kind, so
+  saving a file or note does not require taxonomy or a model. `cognitive-annotation-create` remains
+  the existing shared owner API and does not introduce another annotation store.
+- Draft JSON `facets` use the canonical camel-case enum tokens; use `actionEffect` for the
+  Action–Effect facet. The query CLI flag uses the kebab-case spelling `--facet action-effect`.
+
 ### 3.3 The Owner console (S9-T4) — 1.1.0 legacy, not shipped in 1.2+
 
 This section documents the frozen 1.1.0 WPF console for history and transition proof. Releases
