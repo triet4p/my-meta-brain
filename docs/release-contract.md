@@ -26,6 +26,29 @@ exercised. The self-contained assets need no installed .NET runtime, SDK, source
 PowerShell. Both are unsigned: SHA-256 verifies the bytes and never authenticates the publisher.
 Product-specific known limits are in the [1.2.0 release record](release-1.2.0.md).
 
+## Product and support matrix for 1.4.0 (S14-T6)
+
+This is the current 1.4.0 product matrix. It is the supported-OS and product-scope statement that the
+packaged `RELEASE-NOTES.txt` in every 1.4.0 asset points at; the 1.3.0, 1.2.0, 1.1.0 and 1.0.0
+matrices remain their own historical contracts and are unchanged.
+
+| Product | Version / asset | Entry and lifecycle |
+| --- | --- | --- |
+| CLI | `1.4.0`; public download `MetaBrain-CLI-1.4.0.exe`; candidate filename stays provenance-bound in the manifest | Dedicated CLI setup EXE. Installs `cli/MetaBrain.Cli.exe`, the shared runtime under `service/`, the shared installer under `installer/` and `install-state.json`, and registers the `cli` component only. The owner CLI carries every cognitive workflow: the six-facet taxonomy, encrypted revisioned passage annotations, annotation query/review, and lifecycle/intention/recall for both memory items and classified annotations. The workspace, search and optional `open` document surfaces are unchanged. Needs no Owner UI, SDK, repository or PowerShell glue. |
+| MCP Server | `1.4.0`; public download `MetaBrain-MCP-1.4.0.zip`; candidate filename stays provenance-bound in the manifest | Standalone self-contained ZIP with `mcp/MetaBrain.Mcp.exe`, the shared runtime under `service/`, `package-manifest.json`, the project `LICENSE`, `RELEASE-NOTES.txt`, `THIRD-PARTY-NOTICES.txt` and per-dependency license texts. Stdio transport; the argument list is exactly one of `--data-root <owner data root>` or `--config <service-settings.json>`. The agent tool surface is unchanged from 1.3.0: no cognitive annotation, taxonomy, lifecycle, intention or recall operation is exposed to agents. |
+| Document surface | none as a separate asset | The document HTML/CSS/JS shell and the loopback bridge are compiled into the CLI/shared runtime; they are not a static site, a separately installable UI or a general web console, and the CLI cognitive/search/read/revise/restart/unlock path never needs them. Only the optional `open` preview/edit session launches a browser, and it carries no annotation review controls. |
+| Owner UI | none in 1.4 | No 1.4 setup, `owner-ui` component, build or download. The 1.1.0 WPF product, its published downloads, bytes and source remain unchanged history; this release refuses to modify a 1.1 installation or share its live data root and endpoints. |
+
+**Supported platform for these two 1.4.0 products:** 64-bit Windows releases that Microsoft lists as
+supported for .NET 10 at release/publication time. The CLI and the MCP server need no desktop/WPF
+capability, so Server Core/Nano Server is not excluded by a UI requirement. Linux, macOS and ARM are
+out of scope. This is a framework-supported boundary, not a claim that every listed Windows SKU was
+exercised. The self-contained assets need no installed .NET runtime, SDK, source checkout or
+PowerShell. The optional `open` document session additionally needs an installed Chromium-based
+browser (Chrome or Edge) on the same machine; it fails closed when no browser is available and writes
+no plaintext HTML, draft or temp file. Both assets are unsigned: SHA-256 verifies the bytes and never
+authenticates the publisher. Product-specific known limits are in the [1.4.0 release record](release-1.4.0.md).
+
 ## Product and support matrix for 1.3.0 (S13-T6)
 
 This is the current 1.3.0 product matrix. It is the supported-OS and product-scope statement that the

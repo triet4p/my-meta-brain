@@ -2,7 +2,7 @@
 
 ## Goal và trạng thái
 
-- Status: **In progress — S14-T4 complete, S14-T5 active, S14-T6 pending**. Release mục tiêu cuối sprint: **1.4.0**; chưa build/publish. T4 evidence review round 1 PASS and exact-snapshot checkpoint `867a87ec` complete. T3 provider usage remains 5/10 requests, $0.002741448 settled; no T4 provider calls. No push.
+- Status: **In progress — S14-T5 complete, S14-T6 candidate preparation active**. Release mục tiêu cuối sprint: **1.4.0**; chưa publish. T5 round-1 evidence PASS and exact-snapshot checkpoint `d0796b4f` complete. T3 provider usage remains 5/10 requests, $0.002741448 settled; no T4/T5 provider calls. No push.
 - Entry: Sprint 13 complete và 1.3.0 published.
 - Scope/trace: P2-04, P2-05, P2-12; R01, R12, R13, R19–R22, R26–R30. Các P2 là candidates, không thay baseline khi chưa có approval.
 - Root: `F:/ai-ml/my-meta-brain`; target ref `main`; exact base/worktree/ownership resolve khi execution.
@@ -53,12 +53,13 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
     - Accepted: [worker evidence](../../artifacts/sprint-14/task-4.md), [round-1 PASS](../../artifacts/sprint-14/reviews/S14-T4-C1-R1.md), [checkpoint](../../artifacts/sprint-14/checkpoints/S14-T4-C1.md), commit `867a87ec`. Shared file/passage lifecycle and recall; actual CLI/service notification dedup, lock/restart, acknowledge/complete, temporal/history, supersession and owner-only boundaries verified. No provider/browser/MCP proof claimed; unchanged WPF assertion failure disclosed in evidence.
 
-- [~] **S14-T5 — Cognitive queries và review qua CLI.**
+- [x] **S14-T5 — Cognitive queries và review qua CLI.**
     - Change: CLI list/query/filter cho sáu facets, decisions/questions/lessons và review queue; inspect nguồn/revision rồi sửa/bác phân loại qua shared APIs, tạo ghi chú không cần model. `open` chỉ hiển thị tài liệu đã chọn, không chứa review controls.
     - Acceptance: Owner tìm trải nghiệm/dự định/quan điểm, đọc đúng nguồn và sửa nhãn/review hoàn toàn bằng CLI; source availability và AI-origin rõ, không bắt điền taxonomy trước lưu file.
     - Check: Actual CLI query → source inspect → correction/accept/reject → restart/rebuild; browser chỉ exercise nếu document path thay đổi.
+    - Accepted: [worker evidence](../../artifacts/sprint-14/task-5.md), [round-1 PASS](../../artifacts/sprint-14/reviews/S14-T5-C1-R1.md), [checkpoint](../../artifacts/sprint-14/checkpoints/S14-T5-C1.md), commit `d0796b4f`. Actual CLI query/source inspection/correction/accept/reject/restart/rebuild passed; T2/T4 regressions passed, no provider calls.
 
-- [ ] **S14-T6 — Release 1.4.0.**
+- [~] **S14-T6 — Release 1.4.0.**
     - Change: Publish cognitive/lifecycle workflows và attribution/review guides, nối jobs/source/operations hiện có.
     - Acceptance: Changed flows chạy thật trên candidate; nếu provider consent thiếu thì model task/release blocked, không dùng mocked echo làm acceptance; release contract chung đạt.
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.

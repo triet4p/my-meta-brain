@@ -7,7 +7,7 @@ administrator rights, an AppContainer, a patched agent runtime, or an account of
 - Product scope and requirements: [`META-BRAIN.md`](META-BRAIN.md), [`REQUIREMENTS.md`](REQUIREMENTS.md).
 - Sprint plan and acceptance for this work: [`sprint-plans/sprint-8.md`](sprint-plans/sprint-8.md).
 
-**Version boundary:** From 1.2.0 the supported products are the **CLI installer** and the **standalone MCP ZIP** (owner-approved [CR03](REQUIREMENTS.md#approved-change-record--cr03-2026-11-01) and the [workspace contract D090](META-BRAIN.md#134-approved-workspace-contract--d090)). The CLI covers every owner workflow; MCP remains the scoped agent surface. From 1.3.0 the CLI also offers lexical workspace search and the optional foreground `open` document preview/edit session; its browser assets and bridge are compiled into the same CLI/shared runtime, so there is still no separate web console or UI installer, and no plaintext HTML/temp file is written. **WPF Owner UI 1.1.0 is the frozen legacy product**: this release publishes no UI installer, does not upgrade a 1.1 installation in place, and does not promise that the 1.1 console can use the current runtime or data. Its 1.0.0/1.1.0 downloads, bytes and acceptance stay unchanged. Sections that describe WPF console surfaces are kept as 1.1.0 history and are marked as such.
+**Version boundary:** From 1.2.0 the supported products are the **CLI installer** and the **standalone MCP ZIP** (owner-approved [CR03](REQUIREMENTS.md#approved-change-record--cr03-2026-11-01) and the [workspace contract D090](META-BRAIN.md#134-approved-workspace-contract--d090)). The CLI covers every owner workflow; MCP remains the scoped agent surface. From 1.3.0 the CLI also offers lexical workspace search and the optional foreground `open` document preview/edit session; its browser assets and bridge are compiled into the same CLI/shared runtime, so there is still no separate web console or UI installer, and no plaintext HTML/temp file is written. From 1.4.0 the CLI also carries the owner cognitive workflows — six independent facets, encrypted revisioned passage annotations, annotation query and review, grounded structuring results that stay pending, and lifecycle/intention/recall for both memory items and classified annotations — through the same shared runtime; the MCP agent tool surface is unchanged and exposes none of those owner operations. **WPF Owner UI 1.1.0 is the frozen legacy product**: this release publishes no UI installer, does not upgrade a 1.1 installation in place, and does not promise that the 1.1 console can use the current runtime or data. Its 1.0.0/1.1.0 downloads, bytes and acceptance stay unchanged. Sections that describe WPF console surfaces are kept as 1.1.0 history and are marked as such.
 
 ## 1. The two roots
 
@@ -84,16 +84,18 @@ application files; the data root, the vault and the pipe endpoints are kept.
 **A 1.1.0 installation is refused in place.** The current installer refuses an existing installation
 whose recorded product version is older than 1.2.0 — including a real 1.1.0 installation — before it
 stops that host or changes any file or data. It names the supported transition: install the current
-release (1.3.0) into a separate install root with its own data root and distinct `--control-pipe` /
+release (1.4.0) into a separate install root with its own data root and distinct `--control-pipe` /
 `--agent-pipe` endpoints, and leave the 1.1 application and data untouched. The same refusal covers
 an unknown or mixed component registration, a data root owned by another installation, an unowned
 data root that already holds Meta Brain data, overlapping roots, and a live endpoint that speaks
 another protocol revision. No refusal replaces, uninstalls or edits the old installation.
 
-**An existing 1.2.0 CLI/MCP installation is upgraded in place.** The 1.3.0 setup drains and stops the
-shared host, replaces the application files, keeps the recorded data root, settings, pipe endpoints,
-vault, workspace and backups byte-unchanged, and records the 1.3.0 version and candidate identity.
-No automatic vault or workspace migration runs: the workspace format stays version 1. A shared
+**An existing 1.2.0 or 1.3.0 CLI/MCP installation is upgraded in place.** The 1.4.0 setup drains and
+stops the shared host, replaces the application files, keeps the recorded data root, settings, pipe
+endpoints, vault, workspace and backups byte-unchanged, and records the 1.4.0 version and candidate
+identity. No automatic vault or workspace migration runs: the workspace format stays version 1, and
+the 1.4.0 cognitive annotations are additional encrypted records under the existing vault; they did
+not change the vault envelope or workspace format. A shared
 installation that registers only one of the two components needs the matching complete candidate to
 update the shared runtime, exactly as in 1.2.0.
 
@@ -110,11 +112,11 @@ installer\MetaBrain.Installer.exe   per-user CLI/MCP install/upgrade/uninstall
 release-manifest.json               product version, runtime identifier, every file's size and SHA-256
 ```
 
-The 1.3.0 bundle ships the CLI and the MCP server (CR03/D089); the frozen 1.1.0 WPF Owner UI is not
+The 1.4.0 bundle ships the CLI and the MCP server (CR03/D089); the frozen 1.1.0 WPF Owner UI is not
 published here, and the document bridge/browser shell is compiled into the shared runtime rather
 than shipped as a separate static asset. The bundle is a `--self-contained true -r win-x64` publish,
 so the target machine needs no .NET SDK, no installed .NET runtime, no repository and no PowerShell:
-unpack it and run the entrypoints. Its product version is the version every 1.3 entrypoint reports
+unpack it and run the entrypoints. Its product version is the version every 1.4 entrypoint reports
 (`--version`; the installer records it in `install-state.json`).
 
 A developer builds the bundle from a checkout with
@@ -146,25 +148,25 @@ preserving the selected data root.
 It does not change PATH, profiles, autostart, services, registry, permissions or environment
 settings. The self-contained single-file .NET host may extract runtime support under
 `%TEMP%\.net\<bundle>\<hash>` on launch; this is runtime temp data, not an install or profile
-registration. There is no 1.3 UI setup asset to download or run.
+registration. There is no 1.4 UI setup asset to download or run.
 
-### 2.3 Support transition from the 1.1.0 WPF product (S12-T6, carried by 1.3.0)
+### 2.3 Support transition from the 1.1.0 WPF product (S12-T6, carried by 1.4.0)
 
-1.3.0 ships the CLI and the MCP server only. It publishes no `MetaBrain-UI-<version>.exe`, has no
+1.4.0 ships the CLI and the MCP server only. It publishes no `MetaBrain-UI-<version>.exe`, has no
 `owner-ui` component, and builds no WPF installer. The installer refuses to change an installed
 pre-1.2 (1.1.0 WPF) or unknown/mixed installation in place, before it stops that host or writes
 into either root, and names the supported transition: install the current release into a **separate
 install root** with its own **data root** and distinct `--control-pipe`/`--agent-pipe` endpoints.
 The 1.1 application, its data, its endpoints and any running 1.1 host are left untouched, and
 nothing is uninstalled, replaced or migrated automatically. Sharing one live data root or running
-two writers is refused. An installed 1.2 CLI/MCP layout is upgraded in place by the 1.3 setup with
-its data root, settings and endpoints preserved (§2).
+two writers is refused. An installed 1.2 or 1.3 CLI/MCP layout is upgraded in place by the 1.4
+setup with its data root, settings and endpoints preserved (§2).
 
 An installed 1.1 layout is detected from its recorded `install-state.json` product version, its
 `owner-ui/` directory or its root-level `MetaBrain.OwnerUi.exe`/`MetaBrain.OwnerUi.Setup.exe`
 markers. A 1.2+ installation has neither that directory nor that component; naming
 `--component owner-ui` fails with the same support-transition message. The 1.1.0 Owner UI remains
-downloadable from its own unchanged release; it is not updated by 1.2 or 1.3 and makes no current
+downloadable from its own unchanged release; it is not updated by 1.2, 1.3 or 1.4 and makes no current
 runtime/data compatibility claim.
 
 **A separately confirmed manual transition** is the owner's own act, not an installer feature:
@@ -557,7 +559,8 @@ The authenticated workspace format and metadata schema are both version 1. Versi
 
 ### 3.2.8 Workspace search and the optional `open` document session (S13-T4–T6)
 
-Both surfaces are owner CLI features of the 1.3 runtime. Search and revision-gated editing work
+Both surfaces are owner CLI features of the current runtime (added in 1.3.0, unchanged in 1.4.0).
+Search and revision-gated editing work
 with no browser at all; `open` is an optional convenience that serves exactly one document to a
 local browser.
 
@@ -627,11 +630,62 @@ cli\MetaBrain.Cli.exe owner cognitive-annotation-create --control-pipe <pipe> --
 - Draft JSON `facets` use the canonical camel-case enum tokens; use `actionEffect` for the
   Action–Effect facet. The query CLI flag uses the kebab-case spelling `--facet action-effect`.
 
+### 3.2.10 Cognitive annotations, attribution and lifecycle (S14-T2–T4)
+
+This section joins the six-facet contract (§2.4 of [`META-BRAIN.md`](META-BRAIN.md)) to the
+workspace anchor and review commands above. Everything here runs on the owner CLI; a browser and a
+provider are both optional and neither is needed to classify, correct, review or schedule a passage.
+
+```text
+cli\MetaBrain.Cli.exe owner taxonomy --control-pipe <pipe>
+cli\MetaBrain.Cli.exe owner workspace-anchor-create --control-pipe <pipe> --file-id <file-id> --expected-content-revision <live> --offset <bytes> --length <bytes> --expected-tree-revision <live>
+cli\MetaBrain.Cli.exe owner cognitive-annotation-create --control-pipe <pipe> --file-id <file-id> --input-file <draft.json>
+cli\MetaBrain.Cli.exe owner cognitive-annotation-list --control-pipe <pipe> [--review-status pending]
+cli\MetaBrain.Cli.exe owner cognitive-annotation-query --control-pipe <pipe> [--facet <facet>] [--kind <kind>] [--review-status <state>] [--origin <origin>] [--source-availability <state>]
+cli\MetaBrain.Cli.exe owner cognitive-annotation-read --control-pipe <pipe> --resource-id <annotation-id>
+cli\MetaBrain.Cli.exe owner cognitive-annotation-correct --control-pipe <pipe> --resource-id <annotation-id> --expected-revision <live> --input-file <correction.json>
+cli\MetaBrain.Cli.exe owner cognitive-annotation-accept --control-pipe <pipe> --resource-id <annotation-id> --expected-revision <live> [--reason <text>]
+cli\MetaBrain.Cli.exe owner cognitive-annotation-reject --control-pipe <pipe> --resource-id <annotation-id> --expected-revision <live> --reason <text>
+cli\MetaBrain.Cli.exe owner lifecycle-create --control-pipe <pipe> --resource-id <annotation-id> --reason <text>
+cli\MetaBrain.Cli.exe owner intention-trigger-set --control-pipe <pipe> --resource-id <annotation-id> --due-at <ISO-8601>
+cli\MetaBrain.Cli.exe owner intentions --control-pipe <pipe>
+cli\MetaBrain.Cli.exe owner lifecycle-intention-acknowledge --control-pipe <pipe> --resource-id <annotation-id> --expected-revision <live>
+cli\MetaBrain.Cli.exe owner lifecycle-intention-complete --control-pipe <pipe> --resource-id <annotation-id> --expected-revision <live>
+cli\MetaBrain.Cli.exe owner lifecycle-read --control-pipe <pipe> --resource-id <annotation-id>
+cli\MetaBrain.Cli.exe owner recall-apply --control-pipe <pipe> --resource-id <annotation-id> --act pin|demote|archive|restore [--reason <text>]
+cli\MetaBrain.Cli.exe owner recall-read --control-pipe <pipe> --resource-id <annotation-id>
+```
+
+- The six facets are independent views and may overlap on one passage; a file never needs one type
+  and no facet is inferred from another. Existing kinds (claim, observation, question, hypothesis,
+  decision, lesson, procedure, synthesis, preference, intention, unknown) stay separate and are
+  filtered with `--kind`.
+- A draft may carry `facets`, `kind`, `author`, `creationMethod`, `evidence` and `level`; an owner
+  note may omit facets and kind. Draft facets use the canonical camel-case token (`actionEffect`);
+  the query flag uses `--facet action-effect`. Author, executor, creation method and evidence are
+  independent fields, and an absent source or occurrence time stays unknown rather than invented.
+- An owner-authored annotation is confirmed owner state with review `Accepted`. A suggestion with
+  AI origin stays `Pending` until the owner accepts or rejects it; correction appends a revision and
+  preserves the AI origin, author, executor and evidence. No read, query or correction promotes a
+  suggestion to owner belief or a verified fact.
+- The anchor pins the exact file ID, content revision, byte range and range digest. A revised source
+  leaves the annotation `state=stale` at its original revision; it is never silently rebound. A
+  deleted source reports `availability=Unavailable` until the file is restored.
+- `lifecycle-create` applies only to an annotation with a known cognitive kind; it creates the same
+  revision-gated `lc-<annotation-id>` record used by memory items and never writes a second store.
+  An unclassified annotation is refused and remains unclassified. Due notifications are recorded
+  once, survive restart/lock/unlock without duplication, and acknowledgement is distinct from
+  completion. Validity and review-after stamps, history and retained revisions keep the source
+  semantics; `recall-apply` records pin/demote/archive/restore without rewriting the annotation.
+- A structuring job may create pending suggestions for an exact workspace revision, but that is
+  provider egress under the existing job consent/budget, not part of this local workflow. The
+  separate T3 live-provider result is recorded in its own evidence; it is not re-claimed here.
+
 ### 3.3 The Owner console (S9-T4) — 1.1.0 legacy, not shipped in 1.2+
 
 This section documents the frozen 1.1.0 WPF console for history and transition proof. Releases
-1.2.0 and 1.3.0 ship no Owner UI executable or installer; every workflow below is available through
-the CLI commands in §3.2, §3.2.3–§3.2.7 and §3.2.8, and the console is not compatible with the
+1.2.0 through 1.4.0 ship no Owner UI executable or installer; every workflow below is available
+through the CLI commands in §3.2, §3.2.3–§3.2.10, and the console is not compatible with the
 current runtime or workspace data.
 
 The packaged console is `owner-ui/MetaBrain.OwnerUi.exe`. It opens on the **Owner session**
@@ -1801,13 +1855,18 @@ removes the fixture when the run ends.
 - A real logout or reboot, and a connection from the official Codex/OMP clients,
   need the owner in front of the machine; they cannot be proved by a headless run.
 - The installer is Windows-only and per-user. There is no multi-account or shared-machine install.
-- 1.3.0 ships the CLI and the MCP server only. There is no Owner UI installer or UI component in
-  1.3, and the frozen 1.1.0 console is not guaranteed to read the current runtime or workspace data.
-  A 1.1 installation is refused in place; install 1.3 beside it with separate roots and endpoints
-  (§2.3). An existing 1.2 CLI/MCP installation upgrades in place. The 1.3.0 candidate was published
-  as `v1.3.0` on 2026-11-03 after the owner authorized publication, and the public assets and links
-  were smoke-verified.
-- One workspace act carries at most 1 MiB of original bytes in 1.3.0 (`workspace_too_large`), and
+- 1.4.0 ships the CLI and the MCP server only. There is no Owner UI installer or UI component in
+  1.4, and the frozen 1.1.0 console is not guaranteed to read the current runtime or workspace data.
+  A 1.1 installation is refused in place; install 1.4 beside it with separate roots and endpoints
+  (§2.3). An existing 1.2 or 1.3 CLI/MCP installation upgrades in place. 1.3.0 was published as
+  `v1.3.0` on 2026-11-03 after the owner authorized publication; the 1.4.0 candidate is prepared
+  locally and is not published by this build.
+- The cognitive facets are owner review labels, not truth levels. AI suggestions stay unverified
+  and pending until the owner accepts or rejects them, and a grounded excerpt establishes provenance
+  only: the service does not prove semantic entailment or detect every incorrect inference in prose.
+  An unclassified annotation has no lifecycle, and a revised source leaves the annotation anchored at
+  its original revision in the `stale` state rather than rebinding it.
+- One workspace act carries at most 1 MiB of original bytes in 1.4.0 (`workspace_too_large`), and
   an encrypted backup/restore carries the workspace identity, tree, retained bytes and anchors
   together with the rest of the vault.
 - The optional `open` document session needs an installed Chromium-based browser (Chrome or Edge)
