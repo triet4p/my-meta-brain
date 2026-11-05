@@ -339,7 +339,7 @@ public sealed class IntentionScheduleService
                 lifecycle.Revision,
                 LifecycleTokens.Intention(lifecycle.Intention!.Value),
                 subject.Title,
-                subject.Body.Length <= BodyPreviewLength ? subject.Body : subject.Body[..BodyPreviewLength],
+                subject.BodyPreview,
                 dueAt,
                 isDue,
                 lifecycle.Notified,
@@ -408,19 +408,43 @@ public sealed class IntentionScheduleService
         return new IntentionSchedulePassResult(notificationsRecorded);
     }
 
-    private static StoredMemoryEnvelope ReadIntention(string resourceId, IManagedResourceStore store)
+    /// <summary>
+    /// One intention subject as the schedule view sees it: its zone and the
+    /// bounded display text the owner already knows. A memory item supplies
+    /// its title and body preview; a passage annotation supplies no title and
+    /// no copied preview, because its source is the exact pinned anchor the
+    /// owner reads through the annotation rather than text this view may copy.
+    /// </summary>
+    private sealed record IntentionSubject(string ZoneId, string? Title, string BodyPreview);
+
+    private static IntentionSubject ReadIntention(string resourceId, IManagedResourceStore store)
     {
         byte[]? raw = null;
         try
         {
             raw = store.ReadContent(resourceId);
+            if (DomainIdentifiers.IsCognitiveAnnotationId(resourceId))
+            {
+                var annotation = CognitiveAnnotationCodec.DecodeStored(raw);
+                if (!string.Equals(annotation.Id, resourceId, StringComparison.Ordinal) ||
+                    annotation.Kind != MemoryKind.Intention)
+                {
+                    throw new ArgumentException("The named passage annotation is not an intention.");
+                }
+
+                return new IntentionSubject(annotation.ZoneId, Title: null, BodyPreview: string.Empty);
+            }
+
             var subject = MemoryEnvelopeCodec.DecodeStored(raw);
             if (!string.Equals(subject.Id, resourceId, StringComparison.Ordinal) || subject.Kind != MemoryKind.Intention)
             {
                 throw new ArgumentException("The named memory item is not an intention.");
             }
 
-            return subject;
+            return new IntentionSubject(
+                subject.ZoneId,
+                subject.Title,
+                subject.Body.Length <= BodyPreviewLength ? subject.Body : subject.Body[..BodyPreviewLength]);
         }
         catch (IOException ex)
         {

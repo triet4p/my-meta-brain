@@ -532,14 +532,29 @@ public static class LifecycleCodec
             : json;
 }
 
+/// <summary>
+/// What a lifecycle record must know about its subject to validate temporal
+/// knowledge: the subject's own cognitive kind, the instant the subject was
+/// recorded, and its occurrence instant when the subject knows one. A memory
+/// item supplies its envelope; a durable cognitive annotation supplies its
+/// record time, and an occurrence time it never claims stays null (unknown),
+/// never inferred. <see cref="IsPassageAnnotation"/> keeps the shared policy
+/// honest about which acts even apply to a passage subject.
+/// </summary>
+public sealed record LifecycleSubjectInfo(
+    MemoryKind Kind,
+    DateTimeOffset RecordedAtUtc,
+    DateTimeOffset? OccurredAtUtc,
+    bool IsPassageAnnotation);
+
 public static class LifecycleValidator
 {
     public static void ValidateDraft(LifecycleDraft draft, string subjectResourceId)
     {
         ArgumentNullException.ThrowIfNull(draft);
-        if (!DomainIdentifiers.IsDomainIdentifier(subjectResourceId))
+        if (!DomainIdentifiers.IsLifecycleSubject(subjectResourceId))
         {
-            throw new ArgumentException("The lifecycle subject must be an opaque memory item identifier.");
+            throw new ArgumentException("The lifecycle subject must be a memory item or a cognitive annotation.");
         }
 
         if (draft.CreationMethod is null || draft.CreationMethod == CreationMethod.Unknown)
@@ -554,11 +569,13 @@ public static class LifecycleValidator
 
     /// <summary>
     /// Temporal knowledge about the subject must agree with the subject's own
-    /// envelope: an occurred stamp can only be exact when the envelope carries
-    /// the instant, and a recorded stamp must be the envelope's recorded
-    /// instant. The zone offset is extra knowledge the envelope cannot hold.
+    /// record: an occurred stamp can only be exact when the subject carries
+    /// the instant, and a recorded stamp must be the subject's recorded
+    /// instant. The zone offset is extra knowledge the subject cannot hold.
+    /// The same rule applies to a memory envelope and to a passage annotation;
+    /// only the source of the two instants differs.
     /// </summary>
-    public static void ValidateAgainstSubject(LifecycleDraft draft, StoredMemoryEnvelope subject)
+    public static void ValidateAgainstSubject(LifecycleDraft draft, LifecycleSubjectInfo subject)
     {
         ArgumentNullException.ThrowIfNull(draft);
         ArgumentNullException.ThrowIfNull(subject);
@@ -567,7 +584,7 @@ public static class LifecycleValidator
 
     public static void ValidateAgainstSubject(
         LifecycleTransitionDraft transition,
-        StoredMemoryEnvelope subject)
+        LifecycleSubjectInfo subject)
     {
         ArgumentNullException.ThrowIfNull(transition);
         ArgumentNullException.ThrowIfNull(subject);
@@ -668,9 +685,9 @@ public static class LifecycleValidator
         }
 
         if (string.IsNullOrEmpty(record.SubjectResourceId) ||
-            !DomainIdentifiers.IsDomainIdentifier(record.SubjectResourceId))
+            !DomainIdentifiers.IsLifecycleSubject(record.SubjectResourceId))
         {
-            throw new ArgumentException("The lifecycle subject must be an opaque memory item identifier.");
+            throw new ArgumentException("The lifecycle subject must be a memory item or a cognitive annotation.");
         }
 
         // The record ID is derived from the subject: exactly one lifecycle
@@ -691,7 +708,14 @@ public static class LifecycleValidator
             throw new ArgumentException("A known subject memory kind is required.");
         }
 
-        if (!Enum.IsDefined(record.Publication) || record.Publication == PublicationState.Unknown)
+        // A memory item carries its catalog publication state. A passage
+        // annotation has no catalog lifecycle at all — its own owner review
+        // status is the review semantics — so its record stays Unknown and
+        // refuses every publication act instead of claiming a proposal it can
+        // never publish.
+        if (!Enum.IsDefined(record.Publication) ||
+            (record.Publication == PublicationState.Unknown &&
+             !DomainIdentifiers.IsCognitiveAnnotationId(record.SubjectResourceId)))
         {
             throw new ArgumentException("A known publication state is required.");
         }
@@ -807,9 +831,9 @@ public static class LifecycleValidator
                 throw new ArgumentException("Only a superseded intention names a replacement item.");
             }
 
-            if (!DomainIdentifiers.IsDomainIdentifier(record.SupersededBy))
+            if (!IsSupersessionReplacement(record.SubjectResourceId, record.SupersededBy))
             {
-                throw new ArgumentException("The replacement item must be an opaque memory item identifier.");
+                throw new ArgumentException("The replacement item must be a memory item, or another passage annotation for a passage subject.");
             }
         }
 
@@ -904,7 +928,7 @@ public static class LifecycleValidator
             if (LifecycleTransitions.RequiresReplacement(change.Act))
             {
                 if (change.ReplacementResourceId is null ||
-                    !DomainIdentifiers.IsDomainIdentifier(change.ReplacementResourceId))
+                    !IsSupersessionReplacement(record.SubjectResourceId, change.ReplacementResourceId))
                 {
                     throw new ArgumentException("A supersession history entry names the replacement item.");
                 }
@@ -968,6 +992,19 @@ public static class LifecycleValidator
         static bool intentionAppliesCheck(StoredLifecycleRecord value) => value.SubjectKind == MemoryKind.Intention;
     }
 
+    /// <summary>
+    /// A supersession names what replaces the subject. A memory item is
+    /// replaced by a memory item, exactly as before. A passage annotation is
+    /// the same durable file/passage memory record family, so it may also be
+    /// replaced by another passage annotation: the pointer never rewrites,
+    /// promotes or deletes either record, and both keep their own source
+    /// anchor and revision history.
+    /// </summary>
+    private static bool IsSupersessionReplacement(string subjectResourceId, string replacementResourceId) =>
+        DomainIdentifiers.IsCognitiveAnnotationId(subjectResourceId)
+            ? DomainIdentifiers.IsLifecycleSubject(replacementResourceId)
+            : DomainIdentifiers.IsDomainIdentifier(replacementResourceId);
+
     private static bool IsStateEdge(LifecycleAspect aspect, LifecycleAct act, string from, string to) => aspect switch
     {
         LifecycleAspect.Publication => LifecycleTransitions.AllowsPublicationEdge(act,
@@ -985,20 +1022,20 @@ public static class LifecycleValidator
         TemporalStamp? validFrom,
         TemporalStamp? validUntil,
         TemporalStamp? reviewAfter,
-        StoredMemoryEnvelope subject)
+        LifecycleSubjectInfo subject)
     {
         ValidateTime(occurred, recorded, validFrom, validUntil, reviewAfter);
         if (recorded is not null &&
             (recorded.Precision != TimestampPrecision.Exact ||
              recorded.InstantUtc != subject.RecordedAtUtc))
         {
-            throw new ArgumentException("A recorded lifecycle time must be the subject envelope's recorded instant.");
+            throw new ArgumentException("A recorded lifecycle time must be the subject's recorded instant.");
         }
 
         if (occurred is not null && subject.OccurredAtUtc is not null &&
             (occurred.Precision != TimestampPrecision.Exact || occurred.InstantUtc != subject.OccurredAtUtc))
         {
-            throw new ArgumentException("An occurred lifecycle time must be the subject envelope's occurred instant.");
+            throw new ArgumentException("An occurred lifecycle time must be the subject's occurred instant.");
         }
     }
 
@@ -1319,6 +1356,25 @@ public static class LifecycleTransitions
     /// is written for a revision that exists now.
     /// </summary>
     public static bool AllowsRetention(LifecycleAct act) => act == LifecycleAct.RetainRevision;
+
+    /// <summary>
+    /// Whether one act applies to a durable passage annotation, the S14-T2
+    /// file/passage memory record. The temporal validity and review-after
+    /// update, the time/context schedule, the notification markers, and every
+    /// kind-derived question/intention transition are shared exactly as they
+    /// are for a memory item. Publication is the catalog lifecycle of a memory
+    /// item and would duplicate the annotation's own owner review status,
+    /// which is why it is refused and why the record keeps an Unknown
+    /// publication state. Retaining a revision is refused because the
+    /// annotation record's own bounded, append-only history already preserves
+    /// every prior version with its immutable anchor, so an archive would
+    /// duplicate the same record instead of preserving anything the owner
+    /// could not already read. The recall policy acts (pin, demote, archive,
+    /// restore) are a separate owner decision about offering, never a lifecycle
+    /// act, and apply to a passage annotation through the same policy record.
+    /// </summary>
+    public static bool AllowsPassageAnnotation(LifecycleAct act) =>
+        AspectOf(act) is not (LifecycleAspect.Publication or LifecycleAspect.History);
 
     public static bool AllowsPublicationEdge(LifecycleAct act, PublicationState from, PublicationState to) => act switch
     {

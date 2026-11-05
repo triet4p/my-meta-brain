@@ -235,11 +235,12 @@ public sealed record LibraryHitWire(
 }
 
 /// <summary>
-/// One S7-T4 owner recall decision for a subject memory item: the owner's own
-/// disposition, the reason the owner gave, who acted and when, and the bounded
-/// act history that explains how the decision was reached. It never carries
-/// the item's body and never says the item is less true: a demoted or archived
-/// item keeps every byte, every citation and every piece of evidence it had.
+/// One S7-T4 owner recall decision for a subject memory item or passage
+/// annotation: the owner's own disposition, the reason the owner gave, who
+/// acted and when, and the bounded act history that explains how the decision
+/// was reached. It never carries the item's body and never says the item is
+/// less true: a demoted or archived subject keeps every byte, every citation
+/// and every piece of evidence it had.
 /// </summary>
 public sealed record RecallPolicyWire(
     string SubjectResourceId,
@@ -6927,9 +6928,14 @@ public sealed class ServiceRequestHandler
         IVaultOperation? operation,
         CancellationToken cancellationToken)
     {
-        if (context.Kind != PrincipalKind.Owner || operation is null || !HasNoOptionalFields(request))
+        if (context.Kind != PrincipalKind.Owner || !HasNoOptionalFields(request))
         {
             return Error("invalid_request");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
         }
 
         try
@@ -8692,16 +8698,18 @@ public sealed class ServiceRequestHandler
     /// revision moved is dropped instead of serving other bytes.
     /// <summary>
     /// S7-T4 owner recall act: the owner demotes, pins, sets aside or
-    /// restores one subject memory item.
+    /// restores one subject memory item or one durable passage annotation.
     /// <para>
     /// The act is owner-only, needs an unlocked vault, and names a subject
-    /// that must be a live memory item now. It changes only how that item is
-    /// offered: the item's body, evidence, verification, revision, citations
-    /// and attribution are untouched, nothing is deleted, and no grant,
-    /// collection or session scope is read or written. A demote or an archive
-    /// requires the owner's own reason, so the ranking can always be
-    /// explained. A protected subject cannot be demoted or set aside until the
-    /// owner releases that protection with an explicit restore.
+    /// that must be a live memory item or live passage annotation now. It
+    /// changes only how that subject is offered: the item's body, evidence,
+    /// verification, revision, citations and attribution are untouched, an
+    /// annotation's anchor, origin and review status are untouched, nothing is
+    /// deleted, and no grant, collection or session scope is read or written.
+    /// A demote or an archive requires the owner's own reason, so the ranking
+    /// can always be explained. A protected subject cannot be demoted or set
+    /// aside until the owner releases that protection with an explicit
+    /// restore.
     /// </para>
     /// </summary>
     private ServiceReply HandleOwnerRecallApply(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
@@ -8717,7 +8725,7 @@ public sealed class ServiceRequestHandler
         }
 
         var subjectId = request.ResourceId;
-        if (subjectId is null || !DomainIdentifiers.IsDomainIdentifier(subjectId))
+        if (subjectId is null || !DomainIdentifiers.IsLifecycleSubject(subjectId))
         {
             return Error("invalid_request");
         }
@@ -8792,7 +8800,7 @@ public sealed class ServiceRequestHandler
         }
 
         var subjectId = request.ResourceId;
-        if (subjectId is null || !DomainIdentifiers.IsDomainIdentifier(subjectId))
+        if (subjectId is null || !DomainIdentifiers.IsLifecycleSubject(subjectId))
         {
             return Error("invalid_request");
         }

@@ -34,9 +34,9 @@ public sealed class RecallPolicyService
 
     /// <summary>
     /// Applies one explicit owner act to one subject's recall policy. The
-    /// subject must be a live memory item now: a policy about an item that no
-    /// longer exists is refused rather than recorded against a name that
-    /// could be reused.
+    /// subject must be a live memory item or a live passage annotation now: a
+    /// policy about a subject that no longer exists is refused rather than
+    /// recorded against a name that could be reused.
     /// </summary>
     public RecallPolicyEntry Apply(
         AuthenticatedContext context,
@@ -52,8 +52,7 @@ public sealed class RecallPolicyService
             throw new UnauthorizedAccessException("Only the owner may set the recall policy.");
         }
 
-        var subject = RequireSubject(operation, subjectResourceId);
-        _ = subject;
+        RequireSubject(operation, subjectResourceId);
 
         return new OwnerRecallPolicyAuthority(_timeProvider).Apply(
             context, subjectResourceId, act, rationale, operation);
@@ -98,11 +97,19 @@ public sealed class RecallPolicyService
         return state.Entries;
     }
 
-    private static MemoryItem RequireSubject(IManagedResourceStore store, string subjectResourceId)
+    /// <summary>
+    /// Resolves a recall subject: a live memory item, or a durable cognitive
+    /// annotation, which is the S14-T2 file/passage memory record. A policy
+    /// about a subject that no longer exists is refused rather than recorded
+    /// against a name that could be reused; a passage annotation is read by its
+    /// own encrypted record so its anchor, origin and review status stay
+    /// untouched.
+    /// </summary>
+    private static void RequireSubject(IManagedResourceStore store, string subjectResourceId)
     {
-        if (string.IsNullOrEmpty(subjectResourceId))
+        if (string.IsNullOrEmpty(subjectResourceId) || !DomainIdentifiers.IsLifecycleSubject(subjectResourceId))
         {
-            throw new ArgumentException("The recall policy needs a subject memory item.", nameof(subjectResourceId));
+            throw new ArgumentException("The recall policy needs a subject memory item or passage annotation.", nameof(subjectResourceId));
         }
 
         var listed = store.ListResources().FirstOrDefault(resource =>
@@ -116,13 +123,24 @@ public sealed class RecallPolicyService
         try
         {
             raw = store.ReadContent(subjectResourceId, listed.Revision);
+            if (DomainIdentifiers.IsCognitiveAnnotationId(subjectResourceId))
+            {
+                var annotation = CognitiveAnnotationCodec.DecodeStored(raw);
+                if (!string.Equals(annotation.Id, subjectResourceId, StringComparison.Ordinal) ||
+                    !string.Equals(annotation.ZoneId, listed.ZoneId, StringComparison.Ordinal) ||
+                    annotation.History[^1].Revision != listed.Revision)
+                {
+                    throw new ArgumentException("The recall subject is not a passage annotation.", nameof(subjectResourceId));
+                }
+
+                return;
+            }
+
             var stored = MemoryEnvelopeCodec.DecodeStored(raw);
             if (!string.Equals(stored.Id, subjectResourceId, StringComparison.Ordinal))
             {
                 throw new ArgumentException("The recall subject is not a memory item.", nameof(subjectResourceId));
             }
-
-            return MemoryItemService.ToItem(stored, listed.Revision);
         }
         catch (ArgumentException)
         {

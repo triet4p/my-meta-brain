@@ -19,8 +19,9 @@ public sealed record RetainedRevisionReadResult(
 /// S2-T5 domain lifecycle and temporal validity over the shared encrypted
 /// canonical store. A lifecycle record is an ordinary revision-gated canonical
 /// resource under a reserved <c>lc-</c> prefix whose ID is derived from the
-/// subject memory item, so exactly one record covers one subject and no caller
-/// can mint a second, disagreeing state. Identity comes from the trusted
+/// subject — a memory item or, since S14-T4, a durable passage annotation — so
+/// exactly one record covers one subject and no caller can mint a second,
+/// disagreeing state. Identity comes from the trusted
 /// subject ID, executor from the trusted
 /// <see cref="Security.AuthenticatedContext"/>, revision from the vault
 /// descriptor, and the initial states from the subject's kind: nothing is
@@ -43,8 +44,9 @@ public sealed class LifecycleService
 
     /// <summary>
     /// Creates the lifecycle record for a subject item. The subject must be a
-    /// memory item that exists now; the record's zone is the subject's zone, so
-    /// a lifecycle record can never disagree with what it describes.
+    /// memory item or a durable passage annotation that exists now; the
+    /// record's zone is the subject's zone, so a lifecycle record can never
+    /// disagree with what it describes.
     /// </summary>
     public LifecycleRecord Create(
         AuthenticatedContext context,
@@ -69,7 +71,7 @@ public sealed class LifecycleService
 
         LifecycleValidator.ValidateDraft(draft, subjectResourceId);
         var subject = RequireSubject(store, subjectResourceId);
-        LifecycleValidator.ValidateAgainstSubject(draft, subject.Envelope);
+        LifecycleValidator.ValidateAgainstSubject(draft, subject.Info);
 
         var now = _timeProvider.GetUtcNow().ToUniversalTime();
         var stored = new StoredLifecycleRecord(
@@ -77,10 +79,14 @@ public sealed class LifecycleService
             DomainIdentifiers.LifecycleIdFor(subjectResourceId),
             subject.ZoneId,
             subjectResourceId,
-            subject.Envelope.Kind,
-            PublicationState.Proposal,
-            subject.Envelope.Kind == MemoryKind.Question ? QuestionState.Open : null,
-            subject.Envelope.Kind == MemoryKind.Intention ? IntentionState.Pending : null,
+            subject.Info.Kind,
+            // A memory item starts as a catalog proposal. A passage annotation
+            // has no catalog lifecycle — its own owner review status is the
+            // review semantics — so it never claims a proposal it can never
+            // publish.
+            subject.Info.IsPassageAnnotation ? PublicationState.Unknown : PublicationState.Proposal,
+            subject.Info.Kind == MemoryKind.Question ? QuestionState.Open : null,
+            subject.Info.Kind == MemoryKind.Intention ? IntentionState.Pending : null,
             false,
             null,
             false,
@@ -213,9 +219,20 @@ public sealed class LifecycleService
         // the record's question/intention applicability stale, which fails
         // closed instead of silently reinterpreting it.
         var subject = RequireSubject(store, subjectResourceId);
-        if (subject.Envelope.Kind != stored.SubjectKind)
+        if (subject.Info.Kind != stored.SubjectKind)
         {
             throw new ArgumentException("The lifecycle subject kind changed after the record was created.");
+        }
+
+        // A passage annotation shares the kind-derived states, the temporal
+        // update, the schedule and the notification markers, but it is never
+        // catalog-published (its own review status is the review semantics)
+        // and it keeps its own append-only version history instead of an
+        // archived memory-item revision.
+        if (subject.Info.IsPassageAnnotation && !LifecycleTransitions.AllowsPassageAnnotation(act))
+        {
+            throw new ArgumentException(
+                "This lifecycle act applies to a memory item; a passage annotation keeps its own review status and version history.");
         }
 
         LifecycleValidator.ValidateTransition(transition, act, stored);
@@ -235,7 +252,7 @@ public sealed class LifecycleService
             _ = RequireSubject(store, replacement);
         }
 
-        LifecycleValidator.ValidateAgainstSubject(transition, subject.Envelope);
+        LifecycleValidator.ValidateAgainstSubject(transition, subject.Info);
 
         var now = _timeProvider.GetUtcNow().ToUniversalTime();
         var executor = ExecutorOf(context);
@@ -488,19 +505,26 @@ public sealed class LifecycleService
         return history;
     }
 
-    private sealed record SubjectState(string ResourceId, string ZoneId, long Revision, StoredMemoryEnvelope Envelope);
+    private sealed record SubjectState(
+        string ResourceId,
+        string ZoneId,
+        long Revision,
+        LifecycleSubjectInfo Info);
 
     /// <summary>
-    /// Resolves the subject as the memory item it must be: present in the
-    /// encrypted manifest, decodable as a stored memory envelope at its live
-    /// revision, and never a relation, a lifecycle record, a retained
-    /// revision, or a registered source.
+    /// Resolves the subject as one of the two canonical lifecycle subjects:
+    /// a memory item decoded from its stored envelope, or a durable cognitive
+    /// annotation, which is the S14-T2 file/passage memory record. Both must
+    /// be present in the encrypted manifest and match their live revision;
+    /// neither is ever a relation, a lifecycle record, a retained revision, a
+    /// proposal or an internal system record. An annotation supplies its own
+    /// kind, zone and record time and claims no occurrence time.
     /// </summary>
     private static SubjectState RequireSubject(IManagedResourceStore store, string subjectResourceId)
     {
-        if (string.IsNullOrEmpty(subjectResourceId) || !DomainIdentifiers.IsDomainIdentifier(subjectResourceId))
+        if (string.IsNullOrEmpty(subjectResourceId) || !DomainIdentifiers.IsLifecycleSubject(subjectResourceId))
         {
-            throw new ArgumentException("The lifecycle subject must be an opaque memory item identifier.");
+            throw new ArgumentException("The lifecycle subject must be a memory item or a cognitive annotation.");
         }
 
         if (!store.TryGetZone(subjectResourceId, out var zone) || string.IsNullOrEmpty(zone))
@@ -513,12 +537,52 @@ public sealed class LifecycleService
         try
         {
             raw = store.ReadContent(subjectResourceId, revision);
+            if (DomainIdentifiers.IsCognitiveAnnotationId(subjectResourceId))
+            {
+                var annotation = CognitiveAnnotationCodec.DecodeStored(raw);
+                if (!string.Equals(annotation.Id, subjectResourceId, StringComparison.Ordinal) ||
+                    !string.Equals(annotation.ZoneId, zone, StringComparison.Ordinal) ||
+                    annotation.History[^1].Revision != revision)
+                {
+                    throw new InvalidDataException(
+                        "The passage annotation identity does not match its encrypted manifest revision.");
+                }
+
+                if (annotation.Kind == MemoryKind.Unknown)
+                {
+                    throw new ArgumentException(
+                        "A passage annotation lifecycle requires a known cognitive kind; an unclassified passage stays unclassified.");
+                }
+
+                return new SubjectState(
+                    subjectResourceId,
+                    zone,
+                    revision,
+                    new LifecycleSubjectInfo(
+                        annotation.Kind,
+                        annotation.RecordedAtUtc,
+                        OccurredAtUtc: null,
+                        IsPassageAnnotation: true));
+            }
+
             var envelope = MemoryEnvelopeCodec.DecodeStored(raw);
-            return new SubjectState(subjectResourceId, zone, revision, envelope);
+            return new SubjectState(
+                subjectResourceId,
+                zone,
+                revision,
+                new LifecycleSubjectInfo(
+                    envelope.Kind,
+                    envelope.RecordedAtUtc,
+                    envelope.OccurredAtUtc,
+                    IsPassageAnnotation: false));
         }
-        catch (ArgumentException ex)
+        catch (ArgumentException)
         {
-            throw new ArgumentException("The lifecycle subject must be a memory item.", ex);
+            throw;
+        }
+        catch (InvalidDataException ex)
+        {
+            throw new ArgumentException("The lifecycle subject does not match its encrypted record.", ex);
         }
         catch (IOException ex)
         {

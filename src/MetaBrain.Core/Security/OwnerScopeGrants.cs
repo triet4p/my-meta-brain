@@ -109,6 +109,8 @@ public sealed partial class OwnerScopeGrantAuthority
 
         var sourceSnapshot = NormalizeResources(resources, allowEmpty: false);
         var destinationSnapshot = NormalizeResources(destinationResources ?? Array.Empty<ScopeResourceRevision>(), allowEmpty: true);
+        EnsureGrantable(sourceSnapshot);
+        EnsureGrantable(destinationSnapshot);
         var operationSnapshot = NormalizeOperations(operations);
         ValidateSnapshotOperationScope(sourceSnapshot, operationSnapshot);
         ValidateOperationScope(operationSnapshot, destinationSnapshot, egress);
@@ -144,6 +146,7 @@ public sealed partial class OwnerScopeGrantAuthority
         var available = NormalizeResources(availableResources, allowEmpty: true)
             .ToDictionary(resource => resource.ResourceId, StringComparer.Ordinal);
         var destinationSnapshot = NormalizeResources(destinationResources ?? Array.Empty<ScopeResourceRevision>(), allowEmpty: true);
+        EnsureGrantable(destinationSnapshot);
         var operationSnapshot = NormalizeOperations(operations);
         ValidateOperationScope(operationSnapshot, destinationSnapshot, egress);
         ValidateExpiry(expiresAtUtc);
@@ -159,6 +162,7 @@ public sealed partial class OwnerScopeGrantAuthority
                     ? resource
                     : throw new ArgumentException("An owner collection member is no longer managed.", nameof(collectionId)))
                 .ToArray();
+            EnsureGrantable(sourceSnapshot);
             ValidateSnapshotOperationScope(sourceSnapshot, operationSnapshot);
             return StorePreviewLocked(
                 state, sourceSnapshot, operationSnapshot, destinationSnapshot, expiresAtUtc, egress, collectionId);
@@ -183,6 +187,7 @@ public sealed partial class OwnerScopeGrantAuthority
         var resourceIds = NormalizeResources(resources, allowEmpty: false)
             .Select(resource => resource.ResourceId)
             .ToArray();
+        EnsureGrantable(resources);
         lock (_gate)
         {
             return persistence.UpdateScopeGrantState(state =>
@@ -515,6 +520,26 @@ public sealed partial class OwnerScopeGrantAuthority
         }
 
         return normalized;
+    }
+
+    /// <summary>
+    /// A durable cognitive annotation is owner-only private state (S14-T2): its
+    /// classification, anchor and review history never leave the owner channel,
+    /// so no scope grant, saved collection or destination scope may name one.
+    /// The refusal runs on every owner mint path instead of on stored state, so
+    /// an externally produced state is never reinterpreted as a new authority.
+    /// </summary>
+    private static void EnsureGrantable(IReadOnlyList<ScopeResourceRevision> resources)
+    {
+        foreach (var resource in resources)
+        {
+            if (MetaBrain.Core.Domain.DomainIdentifiers.IsCognitiveAnnotationId(resource.ResourceId))
+            {
+                throw new ArgumentException(
+                    "A cognitive annotation is owner-only and cannot be granted to an agent session.",
+                    nameof(resources));
+            }
+        }
     }
 
     private static ScopeResourceRevision[] NormalizeResources(

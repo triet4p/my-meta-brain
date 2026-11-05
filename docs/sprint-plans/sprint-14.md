@@ -2,7 +2,7 @@
 
 ## Goal và trạng thái
 
-- Status: **In progress — S14-T3 evidence review**. Release mục tiêu cuối sprint: **1.4.0**; chưa build/publish. Final-source CLI/service smoke passed and bounded real job #5 succeeded. Usage: 5/10 requests, $0.002741448 settled, zero active reservations. Independent review and checkpoint remain pending.
+- Status: **In progress — S14-T3 complete, S14-T4 active, S14-T5–T6 pending**. Release mục tiêu cuối sprint: **1.4.0**; chưa build/publish. T3 evidence review round 1 PASS and exact-snapshot checkpoint `a89b1bd6` complete. Provider usage: 5/10 requests, $0.002741448 settled, zero active reservations. No push.
 - Entry: Sprint 13 complete và 1.3.0 published.
 - Scope/trace: P2-04, P2-05, P2-12; R01, R12, R13, R19–R22, R26–R30. Các P2 là candidates, không thay baseline khi chưa có approval.
 - Root: `F:/ai-ml/my-meta-brain`; target ref `main`; exact base/worktree/ownership resolve khi execution.
@@ -41,13 +41,13 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
     - Accepted: [evidence PASS](../../artifacts/sprint-14/reviews/S14-T2-C1-R1.md), [checkpoint](../../artifacts/sprint-14/checkpoints/S14-T2-C1.md), commit `5ee77fb9`; actual CLI/service annotation lifecycle, rebuild/restart, encrypted backup/restore and selected export verified.
 
-- [~] **S14-T3 — Grounded structuring vào workspace.**
+- [x] **S14-T3 — Grounded structuring vào workspace.**
     - Change: Nối coding/research/trend/synthesis jobs hiện có vào source file revisions và pending annotations/proposals; giữ raw-first capture trước model.
     - Acceptance (owner revised after live diagnosis): Real bounded job khi có provider consent/budget, output trỏ đúng source/revision/excerpt/anchor; malformed, wrong excerpt/scope và stale revisions bị từ chối. Title/body được paraphrase nhưng luôn là unverified AI suggestion pending owner review trước publication, không tự thành verified fact hoặc owner belief; không claim tự động chứng minh semantic entailment hay từ chối mọi suy luận sai trong prose. Provider lỗi/cancel không mất raw hoặc owner edits. Không mock model proof.
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
-    - [Worker evidence](../../artifacts/sprint-14/task-3.md): owner-approved unverified AI paraphrases pending review implemented, D096/spec/changelog synced, temporary capture removed, final-source CLI/service smoke passed. Real job #5 succeeded with pending AI proposal/annotation, exact anchor and raw/owner preservation; 5/10 requests, $0.002741448 settled, zero active reservations. Live proof exposed a creation-method label mismatch; candidate correction is locally smoke-verified, while the existing pending live proposal retains its historical label. Independent review will assess this evidence limit; no checkpoint yet.
+    - Accepted: Owner-approved unverified AI paraphrases pending review implemented; D096/spec/changelog synced; temporary capture removed. [Worker evidence](../../artifacts/sprint-14/task-3.md), [independent round-1 PASS](../../artifacts/sprint-14/reviews/S14-T3-C1-R1.md), [exact-snapshot checkpoint](../../artifacts/sprint-14/checkpoints/S14-T3-C1.md), commit `a89b1bd6`. Final-source CLI/service smoke passed and real job #5 succeeded; 5/10 requests/$0.002741448 settled, zero active reservations. Disclosed historical live-proposal method label accepted by reviewer; candidate correction locally verified. No push.
 
-- [ ] **S14-T4 — Temporal/intention/recall-policy mapping.**
+- [~] **S14-T4 — Temporal/intention/recall-policy mapping.**
     - Change: Nối history/as-of/validity/review-after, intention due/context/ack/done và pin/demote/archive/restore vào file/passage memory theo mapping.
     - Acceptance: Restart/offline/lock không duplicate due notifications; mentioned/acknowledged khác completed; reads không nâng truth; history giữ nguồn và superseded semantics.
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
@@ -72,4 +72,4 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
 
 ## Gate record
 
-S14-P0 accepted with [review](../../artifacts/sprint-14/reviews/S14-P0-C1-R1.md) and [checkpoint](../../artifacts/sprint-14/checkpoints/S14-P0-C1.md) `8734bf06`; S14-T1 owner-approved taxonomy with [review](../../artifacts/sprint-14/reviews/S14-T1-C1-R1.md) and [checkpoint](../../artifacts/sprint-14/checkpoints/S14-T1-C1.md) `0afb0015`; S14-T2 with [review](../../artifacts/sprint-14/reviews/S14-T2-C1-R1.md) and [checkpoint](../../artifacts/sprint-14/checkpoints/S14-T2-C1.md) `5ee77fb9`. S14-T3 [candidate evidence](../../artifacts/sprint-14/task-3.md): final-source local smoke passed, real job #5 succeeded, 5/10 requests/$0.002741448 settled; independent review and exact-snapshot checkpoint pending. No T3 PASS, T4–T6 gates, final deep or 1.4.0 publication result yet. No push.
+S14-P0 accepted with [review](../../artifacts/sprint-14/reviews/S14-P0-C1-R1.md) and [checkpoint](../../artifacts/sprint-14/checkpoints/S14-P0-C1.md) `8734bf06`; S14-T1 owner-approved taxonomy with [review](../../artifacts/sprint-14/reviews/S14-T1-C1-R1.md) and [checkpoint](../../artifacts/sprint-14/checkpoints/S14-T1-C1.md) `0afb0015`; S14-T2 with [review](../../artifacts/sprint-14/reviews/S14-T2-C1-R1.md) and [checkpoint](../../artifacts/sprint-14/checkpoints/S14-T2-C1.md) `5ee77fb9`; S14-T3 [round-1 PASS](../../artifacts/sprint-14/reviews/S14-T3-C1-R1.md) and [checkpoint](../../artifacts/sprint-14/checkpoints/S14-T3-C1.md) `a89b1bd6`, zero actionable findings. T3 final-source smoke and bounded real job passed; 5/10 requests/$0.002741448 settled. T4–T6 pending; no final deep or 1.4.0 publication result. No push.

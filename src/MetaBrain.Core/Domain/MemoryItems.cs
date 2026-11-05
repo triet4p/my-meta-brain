@@ -725,6 +725,18 @@ internal static class DomainIdentifiers
         value is not null && value.StartsWith(JobIdPrefix, StringComparison.Ordinal) && IsSafeIdentifier(value);
 
     /// <summary>
+    /// A subject that may carry a lifecycle record and an owner recall-policy
+    /// entry: a memory item in the domain namespace, or a durable cognitive
+    /// annotation, which is the S14-T2 file/passage memory record. A passage
+    /// annotation reuses both shared records by its own opaque ID; it never
+    /// gets a second state store or policy. The namespace only admits the
+    /// subject — the lifecycle and recall services still resolve the live
+    /// encrypted record behind it, so a bare identifier is never enough.
+    /// </summary>
+    public static bool IsLifecycleSubject(string? value) =>
+        IsDomainIdentifier(value) || IsCognitiveAnnotationId(value);
+
+    /// <summary>
     /// An identifier that names a memory item or a registered source: never a
     /// relation, lifecycle record, retained revision, ingestion journal,
     /// preserved source snapshot, feedback record, proposal, annotation,
@@ -745,9 +757,18 @@ internal static class DomainIdentifiers
 
     /// <summary>
     /// Lifecycle record ID derived from its subject: the ID is never chosen by
-    /// a caller, so one subject has at most one lifecycle record.
+    /// a caller, so one subject has at most one lifecycle record. The subject
+    /// is a memory item or a passage annotation.
     /// </summary>
-    public static string LifecycleIdFor(string subjectResourceId) => LifecycleIdPrefix + subjectResourceId;
+    public static string LifecycleIdFor(string subjectResourceId)
+    {
+        if (!IsLifecycleSubject(subjectResourceId))
+        {
+            throw new ArgumentException("The lifecycle subject must be a memory item or a cognitive annotation.");
+        }
+
+        return LifecycleIdPrefix + subjectResourceId;
+    }
 
     /// <summary>
     /// Memory item ID derived from the pending proposal it was reviewed from:
