@@ -196,13 +196,15 @@ preview/edit session, and fail-closed lock/exit/disconnect/expiry revocation. Th
 1.1.0 is the frozen legacy product: this release refuses to change its installation in place and
 makes no compatibility claim for it.
 
-**1.4.0 is a prepared local candidate, not a published release.** It keeps the same two products —
-the CLI setup and the standalone MCP ZIP, with the shared runtime compiled in — and adds the owner
-cognitive workflows: six independent facets, encrypted revisioned passage annotations with review,
-grounded structuring results that stay pending, and lifecycle/intention/recall for memory items and
-classified annotations, all through the CLI. The MCP agent tool surface is unchanged. The exact
-candidate identity, asset sizes, SHA-256 values and verification are in the
-[1.4.0 release record](docs/release-1.4.0.md); publication is a separate owner-authorized step.
+**1.4.0 is published** at [`v1.4.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.4.0):
+[`MetaBrain-CLI-1.4.0.exe`](https://github.com/triet4p/my-meta-brain/releases/download/v1.4.0/MetaBrain-CLI-1.4.0.exe)
+and
+[`MetaBrain-MCP-1.4.0.zip`](https://github.com/triet4p/my-meta-brain/releases/download/v1.4.0/MetaBrain-MCP-1.4.0.zip),
+with its frozen hashes in the [1.4.0 release record](docs/release-1.4.0.md). It keeps the same two
+products — the CLI setup and the standalone MCP ZIP, with the shared runtime compiled in — and adds
+the owner cognitive workflows: six independent facets, encrypted revisioned passage annotations with
+review, grounded structuring results that stay pending, and lifecycle/intention/recall for memory
+items and classified annotations, all through the CLI. The MCP agent tool surface is unchanged.
 
 ### Developer bundle: build the payload from a checkout
 
@@ -406,9 +408,8 @@ the restore stays available, and the real renders of the view.
 
 The project follows the authoritative milestone roadmap in [`docs/PLAN.md`](docs/PLAN.md).
 Milestones 1–9 and Sprint 9's three-product delivery are complete; the public 1.0.0 release,
-asset-name cutover, updated Pages deployment and public smoke are complete. Sprints 11–13 published
-1.1.0–1.3.0, and Sprint 14 prepares the local 1.4.0 candidate; see [`docs/PLAN.md`](docs/PLAN.md)
-for the authoritative status.
+asset-name cutover, updated Pages deployment and public smoke are complete. Sprints 11–14 published
+1.1.0–1.4.0; see [`docs/PLAN.md`](docs/PLAN.md) for the authoritative status.
 
 - [x] **Milestone 1 (M1) — Encrypted Vault & Scoped Sharing (Sprint 1):** User-controlled key lifecycle, authenticated ciphertext, owner-approved catalog publication, single-use token issuance/redemption, and in-memory scoped reads verified with official Codex and OMP clients.
 - [x] **Milestone 2 (M2) — Durable Encrypted Core (Sprint 2):** Canonical encrypted item/source/zone/revision models, relations, and rebuildable protected index.

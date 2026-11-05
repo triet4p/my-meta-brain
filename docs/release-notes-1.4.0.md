@@ -3,30 +3,37 @@
 Windows x64, self-contained, **unsigned**. SHA-256 verifies downloaded bytes only; it does not
 authenticate the publisher.
 
-**Status: release candidate, not published.** The 1.4.0 candidate is frozen and verified locally;
-there is no public `v1.4.0` tag, Release, upload or deployment yet. Publication is a separate
-owner-authorized step that follows the independent evidence review, the exact-snapshot checkpoint
-and the final differential. Until then, download nothing from a URL that claims to be 1.4.0; the
-exact candidate identity, sizes, SHA-256 values and verification are in the
-[`1.4.0 release record`](release-1.4.0.md).
+**Status: published 2026-11-05 as `v1.4.0`.** The owner authorized publication after the reviewed
+candidate, evidence review, exact-snapshot checkpoint and final differential; the public assets were
+uploaded from the exact frozen candidate bytes under the public names below, and the sizes and
+SHA-256 values are recorded in the [`1.4.0 release record`](release-1.4.0.md). The verification
+described here was performed on the prepublication candidate and is retained unchanged; publication
+and the public smoke are recorded separately.
 
-## Downloads (planned mapping, not live)
+## Downloads
 
-1.4.0 keeps exactly two products. These are the public filenames a later owner-authorized
-publication would use; no 1.4.0 download is live today, and the frozen internal candidate filenames,
-sizes and SHA-256 values are in the [release record](release-1.4.0.md).
+1.4.0 ships exactly two products. The public filenames below are the published download-name mapping;
+the frozen candidate filenames and their exact sizes and SHA-256 values are in the
+[release record](release-1.4.0.md).
 
-- `MetaBrain-CLI-1.4.0.exe` — CLI setup. Installs `cli\MetaBrain.Cli.exe`, the shared runtime and the
-  shared installer; installs and registers the CLI component only. The owner CLI carries every
-  cognitive workflow described below, plus the existing workspace, search and optional `open`
-  document session. No new Owner UI setup is shipped.
-- `MetaBrain-MCP-1.4.0.zip` — standalone MCP server package. Extract it completely and register the
-  absolute `mcp\MetaBrain.Mcp.exe` path. The agent tool surface is unchanged at 22 tools.
+- [`MetaBrain-CLI-1.4.0.exe`](https://github.com/triet4p/my-meta-brain/releases/download/v1.4.0/MetaBrain-CLI-1.4.0.exe)
+  — CLI setup. Installs `cli\MetaBrain.Cli.exe`, the shared runtime and the shared installer; installs
+  and registers the CLI component only. The owner CLI carries every cognitive workflow described
+  below, plus the existing workspace, search and optional `open` document session. No new Owner UI
+  setup is shipped.
+- [`MetaBrain-MCP-1.4.0.zip`](https://github.com/triet4p/my-meta-brain/releases/download/v1.4.0/MetaBrain-MCP-1.4.0.zip)
+  — standalone MCP server package. Extract it completely and register the absolute
+  `mcp\MetaBrain.Mcp.exe` path. The agent tool surface is unchanged at 22 tools.
 - There is **no** 1.4.0 Owner UI setup, `owner-ui` component or UI download, and no separate web
   console.
 
-This release does not rebuild, rename or withdraw the published 1.3.0, 1.2.0, 1.1.0 and 1.0.0
-assets. This release does not upgrade, replace, migrate or withdraw the 1.1.0 WPF console.
+The published 1.3.0, 1.2.0, 1.1.0 and 1.0.0 assets stay available and byte-unchanged at
+[`v1.3.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.3.0),
+[`v1.2.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.2.0),
+[`v1.1.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.1.0) and
+[`v1.0.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.0.0). This release does not
+rebuild, rename or withdraw them, and it does not upgrade, replace, migrate or withdraw the 1.1.0
+WPF console.
 
 ## What is new in 1.4.0
 

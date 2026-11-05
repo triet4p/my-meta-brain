@@ -2,7 +2,7 @@
 
 ## Goal và trạng thái
 
-- Status: **In progress — S14-T5 complete, S14-T6 candidate preparation active**. Release mục tiêu cuối sprint: **1.4.0**; chưa publish. T5 round-1 evidence PASS and exact-snapshot checkpoint `d0796b4f` complete. T3 provider usage remains 5/10 requests, $0.002741448 settled; no T4/T5 provider calls. No push.
+- Status: **In progress — T5 complete; T6 prepublication gates PASS, release_pending**. Candidate **1.4.0** prepared and verified; [T6 review PASS](../../artifacts/sprint-14/reviews/S14-T6-C1-R1.md), checkpoint `4155997e`, [final differential PASS](../../artifacts/sprint-14/reviews/S14-DEEP-D1.md), zero actionable findings. External publication authorization and public smoke remain outstanding. No push/tag/upload/deploy.
 - Entry: Sprint 13 complete và 1.3.0 published.
 - Scope/trace: P2-04, P2-05, P2-12; R01, R12, R13, R19–R22, R26–R30. Các P2 là candidates, không thay baseline khi chưa có approval.
 - Root: `F:/ai-ml/my-meta-brain`; target ref `main`; exact base/worktree/ownership resolve khi execution.
@@ -63,6 +63,7 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
     - Change: Publish cognitive/lifecycle workflows và attribution/review guides, nối jobs/source/operations hiện có.
     - Acceptance: Changed flows chạy thật trên candidate; nếu provider consent thiếu thì model task/release blocked, không dùng mocked echo làm acceptance; release contract chung đạt.
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
+    - Prepublication accepted: [worker evidence](../../artifacts/sprint-14/task-6.md), [round-1 PASS](../../artifacts/sprint-14/reviews/S14-T6-C1-R1.md), [checkpoint](../../artifacts/sprint-14/checkpoints/S14-T6-C1.md) `4155997e`, [differential PASS](../../artifacts/sprint-14/reviews/S14-DEEP-D1.md). Frozen candidate `03f772e2404d`; packaged CLI/MCP, upgrade/data preservation/refusal and local site integrity verified. Unchanged provider logic inherits accepted T3 evidence; no candidate provider call claimed. **release_pending:** separate external publication authorization and exact public artifact/link/version smoke required before T6/Sprint Complete.
 
 ## Exit và release boundary
 
@@ -76,4 +77,4 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
 
 S14-P0 accepted with [review](../../artifacts/sprint-14/reviews/S14-P0-C1-R1.md) and [checkpoint](../../artifacts/sprint-14/checkpoints/S14-P0-C1.md) `8734bf06`; S14-T1 owner-approved taxonomy with [review](../../artifacts/sprint-14/reviews/S14-T1-C1-R1.md) and [checkpoint](../../artifacts/sprint-14/checkpoints/S14-T1-C1.md) `0afb0015`; S14-T2 with [review](../../artifacts/sprint-14/reviews/S14-T2-C1-R1.md) and [checkpoint](../../artifacts/sprint-14/checkpoints/S14-T2-C1.md) `5ee77fb9`; S14-T3 [round-1 PASS](../../artifacts/sprint-14/reviews/S14-T3-C1-R1.md) and [checkpoint](../../artifacts/sprint-14/checkpoints/S14-T3-C1.md) `a89b1bd6`, zero actionable findings. T3 final-source smoke and bounded real job passed; 5/10 requests/$0.002741448 settled. No push.
 
-S14-T4 accepted with [round-1 PASS](../../artifacts/sprint-14/reviews/S14-T4-C1-R1.md) and [checkpoint](../../artifacts/sprint-14/checkpoints/S14-T4-C1.md) `867a87ec`; T5–T6 pending. No final differential review or 1.4.0 publication yet.
+S14-T4 accepted with [round-1 PASS](../../artifacts/sprint-14/reviews/S14-T4-C1-R1.md) and [checkpoint](../../artifacts/sprint-14/checkpoints/S14-T4-C1.md) `867a87ec`; T5 accepted at `d0796b4f`; T6 prepublication checkpoint `4155997e` and [final differential PASS](../../artifacts/sprint-14/reviews/S14-DEEP-D1.md), zero actionable findings. T6 remains release_pending until owner-authorized publication and public smoke.

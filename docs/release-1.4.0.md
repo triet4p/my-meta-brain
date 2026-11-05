@@ -1,12 +1,14 @@
 # Meta Brain 1.4.0 — release record
 
-**Status: `release_pending` — prepared local candidate, not published.** Nothing in this record has
-been uploaded, tagged or deployed. The owner has not authorized publication; publication is a
-separate, explicitly authorized step after the independent evidence review, the exact-snapshot
-checkpoint and the final differential PASS. If a file ever claimed to be a 1.4.0 download does not
-match the size and SHA-256 recorded here, treat it as not verified and report it instead of guessing.
+**Status: published 2026-11-05 as `v1.4.0`.** The owner authorized publication after the independent
+evidence review, the exact-snapshot checkpoint and the final differential PASS. The reviewed `main`
+through `4155997e1a02a20fab1b324c5a00ec02ec6965b7` was pushed, the annotated tag `v1.4.0` and the
+GitHub Release were created, the exact candidate bytes were uploaded under the public names below,
+the site was rebuilt against the published downloads and deployed, and the public assets and links
+were smoke-verified from the live URLs. If a file claimed to be a 1.4.0 download does not match the
+size and SHA-256 recorded here, treat it as not verified and report it instead of guessing.
 
-This is the prepublication release record for the two Meta Brain 1.4.0 products: the CLI setup and
+This is the release record for the two Meta Brain 1.4.0 products: the CLI setup and
 the standalone MCP server package. Product behavior for the workspace, search, document-session and
 multi-source ingestion surfaces was accepted in Sprints 12–13 and is inherited unchanged; the S14
 owner cognitive workflows (six-facet taxonomy, revision-pinned passage annotations, annotation
@@ -40,18 +42,21 @@ assembly and are outside every packaged payload member, so they change neither a
 hashes; no rebuild was performed to make documentation match the manifest. They form a later
 documentation/site snapshot, not the assembly-instant tree.
 
-## Assets and download-name mapping (not published)
+## Assets and download-name mapping (published)
 
-| Product | Planned public asset name | Internal candidate filename | Bytes | SHA-256 |
+Published 2026-11-05 in the GitHub Release
+[`v1.4.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.4.0). The public download URL for
+each asset is `https://github.com/triet4p/my-meta-brain/releases/download/v1.4.0/<public asset name>`;
+the public files are byte copies of the frozen candidate assets below.
+
+| Product | Public asset name | Internal candidate filename | Bytes | SHA-256 |
 | --- | --- | --- | ---: | --- |
 | CLI setup | `MetaBrain-CLI-1.4.0.exe` | `MetaBrain-CLI-1.4.0-win-x64-d0796b4f1458-treed1a503da70e1-03f772e2404d.exe` | 187,940,754 | `d203c6628e3bcb62016378a2fdfef16209c5f1cff35a2a3b32b5b2227126a66d` |
 | MCP package | `MetaBrain-MCP-1.4.0.zip` | `MetaBrain-MCP-1.4.0-win-x64-d0796b4f1458-treed1a503da70e1-03f772e2404d.zip` | 73,798,309 | `28875733584aacade16517f9c313994de21ba9effa0bafad83f67915b7893e00` |
 
-The public names are the download-name mapping a later owner-authorized publication would use. No
-`https://github.com/triet4p/my-meta-brain/releases/download/v1.4.0/<name>` URL is live for 1.4.0 and
-none may be described as live before the owner publishes it. There is no 1.4.0 Owner UI asset, no
-`owner-ui` component and no separate document-console download; neither public name may be reused
-for a UI build.
+The public names are the published download-name mapping; the internal candidate filenames stay the
+frozen provenance-bound names. There is no 1.4.0 Owner UI asset, no `owner-ui` component and no
+separate document-console download; neither public name may be reused for a UI build.
 
 The git-ignored candidate directory
 `runtime/release-candidates/1.4.0-win-x64-d0796b4f1458-treed1a503da70e1-03f772e2404d/` holds the two
@@ -142,10 +147,11 @@ was involved, and no real host installation was mutated.
   the data root/settings bytes and reinstall reopened the preserved annotation. A synthetic 1.1 WPF
   layout was refused with the named boundary and separate-root remediation before any file or data
   change.
-- **Local static site.** `scripts/site/build.ps1` verified the 1.4.0 manifest provenance, both asset
-  sizes and SHA-256 and built the ignored local preview; the download actions resolve only to those
-  verified candidate copies, the framing states the candidate is not a public release, and the
-  historical v1.0.0/v1.1.0/v1.2.0/v1.3.0 release links remain present and unchanged.
+- **Local static site (prepublication).** `scripts/site/build.ps1` verified the 1.4.0 manifest
+  provenance, both asset sizes and SHA-256 and built the ignored local preview; the download actions
+  resolved only to those verified candidate copies, the framing stated the candidate was not a public
+  release (the site was later rebuilt against the published downloads; see the publication section),
+  and the historical v1.0.0/v1.1.0/v1.2.0/v1.3.0 release links remained present and unchanged.
 - **Not exercised.** Fresh Windows SKU coverage, real-host install/ACL/registry/service changes,
   WPF behavior beyond the 1.1 refusal, a provider/model call on this candidate, official Codex/OMP
   client walkthroughs on this candidate, and the optional browser document session. Sprint 14
@@ -201,32 +207,68 @@ was involved, and no real host installation was mutated.
 11. The documentation/site snapshot in the working tree is newer than the assembly-instant source
     snapshot and is deliberately not presented as the frozen tree.
 
-## Publication checklist (not executed)
+## Publication executed (2026-11-05)
 
-This checklist is retained as the ordered procedure for a later owner-authorized publication. None
-of its steps has been performed; until then the status is `release_pending` and no 1.4.0 URL is live.
+The owner authorized publication on 2026-11-05. Every step of the retained procedure was executed in
+order on that date with no collision and no byte mismatch.
 
-1. Re-verify the two internal candidate assets and the manifest against the frozen sizes and
-   SHA-256 values above; do not rebuild the candidate, change its manifest or reuse a historical
-   asset name.
-2. Collision-check tag `v1.4.0`, the Release, `MetaBrain-CLI-1.4.0.exe`,
-   `MetaBrain-MCP-1.4.0.zip`, `candidate-manifest.json`, `SHA256SUMS.txt` and `LICENSE`. Any
-   existing target stops the operation.
-3. After the reviewed commit is pushed, create the annotated tag `v1.4.0`, create the GitHub
-   Release and upload the exact candidate bytes under the public names (copy, never rename the
-   candidate files).
-4. In this record, change the status block to published, fill the public URL cells and the
-   publication date, and record the public smoke result. In `README.md`, change the "1.4.0 is a
-   prepared local candidate" paragraph to published with the release link. In `CHANGELOG.md`, insert
-   `## [1.4.0] - <publication date>` under `[Unreleased]` and move only the 1.4.0 entries under it.
-5. Build the published site with
+1. **Candidate re-verified, not rebuilt.** The two internal candidate assets and the manifest were
+   re-hashed before upload: 187,940,754 bytes / `d203c662…`, 73,798,309 bytes / `28875733…`, and
+   402,963 bytes / `88e96ca9…`, all matching the frozen values above, with `-VerifyOnly` `VERIFIED`
+   when the candidate was assembled. No rebuild, no manifest change and no historical asset name was
+   reused.
+2. **No collision.** No `v1.4.0` tag, Release or target asset existed immediately before the writes;
+   the 1.0.0–1.3.0 tags, Releases and assets were not modified.
+3. **Reviewed main pushed, annotated tag created.** The reviewed `main` fast-forwarded to
+   `4155997e1a02a20fab1b324c5a00ec02ec6965b7` (seven reviewed Sprint 14 commits on top of
+   `5b1c726…`; no divergence, no force push). The annotated tag `v1.4.0` was created on
+   `4155997e1a02a20fab1b324c5a00ec02ec6965b7` and pushed; GitHub reports
+   `refs/tags/v1.4.0^{}` = `4155997e1a02a20fab1b324c5a00ec02ec6965b7`.
+4. **Release and exact bytes.** The GitHub Release
+   [`v1.4.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.4.0) was created and published
+   with `MetaBrain-CLI-1.4.0.exe`, `MetaBrain-MCP-1.4.0.zip`, `candidate-manifest.json`,
+   `SHA256SUMS.txt` and `LICENSE`, copied (never renamed) from the candidate directory. GitHub's own
+   asset digests reported `sha256:d203c662…`, `sha256:28875733…`, `sha256:88e96ca9…` and
+   `sha256:b623a3c4…` for the four byte-identical files.
+5. **Record and site.** This record, the release notes, `README.md`, `CHANGELOG.md`, the
+   `docs/META-BRAIN.md` status line and the `docs/OPERATIONS.md` limits were updated to the observed
+   publication. The site was rebuilt with
    `powershell.exe -NoProfile -File scripts/site/build.ps1 -ReleaseDownloadBaseUrl https://github.com/triet4p/my-meta-brain/releases/download/v1.4.0`
-   and deploy the result through the existing owner-controlled Pages flow; verify the historical
-   links still resolve.
-6. Public smoke: HTTP 200 for site and Release, downloaded bytes match the sizes and SHA-256 above,
-   downloaded CLI setup prints its 1.4.0 version, extracted MCP `--version` prints
-   `MetaBrain.Mcp 1.4.0`, and the manifest hash matches. Any mismatch stops the claim and is
-   reported, not guessed.
+   and deployed to the existing `gh-pages` Pages branch.
+6. **Public smoke.** Recorded in the next section from the live URLs.
+
+## Public smoke (2026-11-05)
+
+All results below were observed on the public URLs after publication, from downloaded bytes, not from
+the local candidate directory.
+
+- Release page `https://github.com/triet4p/my-meta-brain/releases/tag/v1.4.0` — HTTP 200; GitHub
+  reports the release published at `2026-11-05T15:18:56Z` and not a draft or prerelease.
+- Public downloads — HTTP 200 for `MetaBrain-CLI-1.4.0.exe` (187,940,754 bytes),
+  `MetaBrain-MCP-1.4.0.zip` (73,798,309 bytes), `candidate-manifest.json` (402,963 bytes),
+  `SHA256SUMS.txt` (180 bytes) and `LICENSE` (1,064 bytes). Downloaded SHA-256 values matched the
+  frozen values above exactly for the two assets, the manifest and `LICENSE`
+  (`d203c662…`, `28875733…`, `88e96ca9…`, `b623a3c4…`).
+- Downloaded CLI setup — `MetaBrain-CLI-1.4.0.exe --version` exited 0 and printed
+  `MetaBrain CLI Setup 1.4.0` on stdout. Only the version was requested; no install, upgrade or host
+  change ran.
+- Downloaded MCP package — the extracted ZIP has 396 file members and passed a full archive integrity
+  check; `mcp\MetaBrain.Mcp.exe --version` exited 0 and printed `MetaBrain.Mcp 1.4.0` on stderr with
+  stdout empty.
+- Site and links — the `gh-pages` deployment commit `613a86f3…` was built by GitHub Pages
+  (`status: built` for that commit). `https://triet4p.github.io/my-meta-brain/`, `index.html`,
+  `scenarios.html`, `codex.html`, `omp.html`, `operations.html` and `styles.css` all returned
+  HTTP 200. The live page carries the published `BẢN PHÁT HÀNH 1.4.0 · ĐÃ CÔNG BỐ` banner, contains
+  no preview banner, and its download actions point at the two `v1.4.0` release assets; the
+  historical `v1.0.0`–`v1.3.0` links remain present. The `v1.0.0`–`v1.3.0` release pages, the
+  published `v1.3.0` CLI/MCP download URLs and every earlier asset stay HTTP 200 and byte-unchanged
+  (their asset digests are unchanged; the 1.3.0 CLI remains
+  `1dae0fe0509c57081bf13ec81e7fe51ca88e95eecd61ba9375df135d34cc909b`).
+- Verification tooling note — on the Windows Git Bash coreutils in this environment,
+  `sha256sum -c SHA256SUMS.txt` reports `FAILED` for both binary assets because that build opens
+  checksum targets in text mode; the per-file SHA-256 values, an independent hashlib digest and
+  GitHub's own asset digests all matched. The shipped `SHA256SUMS.txt` uses the same standard
+  `hash  name` format as the 1.3.0 release.
 
 ## Rollback
 
@@ -243,13 +285,21 @@ of its steps has been performed; until then the status is `release_pending` and 
 
 ## Current status
 
-- Candidate `03f772e2404d` and its manifest/assets are frozen at the sizes and hashes above and were
-  re-verified with `-VerifyOnly` after the documentation was written. No payload byte changed before
-  or after the proof runs.
+- **Published 2026-11-05 as `v1.4.0`.** The reviewed `main` through
+  `4155997e1a02a20fab1b324c5a00ec02ec6965b7` is on `origin/main`, the annotated `v1.4.0` tag points
+  at it, and the GitHub Release carries the exact candidate bytes under the public names. The public
+  smoke above was observed from the live download URLs.
+- Candidate `03f772e2404d` and its manifest/assets remain frozen at the sizes and hashes above and
+  were re-verified with `-VerifyOnly` after the documentation was written. No payload byte changed
+  before or after the proof runs, and publication copied the bytes without modifying them.
 - The packaged CLI cognitive/review/lifecycle path, packaged MCP stdio transport and agent surface,
   1.3.0 in-place upgrade, uninstall data preservation and 1.1.0 refusal passed on those bytes and
-  remain the prepublication evidence.
-- The release is **not published**: no commit, push, tag, upload, deployment or public smoke has
-  been performed for 1.4.0, and no public-release claim is made. Publication awaits the owner's
-  separate authorization after the assigned review, checkpoint and differential gates.
+  remain the release evidence.
+- The site was rebuilt against the published download URLs and deployed to the existing `gh-pages`
+  Pages branch as commit `613a86f309816cb4e4df34481d3a69f6aa34a4d9`; GitHub Pages built it and was
+  observed serving the 1.4.0 content. During the build window the previous 1.3.0 page stayed live.
+  The deployed page was built from the working-tree publication documentation snapshot described
+  here, not from the `v1.4.0` tag tree: the tag points at the reviewed source commit
+  `4155997e…`, and this publication record/notes/README/CHANGELOG delta reaches `main` through the
+  separate reviewed checkpoint.
 - No provider/model call and no host/browser policy change was made by this release task.

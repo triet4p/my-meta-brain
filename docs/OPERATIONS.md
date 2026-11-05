@@ -1859,8 +1859,8 @@ removes the fixture when the run ends.
   1.4, and the frozen 1.1.0 console is not guaranteed to read the current runtime or workspace data.
   A 1.1 installation is refused in place; install 1.4 beside it with separate roots and endpoints
   (§2.3). An existing 1.2 or 1.3 CLI/MCP installation upgrades in place. 1.3.0 was published as
-  `v1.3.0` on 2026-11-03 after the owner authorized publication; the 1.4.0 candidate is prepared
-  locally and is not published by this build.
+  `v1.3.0` on 2026-11-03 and 1.4.0 as `v1.4.0` on 2026-11-05 after the owner authorized publication;
+  the published assets and links were smoke-verified.
 - The cognitive facets are owner review labels, not truth levels. AI suggestions stay unverified
   and pending until the owner accepts or rejects them, and a grounded excerpt establishes provenance
   only: the service does not prove semantic entailment or detect every incorrect inference in prose.
