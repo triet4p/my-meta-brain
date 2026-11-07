@@ -866,3 +866,10 @@ the assignment can fail before the sentinel check or any child starts.
 **Root cause:** The test waited only for a non-empty status field, which is true before the asynchronous page request renders the bound preview.
 **Fix / workaround:** Wait for the actual bound-preview status before inspecting the preview DOM.
 **Watch out for:** A non-empty DOM value is not an async completion signal; wait for the observable terminal state of the operation being asserted.
+
+## [2026-11-08] Frozen S15-T1 baseline inputs disappeared in a clean checkout
+
+**Symptom:** The S15-T1 lexical smoke tried to load its corpus and query set from `artifacts/sprint-15/evaluation`, so the baseline could not run from a checkout where ignored artifacts were absent.
+**Root cause:** The runner treated local evaluation-output storage as the fixture source even though lexical-v2 had frozen copies under the smoke project's source fixture directory; lexical-v1 remained historical-only.
+**Fix / workaround:** Load the retained lexical-v2 corpus and queries directly from `tests/MetaBrain.S1T4.Smoke/Fixtures/S15T1/lexical-v2`, log the exact input paths and SHA-256 digests, and remove the superseded v1 dispatch while preserving its historical artifacts.
+**Watch out for:** Evaluation reports and generated artifacts are not reproducible fixture inputs; baseline runners must consume source-controlled fixtures and fail directly when those fixtures are missing.

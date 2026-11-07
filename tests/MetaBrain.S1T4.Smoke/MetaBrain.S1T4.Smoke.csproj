@@ -12,6 +12,12 @@
     <UseWPF>true</UseWPF>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.31.1" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" Version="1.31.1" />
+    <PackageReference Include="System.Numerics.Tensors" Version="10.0.14" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- The suite drives the owner console session in process (the exact class
          the WPF window uses) for the S5-T2/S5-T3 private-state lock boundary.
          That session type owns no WPF surface, so this project keeps its plain

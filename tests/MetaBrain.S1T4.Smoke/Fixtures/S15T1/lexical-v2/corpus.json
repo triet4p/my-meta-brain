@@ -1,0 +1,107 @@
+{
+  "datasetId": "s15-t1-synthetic-search-v2",
+  "syntheticOnly": true,
+  "allowedFolderName": "inside",
+  "outsideFolderName": "outside",
+  "distractorFileCount": 100,
+  "distractorBytesPerFile": 1024,
+  "agentScopeItems": [
+    {
+      "resourceId": "s15t1-agent-allowed",
+      "zone": "alpha",
+      "title": "Synthetic S15-T1 granted search witness",
+      "body": "Allowed synthetic memory contains s15t1allowedunique only.",
+      "granted": true
+    },
+    {
+      "resourceId": "s15t1-agent-ungranted-alpha",
+      "zone": "alpha",
+      "title": "Synthetic S15-T1 ungranted same-zone witness",
+      "body": "Unapproved synthetic body contains s15t1ungrantedunique and S15T1-UNGRANTED-PRIVATE-BODY.",
+      "granted": false
+    },
+    {
+      "resourceId": "s15t1-agent-beta-zone",
+      "zone": "beta",
+      "title": "Synthetic S15-T1 different-zone witness",
+      "body": "Unapproved synthetic body contains s15t1betazoneunique and S15T1-BETA-PRIVATE-BODY.",
+      "granted": false
+    }
+  ],
+  "files": [
+    {
+      "key": "preferences",
+      "folder": "inside",
+      "name": "preferences.md",
+      "revision1Content": "# Synthetic preference evidence\nSource: invented owner-authored-style statement for evaluation only; not an actual owner preference.\nTôi ưu tiên giữ dữ liệu cục bộ làm mặc định; không gửi ra ngoài trong mỗi truy vấn.\nMy preference is local-first retrieval; model weights may be downloaded only after explicit owner consent.\nThis synthetic example is not a provider setting or real consent.\n"
+    },
+    {
+      "key": "symbols",
+      "folder": "inside",
+      "name": "symbols.md",
+      "revision1Content": "# Synthetic symbol evidence\nSource: invented code note; no production symbol is represented.\nThe parser emits `MBX_REV_17` when the selected revision matches.\nA similar identifier is `XMBX_REV_17B`, not the same exact symbol.\n"
+    },
+    {
+      "key": "search-intent",
+      "folder": "inside",
+      "name": "search-intent.md",
+      "revision1Content": "# Synthetic recall paraphrase evidence\nI need to retrieve saved information when I only remember the meaning, not the original words.\nTôi muốn tìm lại điều đã ghi dù chỉ nhớ ý, không nhớ đúng câu.\nThis is an invented query scenario, not a claim about retrieval quality.\n"
+    },
+    {
+      "key": "temporal",
+      "folder": "inside",
+      "name": "temporal.md",
+      "revision1Content": "# Synthetic time record\nOccurred: 2026-10-21; recorded: 2026-11-02.\nLEGACY-PLAN-77 was still open in revision 1.\n",
+      "revision2Content": "# Synthetic time record\nOccurred: 2026-10-21; recorded: 2026-11-02.\nCurrent as of 2026-11-05: the review remains pending; review after 2026-11-12.\nThis revision supersedes revision 1; no completion or causal status is asserted.\n"
+    },
+    {
+      "key": "intention",
+      "folder": "inside",
+      "name": "intention.md",
+      "revision1Content": "# Synthetic prospective action\nI plan to compare the lexical baseline with local semantic retrieval in a future sprint.\nStatus: open; no claim that the comparison is completed.\n"
+    },
+    {
+      "key": "action-effect",
+      "folder": "inside",
+      "name": "action-effect.md",
+      "revision1Content": "# Synthetic action-effect observation\nSynthetic observation: With cache enabled, median wait was 93 ms; with cache disabled, 120 ms across twelve synthetic trials.\nThis observation does not establish causality and is not evidence that caching alone caused the difference.\n"
+    },
+    {
+      "key": "scope-decoy",
+      "folder": "outside",
+      "name": "decoy.md",
+      "revision1Content": "# Synthetic excluded-scope decoy\nS15_SCOPE_NEGATIVE_4AF2 exists only in the outside folder.\nS15_OUTSIDE_ONLY_1B7D is another marker outside the selected folder.\nS15_OUTSIDE_ONLY_590F\nS15_OUTSIDE_ONLY_77CE\nS15_OUTSIDE_ONLY_C3A1\n"
+    },
+    {
+      "key": "preferences-2",
+      "folder": "inside",
+      "name": "preferences-2.md",
+      "revision1Content": "# Synthetic supplementary preference evidence\nThe invented preference is to process private notes on this device by default.\nTôi muốn máy tính tự xử lý nội dung ngay tại chỗ; hỏi tôi trước khi tải dữ liệu.\nAsk before fetching public weights; model downloads need explicit consent.\nSynthetic statement only; no real owner setting.\n"
+    },
+    {
+      "key": "symbols-2",
+      "folder": "inside",
+      "name": "symbols-2.md",
+      "revision1Content": "# Synthetic supplementary symbol evidence\nA synthetic evaluator token is `S15_T1_HASH_A9`.\nThe nearby code `XS15_T1_HASH_A9X` is a different identifier and is not an exact match.\n"
+    },
+    {
+      "key": "temporal-2",
+      "folder": "inside",
+      "name": "temporal-2.md",
+      "revision1Content": "# Synthetic supplementary time record\nOccurred: 2026-04-10; recorded: 2026-04-12.\nS15_RETIRED_PLAN_7C4D was scheduled before this revision.\n",
+      "revision2Content": "# Synthetic supplementary time record\nOccurred: 2026-04-10; recorded: 2026-04-12.\nCurrent on 2026-04-14: the synthetic review remains open.\nNext review 2026-04-21.\nThis revision supersedes the retired plan.\n"
+    },
+    {
+      "key": "intention-2",
+      "folder": "inside",
+      "name": "intention-2.md",
+      "revision1Content": "# Synthetic supplementary prospective action\nPlan: revisit the synthetic ranking after the next test run.\nStatus: open, not completed.\n"
+    },
+    {
+      "key": "action-effect-2",
+      "folder": "inside",
+      "name": "action-effect-2.md",
+      "revision1Content": "# Synthetic supplementary action-effect observation\nSynthetic observation: median wait was 84 ms with the feature on and 109 ms with it off across 20 trials.\nThe observed difference is not proof of cause, and it does not establish that the feature reduced wait time.\n"
+    }
+  ]
+}
