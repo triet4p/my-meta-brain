@@ -1,4 +1,5 @@
 using System.Globalization;
+using MetaBrain.Core.Domain;
 using System.Text;
 
 namespace MetaBrain.Core.Security;
@@ -405,5 +406,154 @@ public static class WorkspaceHybridSearchPolicy
             Attribution = host.Attribution ?? other.Attribution,
             ChunkOrdinal = host.ChunkOrdinal ?? other.ChunkOrdinal,
         };
+    }
+}
+
+/// <summary>The purpose-aware owner recall route, resolved without a provider.</summary>
+public sealed record WorkspaceRecallRoute(string Purpose, CognitiveFacet? Facet, string SelectionReason);
+
+/// <summary>
+/// Canonical route names accepted by the owner workspace recall command.
+/// </summary>
+public static class WorkspaceRecallPurposes
+{
+    public const string Auto = "auto";
+    public const string Experience = "experience";
+    public const string Temporal = "temporal";
+    public const string Intention = "intention";
+    public const string ActionEffect = "action-effect";
+    public const string General = "general";
+
+    public static bool IsKnown(string? purpose) =>
+        purpose is null ||
+        string.Equals(purpose, Auto, StringComparison.Ordinal) ||
+        string.Equals(purpose, Experience, StringComparison.Ordinal) ||
+        string.Equals(purpose, Temporal, StringComparison.Ordinal) ||
+        string.Equals(purpose, Intention, StringComparison.Ordinal) ||
+        string.Equals(purpose, ActionEffect, StringComparison.Ordinal) ||
+        string.Equals(purpose, General, StringComparison.Ordinal);
+}
+
+/// <summary>
+/// Deterministic rule-first recall routing. Precedence is action/effect,
+/// intention, temporal, experience, then general; no route asserts truth or
+/// changes the shared hybrid evidence order.
+/// </summary>
+public static class WorkspaceRecallRouter
+{
+    private static readonly string[] ActionEffectTerms =
+    [
+        "action-effect", "action effect", "effect", "impact", "cause", "caused", "because",
+        "correlation", "outcome", "result", "tác động", "ảnh hưởng", "kết quả", "do đâu", "vì sao"
+    ];
+
+    private static readonly string[] IntentionTerms =
+    [
+        "intention", "intend", "intended", "plan", "planned", "remind", "reminder", "complete",
+        "completed", "finish", "finished", "done", "will", "to-do", "todo", "dự định",
+        "kế hoạch", "nhắc", "hoàn thành", "xong"
+    ];
+
+    private static readonly string[] TemporalTerms =
+    [
+        "when", "date", "time", "occurred", "recorded", "valid", "timeline", "history",
+        "before", "after", "since", "lúc nào", "khi nào", "ngày nào", "thời điểm"
+    ];
+
+    private static readonly string[] ExperienceTerms =
+    [
+        "experience", "experienced", "attempt", "attempted", "tried", "what happened",
+        "what did i", "did i", "trải nghiệm", "kinh nghiệm", "đã thử", "lần thử", "tôi đã", "mình đã"
+    ];
+
+    public static WorkspaceRecallRoute Resolve(string query, string requestedPurpose)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentNullException.ThrowIfNull(requestedPurpose);
+        if (!WorkspaceRecallPurposes.IsKnown(requestedPurpose))
+        {
+            throw new ArgumentException("The workspace recall purpose is not supported.", nameof(requestedPurpose));
+        }
+
+        if (!string.Equals(requestedPurpose, WorkspaceRecallPurposes.Auto, StringComparison.Ordinal))
+        {
+            return Route(requestedPurpose);
+        }
+
+        if (ContainsAnyTerm(query, ActionEffectTerms))
+        {
+            return Route(WorkspaceRecallPurposes.ActionEffect);
+        }
+
+        if (ContainsAnyTerm(query, IntentionTerms))
+        {
+            return Route(WorkspaceRecallPurposes.Intention);
+        }
+
+        if (ContainsAnyTerm(query, TemporalTerms))
+        {
+            return Route(WorkspaceRecallPurposes.Temporal);
+        }
+
+        return ContainsAnyTerm(query, ExperienceTerms)
+            ? Route(WorkspaceRecallPurposes.Experience)
+            : Route(WorkspaceRecallPurposes.General);
+    }
+
+    private static WorkspaceRecallRoute Route(string purpose) => purpose switch
+    {
+        WorkspaceRecallPurposes.Experience => new(
+            purpose, CognitiveFacet.Experience,
+            "Selected because the explicit route is attributed experience evidence."),
+        WorkspaceRecallPurposes.Temporal => new(
+            purpose, null,
+            "Selected to report stored event/recorded/validity stamps separately from content dates; absent stamps remain unknown."),
+        WorkspaceRecallPurposes.Intention => new(
+            purpose, CognitiveFacet.Intention,
+            "Selected because the explicit route is prospective intention evidence; only stored lifecycle state is reported."),
+        WorkspaceRecallPurposes.ActionEffect => new(
+            purpose, CognitiveFacet.ActionEffect,
+            "Selected because the explicit route is action/effect evidence; association does not establish causality."),
+        _ => new(
+            WorkspaceRecallPurposes.General, null,
+            "No purpose-specific rule matched; results remain ordinary scoped candidates.")
+    };
+
+    private static bool ContainsAnyTerm(string query, IReadOnlyList<string> terms)
+    {
+        foreach (var term in terms)
+        {
+            if (ContainsTerm(query, term))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsTerm(string value, string term)
+    {
+        var start = 0;
+        while (start <= value.Length - term.Length)
+        {
+            var found = value.IndexOf(term, start, StringComparison.OrdinalIgnoreCase);
+            if (found < 0)
+            {
+                return false;
+            }
+
+            var end = found + term.Length;
+            var leftBoundary = found == 0 || !char.IsLetterOrDigit(value[found - 1]);
+            var rightBoundary = end == value.Length || !char.IsLetterOrDigit(value[end]);
+            if (leftBoundary && rightBoundary)
+            {
+                return true;
+            }
+
+            start = found + 1;
+        }
+
+        return false;
     }
 }

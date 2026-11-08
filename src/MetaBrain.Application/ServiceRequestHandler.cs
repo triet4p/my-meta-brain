@@ -1276,7 +1276,8 @@ public sealed record WorkspaceHybridHitWire(
     string? AnchorKind,
     string? Attribution,
     int? ChunkOrdinal,
-    double? Similarity);
+    double? Similarity,
+    WorkspaceRecallHit? Recall = null);
 
 /// <summary>
 /// One S15-T3 hybrid page. <see cref="Total"/> counts every ranked in-scope
@@ -1303,7 +1304,8 @@ public sealed record WorkspaceHybridSearchPageWire(
     string SemanticStatus,
     string? ModelRevision,
     int? VectorDimensions,
-    WorkspaceHybridHitWire[] Hits);
+    WorkspaceHybridHitWire[] Hits,
+    WorkspaceRecallSummary? Recall = null);
 
 public sealed record ServiceReply(
     int ProtocolVersion,
@@ -2032,7 +2034,8 @@ public sealed class ServiceRequestHandler
         if (request.IncludeArchived is not null &&
             !string.Equals(request.Operation, OwnerLibrarySearchOperation, StringComparison.Ordinal) &&
             !string.Equals(request.Operation, AgentMemorySearchOperation, StringComparison.Ordinal) &&
-            !string.Equals(request.Operation, AgentMemoryBriefOperation, StringComparison.Ordinal))
+            !string.Equals(request.Operation, AgentMemoryBriefOperation, StringComparison.Ordinal) &&
+            !string.Equals(request.Operation, OwnerWorkspaceHybridSearchOperation, StringComparison.Ordinal))
         {
             return Error("invalid_request");
         }
@@ -11937,6 +11940,7 @@ public sealed class ServiceRequestHandler
         try
         {
             var outcome = new WorkspaceHybridSearchService(_workspacePassageIndex).Search(
+                context,
                 operation,
                 new WorkspaceHybridSearchRequest(
                     request.Query,
@@ -11947,7 +11951,9 @@ public sealed class ServiceRequestHandler
                     dateTo,
                     offset,
                     limit,
-                    request.WorkspaceModelDirectory),
+                    request.WorkspaceModelDirectory,
+                    request.Purpose,
+                    request.IncludeArchived == true),
                 cancellationToken);
             return new ServiceReply(
                 CurrentProtocolVersion,
@@ -11956,6 +11962,11 @@ public sealed class ServiceRequestHandler
                 null,
                 WorkspaceHybridSearch: ToWorkspaceHybridSearchPage(outcome));
         }
+        catch (CognitiveAnnotationConflictException)
+        {
+            return Error("revision_conflict");
+        }
+
         catch (ServiceRefusalException ex)
         {
             return Refusal(ex.Code, ex.Message);
@@ -12015,8 +12026,10 @@ public sealed class ServiceRequestHandler
                     hit.AnchorKind,
                     hit.Attribution,
                     hit.ChunkOrdinal,
-                    hit.Similarity))
-                .ToArray());
+                    hit.Similarity,
+                    hit.Recall))
+                .ToArray(),
+            outcome.Recall);
 
     private static bool TryParseSearchDate(string? value, out DateOnly? date)
     {
@@ -12426,11 +12439,11 @@ public sealed class ServiceRequestHandler
 
 
     /// <summary>
-    /// S15-T3 the owner hybrid search accepts exactly its query, its folder,
-    /// field, currentness and content-date filters, its page and the explicit
-    /// local model directory. Every other request field is refused instead of
-    /// being silently ignored, so a search can never carry another act's
-    /// authority, precondition or scope.
+    /// S15-T3/T4 owner hybrid search accepts its query, folder, retrieval and
+    /// date filters, purpose-aware recall options, page and explicit local
+    /// model directory. Every other request field is refused instead of being
+    /// silently ignored, so search cannot carry another act's authority,
+    /// precondition or scope.
     /// </summary>
     private static bool HasWorkspaceHybridSearchExtras(ServiceRequest request) =>
         request.ResourceId is not null || request.ZoneId is not null ||
@@ -12448,27 +12461,26 @@ public sealed class ServiceRequestHandler
         request.CatalogId is not null || request.Label is not null ||
         request.Description is not null || request.CatalogIds is not null ||
         request.SearchKind is not null || request.BudgetChars is not null ||
-        request.Purpose is not null || request.AgentId is not null ||
-        request.AgentContext is not null || request.DisclosureContext is not null ||
-        request.RequestId is not null || request.SourceLocator is not null ||
-        request.SourceFormat is not null || request.SourceFormatVersion is not null ||
-        request.SourceTitle is not null || request.SourceAuthor is not null ||
-        request.SourceCapturedAtUtc is not null || request.SourceGeneration is not null ||
-        request.SnapshotRetainUntilUtc is not null || request.SearchLevel is not null ||
-        request.SearchFromUtc is not null || request.SearchToUtc is not null ||
-        request.SearchAsOfUtc is not null || request.JobId is not null ||
-        request.BaseUrl is not null || request.ApiKey is not null ||
+        request.AgentId is not null || request.AgentContext is not null ||
+        request.DisclosureContext is not null || request.RequestId is not null ||
+        request.SourceLocator is not null || request.SourceFormat is not null ||
+        request.SourceFormatVersion is not null || request.SourceTitle is not null ||
+        request.SourceAuthor is not null || request.SourceCapturedAtUtc is not null ||
+        request.SourceGeneration is not null || request.SnapshotRetainUntilUtc is not null ||
+        request.SearchLevel is not null || request.SearchFromUtc is not null ||
+        request.SearchToUtc is not null || request.SearchAsOfUtc is not null ||
+        request.JobId is not null || request.BaseUrl is not null || request.ApiKey is not null ||
         request.Profile is not null || request.IntervalMinutes is not null ||
         request.ContextProject is not null || request.ContextTask is not null ||
-        request.IncludeArchived is not null || request.BackupPath is not null ||
-        request.TargetPath is not null || request.IncludeRelations is not null ||
-        request.IncludeLifecycleStates is not null || request.DiscardRollback is not null ||
-        request.OperationsOffset is not null || request.OperationsLimit is not null ||
-        request.RetentionDays is not null || request.RetentionMaxRecords is not null ||
-        request.PurgeOperationalLog is not null || request.SourceFolderRoot is not null ||
-        request.SourceFolderRecursive is not null || request.SourceFolderIncludePatterns is not null ||
-        request.SourceFolderExcludePatterns is not null || request.SourceFolderPreviewId is not null ||
-        request.SourceFolderConfirmation is not null || request.SourceFolderRawPreservationRetainUntilUtc is not null ||
+        request.BackupPath is not null || request.TargetPath is not null ||
+        request.IncludeRelations is not null || request.IncludeLifecycleStates is not null ||
+        request.DiscardRollback is not null || request.OperationsOffset is not null ||
+        request.OperationsLimit is not null || request.RetentionDays is not null ||
+        request.RetentionMaxRecords is not null || request.PurgeOperationalLog is not null ||
+        request.SourceFolderRoot is not null || request.SourceFolderRecursive is not null ||
+        request.SourceFolderIncludePatterns is not null || request.SourceFolderExcludePatterns is not null ||
+        request.SourceFolderPreviewId is not null || request.SourceFolderConfirmation is not null ||
+        request.SourceFolderRawPreservationRetainUntilUtc is not null ||
         request.RawPreservationRetainUntilUtc is not null || request.SourceRecordOffset is not null ||
         request.WorkspaceParentId is not null || request.WorkspaceName is not null ||
         request.WorkspaceTreeRevision is not null || request.WorkspaceContentRevision is not null ||

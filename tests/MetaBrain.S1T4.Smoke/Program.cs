@@ -29,7 +29,11 @@ internal static class Program
             string.Equals(args[0], "s15-t2", StringComparison.Ordinal);
         var s15T3Scenario = args.Length == 3 &&
             string.Equals(args[0], "s15-t3", StringComparison.Ordinal);
-        var scenario = s15T2Scenario ? "s15-t2" : s15T3Scenario ? "s15-t3" : args.Length == 2 &&
+        var s15T4Scenario = args.Length == 3 &&
+            string.Equals(args[0], "s15-t4", StringComparison.Ordinal);
+        var scenario = s15T2Scenario ? "s15-t2" :
+            s15T3Scenario ? "s15-t3" :
+            s15T4Scenario ? "s15-t4" : args.Length == 2 &&
             (string.Equals(args[0], "scope-issue", StringComparison.Ordinal) ||
              string.Equals(args[0], "agent-session", StringComparison.Ordinal) ||
              string.Equals(args[0], "s1-t5", StringComparison.Ordinal) ||
@@ -187,6 +191,7 @@ internal static class Program
             Console.Error.WriteLine("S15-T1 invocation: MetaBrain.S1T4.Smoke.exe s15-t1 <MetaBrain.Connections.exe>");
             Console.Error.WriteLine("S15-T2 invocation: MetaBrain.S1T4.Smoke.exe s15-t2 <MetaBrain.Connections.exe> <MetaBrain.Cli.exe>");
             Console.Error.WriteLine("S15-T3 invocation: MetaBrain.S1T4.Smoke.exe s15-t3 <MetaBrain.Connections.exe> <MetaBrain.Cli.exe>");
+            Console.Error.WriteLine("S15-T4 invocation: MetaBrain.S1T4.Smoke.exe s15-t4 <MetaBrain.Connections.exe> <MetaBrain.Cli.exe>");
             return 2;
         }
 
@@ -311,6 +316,9 @@ internal static class Program
                     break;
                 case "s15-t3":
                     await OwnerServiceSmoke.RunS15T3HybridSearchAsync(fullPath, Path.GetFullPath(args[2])).ConfigureAwait(false);
+                    break;
+                case "s15-t4":
+                    await OwnerServiceSmoke.RunS15T4PurposeAwareRecallAsync(fullPath, Path.GetFullPath(args[2])).ConfigureAwait(false);
                     break;
                 case "s15-t1-v2":
                     await OwnerServiceSmoke.RunS15T1SearchEvaluationAsync(fullPath).ConfigureAwait(false);

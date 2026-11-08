@@ -572,7 +572,7 @@ local browser.
 
 ```text
 cli\MetaBrain.Cli.exe owner workspace-search --control-pipe <pipe> --query <literal> [--folder-id <live folder id>] [--format text|json]
-cli\MetaBrain.Cli.exe owner workspace-search --control-pipe <pipe> --query <text> --hybrid true [--folder-id <live folder id>] [--field name|path|heading|content] [--current current|history|all] [--content-date-from YYYY-MM-DD --content-date-to YYYY-MM-DD] [--offset N --limit N] [--model-directory <pinned local E5 directory>] [--format text|json]
+cli\MetaBrain.Cli.exe owner workspace-search --control-pipe <pipe> --query <text> --hybrid true [--folder-id <live folder id>] [--field name|path|heading|content] [--current current|history|all] [--content-date-from YYYY-MM-DD --content-date-to YYYY-MM-DD] [--offset N --limit N] [--model-directory <pinned local E5 directory>] [--purpose auto|experience|temporal|intention|action-effect|general [--include-archived true|false]] [--format text|json]
 cli\MetaBrain.Cli.exe open <file-id> --control-pipe <pipe> [--revision <n>] [--anchor-offset <bytes> --anchor-length <bytes> --anchor-sha256 <digest>] [--no-browser] [--lifetime-seconds <n>]
 ```
 
@@ -613,6 +613,20 @@ cli\MetaBrain.Cli.exe open <file-id> --control-pipe <pipe> [--revision <n>] [--a
   prose query therefore returns explicit candidates rather than a claimed match. The identifier,
   folder-scope and currentness no-answer negatives and the no-raw-cutoff rule are unchanged; general
   natural-language abstention is not claimed (measured limits are in the Sprint 15 evidence).
+- `--purpose` (S15-T4) adds deterministic cognitive-intent routing to the same owner operation;
+  `auto` resolves action/effect before intention, temporal, experience and general rules, while an
+  explicit purpose selects its named route. Purpose filters and their regions stay within the
+  existing folder/currentness/content-date scope and exact file revision. Each region groups one
+  file revision, uses its highest-ranked eligible hit as the representative, and reports the
+  complete filtered/ranked hit counts, separate literal and semantic-candidate counts, selection
+  reasons and representative's global rank before region paging. A semantic-only hit remains an
+  unconfirmed candidate, never supporting evidence. Annotation authorship/executor/review and
+  exact lifecycle state are preserved; action/effect association does not prove causality, a
+  mention/reminder/acknowledgement does not complete an intention, and absent occurred/recorded
+  stamps remain unknown. Content dates are still dates in source text, separate from annotation
+  record time and lifecycle stamps. Archived records stay excluded unless `--include-archived true`
+  is supplied with `--purpose`; this expands only the owner's query and does not change recall
+  policy or access. MCP, browser and agent surfaces are unchanged.
 - `open` requires the unlocked vault and the running shared host. It binds one live file, one
   content revision, read plus explicit save, and one lifetime; the bridge listens on an ephemeral
   `127.0.0.1` port and the browser receives only a per-process capability in the served page. A

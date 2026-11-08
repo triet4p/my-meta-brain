@@ -717,7 +717,7 @@ internal static class OwnerControlCli
     {
         options.RequireOnly("--control-pipe", "--query", "--folder-id", "--format", "--hybrid",
             "--field", "--current", "--content-date-from", "--content-date-to",
-            "--offset", "--limit", "--model-directory");
+            "--offset", "--limit", "--model-directory", "--purpose", "--include-archived");
         var controlPipe = ControlPipe(options);
         var query = options.Required("--query");
         var folderId = options.Optional("--folder-id");
@@ -726,6 +726,13 @@ internal static class OwnerControlCli
         var dateFromText = options.Optional("--content-date-from");
         var dateToText = options.Optional("--content-date-to");
         var modelDirectory = options.Optional("--model-directory");
+        var purpose = options.Optional("--purpose");
+        var includeArchived = false;
+        if (options.Optional("--include-archived") is { } includeArchivedText &&
+            !bool.TryParse(includeArchivedText, out includeArchived))
+        {
+            return Usage();
+        }
         var format = options.Optional("--format") ?? "text";
         var offset = 0;
         var limit = WorkspaceHybridSearchService.DefaultLimit;
@@ -738,6 +745,8 @@ internal static class OwnerControlCli
             offset < 0 || limit is < 1 or > WorkspaceHybridSearchService.MaximumLimit ||
             !WorkspaceHybridSearchFields.IsKnown(field) ||
             !WorkspaceHybridSearchCurrent.IsKnown(current) ||
+            !WorkspaceRecallPurposes.IsKnown(purpose) ||
+            (includeArchived && purpose is null) ||
             !TryParseSearchDate(dateFromText, out var dateFrom) ||
             !TryParseSearchDate(dateToText, out var dateTo) ||
             (dateFrom is { } from && dateTo is { } to && from > to) ||
@@ -760,7 +769,9 @@ internal static class OwnerControlCli
                 WorkspaceSearchFolderId: folderId,
                 WorkspaceSearchField: field,
                 WorkspaceSearchDateFrom: dateFromText,
-                WorkspaceSearchDateTo: dateToText)).ConfigureAwait(false);
+                WorkspaceSearchDateTo: dateToText,
+                Purpose: purpose,
+                IncludeArchived: includeArchived)).ConfigureAwait(false);
         if (!result.Success || !HasStatus(result.Reply, "workspace_hybrid_search") ||
             !result.Reply.TryGetProperty("workspaceHybridSearch", out var page) ||
             page.ValueKind != JsonValueKind.Object)
@@ -795,6 +806,7 @@ internal static class OwnerControlCli
             $"hasMore={JsonFlagText(page, "hasMore")} semanticStatus={JsonValueText(page, "semanticStatus")} " +
             $"modelRevision={JsonSerializer.Serialize(JsonValueText(page, "modelRevision"))} " +
             $"vectorDimensions={JsonValueText(page, "vectorDimensions")}");
+        WriteWorkspaceRecallSummary(page);
         if (!page.TryGetProperty("hits", out var hits) || hits.ValueKind != JsonValueKind.Array)
         {
             return;
@@ -802,32 +814,86 @@ internal static class OwnerControlCli
 
         foreach (var hit in hits.EnumerateArray())
         {
-            var location = hit.TryGetProperty("byteOffset", out var offsetValue) &&
-                offsetValue.ValueKind == JsonValueKind.Number &&
-                hit.TryGetProperty("byteLength", out var lengthValue) &&
-                lengthValue.ValueKind == JsonValueKind.Number
-                ? $"byteOffset={offsetValue.GetInt64().ToString(CultureInfo.InvariantCulture)} " +
-                  $"byteLength={lengthValue.GetInt64().ToString(CultureInfo.InvariantCulture)} " +
-                  $"anchorSha256={JsonValueText(hit, "anchorSha256")} " +
-                  $"anchorKind={JsonSerializer.Serialize(JsonValueText(hit, "anchorKind"))}"
-                : "location=metadata";
-            var channels = hit.TryGetProperty("channels", out var channelValues) &&
-                channelValues.ValueKind == JsonValueKind.Array
-                ? string.Join(",", channelValues.EnumerateArray().Select(value => value.GetString()))
-                : string.Empty;
-            var similarity = hit.TryGetProperty("similarity", out var similarityValue) &&
-                similarityValue.ValueKind == JsonValueKind.Number
-                ? similarityValue.GetDouble().ToString("F4", CultureInfo.InvariantCulture)
-                : "none";
+            WriteWorkspaceHybridHit(hit);
+        }
+    }
+    private static void WriteWorkspaceRecallSummary(JsonElement page)
+    {
+        if (!page.TryGetProperty("recall", out var recall) || recall.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        Console.WriteLine(
+            $"RECALL purpose={JsonValueText(recall, "purpose")} " +
+            $"selectionReason={JsonSerializer.Serialize(JsonValueText(recall, "selectionReason"))} " +
+            $"totalRegions={JsonValueText(recall, "totalRegions")} offset={JsonValueText(recall, "offset")} " +
+            $"limit={JsonValueText(recall, "limit")} hasMore={JsonFlagText(recall, "hasMore")} " +
+            $"includeArchived={JsonFlagText(recall, "includeArchived")}");
+        if (!recall.TryGetProperty("regions", out var regions) || regions.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        foreach (var region in regions.EnumerateArray())
+        {
             Console.WriteLine(
-                $"HIT rank={JsonValueText(hit, "rank")} fileId={JsonValueText(hit, "fileId")} " +
-                $"path={JsonSerializer.Serialize(JsonValueText(hit, "path"))} " +
-                $"revision={JsonValueText(hit, "contentRevision")} " +
-                $"fileSha256={JsonValueText(hit, "fileSha256")} field={JsonValueText(hit, "field")} " +
-                $"channels={channels} evidenceClass={JsonValueText(hit, "evidenceClass")} " +
-                $"stale={JsonFlagText(hit, "stale")} " +
-                $"line={JsonValueText(hit, "line")} {location} similarity={similarity} " +
-                $"evidence={JsonSerializer.Serialize(JsonValueText(hit, "evidence"))}");
+                $"REGION fileId={JsonValueText(region, "fileId")} " +
+                $"path={JsonSerializer.Serialize(JsonValueText(region, "path"))} " +
+                $"revision={JsonValueText(region, "contentRevision")} stale={JsonFlagText(region, "stale")} " +
+                $"total={JsonValueText(region, "total")} literalTotal={JsonValueText(region, "literalTotal")} " +
+                $"semanticCandidateTotal={JsonValueText(region, "semanticCandidateTotal")} " +
+                $"representativeRank={JsonValueText(region, "representativeRank")} " +
+                $"selectionReasons={JsonSerializer.Serialize(region.GetProperty("selectionReasons"))}");
+            if (region.TryGetProperty("representative", out var representative) &&
+                representative.ValueKind == JsonValueKind.Object)
+            {
+                WriteWorkspaceHybridHit(representative);
+            }
+        }
+    }
+
+    private static void WriteWorkspaceHybridHit(JsonElement hit)
+    {
+        var location = hit.TryGetProperty("byteOffset", out var offsetValue) &&
+            offsetValue.ValueKind == JsonValueKind.Number &&
+            hit.TryGetProperty("byteLength", out var lengthValue) &&
+            lengthValue.ValueKind == JsonValueKind.Number
+            ? $"byteOffset={offsetValue.GetInt64().ToString(CultureInfo.InvariantCulture)} " +
+              $"byteLength={lengthValue.GetInt64().ToString(CultureInfo.InvariantCulture)} " +
+              $"anchorSha256={JsonValueText(hit, "anchorSha256")} " +
+              $"anchorKind={JsonSerializer.Serialize(JsonValueText(hit, "anchorKind"))}"
+            : "location=metadata";
+        var channels = hit.TryGetProperty("channels", out var channelValues) &&
+            channelValues.ValueKind == JsonValueKind.Array
+            ? string.Join(",", channelValues.EnumerateArray().Select(value => value.GetString()))
+            : string.Empty;
+        var similarity = hit.TryGetProperty("similarity", out var similarityValue) &&
+            similarityValue.ValueKind == JsonValueKind.Number
+            ? similarityValue.GetDouble().ToString("F4", CultureInfo.InvariantCulture)
+            : "none";
+        Console.WriteLine(
+            $"HIT rank={JsonValueText(hit, "rank")} fileId={JsonValueText(hit, "fileId")} " +
+            $"path={JsonSerializer.Serialize(JsonValueText(hit, "path"))} " +
+            $"revision={JsonValueText(hit, "contentRevision")} " +
+            $"fileSha256={JsonValueText(hit, "fileSha256")} field={JsonValueText(hit, "field")} " +
+            $"channels={channels} evidenceClass={JsonValueText(hit, "evidenceClass")} " +
+            $"stale={JsonFlagText(hit, "stale")} " +
+            $"line={JsonValueText(hit, "line")} {location} similarity={similarity} " +
+            $"evidence={JsonSerializer.Serialize(JsonValueText(hit, "evidence"))}");
+        if (hit.TryGetProperty("recall", out var recall) && recall.ValueKind == JsonValueKind.Object)
+        {
+            Console.WriteLine(
+                $"RECALL_HIT evidenceStatus={JsonValueText(recall, "purposeEvidenceStatus")} " +
+                $"selectionReasons={JsonSerializer.Serialize(recall.GetProperty("selectionReasons"))}");
+            if (recall.TryGetProperty("annotations", out var annotations) &&
+                annotations.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var annotation in annotations.EnumerateArray())
+                {
+                    Console.WriteLine("COGNITIVE_ANNOTATION " + JsonSerializer.Serialize(annotation, JsonOptions));
+                }
+            }
         }
     }
 
@@ -10358,7 +10424,7 @@ internal static class OwnerControlCli
         "export" => "owner export --control-pipe <pipe> --resource-ids <id,...> --output-file <new-file> [--include-relations true] [--include-lifecycle-states true]: explicit readable plaintext copy of exactly the selected records (create-only; cannot be revoked afterwards). Citations outside the scope are withheld whole.",
         "workspace-status" => "owner workspace-status --control-pipe <pipe>: committed workspace state (ready/uninitialized), format/schema versions, tree revision and counts. An unreadable or newer workspace is refused, never shown as empty.",
         "workspace-tree" => "owner workspace-tree --control-pipe <pipe>: every logical folder/file with stable id, parent, exact name, tree revision and (for files) the latest content revision, bytes and SHA-256. Names print as JSON strings.",
-        "workspace-search" => "owner workspace-search --control-pipe <pipe> --query <literal> [--folder-id <live-folder-id>] [--format text|json] [--hybrid true [--field name|path|heading|content] [--current current|history|all] [--content-date-from YYYY-MM-DD --content-date-to YYYY-MM-DD] [--offset N --limit N] [--model-directory <pinned-local-E5-directory>]]: without --hybrid, case-insensitive exact lexical search of live workspace file names, paths, Markdown headings and valid UTF-8/UTF-16 text (no stemming, synonyms or semantic expansion). With --hybrid, the service ranks literal evidence from every scoped current/retained revision together with the authenticated local passage generation; literal evidence always outranks a semantic-only neighbour, duplicates are merged, totals count every in-scope candidate and only the page is bounded. Every hit declares evidenceClass=literal_match|semantic_candidate: a literal match is an exact occurrence of the query text, while a semantic candidate is only a local-model neighbour whose relevance is not confirmed and is NOT supporting evidence or an answer. The page reports literalTotal and semanticCandidateTotal separately; query-independent candidate counts are not reduced by a similarity threshold. --content-date-from/--content-date-to are inclusive ISO content dates found in the anchored evidence (not event, recorded, ingest or revision time). Identifier-shaped queries and the folder/currentness filters keep their no-answer behaviour, but there is no general natural-language abstention: for unrelated prose the semantic candidates are still returned, explicitly classified. The local model/generation refuse explicitly when missing, invalid, stale or unmaterialized; no cloud call exists. --folder-id only narrows the owner's workspace search and grants no access.",
+        "workspace-search" => "owner workspace-search --control-pipe <pipe> --query <text> [--folder-id <live-folder-id>] [--format text|json] [--hybrid true [--field name|path|heading|content] [--current current|history|all] [--content-date-from YYYY-MM-DD --content-date-to YYYY-MM-DD] [--offset N --limit N] [--model-directory <pinned-local-E5-directory>] [--purpose auto|experience|temporal|intention|action-effect|general [--include-archived true|false]]]: hybrid search keeps literal matches distinct from unconfirmed semantic candidates; purpose-aware results add exact-revision regions, representative hits, stored annotation/lifecycle state and selection reasons. Archived annotations are excluded by default; this option reveals them only to the owner. Content-date bounds inspect dates in anchored source evidence and are not event or recorded timestamps; missing lifecycle stamps remain unknown. Mentions/reminders/acknowledgements do not complete an intention, and action/effect association does not prove causality.",
         "workspace-mkdir" => "owner workspace-mkdir --control-pipe <pipe> --parent-id <id|root> --name <exact-name> --expected-tree-revision <n>: create one logical folder at the tree revision you last saw. Revision 0 initializes an empty workspace. Sibling names are compared ordinals, case-sensitively.",
         "workspace-import" => "owner workspace-import --control-pipe <pipe> --parent-id <id|root> [--name <exact-name>] --input-file <file> --expected-tree-revision <n>: store the file's exact original bytes (empty and non-UTF-8 included) as content revision 1 under your structural precondition. Defaults to the source file name; an unrepresentable name or an occupied sibling name is refused, never renamed or overwritten.",
         "workspace-revise" => "owner workspace-revise --control-pipe <pipe> --file-id <id> --expected-content-revision <live> --input-file <file>: store the exact bytes as the next retained content revision. A stale revision is refused; earlier revisions stay readable.",

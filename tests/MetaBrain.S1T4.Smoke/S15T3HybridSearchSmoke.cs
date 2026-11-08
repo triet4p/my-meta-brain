@@ -353,7 +353,9 @@ internal static partial class OwnerServiceSmoke
         string? contentDateFrom = null,
         string? contentDateTo = null,
         int? offset = null,
-        int? limit = null)
+        int? limit = null,
+        string? purpose = null,
+        bool? includeArchived = null)
     {
         var arguments = new List<string>
         {
@@ -407,6 +409,17 @@ internal static partial class OwnerServiceSmoke
             arguments.Add("--limit");
             arguments.Add(limitValue.ToString(CultureInfo.InvariantCulture));
         }
+        if (purpose is not null)
+        {
+            arguments.Add("--purpose");
+            arguments.Add(purpose);
+        }
+
+        if (includeArchived is { } archivedValue)
+        {
+            arguments.Add("--include-archived");
+            arguments.Add(archivedValue.ToString().ToLowerInvariant());
+        }
 
         return arguments.ToArray();
     }
@@ -422,11 +435,26 @@ internal static partial class OwnerServiceSmoke
         string? contentDateFrom = null,
         string? contentDateTo = null,
         int? offset = null,
-        int? limit = null)
+        int? limit = null,
+        string? purpose = null,
+        bool? includeArchived = null)
     {
         var result = await RunOwnerCommandAsync(
             executable,
-            HybridArguments(fixture, query, folderId, modelDirectory, "json", field, current, contentDateFrom, contentDateTo, offset, limit),
+            HybridArguments(
+                fixture,
+                query,
+                folderId,
+                modelDirectory,
+                "json",
+                field,
+                current,
+                contentDateFrom,
+                contentDateTo,
+                offset,
+                limit,
+                purpose,
+                includeArchived),
             standardInput: null,
             timeout: S15T3LongCommandTimeout).ConfigureAwait(false);
         Require(result.ExitCode == 0,
