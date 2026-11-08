@@ -41,6 +41,7 @@ internal sealed class NamedPipeService
     private readonly ServiceRequestHandler _handler;
     private readonly VaultLifecycle _vault;
     private readonly EncryptedPrivateIndexStore _privateIndex;
+    private readonly EncryptedWorkspacePassageIndex _workspacePassageIndex;
     private readonly SourceRefreshBackgroundService _backgroundRefresh;
     private readonly SynthesisScheduleBackgroundService _scheduleLoop;
     private readonly IntentionScheduleBackgroundService _intentionScheduleLoop;
@@ -56,6 +57,7 @@ internal sealed class NamedPipeService
         _vault = new VaultLifecycle(store);
         var authority = new GrantAuthority(new InMemoryGrantStore());
         _privateIndex = new EncryptedPrivateIndexStore(settings.VaultDirectoryPath, _vault);
+        _workspacePassageIndex = new EncryptedWorkspacePassageIndex(settings.VaultDirectoryPath, _vault);
         // S8-T4 the safe operational log: a sanitized trace of what the
         // service did, in the service data root and never in the repository.
         _operationalLog = new SafeOperationalLog(settings.DataRootPath);
@@ -72,7 +74,8 @@ internal sealed class NamedPipeService
             modelProvider: modelProvider ?? CreateDefaultModelProvider(),
             vaultBackup: new VaultBackupService(store, _vault),
             vaultMaintenance: new VaultMaintenanceService(store, _vault),
-            operationalLog: _operationalLog);
+            operationalLog: _operationalLog,
+            workspacePassageIndex: _workspacePassageIndex);
         _backgroundRefresh = new SourceRefreshBackgroundService(_handler, _vault);
         _scheduleLoop = new SynthesisScheduleBackgroundService(_handler, _vault);
         _intentionScheduleLoop = new IntentionScheduleBackgroundService(_handler, _vault);
@@ -100,6 +103,7 @@ internal sealed class NamedPipeService
             await _vault.LockAsync().ConfigureAwait(false);
             _vault.Dispose();
             _privateIndex.Dispose();
+            _workspacePassageIndex.Dispose();
         }
     }
 
@@ -169,7 +173,7 @@ internal sealed class NamedPipeService
             using var reader = new StreamReader(pipe, new UTF8Encoding(false, true), detectEncodingFromByteOrderMarks: false, 4096, leaveOpen: true);
             using var writer = new StreamWriter(pipe, new UTF8Encoding(false, true), 4096, leaveOpen: true) { AutoFlush = true };
             string? requestOperation = null;
-            var lockRefreshCancellation = CancellationToken.None;
+            var lockCancellation = CancellationToken.None;
 
             try
             {
@@ -206,7 +210,10 @@ internal sealed class NamedPipeService
                 requestOperation = request.Operation;
                 _handler.RequestRefreshStop(request);
 
-                if (string.Equals(request.Operation, ServiceRequestHandler.OwnerIndexRebuildOperation, StringComparison.Ordinal))
+                if (string.Equals(request.Operation, ServiceRequestHandler.OwnerIndexRebuildOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspacePassageIndexStatusOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspacePassageIndexRebuildOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspacePassageAnchorsOperation, StringComparison.Ordinal))
                 {
                     timeout.CancelAfter(IndexRebuildTimeout);
                 }
@@ -436,7 +443,10 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceNodePurgePreviewOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceNodePurgeOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceExportPreviewOperation, StringComparison.Ordinal) ||
-                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceExportOperation, StringComparison.Ordinal);
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceExportOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspacePassageIndexStatusOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspacePassageIndexRebuildOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspacePassageAnchorsOperation, StringComparison.Ordinal);
                 using var operation = needsVaultOperation ? _vault.TryBeginOperation() : null;
                 var serializeWithBackgroundRefresh =
                     needsVaultOperation &&
@@ -457,16 +467,18 @@ internal sealed class NamedPipeService
                     var context = channel == PrincipalKind.Owner
                         ? AuthenticatedContext.ForOwner()
                         : AuthenticatedContext.ForAgent("agent", "pending");
-                    if (string.Equals(request.Operation, ServiceRequestHandler.SourceRefreshOperation, StringComparison.Ordinal))
+                    if (request.Operation is ServiceRequestHandler.SourceRefreshOperation or
+                        ServiceRequestHandler.OwnerWorkspacePassageIndexStatusOperation or
+                        ServiceRequestHandler.OwnerWorkspacePassageIndexRebuildOperation or
+                        ServiceRequestHandler.OwnerWorkspacePassageAnchorsOperation)
                     {
-                        lockRefreshCancellation = _vault.RefreshCancellation;
+                        lockCancellation = _vault.RefreshCancellation;
                     }
 
-                    using var refreshCancellation = string.Equals(
-                            request.Operation, ServiceRequestHandler.SourceRefreshOperation, StringComparison.Ordinal)
-                        ? CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, lockRefreshCancellation)
+                    using var linkedCancellation = lockCancellation.CanBeCanceled
+                        ? CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, lockCancellation)
                         : null;
-                    var requestCancellation = refreshCancellation?.Token ?? timeout.Token;
+                    var requestCancellation = linkedCancellation?.Token ?? timeout.Token;
                     var reply = await _handler.HandleAsync(context, request, operation, requestCancellation).ConfigureAwait(false);
                     await writer.WriteLineAsync(JsonSerializer.Serialize(reply, OutputOptions).AsMemory(), timeout.Token).ConfigureAwait(false);
                 }
@@ -479,13 +491,11 @@ internal sealed class NamedPipeService
                 }
             }
             catch (OperationCanceledException) when (
-                timeout.IsCancellationRequested ||
-                (string.Equals(requestOperation, ServiceRequestHandler.SourceRefreshOperation, StringComparison.Ordinal) &&
-                 lockRefreshCancellation.IsCancellationRequested))
+                timeout.IsCancellationRequested || lockCancellation.IsCancellationRequested)
             {
                 if (!stoppingToken.IsCancellationRequested)
                 {
-                    var error = lockRefreshCancellation.IsCancellationRequested ? "vault_locked" : "request_timeout";
+                    var error = lockCancellation.IsCancellationRequested ? "vault_locked" : "request_timeout";
                     await WriteErrorAsync(writer, error, CancellationToken.None).ConfigureAwait(false);
                 }
             }

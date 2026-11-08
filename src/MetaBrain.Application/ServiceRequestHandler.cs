@@ -103,6 +103,7 @@ public sealed record ServiceRequest(
     string? WorkspacePurgeToken = null,
     string? WorkspacePurgeConfirmation = null,
     string? WorkspacePurgeReason = null,
+    string? WorkspaceModelDirectory = null,
     long? WorkspaceUnlockEpoch = null);
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
@@ -1342,7 +1343,9 @@ public sealed record ServiceReply(
     CognitiveAnnotationWire? CognitiveAnnotation = null,
     CognitiveAnnotationIdentityWire[]? CognitiveAnnotations = null,
     string? ErrorCode = null,
-    long? UnlockEpoch = null);
+    long? UnlockEpoch = null,
+    WorkspacePassageIndexStatus? WorkspacePassageIndex = null,
+    WorkspacePassageAnchorPage? WorkspacePassageAnchors = null);
 
 public sealed class ServiceRequestHandler
 {
@@ -1482,6 +1485,9 @@ public sealed class ServiceRequestHandler
     public const string LifecycleRetainRevisionOperation = "lifecycle.retain";
     public const string OwnerIndexStatusOperation = "owner.index.status";
     public const string OwnerIndexRebuildOperation = "owner.index.rebuild";
+    public const string OwnerWorkspacePassageIndexStatusOperation = "owner.workspace.passage-index.status";
+    public const string OwnerWorkspacePassageIndexRebuildOperation = "owner.workspace.passage-index.rebuild";
+    public const string OwnerWorkspacePassageAnchorsOperation = "owner.workspace.passage-index.anchors";
     public const string OwnerOperationsHealthOperation = "owner.operations.health";
     public const string OwnerOperationsAuditOperation = "owner.operations.audit";
     public const string OwnerOperationsDiagnosticsOperation = "owner.operations.diagnostics";
@@ -1545,8 +1551,9 @@ public sealed class ServiceRequestHandler
     private readonly ICatalogProjectionStore? _projections;
     private readonly PrivateIndexAuthority _privateIndex;
     private readonly IPrivateIndexStore? _privateIndexStore;
-    private readonly SourceIngestionCoordinator? _sourceIngestion;
+    private readonly IWorkspacePassageIndexEngine? _workspacePassageIndex;
     private readonly ISourceSnapshotReader? _sourceReader;
+    private readonly SourceIngestionCoordinator? _sourceIngestion;
     private readonly SourceSnapshotService _sourceSnapshots = new();
     private PrivateIndexSnapshot? _privateIndexMaterialized;
     // S8-T5: one lock closes the gap between a lazy authenticated load and a
@@ -1580,7 +1587,8 @@ public sealed class ServiceRequestHandler
         IVaultBackupService? vaultBackup = null,
         IVaultMaintenanceService? vaultMaintenance = null,
         IOperationalLog? operationalLog = null,
-        ISourceFolderEnumerator? sourceFolderEnumerator = null)
+        ISourceFolderEnumerator? sourceFolderEnumerator = null,
+        IWorkspacePassageIndexEngine? workspacePassageIndex = null)
     {
         _modelJobs = new ModelJobService(vault, modelProvider);
         _synthesisSchedule = new SynthesisScheduleService(_modelJobs);
@@ -1594,6 +1602,7 @@ public sealed class ServiceRequestHandler
         _projections = projections;
         _privateIndex = new PrivateIndexAuthority();
         _privateIndexStore = privateIndex;
+        _workspacePassageIndex = workspacePassageIndex;
         _sourceReader = sourceReader;
         _vaultBackup = vaultBackup;
         _vaultMaintenance = vaultMaintenance;
@@ -1759,7 +1768,7 @@ public sealed class ServiceRequestHandler
         if (request.WorkspaceContentRevision is not null &&
             request.Operation is not (OwnerWorkspaceFileReviseOperation or OwnerWorkspaceFileReadOperation or
                 OwnerWorkspaceAnchorCreateOperation or OwnerWorkspaceExportPreviewOperation or
-                OwnerWorkspaceExportOperation))
+                OwnerWorkspaceExportOperation or OwnerWorkspacePassageAnchorsOperation))
         {
             return false;
         }
@@ -1804,6 +1813,12 @@ public sealed class ServiceRequestHandler
         if (request.WorkspaceUnlockEpoch is { } unlockEpoch &&
             (unlockEpoch < 0 || request.Operation is not
                 (OwnerWorkspaceFileReadOperation or OwnerWorkspaceFileReviseOperation)))
+        {
+            return false;
+        }
+
+        if (request.WorkspaceModelDirectory is not null &&
+            request.Operation is not OwnerWorkspacePassageIndexRebuildOperation)
         {
             return false;
         }
@@ -2321,6 +2336,21 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, OwnerIndexRebuildOperation, StringComparison.Ordinal))
         {
             return HandleIndexRebuild(context, request, operation, cancellationToken);
+        }
+
+        if (string.Equals(request.Operation, OwnerWorkspacePassageIndexStatusOperation, StringComparison.Ordinal))
+        {
+            return HandleWorkspacePassageIndexStatus(context, request, operation, cancellationToken);
+        }
+
+        if (string.Equals(request.Operation, OwnerWorkspacePassageIndexRebuildOperation, StringComparison.Ordinal))
+        {
+            return HandleWorkspacePassageIndexRebuild(context, request, operation, cancellationToken);
+        }
+
+        if (string.Equals(request.Operation, OwnerWorkspacePassageAnchorsOperation, StringComparison.Ordinal))
+        {
+            return HandleWorkspacePassageAnchors(context, request, operation, cancellationToken);
         }
 
         if (string.Equals(request.Operation, OwnerOperationsHealthOperation, StringComparison.Ordinal))
@@ -11620,6 +11650,162 @@ public sealed class ServiceRequestHandler
         }
     }
 
+    private ServiceReply HandleWorkspacePassageIndexStatus(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation,
+        CancellationToken cancellationToken)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasWorkspacePassageIndexExtras(request, allowAnchorFields: false, allowModelDirectory: false))
+        {
+            return Error("invalid_request");
+        }
+
+        if (_workspacePassageIndex is null)
+        {
+            return Error("workspace_index_unavailable");
+        }
+
+        try
+        {
+            var status = _workspacePassageIndex.ReadStatus(operation, cancellationToken);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "workspace_passage_index_status",
+                "owner",
+                null,
+                WorkspacePassageIndex: status);
+        }
+        catch (WorkspacePassageIndexException ex)
+        {
+            return Error(ex.Code);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or CryptographicException or
+                                   UnauthorizedAccessException or InvalidOperationException or OverflowException)
+        {
+            return Error("workspace_index_unavailable");
+        }
+    }
+
+    private ServiceReply HandleWorkspacePassageIndexRebuild(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation,
+        CancellationToken cancellationToken)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasWorkspacePassageIndexExtras(request, allowAnchorFields: false, allowModelDirectory: true))
+        {
+            return Error("invalid_request");
+        }
+
+        if (_workspacePassageIndex is null)
+        {
+            return Error("workspace_index_unavailable");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.WorkspaceModelDirectory))
+        {
+            return Error("workspace_index_model_missing");
+        }
+
+        try
+        {
+            var status = _workspacePassageIndex.Rebuild(
+                operation, request.WorkspaceModelDirectory, cancellationToken);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "workspace_passage_index_rebuilt",
+                "owner",
+                null,
+                WorkspacePassageIndex: status);
+        }
+        catch (WorkspacePassageIndexException ex)
+        {
+            return Error(ex.Code);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or CryptographicException or
+                                   UnauthorizedAccessException or InvalidOperationException or OverflowException or ArgumentException)
+        {
+            return Error("workspace_index_unavailable");
+        }
+    }
+
+    private ServiceReply HandleWorkspacePassageAnchors(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation,
+        CancellationToken cancellationToken)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasWorkspacePassageIndexExtras(request, allowAnchorFields: true, allowModelDirectory: false))
+        {
+            return Error("invalid_request");
+        }
+
+        if (_workspacePassageIndex is null)
+        {
+            return Error("workspace_index_unavailable");
+        }
+
+        var offset = request.SearchOffset ?? 0;
+        var limit = request.SearchLimit ?? 64;
+        if (request.ResourceId is null || request.WorkspaceContentRevision is not { } revision ||
+            offset < 0 || limit is < 1 or > 512)
+        {
+            return Error("workspace_index_anchor_request_invalid");
+        }
+
+        try
+        {
+            var page = _workspacePassageIndex.ReadAnchors(
+                operation, request.ResourceId, revision, offset, limit, cancellationToken);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "workspace_passage_index_anchors",
+                "owner",
+                null,
+                WorkspacePassageAnchors: page);
+        }
+        catch (WorkspacePassageIndexException ex)
+        {
+            return Error(ex.Code);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or CryptographicException or
+                                   UnauthorizedAccessException or InvalidOperationException or OverflowException)
+        {
+            return Error("workspace_index_unavailable");
+        }
+    }
+
     /// <summary>
     /// S8-T4 the owner's operational health: the vault state, the private
     /// index, the provider configuration, the recorded spend, the size of the
@@ -11959,41 +12145,56 @@ public sealed class ServiceRequestHandler
 
     private void ResetPrivateIndex()
     {
-        if (_privateIndexStore is null)
+        if (_privateIndexStore is not null)
         {
-            return;
+            lock (_privateIndexGate)
+            {
+                try
+                {
+                    // Drops every materialized row and releases the in-memory engine,
+                    // so no private derived data outlives the unlocked epoch.
+                    _privateIndexStore.Reset();
+                }
+                catch (Exception ex) when (ex is IOException or InvalidDataException or ObjectDisposedException)
+                {
+                    // The engine is disposable; a failed reset leaves nothing addressable.
+                }
+
+                _privateIndexMaterialized = null;
+            }
         }
 
-        lock (_privateIndexGate)
-        {
-            try
-            {
-                // Drops every materialized row and releases the in-memory engine,
-                // so no private derived data outlives the unlocked epoch.
-                _privateIndexStore.Reset();
-            }
-            catch (Exception ex) when (ex is IOException or InvalidDataException or ObjectDisposedException)
-            {
-                // The engine is disposable; a failed reset leaves nothing addressable.
-            }
-
-            _privateIndexMaterialized = null;
-        }
+        _workspacePassageIndex?.Reset();
     }
+
 
     /// <summary>
     /// The index operations take no request fields at all: the canonical set is
     /// the input, so a body- or filter-steered request fails closed instead of
     /// selecting what gets materialized.
     /// </summary>
-    private static bool HasPrivateIndexExtras(ServiceRequest request) =>
-        request.ResourceId is not null || request.ZoneId is not null ||
+    private static bool HasPrivateIndexExtras(ServiceRequest request, bool allowResourceId = false) =>
+        (!allowResourceId && request.ResourceId is not null) || request.ZoneId is not null ||
         request.ResourceIds is not null || request.ResourceRevision is not null ||
         request.CollectionId is not null || request.Query is not null ||
         request.SessionId is not null || request.CatalogId is not null ||
         request.Label is not null || request.Description is not null ||
         request.Token is not null || request.SessionToken is not null ||
         request.ContentBase64 is not null || request.Operations is not null;
+
+    private static bool HasWorkspacePassageIndexExtras(
+        ServiceRequest request,
+        bool allowAnchorFields,
+        bool allowModelDirectory) =>
+        HasPrivateIndexExtras(request, allowResourceId: allowAnchorFields) ||
+        (!allowAnchorFields && (request.WorkspaceContentRevision is not null ||
+            request.SearchOffset is not null || request.SearchLimit is not null)) ||
+        (!allowModelDirectory && request.WorkspaceModelDirectory is not null) ||
+        request.SearchKind is not null || request.SearchCurrent is not null ||
+        request.SearchLevel is not null || request.SearchFromUtc is not null ||
+        request.SearchToUtc is not null || request.SearchAsOfUtc is not null ||
+        request.BudgetChars is not null;
+
 
     /// <summary>
     /// The owner library filters are abstraction level and the inclusive time

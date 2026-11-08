@@ -203,6 +203,9 @@ internal static class OwnerControlCli
                 "authorize" => await AuthorizeAsync(options).ConfigureAwait(false),
                 "index-status" => await IndexStatusAsync(options).ConfigureAwait(false),
                 "index-rebuild" => await IndexRebuildAsync(options).ConfigureAwait(false),
+                "workspace-index-status" => await WorkspacePassageIndexStatusAsync(options).ConfigureAwait(false),
+                "workspace-index-rebuild" => await WorkspacePassageIndexRebuildAsync(options).ConfigureAwait(false),
+                "workspace-index-anchors" => await WorkspacePassageAnchorsAsync(options).ConfigureAwait(false),
                 "recall-apply" => await RecallApplyAsync(options).ConfigureAwait(false),
                 "recall-read" => await RecallReadAsync(options).ConfigureAwait(false),
                 "purge-preview" => await PurgePreviewAsync(options).ConfigureAwait(false),
@@ -8519,6 +8522,122 @@ internal static class OwnerControlCli
         return 0;
     }
 
+    private static async Task<int> WorkspacePassageIndexStatusAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(
+            ControlPipe(options),
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspacePassageIndexStatusOperation)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "workspace_passage_index_status") ||
+            !result.Reply.TryGetProperty("workspacePassageIndex", out var index) ||
+            index.ValueKind != JsonValueKind.Object)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintWorkspacePassageIndex(index);
+        return 0;
+    }
+
+    private static async Task<int> WorkspacePassageIndexRebuildAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--model-directory");
+        var modelDirectory = options.Required("--model-directory");
+        if (string.IsNullOrWhiteSpace(modelDirectory))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(
+            ControlPipe(options),
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspacePassageIndexRebuildOperation,
+                WorkspaceModelDirectory: modelDirectory)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "workspace_passage_index_rebuilt") ||
+            !result.Reply.TryGetProperty("workspacePassageIndex", out var index) ||
+            index.ValueKind != JsonValueKind.Object)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintWorkspacePassageIndex(index);
+        return 0;
+    }
+
+    private static async Task<int> WorkspacePassageAnchorsAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--file-id", "--revision", "--offset", "--limit");
+        var fileId = options.Required("--file-id");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(fileId) ||
+            !long.TryParse(options.Required("--revision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var revision) ||
+            revision < 1)
+        {
+            return Usage();
+        }
+
+        var offsetText = options.Optional("--offset");
+        var limitText = options.Optional("--limit");
+        var offset = 0;
+        var limit = 64;
+        if ((offsetText is not null &&
+             !int.TryParse(offsetText, NumberStyles.Integer, CultureInfo.InvariantCulture, out offset)) ||
+            (limitText is not null &&
+             !int.TryParse(limitText, NumberStyles.Integer, CultureInfo.InvariantCulture, out limit)) ||
+            offset < 0 || limit is < 1 or > 512)
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(
+            ControlPipe(options),
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspacePassageAnchorsOperation,
+                ResourceId: fileId,
+                WorkspaceContentRevision: revision,
+                SearchOffset: offset,
+                SearchLimit: limit)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "workspace_passage_index_anchors") ||
+            !result.Reply.TryGetProperty("workspacePassageAnchors", out var page) ||
+            page.ValueKind != JsonValueKind.Object ||
+            !page.TryGetProperty("anchors", out var anchors) || anchors.ValueKind != JsonValueKind.Array)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine(
+            $"WORKSPACE_INDEX_ANCHORS file={JsonValueText(page, "fileId")} revision={JsonValueText(page, "contentRevision")} " +
+            $"total={JsonValueText(page, "total")} offset={JsonValueText(page, "offset")} limit={JsonValueText(page, "limit")} " +
+            $"hasMore={JsonFlagText(page, "hasMore")}");
+        foreach (var anchor in anchors.EnumerateArray())
+        {
+            Console.WriteLine(
+                $"ANCHOR file={JsonValueText(anchor, "fileId")} revision={JsonValueText(anchor, "contentRevision")} " +
+                $"offset={JsonValueText(anchor, "byteOffset")} length={JsonValueText(anchor, "byteLength")} " +
+                $"sha256={JsonValueText(anchor, "sha256")} kind={JsonValueText(anchor, "kind")} " +
+                $"attribution={JsonValueText(anchor, "attribution")} chunk={JsonValueText(anchor, "chunkOrdinal")}");
+        }
+
+        return 0;
+    }
+
+    private static void PrintWorkspacePassageIndex(JsonElement index)
+    {
+        Console.WriteLine(
+            $"WORKSPACE_INDEX state={JsonValueText(index, "state")} schema={JsonValueText(index, "schemaVersion")} " +
+            $"revision={JsonValueText(index, "workspaceRevision")} files={JsonValueText(index, "fileCount")} " +
+            $"passages={JsonValueText(index, "passageCount")} unsupported={JsonValueText(index, "unsupportedFileCount")} " +
+            $"postings={JsonValueText(index, "postingCount")} dimensions={JsonValueText(index, "vectorDimensions")} " +
+            $"stale={JsonFlagText(index, "stale")} refusal={OptionalText(index, "refusalCode")}");
+    }
+
+
     /// <summary>
     /// Prints one materialized row per line. Only canonical identity,
     /// revision, zone scope, record state and referenced IDs are printed;
@@ -9946,7 +10065,7 @@ internal static class OwnerControlCli
         {
             Console.Error.WriteLine("Owner commands (run `owner <verb> --help` for one command; `owner help --command <verb>` is the same):");
             Console.Error.WriteLine("  vault: status|provision|unlock|recover|lock|upgrade|upgrade-with-recovery-code|rollback|rollback-with-recovery-code|health|audit|diagnostics|retention|backup|restore|restore-with-recovery-code|export");
-            Console.Error.WriteLine("  workspace: workspace-status|workspace-tree|workspace-search|workspace-mkdir|workspace-import|workspace-revise|workspace-read|workspace-rename|workspace-move|workspace-copy|workspace-delete-preview|workspace-delete|workspace-restore|workspace-tombstones|workspace-anchor-create|workspace-anchor-list|workspace-purge-preview|workspace-purge|workspace-export-preview|workspace-export");
+            Console.Error.WriteLine("  workspace: workspace-status|workspace-tree|workspace-search|workspace-mkdir|workspace-import|workspace-revise|workspace-read|workspace-rename|workspace-move|workspace-copy|workspace-delete-preview|workspace-delete|workspace-restore|workspace-tombstones|workspace-anchor-create|workspace-anchor-list|workspace-index-status|workspace-index-rebuild|workspace-index-anchors|workspace-purge-preview|workspace-purge|workspace-export-preview|workspace-export");
             Console.Error.WriteLine("  document (top-level): open <file-id> — foreground loopback browser preview/edit of one workspace file at one content revision");
             Console.Error.WriteLine("  taxonomy: taxonomy — explain the cognitive facet vocabulary (local, no vault required)");
             Console.Error.WriteLine("  capture: memory-create|memory-revise|memory-import|memory-read|read|write|source-create|source-revise|source-read|research-capture|research-read|feedback-create|feedback-read");
@@ -10052,6 +10171,9 @@ internal static class OwnerControlCli
         "redeem" => "owner redeem --agent-pipe <pipe> --handoff-file <file> --session-file <new-file>: redeem the one-time handoff into a short session (atomic; replayed/expired/revoked/locked fails closed).",
         "index-status" => "owner index-status --control-pipe <pipe>: materialized generation fingerprint/rows/staleness. Read-only.",
         "index-rebuild" => "owner index-rebuild --control-pipe <pipe>: explicit full rebuild from canonical (interrupted rebuild publishes nothing).",
+        "workspace-index-status" => "owner workspace-index-status --control-pipe <pipe>: authenticated status of the encrypted workspace passage/vector generation; reports stale and unsupported-file coverage.",
+        "workspace-index-rebuild" => "owner workspace-index-rebuild --control-pipe <pipe> --model-directory <local-pinned-e5-directory>: explicit full rebuild from the current encrypted workspace; refuses missing/invalid local model assets and publishes only after the source snapshot remains current.",
+        "workspace-index-anchors" => "owner workspace-index-anchors --control-pipe <pipe> --file-id <id> --revision <n> [--offset N --limit N]: read a bounded page of exact encrypted-generation source byte/revision anchors (default offset 0, limit 64).",
         "recall-apply" => "owner recall-apply --control-pipe <pipe> --resource-id <id> --act demote|pin|archive|restore [--reason text]: how the item is offered; never its content/evidence/revision/scope.",
         "recall-read" => "owner recall-read --control-pipe <pipe> --resource-id <id>: the recall decision and act history.",
         "purge-preview" => "owner purge-preview --control-pipe <pipe> --resource-id <id> --resource-revision <rev> --reason text: exact impacted canonical set a confirm would delete (a reason is required for the ledger).",

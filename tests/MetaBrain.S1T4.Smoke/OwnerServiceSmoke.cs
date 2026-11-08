@@ -995,10 +995,13 @@ internal static partial class OwnerServiceSmoke
     }
 
     private static async Task<CommandResult> RunOwnerCommandAsync(string executable, params string[] arguments) =>
-        await RunOwnerCommandAsync(executable, arguments, standardInput: null).ConfigureAwait(false);
+        await RunOwnerCommandAsync(executable, arguments, standardInput: null, timeout: null).ConfigureAwait(false);
+
+    private static Task<CommandResult> RunOwnerCommandAsync(string executable, TimeSpan timeout, params string[] arguments) =>
+        RunOwnerCommandAsync(executable, arguments, standardInput: null, timeout);
 
     private static Task<CommandResult> RunOwnerCommandWithInputAsync(string executable, string standardInput, params string[] arguments) =>
-        RunOwnerCommandAsync(executable, arguments, standardInput);
+        RunOwnerCommandAsync(executable, arguments, standardInput, timeout: null);
 
     /// <summary>
     /// The live walkthrough gets its operator key from the harness and hands it
@@ -1019,7 +1022,7 @@ internal static partial class OwnerServiceSmoke
         return key;
     }
 
-    private static async Task<CommandResult> RunOwnerCommandAsync(string executable, string[] arguments, string? standardInput)
+    private static async Task<CommandResult> RunOwnerCommandAsync(string executable, string[] arguments, string? standardInput, TimeSpan? timeout = null)
     {
         var start = new ProcessStartInfo(executable)
         {
@@ -1050,7 +1053,7 @@ internal static partial class OwnerServiceSmoke
         process.StandardInput.Close();
         try
         {
-            await process.WaitForExitAsync().WaitAsync(CommandTimeout).ConfigureAwait(false);
+            await process.WaitForExitAsync().WaitAsync(timeout ?? CommandTimeout).ConfigureAwait(false);
         }
         catch
         {
