@@ -252,7 +252,7 @@ internal sealed class EncryptedWorkspacePassageIndex : IWorkspacePassageIndexEng
             var pageStart = offset;
             var pageEnd = checked(offset + limit);
             var total = 0;
-            var generation = ScanGeneration(stream, aes, anchor =>
+            var generation = ScanGeneration(stream, aes, (anchor, _, _) =>
             {
                 if (string.Equals(anchor.FileId, fileId, StringComparison.Ordinal) && anchor.ContentRevision == contentRevision)
                 {
@@ -341,6 +341,230 @@ internal sealed class EncryptedWorkspacePassageIndex : IWorkspacePassageIndexEng
         {
             // The engine retains no decrypted generation, model, or cache between calls.
         }
+    }
+
+    /// <summary>
+    /// S15-T3 hybrid semantic read: encodes the query with the pinned local
+    /// model and scores every passage whose exact file identity and content
+    /// revision belong to the caller's scope. The authenticated generation must
+    /// describe the live workspace before and after the scan, so a stale
+    /// generation refuses instead of pretending to be current. Every distinct
+    /// scoped anchor is returned (chunks that share one anchor keep their best
+    /// score); the shared ranking owns filtering, totals and the final order.
+    /// </summary>
+    public WorkspacePassageSemanticResult SearchSemantic(
+        IWorkspacePersistence workspace,
+        string modelDirectory,
+        string query,
+        IReadOnlyCollection<WorkspacePassageScope> scope,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        ArgumentNullException.ThrowIfNull(scope);
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            throw new WorkspacePassageIndexException("workspace_index_query_invalid");
+        }
+
+        if (string.IsNullOrWhiteSpace(modelDirectory))
+        {
+            throw new WorkspacePassageIndexException("workspace_index_model_missing");
+        }
+
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            cancellationToken.ThrowIfCancellationRequested();
+            var snapshot = workspace.ReadWorkspaceTree();
+            if (!File.Exists(_publishedPath))
+            {
+                throw new WorkspacePassageIndexException("workspace_index_not_materialized");
+            }
+
+            var key = RequireKey();
+            using var aes = new AesGcm(key, TagBytes);
+            using var stream = new FileStream(_publishedPath, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.SequentialScan);
+            var header = ReadHeaderAndFooter(stream, aes);
+            EnsureCurrent(header, snapshot);
+            // The full scan below re-reads the header from the start of the
+            // file; the footer pre-check above left the stream at its end.
+            stream.Position = 0;
+
+            var allowed = new HashSet<WorkspacePassageScope>(scope);
+            using var model = new PinnedE5WorkspacePassageEmbeddingModel(modelDirectory);
+            int[]? tokenIds = null;
+            float[]? queryVector = null;
+            try
+            {
+                tokenIds = model.TokenizeQuery(query, cancellationToken);
+                if (tokenIds.Length is < 1 or > MaximumModelTokens)
+                {
+                    throw new WorkspacePassageIndexException("workspace_index_token_limit");
+                }
+
+                queryVector = model.Encode(tokenIds, cancellationToken);
+                if (queryVector.Length != VectorDimensions)
+                {
+                    throw new WorkspacePassageIndexException("workspace_index_embedding_dimensions_invalid");
+                }
+
+                var matches = new Dictionary<(string FileId, long Revision, long Offset, long Length), WorkspacePassageSemanticMatch>();
+                var scopedPassages = 0;
+                var scan = ScanGeneration(stream, aes, (anchor, vector, _) =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!allowed.Contains(new WorkspacePassageScope(anchor.FileId, anchor.ContentRevision)))
+                    {
+                        return;
+                    }
+
+                    scopedPassages++;
+                    var similarity = Dot(queryVector, vector);
+                    if (!double.IsFinite(similarity))
+                    {
+                        throw new WorkspacePassageIndexException("workspace_index_embedding_invalid");
+                    }
+
+                    var matchKey = (anchor.FileId, anchor.ContentRevision, anchor.ByteOffset, anchor.ByteLength);
+                    if (matches.TryGetValue(matchKey, out var existing) && existing.Similarity >= similarity)
+                    {
+                        return;
+                    }
+
+                    matches[matchKey] = new WorkspacePassageSemanticMatch(
+                        anchor.FileId,
+                        anchor.ContentRevision,
+                        anchor.ByteOffset,
+                        anchor.ByteLength,
+                        anchor.Sha256,
+                        anchor.Kind,
+                        anchor.Attribution,
+                        anchor.ChunkOrdinal,
+                        similarity);
+                }, cancellationToken);
+                EnsureCurrent(scan.Footer, snapshot);
+
+                var ordered = new List<WorkspacePassageSemanticMatch>(matches.Values);
+                ordered.Sort(static (left, right) =>
+                {
+                    var similarity = right.Similarity.CompareTo(left.Similarity);
+                    if (similarity != 0)
+                    {
+                        return similarity;
+                    }
+
+                    var file = string.CompareOrdinal(left.FileId, right.FileId);
+                    if (file != 0)
+                    {
+                        return file;
+                    }
+
+                    var offset = left.ByteOffset.CompareTo(right.ByteOffset);
+                    return offset != 0 ? offset : left.ByteLength.CompareTo(right.ByteLength);
+                });
+
+                return new WorkspacePassageSemanticResult(
+                    model.ModelRevision,
+                    model.Dimensions,
+                    tokenIds.Length,
+                    scopedPassages,
+                    ordered.ToArray());
+            }
+            finally
+            {
+                if (tokenIds is not null)
+                {
+                    CryptographicOperations.ZeroMemory(System.Runtime.InteropServices.MemoryMarshal.AsBytes(tokenIds.AsSpan()));
+                }
+
+                if (queryVector is not null)
+                {
+                    CryptographicOperations.ZeroMemory(System.Runtime.InteropServices.MemoryMarshal.AsBytes(queryVector.AsSpan()));
+                }
+            }
+        }
+    }
+
+    private static WorkspaceFooter ReadHeaderAndFooter(FileStream stream, AesGcm aes)
+    {
+        if (stream.Length < HeaderBytes)
+        {
+            throw new InvalidDataException("workspace_index_generation_truncated");
+        }
+
+        var header = new byte[HeaderBytes];
+        byte[]? fileId = null;
+        try
+        {
+            ReadExactly(stream, header);
+            if (!header.AsSpan(0, Magic.Length).SequenceEqual(Magic) ||
+                BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(8, 4)) != CurrentVersion)
+            {
+                throw new InvalidDataException("workspace_index_format_invalid");
+            }
+
+            var footerOffset = BinaryPrimitives.ReadInt64LittleEndian(header.AsSpan(12, 8));
+            var footerLength = BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(20, 4));
+            fileId = header.AsSpan(24, 16).ToArray();
+            if (footerOffset < HeaderBytes || footerLength <= 0 || footerLength > MaximumRecordBytes ||
+                footerOffset > stream.Length ||
+                checked(footerOffset + RecordFrameLength(footerLength)) != stream.Length)
+            {
+                throw new InvalidDataException("workspace_index_header_invalid");
+            }
+
+            stream.Position = footerOffset;
+            var (footerType, footerPayload) = ReadRecord(stream, aes, fileId, footerOffset, stream.Length);
+            try
+            {
+                if (footerType != FooterRecord)
+                {
+                    throw new InvalidDataException("workspace_index_footer_invalid");
+                }
+
+                return ReadFooter(footerPayload);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(footerPayload);
+            }
+        }
+        finally
+        {
+            if (fileId is not null)
+            {
+                CryptographicOperations.ZeroMemory(fileId);
+            }
+
+            CryptographicOperations.ZeroMemory(header);
+        }
+    }
+
+    private static void EnsureCurrent(WorkspaceFooter footer, WorkspaceSnapshot? snapshot)
+    {
+        if (snapshot is null ||
+            !string.Equals(footer.WorkspaceDigest, WorkspaceDigest(snapshot), StringComparison.Ordinal) ||
+            footer.WorkspaceRevision != snapshot.Revision ||
+            !string.Equals(footer.WorkspaceId, snapshot.WorkspaceId, StringComparison.Ordinal))
+        {
+            throw new WorkspacePassageIndexException("workspace_index_stale");
+        }
+    }
+
+    private static double Dot(ReadOnlySpan<float> left, ReadOnlySpan<float> right)
+    {
+        if (left.Length != right.Length || left.Length != VectorDimensions)
+        {
+            throw new WorkspacePassageIndexException("workspace_index_embedding_dimensions_invalid");
+        }
+
+        double sum = 0;
+        for (var index = 0; index < left.Length; index++)
+        {
+            sum += (double)left[index] * right[index];
+        }
+
+        return sum;
     }
 
     public void Dispose()
@@ -487,10 +711,12 @@ internal sealed class EncryptedWorkspacePassageIndex : IWorkspacePassageIndexEng
         return position;
     }
 
+    private delegate void PassageVisitor(WorkspacePassageAnchor anchor, ReadOnlySpan<float> vector, long ordinal);
+
     private GenerationScan ScanGeneration(
         FileStream stream,
         AesGcm aes,
-        Action<WorkspacePassageAnchor>? onPassage,
+        PassageVisitor? onPassage,
         CancellationToken cancellationToken)
     {
         if (stream.Length < HeaderBytes)
@@ -531,8 +757,12 @@ internal sealed class EncryptedWorkspacePassageIndex : IWorkspacePassageIndexEng
                 {
                     if (type == PassageRecord)
                     {
-                        var anchor = ReadPassageMetadata(payload, passageCount);
-                        onPassage?.Invoke(anchor);
+                        var anchor = ReadPassageMetadata(payload, passageCount, out var vectorOffset);
+                        onPassage?.Invoke(
+                            anchor,
+                            System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(
+                                payload.AsSpan(vectorOffset, VectorDimensions * sizeof(float))),
+                            passageCount);
                         passageCount++;
                     }
                     else if (type == PostingRecord)
@@ -691,7 +921,7 @@ internal sealed class EncryptedWorkspacePassageIndex : IWorkspacePassageIndexEng
     }
 
 
-    private static WorkspacePassageAnchor ReadPassageMetadata(byte[] payload, long expectedOrdinal)
+    private static WorkspacePassageAnchor ReadPassageMetadata(byte[] payload, long expectedOrdinal, out int vectorOffset)
     {
         using var buffer = new MemoryStream(payload, writable: false);
         using var reader = new BinaryReader(buffer, StrictUtf8, leaveOpen: true);
@@ -710,9 +940,10 @@ internal sealed class EncryptedWorkspacePassageIndex : IWorkspacePassageIndexEng
         var chunkOrdinal = reader.ReadInt32();
         var dimensions = reader.ReadInt32();
         var vectorBytes = checked(dimensions * sizeof(float));
+        vectorOffset = checked((int)buffer.Position);
         if (fileId.Length == 0 || revision < 1 || offset < 0 || length < 1 || digestBytes.Length != 32 ||
             kind.Length == 0 || attribution.Length == 0 || chunkOrdinal < 0 || dimensions != VectorDimensions ||
-            buffer.Length - buffer.Position != vectorBytes)
+            buffer.Length - vectorOffset != vectorBytes)
         {
             CryptographicOperations.ZeroMemory(digestBytes);
             throw new InvalidDataException("workspace_index_passage_invalid");

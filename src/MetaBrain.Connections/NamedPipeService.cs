@@ -274,7 +274,8 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerCognitiveAnnotationCorrectOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerCognitiveAnnotationAcceptOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerCognitiveAnnotationRejectOperation, StringComparison.Ordinal) ||
-                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceExportPreviewOperation, StringComparison.Ordinal))
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspacePassageAnchorsOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceHybridSearchOperation, StringComparison.Ordinal))
                 {
                     timeout.CancelAfter(WorkspaceTimeout);
                 }
@@ -446,7 +447,8 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceExportOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspacePassageIndexStatusOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspacePassageIndexRebuildOperation, StringComparison.Ordinal) ||
-                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspacePassageAnchorsOperation, StringComparison.Ordinal);
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspacePassageAnchorsOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceHybridSearchOperation, StringComparison.Ordinal);
                 using var operation = needsVaultOperation ? _vault.TryBeginOperation() : null;
                 var serializeWithBackgroundRefresh =
                     needsVaultOperation &&
@@ -470,7 +472,8 @@ internal sealed class NamedPipeService
                     if (request.Operation is ServiceRequestHandler.SourceRefreshOperation or
                         ServiceRequestHandler.OwnerWorkspacePassageIndexStatusOperation or
                         ServiceRequestHandler.OwnerWorkspacePassageIndexRebuildOperation or
-                        ServiceRequestHandler.OwnerWorkspacePassageAnchorsOperation)
+                        ServiceRequestHandler.OwnerWorkspacePassageAnchorsOperation or
+                        ServiceRequestHandler.OwnerWorkspaceHybridSearchOperation)
                     {
                         lockCancellation = _vault.RefreshCancellation;
                     }

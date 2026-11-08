@@ -339,6 +339,24 @@ public static class WorkspaceSearch
         return true;
     }
 
+    /// <summary>
+    /// Decodes one live file revision with the same bounded, strict text rules
+    /// the lexical search applies. False means the content is opaque binary,
+    /// invalid text, NUL-bearing or UTF-32, so a caller must not present a
+    /// text snippet for it.
+    /// </summary>
+    public static bool TryDecodeSearchText(ReadOnlySpan<byte> content, out string text)
+    {
+        if (!TryDecodeText(content, out var decoded))
+        {
+            text = string.Empty;
+            return false;
+        }
+
+        text = decoded.Text;
+        return true;
+    }
+
     public static int LineStart(string text, int textOffset)
     {
         ArgumentNullException.ThrowIfNull(text);

@@ -564,13 +564,15 @@ The authenticated workspace format and metadata schema are both version 1. Versi
 
 ### 3.2.8 Workspace search and the optional `open` document session (S13-T4–T6)
 
-Both surfaces are owner CLI features of the current runtime (added in 1.3.0, unchanged in 1.4.0).
+Both surfaces are owner CLI features of the current runtime (search and editing added in 1.3.0;
+1.4.0 kept them unchanged and the Sprint 15 hybrid pass below is unreleased work).
 Search and revision-gated editing work
 with no browser at all; `open` is an optional convenience that serves exactly one document to a
 local browser.
 
 ```text
 cli\MetaBrain.Cli.exe owner workspace-search --control-pipe <pipe> --query <literal> [--folder-id <live folder id>] [--format text|json]
+cli\MetaBrain.Cli.exe owner workspace-search --control-pipe <pipe> --query <text> --hybrid true [--folder-id <live folder id>] [--field name|path|heading|content] [--current current|history|all] [--content-date-from YYYY-MM-DD --content-date-to YYYY-MM-DD] [--offset N --limit N] [--model-directory <pinned local E5 directory>] [--format text|json]
 cli\MetaBrain.Cli.exe open <file-id> --control-pipe <pipe> [--revision <n>] [--anchor-offset <bytes> --anchor-length <bytes> --anchor-sha256 <digest>] [--no-browser] [--lifetime-seconds <n>]
 ```
 
@@ -579,6 +581,38 @@ cli\MetaBrain.Cli.exe open <file-id> --control-pipe <pipe> [--revision <n>] [--a
   folder narrowing, and no stemming, synonym or semantic expansion. `--folder-id` narrows but never
   grants anything; every hit reports the live file revision and byte-range digest, and an anchor
   from a different revision is refused (`workspace_anchor_stale`/`workspace_anchor_mismatch`).
+- `--hybrid true` (S15-T3) runs one server-side owner retrieval pass over the same scope instead of
+  the CLI-side literal scan. The service applies `--folder-id`, `--field`,
+  `--current current|history|all` and the optional inclusive `--content-date-from/--content-date-to`
+  window first, then ranks the retained exact/lexical/heading evidence of every scoped revision
+  together with the authenticated local passage generation. Literal evidence always precedes a
+  semantic-only neighbour (a retained literal hit also stays above current semantic neighbours),
+  current evidence precedes retained evidence inside each band, and the rest of the order is
+  deterministic (score/similarity, path, file id, byte range, field, chunk). A semantic neighbour
+  whose anchored passage contains a literal hit is merged into that hit, so the same evidence is
+  never returned twice. `total` counts every ranked candidate after those filters, so `--offset`
+  and `--limit` (default 20, maximum 100) only bound the returned page; each returned hit is
+  revalidated against its exact current or retained revision and carries an exact evidence
+  snippet. The `--content-date-from/--content-date-to` window matches ISO-8601 calendar dates
+  written in the anchored evidence — a **content date**, never an event, recorded, ingest or
+  revision time; the workspace stores no per-node wall-clock time and none is invented.
+  `semanticStatus` reports whether the semantic channel ran (`applied`, `applied_current_only`,
+  `abstained_exact_query`, `not_applicable_history`, `not_applicable_field`,
+  `not_applicable_empty_scope`). An identifier-shaped query (one symbol, identifier or date token)
+  answers from the exact path alone, and a missing/invalid local model or a stale/unmaterialized
+  generation refuses with its own code (`workspace_index_model_missing`,
+  `workspace_index_model_invalid`, `workspace_index_not_materialized`, `workspace_index_stale`)
+  instead of silently returning literal-only results. No similarity threshold is applied (none is
+  approved), no provider or network call exists, the vault must be unlocked, and the owner channel
+  is the only channel that can call it. The owner-approved **candidate-discovery contract** keeps
+  literal matches and semantic candidates distinct instead of gating natural-language exposure:
+  every hit declares `evidenceClass=literal_match|semantic_candidate`, and the page reports
+  `literalTotal` and `semanticCandidateTotal` separately (their sum is `total`). A literal match is
+  an exact occurrence of the query text; a semantic candidate is only a local-model neighbour whose
+  relevance is not confirmed — it is not supporting evidence and not an answer, and an unrelated
+  prose query therefore returns explicit candidates rather than a claimed match. The identifier,
+  folder-scope and currentness no-answer negatives and the no-raw-cutoff rule are unchanged; general
+  natural-language abstention is not claimed (measured limits are in the Sprint 15 evidence).
 - `open` requires the unlocked vault and the running shared host. It binds one live file, one
   content revision, read plus explicit save, and one lifetime; the bridge listens on an ephemeral
   `127.0.0.1` port and the browser receives only a per-process capability in the served page. A

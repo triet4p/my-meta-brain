@@ -887,3 +887,17 @@ the assignment can fail before the sentinel check or any child starts.
 **Root cause:** `workspace-anchor-create` and `cognitive-annotation-create` commit workspace state generations, so the tree revision moves past the value an earlier import returned. Caching that value across anchor or annotation creation makes the next structural act look stale.
 **Fix / workaround:** Re-read `owner workspace-status` immediately before each structural workspace act and pass that `revision` as `--expected-tree-revision`; do not reuse a revision returned by an earlier act when anchors or annotations were created in between.
 **Watch out for:** Any workflow or test that mixes citation/annotation writes with later tree mutations must refresh the tree revision first; the read is cheap and the conflict refusal is correct.
+
+## [2026-11-08] A footer pre-check left the passage-generation stream at EOF for the full scan
+
+**Symptom:** The first natural-language hybrid query against a freshly built generation failed with `ERROR workspace_search_unavailable`, while identifier-shaped queries (which never open the generation) worked.
+**Root cause:** `EncryptedWorkspacePassageIndex.SearchSemantic` read the header and footer first to reconcile the generation against the live workspace, which left the `FileStream` at its end. The shared `ScanGeneration` helper assumes a freshly opened stream and reads the header from the current position, so it threw `EndOfStreamException`, which the handler maps to `workspace_search_unavailable`.
+**Fix / workaround:** Reset `stream.Position = 0` after the footer pre-check and before the full scan; the observed semantic search then returned the ranked page.
+**Watch out for:** Any new pre-scan read over the same stream must rewind. The refusal code hides the cause by design, so reproduce with a single semantic query before assuming a generation or model problem.
+
+## [2026-11-08] A merged literal+semantic hit rendered its evidence from the literal anchor as a passage
+
+**Symptom:** A content-date-filtered query passed the filter but one returned hit's evidence was only `"review"` instead of the surrounding line, so the smoke's in-window date check failed.
+**Root cause:** Evidence selection keyed on `Similarity != null`, which is also set on a merged hit. A merged hit keeps the narrower literal anchor, so the passage renderer sliced only the literal length out of the anchor offset.
+**Fix / workaround:** Choose the line snippet for every literal host (merged or not) and the passage snippet only for a semantic-only hit.
+**Watch out for:** A merged hit's channel list says both channels, but its anchor stays the literal range; channel presence must never change how the anchor is interpreted.

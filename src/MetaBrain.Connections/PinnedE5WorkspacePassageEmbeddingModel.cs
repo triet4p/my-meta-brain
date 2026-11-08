@@ -71,11 +71,17 @@ internal sealed class PinnedE5WorkspacePassageEmbeddingModel : IWorkspacePassage
 
     public int Dimensions => EmbeddingDimensions;
 
-    public int[] Tokenize(ReadOnlySpan<char> passage, CancellationToken cancellationToken = default)
+    public int[] Tokenize(ReadOnlySpan<char> passage, CancellationToken cancellationToken = default) =>
+        TokenizeWithPrefix("passage: ", passage, cancellationToken);
+
+    public int[] TokenizeQuery(ReadOnlySpan<char> query, CancellationToken cancellationToken = default) =>
+        TokenizeWithPrefix("query: ", query, cancellationToken);
+
+    private int[] TokenizeWithPrefix(string prefix, ReadOnlySpan<char> value, CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
-        var input = string.Concat("passage: ", passage.ToString());
+        var input = string.Concat(prefix, value.ToString());
         uint[] rawIds = Array.Empty<uint>();
         int[] modelIds = Array.Empty<int>();
         try

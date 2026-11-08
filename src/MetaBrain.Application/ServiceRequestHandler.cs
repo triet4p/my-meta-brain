@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -104,6 +105,10 @@ public sealed record ServiceRequest(
     string? WorkspacePurgeConfirmation = null,
     string? WorkspacePurgeReason = null,
     string? WorkspaceModelDirectory = null,
+    string? WorkspaceSearchFolderId = null,
+    string? WorkspaceSearchField = null,
+    string? WorkspaceSearchDateFrom = null,
+    string? WorkspaceSearchDateTo = null,
     long? WorkspaceUnlockEpoch = null);
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
@@ -1244,6 +1249,62 @@ public sealed record WorkspaceExportWire(
     long TotalBytes,
     string SidecarSha256);
 
+/// <summary>
+/// One S15-T3 hybrid hit: the exact file/revision identity, the exact
+/// byte-range anchor and its digest, the retrieval channels that produced it,
+/// and one bounded evidence snippet. <see cref="Similarity"/> is diagnostic
+/// local-model evidence, not an approved threshold, and is null for a
+/// literal-only hit.
+/// </summary>
+public sealed record WorkspaceHybridHitWire(
+    int Rank,
+    string FileId,
+    string Path,
+    long ContentRevision,
+    string FileSha256,
+    string Field,
+    string[] Channels,
+    string EvidenceClass,
+    bool Stale,
+    int? Line,
+    long? ByteOffset,
+    long? ByteLength,
+    string? AnchorSha256,
+    int? TextOffset,
+    int? TextLength,
+    string Evidence,
+    string? AnchorKind,
+    string? Attribution,
+    int? ChunkOrdinal,
+    double? Similarity);
+
+/// <summary>
+/// One S15-T3 hybrid page. <see cref="Total"/> counts every ranked in-scope
+/// candidate after the folder, field, currentness and content-date filters;
+/// only <see cref="Hits"/> is bounded by the page. <see cref="SemanticStatus"/>
+/// states whether the semantic channel ran, so a literal-only answer is never
+/// presented as a semantic one.
+/// </summary>
+public sealed record WorkspaceHybridSearchPageWire(
+    long WorkspaceRevision,
+    string? FolderId,
+    string? FolderPath,
+    string Query,
+    string? Field,
+    string Current,
+    string? ContentDateFrom,
+    string? ContentDateTo,
+    int Total,
+    int LiteralTotal,
+    int SemanticCandidateTotal,
+    int Offset,
+    int Limit,
+    bool HasMore,
+    string SemanticStatus,
+    string? ModelRevision,
+    int? VectorDimensions,
+    WorkspaceHybridHitWire[] Hits);
+
 public sealed record ServiceReply(
     int ProtocolVersion,
     string? Status,
@@ -1345,7 +1406,8 @@ public sealed record ServiceReply(
     string? ErrorCode = null,
     long? UnlockEpoch = null,
     WorkspacePassageIndexStatus? WorkspacePassageIndex = null,
-    WorkspacePassageAnchorPage? WorkspacePassageAnchors = null);
+    WorkspacePassageAnchorPage? WorkspacePassageAnchors = null,
+    WorkspaceHybridSearchPageWire? WorkspaceHybridSearch = null);
 
 public sealed class ServiceRequestHandler
 {
@@ -1488,6 +1550,7 @@ public sealed class ServiceRequestHandler
     public const string OwnerWorkspacePassageIndexStatusOperation = "owner.workspace.passage-index.status";
     public const string OwnerWorkspacePassageIndexRebuildOperation = "owner.workspace.passage-index.rebuild";
     public const string OwnerWorkspacePassageAnchorsOperation = "owner.workspace.passage-index.anchors";
+    public const string OwnerWorkspaceHybridSearchOperation = "owner.workspace.search";
     public const string OwnerOperationsHealthOperation = "owner.operations.health";
     public const string OwnerOperationsAuditOperation = "owner.operations.audit";
     public const string OwnerOperationsDiagnosticsOperation = "owner.operations.diagnostics";
@@ -1818,7 +1881,14 @@ public sealed class ServiceRequestHandler
         }
 
         if (request.WorkspaceModelDirectory is not null &&
-            request.Operation is not OwnerWorkspacePassageIndexRebuildOperation)
+            request.Operation is not (OwnerWorkspacePassageIndexRebuildOperation or OwnerWorkspaceHybridSearchOperation))
+        {
+            return false;
+        }
+
+        if ((request.WorkspaceSearchFolderId is not null || request.WorkspaceSearchField is not null ||
+                request.WorkspaceSearchDateFrom is not null || request.WorkspaceSearchDateTo is not null) &&
+            request.Operation is not OwnerWorkspaceHybridSearchOperation)
         {
             return false;
         }
@@ -1868,6 +1938,7 @@ public sealed class ServiceRequestHandler
         OwnerWorkspaceExportPreviewOperation,
         OwnerWorkspaceNodePurgePreviewOperation,
         OwnerLibrarySearchOperation,
+        OwnerWorkspaceHybridSearchOperation,
         OwnerRecallReadOperation,
         OwnerIndexStatusOperation,
         OwnerOperationsHealthOperation,
@@ -2351,6 +2422,11 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, OwnerWorkspacePassageAnchorsOperation, StringComparison.Ordinal))
         {
             return HandleWorkspacePassageAnchors(context, request, operation, cancellationToken);
+        }
+
+        if (string.Equals(request.Operation, OwnerWorkspaceHybridSearchOperation, StringComparison.Ordinal))
+        {
+            return HandleWorkspaceHybridSearch(context, request, operation, cancellationToken);
         }
 
         if (string.Equals(request.Operation, OwnerOperationsHealthOperation, StringComparison.Ordinal))
@@ -11807,6 +11883,159 @@ public sealed class ServiceRequestHandler
     }
 
     /// <summary>
+    /// S15-T3 owner hybrid search: one server-side pass over the caller's
+    /// scope. The owner's folder, field, currentness and content-date filters
+    /// are applied before any rank, total or snippet is disclosed; a missing or
+    /// invalid local model, a stale or unmaterialized generation and a locked
+    /// vault keep their own refusal codes instead of silently degrading to a
+    /// literal-only answer.
+    /// </summary>
+    private ServiceReply HandleWorkspaceHybridSearch(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation,
+        CancellationToken cancellationToken)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasWorkspaceHybridSearchExtras(request))
+        {
+            return Error("invalid_request");
+        }
+
+        if (_workspacePassageIndex is null)
+        {
+            return Error("workspace_index_unavailable");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Query) ||
+            request.Query.Length > WorkspaceHybridSearchService.MaximumQueryChars ||
+            !WorkspaceHybridSearchFields.IsKnown(request.WorkspaceSearchField) ||
+            !WorkspaceHybridSearchCurrent.IsKnown(request.SearchCurrent) ||
+            !TryParseSearchDate(request.WorkspaceSearchDateFrom, out var dateFrom) ||
+            !TryParseSearchDate(request.WorkspaceSearchDateTo, out var dateTo))
+        {
+            return Error("invalid_request");
+        }
+
+        var offset = request.SearchOffset ?? 0;
+        var limit = request.SearchLimit ?? WorkspaceHybridSearchService.DefaultLimit;
+        if (offset < 0 || limit is < 1 or > WorkspaceHybridSearchService.MaximumLimit ||
+            (dateFrom is { } from && dateTo is { } to && from > to))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var outcome = new WorkspaceHybridSearchService(_workspacePassageIndex).Search(
+                operation,
+                new WorkspaceHybridSearchRequest(
+                    request.Query,
+                    request.WorkspaceSearchFolderId,
+                    request.WorkspaceSearchField,
+                    request.SearchCurrent ?? WorkspaceHybridSearchCurrent.CurrentOnly,
+                    dateFrom,
+                    dateTo,
+                    offset,
+                    limit,
+                    request.WorkspaceModelDirectory),
+                cancellationToken);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "workspace_hybrid_search",
+                "owner",
+                null,
+                WorkspaceHybridSearch: ToWorkspaceHybridSearchPage(outcome));
+        }
+        catch (ServiceRefusalException ex)
+        {
+            return Refusal(ex.Code, ex.Message);
+        }
+        catch (WorkspacePassageIndexException ex)
+        {
+            return Error(ex.Code);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or CryptographicException or
+                                   UnauthorizedAccessException or InvalidOperationException or OverflowException or ArgumentException)
+        {
+            return Error("workspace_search_unavailable");
+        }
+    }
+
+    private static WorkspaceHybridSearchPageWire ToWorkspaceHybridSearchPage(WorkspaceHybridSearchOutcome outcome) =>
+        new(
+            outcome.WorkspaceRevision,
+            outcome.FolderId,
+            outcome.FolderPath,
+            outcome.Query,
+            outcome.Field,
+            outcome.Current,
+            outcome.ContentDateFrom,
+            outcome.ContentDateTo,
+            outcome.Total,
+            outcome.LiteralTotal,
+            outcome.SemanticCandidateTotal,
+            outcome.Offset,
+            outcome.Limit,
+            outcome.HasMore,
+            outcome.SemanticStatus,
+            outcome.ModelRevision,
+            outcome.VectorDimensions,
+            outcome.Hits
+                .Select(hit => new WorkspaceHybridHitWire(
+                    hit.Rank,
+                    hit.FileId,
+                    hit.Path,
+                    hit.ContentRevision,
+                    hit.FileSha256,
+                    hit.Field,
+                    hit.Channels,
+                    hit.EvidenceClass,
+                    hit.Stale,
+                    hit.Line,
+                    hit.ByteOffset,
+                    hit.ByteLength,
+                    hit.AnchorSha256,
+                    hit.TextOffset,
+                    hit.TextLength,
+                    hit.Evidence,
+                    hit.AnchorKind,
+                    hit.Attribution,
+                    hit.ChunkOrdinal,
+                    hit.Similarity))
+                .ToArray());
+
+    private static bool TryParseSearchDate(string? value, out DateOnly? date)
+    {
+        date = null;
+        if (value is null)
+        {
+            return true;
+        }
+
+        if (DateOnly.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
+        {
+            date = parsed;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// S8-T4 the owner's operational health: the vault state, the private
     /// index, the provider configuration, the recorded spend, the size of the
     /// private operations state and the size of the safe operational log.
@@ -12195,6 +12424,60 @@ public sealed class ServiceRequestHandler
         request.SearchToUtc is not null || request.SearchAsOfUtc is not null ||
         request.BudgetChars is not null;
 
+
+    /// <summary>
+    /// S15-T3 the owner hybrid search accepts exactly its query, its folder,
+    /// field, currentness and content-date filters, its page and the explicit
+    /// local model directory. Every other request field is refused instead of
+    /// being silently ignored, so a search can never carry another act's
+    /// authority, precondition or scope.
+    /// </summary>
+    private static bool HasWorkspaceHybridSearchExtras(ServiceRequest request) =>
+        request.ResourceId is not null || request.ZoneId is not null ||
+        request.Passphrase is not null || request.RecoveryCode is not null ||
+        request.ContentBase64 is not null || request.ResourceIds is not null ||
+        request.Operations is not null || request.DestinationResourceIds is not null ||
+        request.ExpiresAtUtc is not null || request.Provider is not null ||
+        request.Model is not null || request.MaximumCostUsd is not null ||
+        request.PreviewId is not null || request.CollectionId is not null ||
+        request.Token is not null || request.SessionToken is not null ||
+        request.SessionId is not null || request.AccessOperation is not null ||
+        request.ResourceRevision is not null || request.DestinationResourceId is not null ||
+        request.DestinationRevision is not null || request.EstimatedCostUsd is not null ||
+        request.InputTokens is not null || request.OutputTokens is not null ||
+        request.CatalogId is not null || request.Label is not null ||
+        request.Description is not null || request.CatalogIds is not null ||
+        request.SearchKind is not null || request.BudgetChars is not null ||
+        request.Purpose is not null || request.AgentId is not null ||
+        request.AgentContext is not null || request.DisclosureContext is not null ||
+        request.RequestId is not null || request.SourceLocator is not null ||
+        request.SourceFormat is not null || request.SourceFormatVersion is not null ||
+        request.SourceTitle is not null || request.SourceAuthor is not null ||
+        request.SourceCapturedAtUtc is not null || request.SourceGeneration is not null ||
+        request.SnapshotRetainUntilUtc is not null || request.SearchLevel is not null ||
+        request.SearchFromUtc is not null || request.SearchToUtc is not null ||
+        request.SearchAsOfUtc is not null || request.JobId is not null ||
+        request.BaseUrl is not null || request.ApiKey is not null ||
+        request.Profile is not null || request.IntervalMinutes is not null ||
+        request.ContextProject is not null || request.ContextTask is not null ||
+        request.IncludeArchived is not null || request.BackupPath is not null ||
+        request.TargetPath is not null || request.IncludeRelations is not null ||
+        request.IncludeLifecycleStates is not null || request.DiscardRollback is not null ||
+        request.OperationsOffset is not null || request.OperationsLimit is not null ||
+        request.RetentionDays is not null || request.RetentionMaxRecords is not null ||
+        request.PurgeOperationalLog is not null || request.SourceFolderRoot is not null ||
+        request.SourceFolderRecursive is not null || request.SourceFolderIncludePatterns is not null ||
+        request.SourceFolderExcludePatterns is not null || request.SourceFolderPreviewId is not null ||
+        request.SourceFolderConfirmation is not null || request.SourceFolderRawPreservationRetainUntilUtc is not null ||
+        request.RawPreservationRetainUntilUtc is not null || request.SourceRecordOffset is not null ||
+        request.WorkspaceParentId is not null || request.WorkspaceName is not null ||
+        request.WorkspaceTreeRevision is not null || request.WorkspaceContentRevision is not null ||
+        request.WorkspaceNodeRevision is not null || request.WorkspacePreviewToken is not null ||
+        request.WorkspaceAnchorOffset is not null || request.WorkspaceAnchorLength is not null ||
+        request.WorkspaceExportDestination is not null || request.WorkspaceExportToken is not null ||
+        request.WorkspaceExportConfirmation is not null || request.WorkspacePurgeToken is not null ||
+        request.WorkspacePurgeConfirmation is not null || request.WorkspacePurgeReason is not null ||
+        request.WorkspaceUnlockEpoch is not null;
 
     /// <summary>
     /// The owner library filters are abstraction level and the inclusive time
