@@ -307,6 +307,18 @@ internal static partial class OwnerServiceSmoke
             var builtPassages = WorkspaceNumber(rebuilt.StandardOutput, "passages");
             var builtPostings = WorkspaceNumber(rebuilt.StandardOutput, "postings");
 
+            // Releasing the explicit model selection keeps this stale-generation probe deterministic.
+            var staleProbeLock = await RunOwnerCommandAsync(
+                cliExecutable, "owner", "lock", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
+            Require(staleProbeLock.ExitCode == 0 &&
+                    staleProbeLock.StandardOutput.Contains("VAULT locked", StringComparison.Ordinal),
+                "The vault did not lock before the stale-generation probe.");
+            var staleProbeUnlock = await RunOwnerCommandWithInputAsync(
+                cliExecutable, passphrase + Environment.NewLine,
+                "owner", "unlock", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
+            Require(staleProbeUnlock.ExitCode == 0 &&
+                    staleProbeUnlock.StandardOutput.Contains("VAULT unlocked", StringComparison.Ordinal),
+                "The vault did not unlock before the stale-generation probe.");
             treeRevision = WorkspaceNumber(
                 await ReadWorkspaceStatusAsync(cliExecutable, fixture).ConfigureAwait(false), "revision");
             var staleFolder = await RunOwnerCommandAsync(cliExecutable,
@@ -534,6 +546,18 @@ internal static partial class OwnerServiceSmoke
             Console.WriteLine("PASS synthetic header/identity/record/footer tampering and a foreign-vault-key generation are refused, and the original authenticates again");
 
             // --- malformed and incomplete known JSONL refusals preserve the authentic old generation ---
+            // Clear the selected model so the mutation itself cannot replace the generation before the refusal check.
+            var malformedProbeLock = await RunOwnerCommandAsync(
+                cliExecutable, "owner", "lock", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
+            Require(malformedProbeLock.ExitCode == 0 &&
+                    malformedProbeLock.StandardOutput.Contains("VAULT locked", StringComparison.Ordinal),
+                "The vault did not lock before the malformed-JSONL preservation probe.");
+            var malformedProbeUnlock = await RunOwnerCommandWithInputAsync(
+                cliExecutable, passphrase + Environment.NewLine,
+                "owner", "unlock", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
+            Require(malformedProbeUnlock.ExitCode == 0 &&
+                    malformedProbeUnlock.StandardOutput.Contains("VAULT unlocked", StringComparison.Ordinal),
+                "The vault did not unlock before the malformed-JSONL preservation probe.");
             treeRevision = WorkspaceNumber(
                 await ReadWorkspaceStatusAsync(cliExecutable, fixture).ConfigureAwait(false), "revision");
             var knownJsonlFolder = await RunOwnerCommandAsync(cliExecutable,

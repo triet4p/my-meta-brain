@@ -901,3 +901,13 @@ the assignment can fail before the sentinel check or any child starts.
 **Root cause:** Evidence selection keyed on `Similarity != null`, which is also set on a merged hit. A merged hit keeps the narrower literal anchor, so the passage renderer sliced only the literal length out of the anchor offset.
 **Fix / workaround:** Choose the line snippet for every literal host (merged or not) and the passage snippet only for a semantic-only hit.
 **Watch out for:** A merged hit's channel list says both channels, but its anchor stays the literal range; channel presence must never change how the anchor is interpreted.
+
+## [2026-11-08] A workspace mutation could be forgotten before model selection
+
+**Symptom:** Source inspection showed that a successful owner content mutation arriving before any local model directory was explicitly supplied left an already-materialized passage generation stale, but created no pending scheduler work. Supplying the model directory later alone could not refresh that mutation.
+
+**Root cause:** The mutation callback returned early when the scheduler's in-memory model directory was null, and model observation only stored the path; it did not restore the discarded mutation request.
+
+**Fix / workaround:** Retain the coalesced pending request on every successful owner content mutation in the unlocked epoch, and signal the worker when the owner explicitly supplies a model directory. A successful explicit full rebuild clears any pending request it has already satisfied.
+
+**Watch out for:** Optional model/resource selection must not erase an already-authorized content-change trigger. Keep the job pending without choosing or loading a model implicitly, and distinguish a successful manual rebuild (which makes the generation current) from a search or failed rebuild.

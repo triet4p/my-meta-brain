@@ -717,7 +717,8 @@ internal static class OwnerControlCli
     {
         options.RequireOnly("--control-pipe", "--query", "--folder-id", "--format", "--hybrid",
             "--field", "--current", "--content-date-from", "--content-date-to",
-            "--offset", "--limit", "--model-directory", "--purpose", "--include-archived");
+            "--offset", "--limit", "--model-directory", "--purpose", "--include-archived",
+            "--open-rank", "--open-browser");
         var controlPipe = ControlPipe(options);
         var query = options.Required("--query");
         var folderId = options.Optional("--folder-id");
@@ -727,6 +728,23 @@ internal static class OwnerControlCli
         var dateToText = options.Optional("--content-date-to");
         var modelDirectory = options.Optional("--model-directory");
         var purpose = options.Optional("--purpose");
+        var openRank = (int?)null;
+        if (options.Optional("--open-rank") is { } openRankText)
+        {
+            if (!int.TryParse(openRankText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedOpenRank) ||
+                parsedOpenRank < 1)
+            {
+                return Usage();
+            }
+
+            openRank = parsedOpenRank;
+        }
+        var openBrowser = true;
+        if (options.Optional("--open-browser") is { } openBrowserText &&
+            (!bool.TryParse(openBrowserText, out openBrowser) || openRank is null))
+        {
+            return Usage();
+        }
         var includeArchived = false;
         if (options.Optional("--include-archived") is { } includeArchivedText &&
             !bool.TryParse(includeArchivedText, out includeArchived))
@@ -781,7 +799,95 @@ internal static class OwnerControlCli
         }
 
         WriteWorkspaceHybridSearchResults(page, format);
-        return 0;
+        return openRank is { } rank
+            ? await OpenWorkspaceHybridHitAsync(page, rank, controlPipe, openBrowser).ConfigureAwait(false)
+            : 0;
+    }
+
+    private static async Task<int> OpenWorkspaceHybridHitAsync(
+        JsonElement page,
+        int rank,
+        string controlPipe,
+        bool openBrowser)
+    {
+        if (!page.TryGetProperty("hits", out var hits) || hits.ValueKind != JsonValueKind.Array)
+        {
+            Console.Error.WriteLine("ERROR workspace_search_open_unavailable: the selected search page has no hits.");
+            return 3;
+        }
+
+        JsonElement selected = default;
+        foreach (var hit in hits.EnumerateArray())
+        {
+            if (hit.TryGetProperty("rank", out var rankValue) &&
+                rankValue.TryGetInt32(out var hitRank) &&
+                hitRank == rank)
+            {
+                selected = hit;
+                break;
+            }
+        }
+
+        if (selected.ValueKind != JsonValueKind.Object)
+        {
+            Console.Error.WriteLine(
+                "ERROR workspace_search_open_rank_unavailable: select a rank present on the returned page; adjust --offset or --limit.");
+            return 3;
+        }
+
+        if (selected.TryGetProperty("stale", out var staleValue) &&
+            staleValue.ValueKind == JsonValueKind.True)
+        {
+            Console.Error.WriteLine("ERROR workspace_search_open_stale: the selected result is a retained historical revision.");
+            return 3;
+        }
+
+        var fileId = JsonValueText(selected, "fileId");
+        if (string.IsNullOrWhiteSpace(fileId) ||
+            !selected.TryGetProperty("contentRevision", out var revisionValue) ||
+            !revisionValue.TryGetInt64(out var revision) || revision < 1)
+        {
+            Console.Error.WriteLine("ERROR workspace_search_open_unavailable: the selected result has no exact source revision.");
+            return 3;
+        }
+
+        var openArguments = new List<string>
+        {
+            fileId,
+            "--control-pipe", controlPipe,
+            "--revision", revision.ToString(CultureInfo.InvariantCulture),
+        };
+        var offset = 0L;
+        var hasOffset = selected.TryGetProperty("byteOffset", out var offsetValue) &&
+            offsetValue.ValueKind == JsonValueKind.Number &&
+            offsetValue.TryGetInt64(out offset);
+        var length = 0L;
+        var hasLength = selected.TryGetProperty("byteLength", out var lengthValue) &&
+            lengthValue.ValueKind == JsonValueKind.Number &&
+            lengthValue.TryGetInt64(out length);
+        if (hasOffset || hasLength)
+        {
+            var anchorSha256 = JsonValueText(selected, "anchorSha256");
+            if (!hasOffset || !hasLength || offset < 0 || length < 1 || !IsSha256(anchorSha256))
+            {
+                Console.Error.WriteLine("ERROR workspace_search_open_anchor_invalid: the selected result has an incomplete source anchor.");
+                return 3;
+            }
+
+            openArguments.Add("--anchor-offset");
+            openArguments.Add(offset.ToString(CultureInfo.InvariantCulture));
+            openArguments.Add("--anchor-length");
+            openArguments.Add(length.ToString(CultureInfo.InvariantCulture));
+            openArguments.Add("--anchor-sha256");
+            openArguments.Add(anchorSha256);
+        }
+
+        if (!openBrowser)
+        {
+            openArguments.Add("--no-browser");
+        }
+
+        return await RunOpenAsync(openArguments.ToArray()).ConfigureAwait(false);
     }
 
     private static void WriteWorkspaceHybridSearchResults(JsonElement page, string format)
@@ -10424,7 +10530,7 @@ internal static class OwnerControlCli
         "export" => "owner export --control-pipe <pipe> --resource-ids <id,...> --output-file <new-file> [--include-relations true] [--include-lifecycle-states true]: explicit readable plaintext copy of exactly the selected records (create-only; cannot be revoked afterwards). Citations outside the scope are withheld whole.",
         "workspace-status" => "owner workspace-status --control-pipe <pipe>: committed workspace state (ready/uninitialized), format/schema versions, tree revision and counts. An unreadable or newer workspace is refused, never shown as empty.",
         "workspace-tree" => "owner workspace-tree --control-pipe <pipe>: every logical folder/file with stable id, parent, exact name, tree revision and (for files) the latest content revision, bytes and SHA-256. Names print as JSON strings.",
-        "workspace-search" => "owner workspace-search --control-pipe <pipe> --query <text> [--folder-id <live-folder-id>] [--format text|json] [--hybrid true [--field name|path|heading|content] [--current current|history|all] [--content-date-from YYYY-MM-DD --content-date-to YYYY-MM-DD] [--offset N --limit N] [--model-directory <pinned-local-E5-directory>] [--purpose auto|experience|temporal|intention|action-effect|general [--include-archived true|false]]]: hybrid search keeps literal matches distinct from unconfirmed semantic candidates; purpose-aware results add exact-revision regions, representative hits, stored annotation/lifecycle state and selection reasons. Archived annotations are excluded by default; this option reveals them only to the owner. Content-date bounds inspect dates in anchored source evidence and are not event or recorded timestamps; missing lifecycle stamps remain unknown. Mentions/reminders/acknowledgements do not complete an intention, and action/effect association does not prove causality.",
+        "workspace-search" => "owner workspace-search --control-pipe <pipe> --query <text> [--folder-id <live-folder-id>] [--format text|json] [--hybrid true [--field name|path|heading|content] [--current current|history|all] [--content-date-from YYYY-MM-DD --content-date-to YYYY-MM-DD] [--offset N --limit N] [--model-directory <pinned-local-E5-directory>] [--purpose auto|experience|temporal|intention|action-effect|general [--include-archived true|false]] [--open-rank N [--open-browser true|false]]]: hybrid search keeps literal matches distinct from unconfirmed semantic candidates; purpose-aware results add exact-revision regions, representative hits, stored annotation/lifecycle state and selection reasons. Archived annotations are excluded by default; this option reveals them only to the owner. Content-date bounds inspect dates in anchored source evidence and are not event or recorded timestamps; missing lifecycle stamps remain unknown. Mentions/reminders/acknowledgements do not complete an intention, and action/effect association does not prove causality. --open-rank opens only that returned current hit at its exact source revision and byte anchor when present; --open-browser false prints the foreground document URL without launching a browser.",
         "workspace-mkdir" => "owner workspace-mkdir --control-pipe <pipe> --parent-id <id|root> --name <exact-name> --expected-tree-revision <n>: create one logical folder at the tree revision you last saw. Revision 0 initializes an empty workspace. Sibling names are compared ordinals, case-sensitively.",
         "workspace-import" => "owner workspace-import --control-pipe <pipe> --parent-id <id|root> [--name <exact-name>] --input-file <file> --expected-tree-revision <n>: store the file's exact original bytes (empty and non-UTF-8 included) as content revision 1 under your structural precondition. Defaults to the source file name; an unrepresentable name or an occupied sibling name is refused, never renamed or overwritten.",
         "workspace-revise" => "owner workspace-revise --control-pipe <pipe> --file-id <id> --expected-content-revision <live> --input-file <file>: store the exact bytes as the next retained content revision. A stale revision is refused; earlier revisions stay readable.",

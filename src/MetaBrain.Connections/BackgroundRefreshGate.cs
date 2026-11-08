@@ -23,6 +23,38 @@ internal static class BackgroundRefreshGate
 
     public static void Release() => Gate.Release();
 
+    /// <summary>
+    /// Acquires one bounded background-work slice without queueing ahead of
+    /// owner requests. The caller releases the returned lease before beginning
+    /// another slice, so owner traffic gets the same gate between units.
+    /// </summary>
+    public static IDisposable EnterForWorkSlice(CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (TryEnter())
+            {
+                return new GateLease();
+            }
+
+            cancellationToken.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(25));
+        }
+    }
+
+    private sealed class GateLease : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            {
+                Release();
+            }
+        }
+    }
+
     public static void Exit() => Gate.Release();
 
     public static bool HasActiveOwnerOperation() => Gate.CurrentCount == 0;

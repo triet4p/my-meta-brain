@@ -43,6 +43,7 @@ internal sealed class NamedPipeService
     private readonly EncryptedPrivateIndexStore _privateIndex;
     private readonly EncryptedWorkspacePassageIndex _workspacePassageIndex;
     private readonly SourceRefreshBackgroundService _backgroundRefresh;
+    private readonly WorkspacePassageIndexBackgroundService _workspacePassageIndexBackground;
     private readonly SynthesisScheduleBackgroundService _scheduleLoop;
     private readonly IntentionScheduleBackgroundService _intentionScheduleLoop;
     private readonly SafeOperationalLog _operationalLog;
@@ -58,6 +59,7 @@ internal sealed class NamedPipeService
         var authority = new GrantAuthority(new InMemoryGrantStore());
         _privateIndex = new EncryptedPrivateIndexStore(settings.VaultDirectoryPath, _vault);
         _workspacePassageIndex = new EncryptedWorkspacePassageIndex(settings.VaultDirectoryPath, _vault);
+        _workspacePassageIndexBackground = new WorkspacePassageIndexBackgroundService(_vault, _workspacePassageIndex);
         // S8-T4 the safe operational log: a sanitized trace of what the
         // service did, in the service data root and never in the repository.
         _operationalLog = new SafeOperationalLog(settings.DataRootPath);
@@ -96,10 +98,12 @@ internal sealed class NamedPipeService
                 ListenAsync(agentListener, PrincipalKind.Agent, WindowsPipeServer.CreateAgent, cancellationToken),
                 _backgroundRefresh.RunAsync(cancellationToken),
                 _scheduleLoop.RunAsync(cancellationToken),
-                _intentionScheduleLoop.RunAsync(cancellationToken)).ConfigureAwait(false);
+                _intentionScheduleLoop.RunAsync(cancellationToken),
+                _workspacePassageIndexBackground.RunAsync(cancellationToken)).ConfigureAwait(false);
         }
         finally
         {
+            _workspacePassageIndexBackground.ClearForEpochTransition();
             await _vault.LockAsync().ConfigureAwait(false);
             _vault.Dispose();
             _privateIndex.Dispose();
@@ -453,7 +457,11 @@ internal sealed class NamedPipeService
                 var serializeWithBackgroundRefresh =
                     needsVaultOperation &&
                     operation is not null &&
-                    !string.Equals(request.Operation, ServiceRequestHandler.OwnerJobCancelOperation, StringComparison.Ordinal);
+                    !string.Equals(request.Operation, ServiceRequestHandler.OwnerJobCancelOperation, StringComparison.Ordinal) &&
+                    !string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspacePassageIndexStatusOperation, StringComparison.Ordinal) &&
+                    !string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspacePassageIndexRebuildOperation, StringComparison.Ordinal) &&
+                    !string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspacePassageAnchorsOperation, StringComparison.Ordinal) &&
+                    !string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceHybridSearchOperation, StringComparison.Ordinal);
                 if (serializeWithBackgroundRefresh)
                 {
                     // Cancellation updates the job, spend ledger, and audit state.
@@ -483,6 +491,39 @@ internal sealed class NamedPipeService
                         : null;
                     var requestCancellation = linkedCancellation?.Token ?? timeout.Token;
                     var reply = await _handler.HandleAsync(context, request, operation, requestCancellation).ConfigureAwait(false);
+                    if (channel == PrincipalKind.Owner)
+                    {
+                        if ((request.Operation is ServiceRequestHandler.OwnerWorkspacePassageIndexRebuildOperation or
+                            ServiceRequestHandler.OwnerWorkspaceHybridSearchOperation) &&
+                            request.WorkspaceModelDirectory is { Length: > 0 } modelDirectory)
+                        {
+                            var generationIsCurrent =
+                                string.Equals(
+                                    request.Operation,
+                                    ServiceRequestHandler.OwnerWorkspacePassageIndexRebuildOperation,
+                                    StringComparison.Ordinal) &&
+                                reply.Error is null &&
+                                reply.ErrorCode is null &&
+                                string.Equals(reply.Status, "workspace_passage_index_rebuilt", StringComparison.Ordinal);
+                            _workspacePassageIndexBackground.ObserveExplicitModelDirectory(
+                                modelDirectory, generationIsCurrent);
+                        }
+
+                        if (IsSuccessfulWorkspaceContentMutation(request.Operation, reply))
+                        {
+                            _workspacePassageIndexBackground.RequestAfterSuccessfulMutation();
+                        }
+
+                        if (string.Equals(
+                            request.Operation,
+                            ServiceRequestHandler.OwnerVaultLockOperation,
+                            StringComparison.Ordinal))
+                        {
+                            _workspacePassageIndexBackground.ClearForEpochTransition();
+                        }
+                    }
+
+
                     await writer.WriteLineAsync(JsonSerializer.Serialize(reply, OutputOptions).AsMemory(), timeout.Token).ConfigureAwait(false);
                 }
                 finally
@@ -507,6 +548,32 @@ internal sealed class NamedPipeService
                 await WriteErrorAsync(writer, "unauthorized", CancellationToken.None).ConfigureAwait(false);
             }
         }
+    }
+
+    private static bool IsSuccessfulWorkspaceContentMutation(string operation, ServiceReply reply)
+    {
+        if (reply.Error is not null || reply.ErrorCode is not null)
+        {
+            return false;
+        }
+
+        var expectedStatus = operation switch
+        {
+            ServiceRequestHandler.OwnerWorkspaceFolderCreateOperation or
+            ServiceRequestHandler.OwnerWorkspaceFileCreateOperation or
+            ServiceRequestHandler.OwnerWorkspaceFileReviseOperation or
+            ServiceRequestHandler.OwnerWorkspaceNodeRenameOperation or
+            ServiceRequestHandler.OwnerWorkspaceNodeMoveOperation => "workspace_mutated",
+            ServiceRequestHandler.OwnerWorkspaceNodeCopyOperation => "workspace_copied",
+            ServiceRequestHandler.OwnerWorkspaceNodeDeleteOperation => "workspace_deleted",
+            ServiceRequestHandler.OwnerWorkspaceNodeRestoreOperation => "workspace_restored",
+            ServiceRequestHandler.OwnerWorkspaceNodePurgeOperation => "workspace_purged",
+            ServiceRequestHandler.OwnerWorkspaceAnchorCreateOperation => "workspace_anchor",
+            _ => null
+        };
+
+        return expectedStatus is not null &&
+            string.Equals(reply.Status, expectedStatus, StringComparison.Ordinal);
     }
 
     private static bool IsOperationAllowedOnChannel(PrincipalKind channel, string? operation)

@@ -113,6 +113,19 @@ public interface IWorkspacePassageIndexEngine : IDisposable
         string modelDirectory,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Builds a complete authenticated generation while reusing only unchanged,
+    /// authenticated passage records when available. The optional work-slice
+    /// provider lets a background caller yield between bounded read-only units;
+    /// implementations without an incremental path may safely rebuild fully.
+    /// </summary>
+    WorkspacePassageIndexStatus RebuildIncremental(
+        IWorkspacePersistence workspace,
+        string modelDirectory,
+        Func<CancellationToken, IDisposable>? acquireWorkSlice,
+        CancellationToken cancellationToken = default) =>
+        Rebuild(workspace, modelDirectory, cancellationToken);
+
     WorkspacePassageAnchorPage ReadAnchors(
         IWorkspacePersistence workspace,
         string fileId,

@@ -409,6 +409,18 @@ internal static partial class OwnerServiceSmoke
             await VerifyS15T4SerializedSearchAndRecallAsync(
                 cliExecutable, fixture, allowed.FolderId, modelDirectory, currentExperienceOwner.Id).ConfigureAwait(false);
 
+            // Lock clears the explicit model selection; stale refusal remains deterministic.
+            var staleProbeLock = await RunOwnerCommandAsync(
+                cliExecutable, "owner", "lock", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
+            Require(staleProbeLock.ExitCode == 0 &&
+                    staleProbeLock.StandardOutput.Contains("VAULT locked", StringComparison.Ordinal),
+                "The vault did not lock before the stale-generation probe.");
+            var staleProbeUnlock = await RunOwnerCommandWithInputAsync(
+                cliExecutable, passphrase + Environment.NewLine,
+                "owner", "unlock", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
+            Require(staleProbeUnlock.ExitCode == 0 &&
+                    staleProbeUnlock.StandardOutput.Contains("VAULT unlocked", StringComparison.Ordinal),
+                "The vault did not unlock before the stale-generation probe.");
             var staleFolder = await CreateFolderAsync(
                 cliExecutable, fixture, allowed.FolderId, "stale-generation-probe",
                 WorkspaceNumber(await ReadWorkspaceStatusAsync(cliExecutable, fixture).ConfigureAwait(false), "revision"))

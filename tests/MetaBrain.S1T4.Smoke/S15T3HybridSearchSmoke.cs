@@ -318,7 +318,44 @@ internal static partial class OwnerServiceSmoke
                 " paraphraseOrNearMiss=" + paraphraseQueries.ToString(CultureInfo.InvariantCulture) +
                 " negatives=" + negativeQueries.ToString(CultureInfo.InvariantCulture) +
                 "; no similarity threshold or owner acceptance is implied");
+            await StopServiceAsync(service!).ConfigureAwait(false);
+            service = null;
+            service = await StartServiceAsync(connectionsExecutable, fixture.SettingsPath).ConfigureAwait(false);
+            var coldUnlock = await RunOwnerCommandWithInputAsync(
+                cliExecutable, passphrase + Environment.NewLine,
+                "owner", "unlock", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
+            Require(coldUnlock.ExitCode == 0 && coldUnlock.StandardOutput.Contains("VAULT unlocked", StringComparison.Ordinal),
+                "The synthetic vault did not unlock for the post-restart T5 measurement.");
+            var coldQuery = querySet.Queries.First(query =>
+                !S15T3ExactLiteralQueries.Contains(query.Id) && query.ExpectedEvidence.Count > 0);
+            var coldProcessSample = ReadS15T5ProcessSample(service.Process);
+            var coldTimer = Stopwatch.StartNew();
+            var coldResult = await RunOwnerCommandAsync(
+                cliExecutable,
+                S15T3LongCommandTimeout,
+                HybridArguments(
+                    fixture, coldQuery.Query,
+                    coldQuery.Scope == "inside" ? allowedFolder.FolderId : null,
+                    modelDirectory)).ConfigureAwait(false);
+            Require(coldResult.ExitCode == 0,
+                "The first post-restart actual hybrid CLI query failed (stderr=" + coldResult.StandardError.Trim() + ").");
+            using (var coldPage = JsonDocument.Parse(coldResult.StandardOutput))
+            {
+                Require(coldPage.RootElement.GetProperty("semanticStatus").GetString() == WorkspaceHybridSemanticStatus.Applied,
+                    "The first post-restart query did not load and execute the explicitly selected local model.");
+            }
+            coldTimer.Stop();
 
+            Console.WriteLine(
+                "OBSERVATION S15-T5 firstHybridAfterLockedRestartMs=" +
+                coldTimer.Elapsed.TotalMilliseconds.ToString("F2", CultureInfo.InvariantCulture) +
+                " servicePrivateBytesBefore=" + coldProcessSample.PrivateBytes.ToString(CultureInfo.InvariantCulture) +
+                " serviceWorkingSetBefore=" + coldProcessSample.WorkingSet.ToString(CultureInfo.InvariantCulture) +
+                " (first CLI process after restart; model reload included; no latency/resource gate implied)");
+            await MeasureS15T5IntegratedHybridLatencyAsync(
+                cliExecutable, fixture, service, querySet, allowedFolder.FolderId, modelDirectory).ConfigureAwait(false);
+
+            
             await RunS15T3UnrelatedNegativesAsync(cliExecutable, fixture, allowedFolder.FolderId, modelDirectory).ConfigureAwait(false);
             await RunS15T3ScopeNegativesAsync(cliExecutable, fixture, querySet, allowedFolder.FolderId, modelDirectory).ConfigureAwait(false);
             await RunS15T3TieAndDedupAsync(cliExecutable, fixture, allowedFolder.FolderId, modelDirectory).ConfigureAwait(false);
@@ -326,7 +363,8 @@ internal static partial class OwnerServiceSmoke
             await RunS15T3ModelRefusalsAsync(cliExecutable, fixture, allowedFolder.FolderId, modelDirectory).ConfigureAwait(false);
             await RunS15T3CancellationAsync(
                 cliExecutable, fixture, allowedFolder.FolderId, modelDirectory, passphrase).ConfigureAwait(false);
-            await RunS15T3StaleAsync(cliExecutable, fixture, allowedFolder.FolderId, modelDirectory).ConfigureAwait(false);
+            await RunS15T3StaleAsync(
+                cliExecutable, fixture, allowedFolder.FolderId, modelDirectory, passphrase).ConfigureAwait(false);
         }
         finally
         {
@@ -336,6 +374,7 @@ internal static partial class OwnerServiceSmoke
             }
         }
     }
+
 
     private static readonly HashSet<string> S15T3ExactLiteralQueries = new(StringComparer.Ordinal)
     {
@@ -423,6 +462,84 @@ internal static partial class OwnerServiceSmoke
 
         return arguments.ToArray();
     }
+
+    private static async Task MeasureS15T5IntegratedHybridLatencyAsync(
+        string cliExecutable,
+        SmokeFixture fixture,
+        RunningService service,
+        S15T1QuerySet querySet,
+        string allowedFolderId,
+        string modelDirectory)
+    {
+        const int warmupCount = 10;
+        const int timedQueryCount = 100;
+        var latenciesMs = new double[timedQueryCount];
+        var process = service.Process;
+        var before = ReadS15T5ProcessSample(process);
+        var maxPrivateBytes = before.PrivateBytes;
+        var maxWorkingSet = before.WorkingSet;
+
+        void Sample()
+        {
+            var sample = ReadS15T5ProcessSample(process);
+            maxPrivateBytes = Math.Max(maxPrivateBytes, sample.PrivateBytes);
+            maxWorkingSet = Math.Max(maxWorkingSet, sample.WorkingSet);
+        }
+
+        async Task RunQueryAsync(int index, int? timedIndex)
+        {
+            var query = querySet.Queries[index % querySet.Queries.Count];
+            var folderId = query.Scope == "inside" ? allowedFolderId : null;
+            var timer = Stopwatch.StartNew();
+            var result = await RunOwnerCommandAsync(
+                cliExecutable,
+                S15T3LongCommandTimeout,
+                HybridArguments(fixture, query.Query, folderId, modelDirectory)).ConfigureAwait(false);
+            using var page = result.ExitCode == 0 ? JsonDocument.Parse(result.StandardOutput) : null;
+            timer.Stop();
+            Require(result.ExitCode == 0 && page is not null &&
+                    page.RootElement.TryGetProperty("hits", out var hits) && hits.ValueKind == JsonValueKind.Array,
+                "An integrated S15-T5 hybrid measurement query failed for " + query.Id +
+                " (stderr=" + result.StandardError.Trim() + ").");
+            if (timedIndex is { } sampleIndex)
+            {
+                latenciesMs[sampleIndex] = timer.Elapsed.TotalMilliseconds;
+            }
+
+            Sample();
+        }
+
+        for (var index = 0; index < warmupCount; index++)
+        {
+            await RunQueryAsync(index, timedIndex: null).ConfigureAwait(false);
+        }
+
+        for (var index = 0; index < timedQueryCount; index++)
+        {
+            await RunQueryAsync(index, index).ConfigureAwait(false);
+        }
+
+        var after = ReadS15T5ProcessSample(process);
+        Array.Sort(latenciesMs);
+        var p50 = latenciesMs[(int)Math.Ceiling(0.50 * timedQueryCount) - 1];
+        var p95 = latenciesMs[(int)Math.Ceiling(0.95 * timedQueryCount) - 1];
+        Console.WriteLine(
+            "OBSERVATION S15-T5 integratedHybrid dataset=lexical-v2+two-tie-probes warmup=" +
+            warmupCount.ToString(CultureInfo.InvariantCulture) +
+            " timed=" + timedQueryCount.ToString(CultureInfo.InvariantCulture) +
+            " nearestRankP50Ms=" + p50.ToString("F2", CultureInfo.InvariantCulture) +
+            " nearestRankP95Ms=" + p95.ToString("F2", CultureInfo.InvariantCulture) +
+            " servicePrivateBytesBefore=" + before.PrivateBytes.ToString(CultureInfo.InvariantCulture) +
+            " servicePrivateBytesMaxAtBoundaries=" + maxPrivateBytes.ToString(CultureInfo.InvariantCulture) +
+            " servicePrivateBytesAfter=" + after.PrivateBytes.ToString(CultureInfo.InvariantCulture) +
+            " serviceWorkingSetBefore=" + before.WorkingSet.ToString(CultureInfo.InvariantCulture) +
+            " serviceWorkingSetMaxAtBoundaries=" + maxWorkingSet.ToString(CultureInfo.InvariantCulture) +
+            " serviceWorkingSetAfter=" + after.WorkingSet.ToString(CultureInfo.InvariantCulture) +
+            " serviceLifetimePeakWorkingSetBefore=" + before.PeakWorkingSet.ToString(CultureInfo.InvariantCulture) +
+            " serviceLifetimePeakWorkingSetAfter=" + after.PeakWorkingSet.ToString(CultureInfo.InvariantCulture) +
+            "; timer covers fresh CLI process through parsed hybrid JSON; excludes CLI-child/transient-between-boundary memory; no gate implied");
+    }
+
 
     private static async Task<JsonElement> HybridSearchJsonAsync(
         string executable,
@@ -1023,8 +1140,20 @@ internal static partial class OwnerServiceSmoke
         string executable,
         SmokeFixture fixture,
         string allowedFolderId,
-        string modelDirectory)
+        string modelDirectory,
+        string passphrase)
     {
+        var lockResult = await RunOwnerCommandAsync(
+            executable, "owner", "lock", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
+        Require(lockResult.ExitCode == 0 &&
+                lockResult.StandardOutput.Contains("VAULT locked", StringComparison.Ordinal),
+            "The vault did not lock before the stale-generation probe.");
+        var unlockResult = await RunOwnerCommandWithInputAsync(
+            executable, passphrase + Environment.NewLine,
+            "owner", "unlock", "--control-pipe", fixture.ControlPipe).ConfigureAwait(false);
+        Require(unlockResult.ExitCode == 0 &&
+                unlockResult.StandardOutput.Contains("VAULT unlocked", StringComparison.Ordinal),
+            "The vault did not unlock before the stale-generation probe.");
         var status = await ReadWorkspaceStatusAsync(executable, fixture).ConfigureAwait(false);
         var treeRevision = WorkspaceNumber(status, "revision");
         var mkdir = await RunOwnerCommandAsync(
