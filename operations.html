@@ -1,4 +1,5 @@
 ﻿<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Operations runbook - Meta Brain</title><link rel="stylesheet" href="styles.css"></head><body><main class="wrap"><p><a href="index.html">Home</a> | <a href="scenarios.html">Scenario guides</a></p><h1>Operations runbook</h1><pre id="321-mcp-client-registration-standalone-package-100"># Operations — installing and running Meta Brain every day
+**Candidate status:** The 1.5.0 candidate is assembled, independently reviewed and checkpoint-committed, but the release is not published; the published 1.4.0 downloads remain the current products. Candidate-only model/resource guidance is labeled in &#167;3.2.7 and must not be read as a feature of the 1.4.0 download.
 
 Meta Brain is installed for **one owner account** on Windows. The owner installs it, starts it,
 unlocks it, and uses it; the agents connect to it as scoped clients. Nothing in this runbook needs
@@ -543,11 +544,49 @@ The workspace is a private logical tree stored inside the unlocked vault: folder
 - `owner workspace-tombstones --control-pipe &lt;pipe&gt;` lists every retained tombstone with its id, kind, former parent and name, deletion group and revisions. A new file created at the freed name is a different identity, so deleting and re-creating a path never resumes the old one.
 - `owner workspace-anchor-create --control-pipe &lt;pipe&gt; --file-id &lt;id&gt; --expected-content-revision &lt;live&gt; --offset &lt;n&gt; --length &lt;n&gt; --expected-tree-revision &lt;n&gt;` pins one citation anchor to that exact byte range of the file&#39;s current content revision. The anchor records the document id, the content revision, the range and the digest of the anchored bytes; it stores no path and no display name. An out-of-range span refuses with `workspace_anchor_invalid` and a stale content revision with `workspace_conflict`.
 - `owner workspace-anchor-list --control-pipe &lt;pipe&gt; --file-id &lt;id&gt;` lists the anchors of one live file with their pinned `contentRevision`, range, digest and `live|stale` state. A deleted file refuses with `workspace_deleted` because its relations are unavailable until it is restored.
+- `owner workspace-index-status --control-pipe &lt;pipe&gt;` reports the encrypted workspace passage/vector generation as `WORKSPACE_INDEX state=not_materialized|empty|ready|partial|stale schema=1 revision=&lt;current tree revision&gt; files=&lt;n&gt; passages=&lt;n&gt; unsupported=&lt;n&gt; postings=&lt;n&gt; dimensions=384 stale=&lt;true|false&gt; refusal=&lt;code|none&gt;`. `stale` means the published generation was built from a different workspace identity, tree digest or revision; unsupported files are reported explicitly, never silently dropped. A workspace with no files reports `empty`; a workspace that was never indexed reports `not_materialized` with `workspace_index_not_materialized`. Successful owner workspace content mutations retain one coalesced refresh request; it waits until an owner explicitly supplies a local model directory during the unlocked epoch. Status/search and refused mutations never create a request. Without a selected model, status remains truthfully stale or unavailable; the pending request may resume only after explicit model selection.
+- `owner workspace-index-rebuild --control-pipe &lt;pipe&gt; --model-directory &lt;pinned local E5 directory&gt;` explicitly performs a full rebuild from the current encrypted workspace at its current tree revision. A background mutation refresh authenticates the previous v1 generation and reuses only unchanged, source- and anchor-validated passage/vector/posting groups; it still writes a complete fresh encrypted v1 generation and atomically publishes it. A missing local model refuses `workspace_index_model_missing`, invalid or unpinned assets `workspace_index_model_invalid`; invalid source content refuses with its own code (`workspace_index_jsonl_parser_invalid`, `workspace_index_jsonl_incomplete_record`, `workspace_index_csv_invalid`, `workspace_index_text_encoding_invalid`); a workspace that moved during the rebuild refuses `workspace_index_canonical_moved`. Any refusal, cancellation or lock leaves the previously published generation byte-identical and removes its `.building` staging file.
+- `owner workspace-index-anchors --control-pipe &lt;pipe&gt; --file-id &lt;id&gt; --revision &lt;n&gt; [--offset &lt;n&gt;] [--limit &lt;n&gt;]` reads a bounded page (default 64, maximum 512) of exact anchors from the authenticated generation: `ANCHOR file=… revision=… offset=… length=… sha256=… kind=… attribution=… chunk=…`. Every returned range digest is revalidated against the current source revision before it is reported. A stale generation refuses `workspace_index_stale`, a revision that is no longer current refuses `workspace_index_anchor_revision_unavailable`, a tampered, wrong-identity or wrong-key generation refuses `workspace_index_unavailable`, and every command needs the unlocked vault (`vault_locked`).
 
 - `owner workspace-purge-preview --control-pipe &lt;pipe&gt; --node-id &lt;id&gt;` writes nothing and reports the exact tombstone deletion group (one `TOMBSTONE` line per retained node), the retained content revisions, total bytes, anchors and the binding `token` an irreversible purge would erase, plus the disclosure that pre-existing backups and plaintext exports still hold their own copies. A live node is refused; this reads only.
 - `owner workspace-purge --control-pipe &lt;pipe&gt; --node-id &lt;id&gt; --expected-tree-revision &lt;n&gt; --preview &lt;token&gt; --confirm PURGE --reason &lt;text&gt;` permanently removes the previewed tombstone group and its retained bytes and anchors from this vault after re-deriving the preview, recording the owner&#39;s reason and every purged id in the vault&#39;s encrypted purge ledger before the workspace commit. A stale tree revision, group or token refuses with `workspace_conflict`; a missing reason or a confirmation other than `PURGE` refuses with `workspace_purge_confirmation`. The ledger is the same durable record canonical purges use, later backups carry it, and a restore re-applies it, so those identities are not resurrected here. Backups and exports made before the purge are disclosed, not recalled.
 - `owner workspace-export-preview --control-pipe &lt;pipe&gt; --node-id &lt;id&gt; [--content-revision N] --destination &lt;new-absolute-path&gt;` writes nothing and reports exactly what an export would write: every in-scope file pinned to its retained revision, every folder, the in-scope citation anchors, the new destination directory, the versioned metadata document and the binding token. For a file scope, `--content-revision N` pins one retained revision; for a folder scope it is refused with `workspace_export_revision` and every file pins its current content revision. Files outside the selected scope, citations of them and the selected node&#39;s parent identity are not included.
 - `owner workspace-export --control-pipe &lt;pipe&gt; --node-id &lt;id&gt; [--content-revision N] --destination &lt;new-absolute-path&gt; --preview &lt;token&gt; --confirm EXPORT` writes exactly the previewed scope as plaintext original bytes plus a separate versioned metadata document `metabrain-workspace-export.json` (`format: metabrain-workspace-export/1`, `metadataSchemaVersion: 1`) into one new destination directory. The destination must be an absolute path with no `.`/`..` segment, device namespace, reparse point in any existing ancestor, existing entry, or case-only collision with another in-scope name or the sidecar name; a logical name that is not a valid unchanged Windows component refuses with `workspace_export_name`. The token and the exact `EXPORT` confirmation are required and bind workspace identity and format, tree revision, selected node and revision, canonical destination and every in-scope node&#39;s id, node revision, pinned revision and exact path; any changed workspace, destination or scope refuses `workspace_conflict` before the first write. Each file is read from its authenticated retained revision, written create-only with a write-through flush and its buffer zeroized; the sidecar is written last. On cancellation, refusal or I/O failure the created files are deleted (deepest first, empty directories only, nothing followed) and the command refuses `workspace_export_failed`, or `workspace_export_incomplete` when removal could not complete. No temporary plaintext is staged in the vault or beside the destination. The copy lives outside the vault and cannot be revoked by a later lock, delete or purge.
+
+The generation is one authenticated file under `workspace-passage-index/` (`passages.v1.bin`). A rebuild writes a `.building` stage that is opened with exclusive access, then flushes and atomically moves it over the published file, so an interrupted or refused rebuild exposes either the previous or the fully written generation. The file holds only AES-GCM ciphertext keyed by the unlocked vault index key, with per-record associated data binding the file identity, record type, offset and format version; it stores no plaintext passage text, path or source metadata. While a rebuild is active the stage is held exclusively, so another process cannot read its in-flight bytes. Passage indexing never rewrites owner anchors or canonical records, and it is owner-only: the agent channel&#39;s allowlist refuses all three operations.
+
+Model directories and decoded passage groups are process-memory-only for the unlocked epoch; vault lock or host exit cancels background work and clears both. A model path is never saved or downloaded implicitly. This workspace-only refresh does not enroll folders or expand external-source refresh consent.
+
+#### Local E5 model, explicit selection and measured limits
+
+The 1.5.0 hybrid workspace path is prepared 1.5.0 release behavior; it is not published yet, and the published 1.4.0 downloads do not include it. See the [1.5.0 candidate notes](release-notes-1.5.0.md). Hybrid indexing and search are owner-CLI operations only. MCP remains the scoped agent surface and does not expose owner workspace search.
+
+The 1.5.0 candidate&#39;s dynamic native tokenizer requires Microsoft Visual C++ v14 x64 Redistributable version 14.43.34808 or later. Install it directly from Microsoft&#39;s [latest supported downloads](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170) before CLI setup or MCP startup. CLI setup, direct install and MCP startup read only the installed x64 runtime version and refuse before payload extraction, application/data-root changes or service changes if it is missing, unreadable, malformed or too old. Meta Brain does not download, bundle or install the runtime. Windows 10+ includes the OS Universal CRT; it does not provide the `VCRUNTIME140.dll` and `VCRUNTIME140_1.dll` imports. This prerequisite applies only to the unreleased 1.5.0 candidate and does not change the published 1.4.0 products.
+
+The owner must explicitly choose a local model directory when rebuilding or searching in hybrid mode. The approved repository-local model root is `runtime/s15-t1-model-staging/614241f622f53c4eeff9890bdc4f31cfecc418b3/model`; another owner-selected path is valid only when it contains the same pinned files under `onnx/`:
+
+| Relative file | Bytes | Required SHA-256 |
+| --- | ---: | --- |
+| `onnx/model.onnx` | 470,268,510 | `ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665` |
+| `onnx/tokenizer.json` | 17,082,730 | `0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39` |
+
+The seven approved model/tokenizer/config assets used for the T1 screen occupy 492,421,754 bytes (about 469.7 MiB). This is staged asset size, not an installed footprint; the product release does not bundle model weights. Before obtaining model files from any source, the owner must make an explicit choice. The application does not download weights, call a cloud embedding provider or save the selected path. An absent directory fails with `workspace_index_model_missing`; a missing, mismatched or unusable pinned file fails with `workspace_index_model_invalid`. Hybrid mode never silently substitutes lexical-only results; use the separate non-hybrid search command when literal-only behavior is desired.
+
+```text
+cli\MetaBrain.Cli.exe owner workspace-index-rebuild --control-pipe &lt;pipe&gt; --model-directory &lt;owner-selected-model-directory&gt;
+cli\MetaBrain.Cli.exe owner workspace-index-status --control-pipe &lt;pipe&gt;
+cli\MetaBrain.Cli.exe owner workspace-search --control-pipe &lt;pipe&gt; --query &lt;text&gt; --hybrid true --model-directory &lt;owner-selected-model-directory&gt; --format json
+```
+
+The model path and decoded passage reuse are process-memory-only for the unlocked epoch and are cleared on vault lock or host exit. Background refresh follows successful workspace content mutations only and requires a model path already supplied in that unlocked epoch; it does not enroll or scan external folders. The encrypted passage generation remains bound to the authenticated workspace identity, tree and exact source revisions.
+
+The accepted 35-query S15-T3 actual owner CLI/service run returned 27/27 labeled evidence cases (13 literal-baseline and 14 paraphrase/near-miss); two paraphrase cases ranked second and the other labeled cases ranked first. Four exact/no-evidence negatives and four folder-scope negatives returned no results. Unrelated natural-language queries can still return explicit `semantic_candidate` neighbors, so general prose abstention is not claimed. Every semantic candidate is unconfirmed, not supporting evidence or an answer; no raw similarity cutoff is approved. Results preserve the D104 `literal_match` / `semantic_candidate` classification and exact current/retained revision and byte-anchor contract.
+
+Approved numeric screening targets apply only to the isolated T1 evaluator: recall@5 at least 25/27, seven model/tokenizer/config assets no larger than 500 MiB, process-private boundary delta no larger than 768 MiB, and warm in-process p95 no larger than 25 ms. The approved T1 model screen observed 25/27 at rank 5, 492,421,754 bytes, +559.1953 MiB private bytes and 17.8471 ms warm p95 after 10 warmups and 100 pre-tokenized-ID searches. It was not integrated CLI/service latency or memory proof.
+
+The accepted T5 integrated observation used 112 synthetic files and 35 queries: after 10 warmups and 100 fresh CLI-to-service searches, p50/p95 were 291.65/379.81 ms; the first post-locked-restart query was 2,365.89 ms including model reload. Service private bytes were 810,008,576 before and 826,810,368 at the maximum sampled query boundary; working set was 851,689,472 before and 863,821,824 at the maximum sample. These host/fixture-specific observations are not an approved integrated SLA or a 1.5.0 packaged-candidate result. See the S15-T1, S15-T3 and S15-T5 evidence.
+
+The 1.5.0 managed-source smoke (not a release package) additionally passed the same 35 frozen queries and model-missing/model-invalid/no-silent-fallback negatives. Its first post-locked-restart query took 2,611.85 ms; after 10 warmups and 100 timed CLI-to-service searches over lexical-v2 plus two tie probes, p50/p95 were 263.44/313.50 ms. Service private bytes were 809,160,704 before and 825,040,896 maximum/after at query boundaries; working set was 849,477,632 before and 861,339,648 maximum/after. These are not targets or a package/runtime distribution proof; see the [1.5.0 candidate record](release-1.5.0.md) for the same-run context.
 
 The preview is an unaudited owner read; the act is owner-only and audited under `owner.workspace.export` (the preview under `owner.workspace.export.preview` is unaudited). The act is cancellable between files and bounded by the same 10-minute whole-scope guard as record export. The workspace root itself is not exportable (`workspace_root_invalid`); tombstoned nodes are refused; a later revision is never substituted for a pinned one.
 
@@ -559,13 +598,16 @@ The authenticated workspace format and metadata schema are both version 1. Versi
 
 ### 3.2.8 Workspace search and the optional `open` document session (S13-T4–T6)
 
-Both surfaces are owner CLI features of the current runtime (added in 1.3.0, unchanged in 1.4.0).
+Both surfaces are owner CLI features of the current runtime (search and editing added in 1.3.0;
+1.4.0 kept them unchanged; the Sprint 15 hybrid pass below is prepared 1.5.0 work that is not yet
+published).
 Search and revision-gated editing work
 with no browser at all; `open` is an optional convenience that serves exactly one document to a
 local browser.
 
 ```text
 cli\MetaBrain.Cli.exe owner workspace-search --control-pipe &lt;pipe&gt; --query &lt;literal&gt; [--folder-id &lt;live folder id&gt;] [--format text|json]
+cli\MetaBrain.Cli.exe owner workspace-search --control-pipe &lt;pipe&gt; --query &lt;text&gt; --hybrid true [--folder-id &lt;live folder id&gt;] [--field name|path|heading|content] [--current current|history|all] [--content-date-from YYYY-MM-DD --content-date-to YYYY-MM-DD] [--offset N --limit N] [--model-directory &lt;pinned local E5 directory&gt;] [--purpose auto|experience|temporal|intention|action-effect|general [--include-archived true|false]] [--format text|json] [--open-rank &lt;rank&gt; [--open-browser true|false]]
 cli\MetaBrain.Cli.exe open &lt;file-id&gt; --control-pipe &lt;pipe&gt; [--revision &lt;n&gt;] [--anchor-offset &lt;bytes&gt; --anchor-length &lt;bytes&gt; --anchor-sha256 &lt;digest&gt;] [--no-browser] [--lifetime-seconds &lt;n&gt;]
 ```
 
@@ -574,6 +616,53 @@ cli\MetaBrain.Cli.exe open &lt;file-id&gt; --control-pipe &lt;pipe&gt; [--revisi
   folder narrowing, and no stemming, synonym or semantic expansion. `--folder-id` narrows but never
   grants anything; every hit reports the live file revision and byte-range digest, and an anchor
   from a different revision is refused (`workspace_anchor_stale`/`workspace_anchor_mismatch`).
+- `--hybrid true` (S15-T3) runs one server-side owner retrieval pass over the same scope instead of
+  the CLI-side literal scan. The service applies `--folder-id`, `--field`,
+  `--current current|history|all` and the optional inclusive `--content-date-from/--content-date-to`
+  window first, then ranks the retained exact/lexical/heading evidence of every scoped revision
+  together with the authenticated local passage generation. Literal evidence always precedes a
+  semantic-only neighbour (a retained literal hit also stays above current semantic neighbours),
+  current evidence precedes retained evidence inside each band, and the rest of the order is
+  deterministic (score/similarity, path, file id, byte range, field, chunk). A semantic neighbour
+  whose anchored passage contains a literal hit is merged into that hit, so the same evidence is
+  never returned twice. `total` counts every ranked candidate after those filters, so `--offset`
+  and `--limit` (default 20, maximum 100) only bound the returned page; each returned hit is
+  revalidated against its exact current or retained revision and carries an exact evidence
+  snippet. The `--content-date-from/--content-date-to` window matches ISO-8601 calendar dates
+  written in the anchored evidence — a **content date**, never an event, recorded, ingest or
+  revision time; the workspace stores no per-node wall-clock time and none is invented.
+  `semanticStatus` reports whether the semantic channel ran (`applied`, `applied_current_only`,
+  `abstained_exact_query`, `not_applicable_history`, `not_applicable_field`,
+  `not_applicable_empty_scope`). An identifier-shaped query (one symbol, identifier or date token)
+  answers from the exact path alone, and a missing/invalid local model or a stale/unmaterialized
+  generation refuses with its own code (`workspace_index_model_missing`,
+  `workspace_index_model_invalid`, `workspace_index_not_materialized`, `workspace_index_stale`)
+  instead of silently returning literal-only results. No similarity threshold is applied (none is
+  approved), no provider or network call exists, the vault must be unlocked, and the owner channel
+  is the only channel that can call it. The owner-approved **candidate-discovery contract** keeps
+  literal matches and semantic candidates distinct instead of gating natural-language exposure:
+  every hit declares `evidenceClass=literal_match|semantic_candidate`, and the page reports
+  `literalTotal` and `semanticCandidateTotal` separately (their sum is `total`). A literal match is
+  an exact occurrence of the query text; a semantic candidate is only a local-model neighbour whose
+  relevance is not confirmed — it is not supporting evidence and not an answer, and an unrelated
+  prose query therefore returns explicit candidates rather than a claimed match. The identifier,
+  folder-scope and currentness no-answer negatives and the no-raw-cutoff rule are unchanged; general
+  natural-language abstention is not claimed (measured limits are in the Sprint 15 evidence).
+- `--open-rank N` (S15-T5) opens a hit present on the returned hybrid-search page through the existing document bridge, passing its exact file id, content revision and byte offset/length/digest. Missing ranks, stale revisions or incomplete/mismatched anchors refuse; `--open-browser false` leaves browser launch to an attaching harness. This opens the selected source location, never a browser search console.
+- `--purpose` (S15-T4) adds deterministic cognitive-intent routing to the same owner operation;
+  `auto` resolves action/effect before intention, temporal, experience and general rules, while an
+  explicit purpose selects its named route. Purpose filters and their regions stay within the
+  existing folder/currentness/content-date scope and exact file revision. Each region groups one
+  file revision, uses its highest-ranked eligible hit as the representative, and reports the
+  complete filtered/ranked hit counts, separate literal and semantic-candidate counts, selection
+  reasons and representative&#39;s global rank before region paging. A semantic-only hit remains an
+  unconfirmed candidate, never supporting evidence. Annotation authorship/executor/review and
+  exact lifecycle state are preserved; action/effect association does not prove causality, a
+  mention/reminder/acknowledgement does not complete an intention, and absent occurred/recorded
+  stamps remain unknown. Content dates are still dates in source text, separate from annotation
+  record time and lifecycle stamps. Archived records stay excluded unless `--include-archived true`
+  is supplied with `--purpose`; this expands only the owner&#39;s query and does not change recall
+  policy or access. MCP, browser and agent surfaces are unchanged.
 - `open` requires the unlocked vault and the running shared host. It binds one live file, one
   content revision, read plus explicit save, and one lifetime; the bridge listens on an ephemeral
   `127.0.0.1` port and the browser receives only a per-process capability in the served page. A
@@ -1860,7 +1949,16 @@ removes the fixture when the run ends.
   A 1.1 installation is refused in place; install 1.4 beside it with separate roots and endpoints
   (&#167;2.3). An existing 1.2 or 1.3 CLI/MCP installation upgrades in place. 1.3.0 was published as
   `v1.3.0` on 2026-11-03 and 1.4.0 as `v1.4.0` on 2026-11-05 after the owner authorized publication;
-  the published assets and links were smoke-verified.
+  the published assets and links were smoke-verified. The 1.5.0 candidate is assembled, reviewed and
+  checkpoint-committed but is not published, so no 1.5.0 download or site link is live until the
+  owner-authorized publication and public smoke complete.
+- 1.5.0 adds hybrid workspace search only when the owner explicitly supplies a local E5 model
+  directory; the release bundles no model weights, downloads none, calls no cloud embedding provider
+  and never falls back silently to lexical-only output. The dynamic native tokenizer requires an
+  owner-installed Microsoft Visual C++ v14 x64 Redistributable 14.43.34808 or later, which Meta Brain
+  does not bundle, download or install. Semantic results are unconfirmed candidates, not evidence or
+  answers, and the recorded latency/RAM figures are host- and fixture-specific observations rather
+  than SLAs.
 - The cognitive facets are owner review labels, not truth levels. AI suggestions stay unverified
   and pending until the owner accepts or rejects them, and a grounded excerpt establishes provenance
   only: the service does not prove semantic entailment or detect every incorrect inference in prose.
