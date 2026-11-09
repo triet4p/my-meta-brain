@@ -911,3 +911,19 @@ the assignment can fail before the sentinel check or any child starts.
 **Fix / workaround:** Retain the coalesced pending request on every successful owner content mutation in the unlocked epoch, and signal the worker when the owner explicitly supplies a model directory. A successful explicit full rebuild clears any pending request it has already satisfied.
 
 **Watch out for:** Optional model/resource selection must not erase an already-authorized content-change trigger. Keep the job pending without choosing or loading a model implicitly, and distinguish a successful manual rebuild (which makes the generation current) from a search or failed rebuild.
+
+## [2026-11-09] A UTF-8 copyright literal was mojibaked in Windows PowerShell
+**Symptom:** Candidate assembly reported that `System.Numerics.Tensors` package metadata did not match its pinned license source, although the restored nuspec's copyright visibly matched.
+**Root cause:** `powershell.exe` interpreted the UTF-8-without-BOM `.ps1` source through the active ANSI code page, so the literal `©` became `Â©` and failed the exact package-copyright comparison.
+**Fix / workaround:** Construct the copyright as `([string][char]0x00A9) + ' Microsoft Corporation. All rights reserved.'`; this keeps the script source ASCII while preserving the exact nuspec text. The extracted assembler function then passed for both CLI and MCP dependency graphs.
+**Watch out for:** Windows PowerShell scripts saved as UTF-8 without a BOM can mojibake non-ASCII string literals; prefer ASCII code-point construction for fixed Unicode values or use a deliberate encoding contract.
+
+## [2026-11-09] A release checkpoint edit silently dropped the MCP initialize protocolVersion
+
+**Symptom:** An actual packaged MCP client run got a valid JSON-RPC `initialize` result that contained only `serverInfo` and `capabilities`; `protocolVersion` was absent. `McpAgentBridge.NegotiateProtocolVersion` still existed but had no caller, and the committed S4-T1 bridge smoke's `protocolVersion` assertions could not pass.
+
+**Root cause:** Commit `e4f0170` rewrote the `initialize` result object to switch `serverInfo.version` to `ProductInfo.Version` and removed the `["protocolVersion"] = NegotiateProtocolVersion(rawParams)` entry in the same edit. The dead helper hid the loss, and no per-task run exercised the S4-T1 scenario afterwards.
+
+**Fix / workaround:** Restore the `protocolVersion` entry from `NegotiateProtocolVersion(rawParams)` in the `initialize` result and exercise the existing `s4-t1` smoke scenario (current, legacy, unknown offer and notification silence) before packaging.
+
+**Watch out for:** `initialize` results must carry `protocolVersion`, `capabilities` and `serverInfo` together; an unused negotiation helper is a signal that the field was dropped rather than a harmless leftover.

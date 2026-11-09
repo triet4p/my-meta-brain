@@ -6,6 +6,11 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
+        if (args.Length == 1 && string.Equals(args[0], "s15-t6-runtime-prerequisite", StringComparison.Ordinal))
+        {
+            await S15T6RuntimePrerequisiteSmoke.RunAsync().ConfigureAwait(false);
+            return 0;
+        }
         if (args.Length == 7 && string.Equals(args[0], "s15-t1-e5", StringComparison.Ordinal))
         {
             await S15T1E5CandidateEvaluation.RunAsync(

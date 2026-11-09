@@ -10,11 +10,24 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Tokenizers.DotNet" Version="1.4.1" />
-    <PackageReference Include="Tokenizers.DotNet.runtime.win-x64" Version="1.4.1" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.31.1" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" Version="1.31.1" />
     <PackageReference Include="System.Numerics.Tensors" Version="10.0.14" />
   </ItemGroup>
+  <PropertyGroup>
+    <NativeTokenizerPath>$(MSBuildThisFileDirectory)..\..\runtime\s15-t6-native-build\target\x86_64-pc-windows-msvc\release\hf_tokenizers.dll</NativeTokenizerPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Content Include="$(NativeTokenizerPath)">
+      <Link>hf_tokenizers.dll</Link>
+      <TargetPath>hf_tokenizers.dll</TargetPath>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+  <Target Name="RequirePinnedS15T6NativeTokenizer" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(NativeTokenizerPath)')" Text="The pinned S15-T6 native tokenizer is missing from repository-local runtime/s15-t6-native-build staging." />
+  </Target>
   <ItemGroup>
     <ProjectReference Include="..\MetaBrain.Core\MetaBrain.Core.csproj" />
     <ProjectReference Include="..\MetaBrain.Application\MetaBrain.Application.csproj" />

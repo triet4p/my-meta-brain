@@ -92,34 +92,50 @@ internal static class CliSetup
         dataRoot = string.IsNullOrWhiteSpace(dataRoot) ? defaultData : dataRoot;
         return new[] { "install", "--install-root", installRoot, "--data-root", dataRoot };
     }
-    private static Task VerifyEmbeddedPayloadAsync()
+     private static Task VerifyEmbeddedPayloadAsync()
+     {
+         using var payload = Assembly.GetManifestResourceStream(PayloadResourceName)
+             ?? throw new InvalidOperationException("This setup executable does not contain its release payload.");
+         var digest = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(payload)).ToLowerInvariant();
+         if (ExpectedPayloadSha256 is null || !string.Equals(digest, ExpectedPayloadSha256, StringComparison.Ordinal))
+         {
+             throw new InvalidOperationException("Embedded setup payload hash differs from the candidate build metadata.");
+         }
+
+         payload.Position = 0;
+         using var archive = new ZipArchive(payload, ZipArchiveMode.Read, leaveOpen: true);
+         var files = archive.Entries
+             .Where(entry => !string.IsNullOrEmpty(entry.Name))
+             .Select(entry =>
+             {
+                 using var entryStream = entry.Open();
+                 var fileHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(entryStream)).ToLowerInvariant();
+                 return new { path = entry.FullName.Replace('\\', '/'), bytes = entry.Length, sha256 = fileHash };
+             })
+             .OrderBy(file => file.path, StringComparer.Ordinal)
+             .ToArray();
+         var manifestEntry = archive.GetEntry("package-manifest.json")
+             ?? throw new InvalidOperationException("Embedded setup package manifest is missing.");
+         using var manifestStream = manifestEntry.Open();
+         using var manifest = System.Text.Json.JsonDocument.Parse(manifestStream);
+         var packageManifest = manifest.RootElement.Clone();
+         Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new { bytes = payload.Length, sha256 = digest, files, packageManifest }));
+         return Task.CompletedTask;
+     }
+
+    private static Task<int> InstallAsync(string[] args) =>
+        InstallAsync(args, VisualCppRuntimePrerequisite.ReadInstalledX64Version);
+
+    internal static async Task<int> InstallAsync(string[] args, Func<Version?> readInstalledRuntimeVersion)
     {
-        using var payload = Assembly.GetManifestResourceStream(PayloadResourceName)
-            ?? throw new InvalidOperationException("This setup executable does not contain its release payload.");
-        var digest = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(payload)).ToLowerInvariant();
-        if (ExpectedPayloadSha256 is null || !string.Equals(digest, ExpectedPayloadSha256, StringComparison.Ordinal))
+        var installedRuntimeVersion = readInstalledRuntimeVersion();
+        if (VisualCppRuntimePrerequisite.TryReportRefusal(
+                installedRuntimeVersion, "Meta Brain CLI setup", Console.Error))
         {
-            throw new InvalidOperationException("Embedded setup payload hash differs from the candidate build metadata.");
+            Console.Error.WriteLine("Setup stopped before extracting the package or changing installation or data files.");
+            return 1;
         }
 
-        payload.Position = 0;
-        using var archive = new ZipArchive(payload, ZipArchiveMode.Read, leaveOpen: true);
-        var files = archive.Entries
-            .Where(entry => !string.IsNullOrEmpty(entry.Name))
-            .Select(entry =>
-            {
-                using var entryStream = entry.Open();
-                var fileHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(entryStream)).ToLowerInvariant();
-                return new { path = entry.FullName.Replace('\\', '/'), bytes = entry.Length, sha256 = fileHash };
-            })
-            .OrderBy(file => file.path, StringComparer.Ordinal)
-            .ToArray();
-        Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new { bytes = payload.Length, sha256 = digest, files }));
-        return Task.CompletedTask;
-    }
-
-    private static async Task<int> InstallAsync(string[] args)
-    {
         var options = InstallerOptions.Parse(args, new[] { "--install-root", "--data-root" });
         var installRoot = Path.GetFullPath(options.Required("--install-root"));
         var existing = InstallState.Read(Path.Combine(installRoot, InstallLayout.StateFileName));

@@ -1,4 +1,5 @@
 # Operations — installing and running Meta Brain every day
+**Candidate status:** The 1.5.0 release is unreleased and its packages are not assembled; the published 1.4.0 downloads remain the current products. Candidate-only model/resource guidance is labeled in §3.2.7 and must not be read as a feature of the 1.4.0 download.
 
 Meta Brain is installed for **one owner account** on Windows. The owner installs it, starts it,
 unlocks it, and uses it; the agents connect to it as scoped clients. Nothing in this runbook needs
@@ -555,6 +556,37 @@ The workspace is a private logical tree stored inside the unlocked vault: folder
 The generation is one authenticated file under `workspace-passage-index/` (`passages.v1.bin`). A rebuild writes a `.building` stage that is opened with exclusive access, then flushes and atomically moves it over the published file, so an interrupted or refused rebuild exposes either the previous or the fully written generation. The file holds only AES-GCM ciphertext keyed by the unlocked vault index key, with per-record associated data binding the file identity, record type, offset and format version; it stores no plaintext passage text, path or source metadata. While a rebuild is active the stage is held exclusively, so another process cannot read its in-flight bytes. Passage indexing never rewrites owner anchors or canonical records, and it is owner-only: the agent channel's allowlist refuses all three operations.
 
 Model directories and decoded passage groups are process-memory-only for the unlocked epoch; vault lock or host exit cancels background work and clears both. A model path is never saved or downloaded implicitly. This workspace-only refresh does not enroll folders or expand external-source refresh consent.
+
+#### Local E5 model, explicit selection and measured limits
+
+The 1.5.0 hybrid workspace path is unreleased candidate behavior; the published 1.4.0 downloads do not include it. See the [1.5.0 candidate notes](release-notes-1.5.0.md). Hybrid indexing and search are owner-CLI operations only. MCP remains the scoped agent surface and does not expose owner workspace search.
+
+The 1.5.0 candidate's dynamic native tokenizer requires Microsoft Visual C++ v14 x64 Redistributable version 14.43.34808 or later. Install it directly from Microsoft's [latest supported downloads](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170) before CLI setup or MCP startup. CLI setup, direct install and MCP startup read only the installed x64 runtime version and refuse before payload extraction, application/data-root changes or service changes if it is missing, unreadable, malformed or too old. Meta Brain does not download, bundle or install the runtime. Windows 10+ includes the OS Universal CRT; it does not provide the `VCRUNTIME140.dll` and `VCRUNTIME140_1.dll` imports. This prerequisite applies only to the unreleased 1.5.0 candidate and does not change the published 1.4.0 products.
+
+The owner must explicitly choose a local model directory when rebuilding or searching in hybrid mode. The approved repository-local model root is `runtime/s15-t1-model-staging/614241f622f53c4eeff9890bdc4f31cfecc418b3/model`; another owner-selected path is valid only when it contains the same pinned files under `onnx/`:
+
+| Relative file | Bytes | Required SHA-256 |
+| --- | ---: | --- |
+| `onnx/model.onnx` | 470,268,510 | `ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665` |
+| `onnx/tokenizer.json` | 17,082,730 | `0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39` |
+
+The seven approved model/tokenizer/config assets used for the T1 screen occupy 492,421,754 bytes (about 469.7 MiB). This is staged asset size, not an installed footprint; the product release does not bundle model weights. Before obtaining model files from any source, the owner must make an explicit choice. The application does not download weights, call a cloud embedding provider or save the selected path. An absent directory fails with `workspace_index_model_missing`; a missing, mismatched or unusable pinned file fails with `workspace_index_model_invalid`. Hybrid mode never silently substitutes lexical-only results; use the separate non-hybrid search command when literal-only behavior is desired.
+
+```text
+cli\MetaBrain.Cli.exe owner workspace-index-rebuild --control-pipe <pipe> --model-directory <owner-selected-model-directory>
+cli\MetaBrain.Cli.exe owner workspace-index-status --control-pipe <pipe>
+cli\MetaBrain.Cli.exe owner workspace-search --control-pipe <pipe> --query <text> --hybrid true --model-directory <owner-selected-model-directory> --format json
+```
+
+The model path and decoded passage reuse are process-memory-only for the unlocked epoch and are cleared on vault lock or host exit. Background refresh follows successful workspace content mutations only and requires a model path already supplied in that unlocked epoch; it does not enroll or scan external folders. The encrypted passage generation remains bound to the authenticated workspace identity, tree and exact source revisions.
+
+The accepted 35-query S15-T3 actual owner CLI/service run returned 27/27 labeled evidence cases (13 literal-baseline and 14 paraphrase/near-miss); two paraphrase cases ranked second and the other labeled cases ranked first. Four exact/no-evidence negatives and four folder-scope negatives returned no results. Unrelated natural-language queries can still return explicit `semantic_candidate` neighbors, so general prose abstention is not claimed. Every semantic candidate is unconfirmed, not supporting evidence or an answer; no raw similarity cutoff is approved. Results preserve the D104 `literal_match` / `semantic_candidate` classification and exact current/retained revision and byte-anchor contract.
+
+Approved numeric screening targets apply only to the isolated T1 evaluator: recall@5 at least 25/27, seven model/tokenizer/config assets no larger than 500 MiB, process-private boundary delta no larger than 768 MiB, and warm in-process p95 no larger than 25 ms. The approved T1 model screen observed 25/27 at rank 5, 492,421,754 bytes, +559.1953 MiB private bytes and 17.8471 ms warm p95 after 10 warmups and 100 pre-tokenized-ID searches. It was not integrated CLI/service latency or memory proof.
+
+The accepted T5 integrated observation used 112 synthetic files and 35 queries: after 10 warmups and 100 fresh CLI-to-service searches, p50/p95 were 291.65/379.81 ms; the first post-locked-restart query was 2,365.89 ms including model reload. Service private bytes were 810,008,576 before and 826,810,368 at the maximum sampled query boundary; working set was 851,689,472 before and 863,821,824 at the maximum sample. These host/fixture-specific observations are not an approved integrated SLA or a 1.5.0 packaged-candidate result. See the [S15-T1](../artifacts/sprint-15/task-1.md), [S15-T3](../artifacts/sprint-15/task-3.md) and [S15-T5](../artifacts/sprint-15/task-5.md) evidence.
+
+The 1.5.0 managed-source smoke (not a release package) additionally passed the same 35 frozen queries and model-missing/model-invalid/no-silent-fallback negatives. Its first post-locked-restart query took 2,611.85 ms; after 10 warmups and 100 timed CLI-to-service searches over lexical-v2 plus two tie probes, p50/p95 were 263.44/313.50 ms. Service private bytes were 809,160,704 before and 825,040,896 maximum/after at query boundaries; working set was 849,477,632 before and 861,339,648 maximum/after. These are not targets or a package/runtime distribution proof; see the [1.5.0 candidate record](release-1.5.0.md) for the same-run context.
 
 The preview is an unaudited owner read; the act is owner-only and audited under `owner.workspace.export` (the preview under `owner.workspace.export.preview` is unaudited). The act is cancellable between files and bounded by the same 10-minute whole-scope guard as record export. The workspace root itself is not exportable (`workspace_root_invalid`); tombstoned nodes are refused; a later revision is never substituted for a pinned one.
 

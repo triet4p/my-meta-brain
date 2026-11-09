@@ -13,7 +13,6 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Tokenizers.DotNet" Version="1.4.1" />
-    <PackageReference Include="Tokenizers.DotNet.runtime.win-x64" Version="1.4.1" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.31.1" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" Version="1.31.1" />
     <PackageReference Include="System.Numerics.Tensors" Version="10.0.14" />
@@ -27,5 +26,6 @@
     <ProjectReference Include="..\..\src\MetaBrain.Connections\MetaBrain.Connections.csproj" />
     <ProjectReference Include="..\..\src\MetaBrain.OwnerUi\MetaBrain.OwnerUi.csproj" />
     <ProjectReference Include="..\..\src\MetaBrain.Cli\MetaBrain.Cli.csproj" />
+    <ProjectReference Include="..\..\src\MetaBrain.Installer\MetaBrain.Installer.csproj" />
   </ItemGroup>
 </Project>

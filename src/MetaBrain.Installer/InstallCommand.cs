@@ -12,8 +12,18 @@ namespace MetaBrain.Installer;
 /// </summary>
 internal static class InstallCommand
 {
-    internal static async Task<int> RunAsync(string[] args)
+    internal static Task<int> RunAsync(string[] args) =>
+        RunAsync(args, VisualCppRuntimePrerequisite.ReadInstalledX64Version);
+
+    internal static async Task<int> RunAsync(string[] args, Func<Version?> readInstalledRuntimeVersion)
     {
+        var installedRuntimeVersion = readInstalledRuntimeVersion();
+        if (VisualCppRuntimePrerequisite.TryReportRefusal(
+                installedRuntimeVersion, "Meta Brain installation", Console.Error))
+        {
+            Console.Error.WriteLine("Installation stopped before stopping the shared host or changing installation or data files.");
+            return 1;
+        }
         var options = InstallerOptions.Parse(args,
             new[] { "--payload", "--install-root", "--data-root", "--control-pipe", "--agent-pipe", "--component", "--candidate-id" },
             "--start");

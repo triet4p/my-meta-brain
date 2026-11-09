@@ -26,7 +26,10 @@ namespace MetaBrain.Connections;
 /// </summary>
 public static class McpAgentProduct
 {
-    public static async Task<int> RunAsync(string[] args)
+    public static Task<int> RunAsync(string[] args) =>
+        RunAsync(args, VisualCppRuntimePrerequisite.ReadInstalledX64Version);
+
+    internal static async Task<int> RunAsync(string[] args, Func<Version?> readInstalledRuntimeVersion)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -51,6 +54,12 @@ public static class McpAgentProduct
             return 0;
         }
 
+        var installedRuntimeVersion = readInstalledRuntimeVersion();
+        if (VisualCppRuntimePrerequisite.TryReportRefusal(
+                installedRuntimeVersion, "Meta Brain MCP", Console.Error))
+        {
+            return 1;
+        }
         try
         {
             var instance = McpProductOptions.Parse(args);

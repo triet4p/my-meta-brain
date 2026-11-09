@@ -29,17 +29,226 @@ $env:DOTNET_BUNDLE_EXTRACT_BASE_DIR = Join-Path $toolchain 'bundle-extract'
 $env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'
 $env:DOTNET_ADD_GLOBAL_TOOLS_TO_PATH = 'false'
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
+ $env:DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE = 'true'
 $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
 $env:DOTNET_NOLOGO = '1'
 $props = [xml](Get-Content -LiteralPath (Join-Path $repo 'Directory.Build.props'))
 $version = @($props.Project.PropertyGroup | ForEach-Object { $_.Version } | Where-Object { $_ }) | Select-Object -First 1
 if (-not $version) { throw 'Product version is missing from Directory.Build.props.' }
 function Hash-File([string] $Path) { $stream=[IO.File]::OpenRead($Path); try { $sha=[Security.Cryptography.SHA256]::Create(); try { return -join ($sha.ComputeHash($stream) | ForEach-Object { $_.ToString('x2') }) } finally { $sha.Dispose() } } finally { $stream.Dispose() } }
+ $nativeTokenizerSha256 = '4595800ae02f9c7c96d583347e6cf1e2ddd17c26348ac8169c8314ca28b7480d'
+ $nativeTokenizerBytes = 3198464
+ $nativeSourceCommit = 'b8eaa77d72bf9d9c768d75599bfa6a602e467b93'
+ $nativeSourceArchive = Join-Path $repo 'runtime\s15-t6-native-build\tokenizers-dotnet-b8eaa77d-source.zip'
+ $nativeSourceArchiveBytes = 1236124
+ $nativeSourceArchiveSha256 = '2ee9c2d81aba55396ca67544765bd5cf2438ff35b5a959fe820915e449f77ded'
+ $nativeCargoLock = Join-Path $repo 'src\MetaBrain.Connections\native\provenance\Cargo.lock'
+ $nativeCargoLockSha256 = '7597e8861f7368d02ea5daded9b71cbc226286ffbf1bbe7ad57f3d719b53d48f'
+ $nativeNotices = Join-Path $repo 'src\MetaBrain.Connections\native\THIRD-PARTY-NOTICES.txt'
+ $nativeNoticesSha256 = if (Test-Path -LiteralPath $nativeNotices -PathType Leaf) { Hash-File $nativeNotices } else { '' }
+ $nativeNoticesBytes = if (Test-Path -LiteralPath $nativeNotices -PathType Leaf) { (Get-Item -LiteralPath $nativeNotices).Length } else { 0 }
+ $nativeNoticePath = 'service/licenses/native-tokenizer/THIRD-PARTY-NOTICES.txt'
+ $tensorPackageLicenseRoot = Join-Path $repo 'runtime\s15-t6-package-license\system-numerics-tensors-10.0.14'
+ $tensorPackageLicenseSource = Join-Path $tensorPackageLicenseRoot 'dotnet-vmr-LICENSE.TXT'
+ $tensorPackageCopyrightSource = Join-Path $tensorPackageLicenseRoot 'System.Numerics.Tensors-10.0.14-COPYRIGHT.txt'
+ $tensorPackageCopyright = ([string][char]0x00A9) + ' Microsoft Corporation. All rights reserved.'
+ $tensorPackageLicenseMetadata = [ordered]@{
+     id='System.Numerics.Tensors'
+     version='10.0.14'
+     license='MIT'
+     licenseText='licenses/System.Numerics.Tensors-10.0.14-LICENSE.txt'
+     licenseTextBytes=1115
+     licenseTextSha256='ae48df11a335dc1a615f4f938b69cba73bcf4485c4f97af49b38efb0f216353b'
+     copyright=$tensorPackageCopyright
+     copyrightText='licenses/System.Numerics.Tensors-10.0.14-COPYRIGHT.txt'
+     copyrightTextBytes=46
+     copyrightTextSha256='30bedab2f6c25a864a0c7ceac40f5c4ce1816684db188e87644e72acf6a2b8c3'
+     provenanceText='licenses/System.Numerics.Tensors-10.0.14-PROVENANCE.txt'
+     sourceRepository='https://github.com/dotnet/dotnet'
+     sourceCommit='0427b9abbead3fa64c6655eb4290c537397131fa'
+     sourceLicensePath='LICENSE.TXT'
+     sourceLicenseUrl='https://raw.githubusercontent.com/dotnet/dotnet/0427b9abbead3fa64c6655eb4290c537397131fa/LICENSE.TXT'
+     repositoryNoticeUrl='https://raw.githubusercontent.com/dotnet/dotnet/0427b9abbead3fa64c6655eb4290c537397131fa/THIRD-PARTY-NOTICES.txt'
+     repositoryNoticeSha256='5a90be9000b5c2f928dead74be4e86952420d1160fa38f6f2d34526eeee49ff6'
+     repositoryNoticeScope='Monorepo-wide source notice; staged for provenance and not presented as package-specific.'
+     licenseDocumentationUrl='https://licenses.nuget.org/MIT'
+     licenseDocumentationSha256='0ff20ddac3d7ee3c94cd6b60bef6537b4c4f6815063ab28228ab8ca563b1fe8e'
+     spdxDocumentationUrl='https://spdx.org/licenses/MIT.html'
+     spdxDocumentationSha256='b7eaaa2c58e7b36f76e1562cb4070a1e15ad52ee0a7386c724039bb929d3b078'
+     packageNoticePath='licenses/System.Numerics.Tensors-10.0.14-THIRD-PARTY-NOTICES.txt'
+     packageNoticeBytes=78041
+     packageNoticeSha256='6d15e10a101c6bfff2ab4429ed061bf76c456fc4b23ad6b03e0d0f8377148a21'
+     packageNoticeMember='THIRD-PARTY-NOTICES.TXT'
+ }
+ $tensorLicenseEvidenceFiles = @(
+     [ordered]@{path=(Join-Path $tensorPackageLicenseRoot 'dotnet-vmr-LICENSE.TXT');bytes=1115;sha256='ae48df11a335dc1a615f4f938b69cba73bcf4485c4f97af49b38efb0f216353b'}
+     [ordered]@{path=(Join-Path $tensorPackageLicenseRoot 'dotnet-vmr-THIRD-PARTY-NOTICES.txt');bytes=265586;sha256='5a90be9000b5c2f928dead74be4e86952420d1160fa38f6f2d34526eeee49ff6'}
+     [ordered]@{path=(Join-Path $tensorPackageLicenseRoot 'System.Numerics.Tensors-README.md');bytes=122;sha256='2ab3b3eb4a6e7e398c631d7187a3f9b99560405387dd0cee9013dc1f202b935e'}
+     [ordered]@{path=(Join-Path $tensorPackageLicenseRoot 'licenses.nuget.org-MIT.html');bytes=2442;sha256='0ff20ddac3d7ee3c94cd6b60bef6537b4c4f6815063ab28228ab8ca563b1fe8e'}
+     [ordered]@{path=(Join-Path $tensorPackageLicenseRoot 'spdx-MIT.html');bytes=13452;sha256='b7eaaa2c58e7b36f76e1562cb4070a1e15ad52ee0a7386c724039bb929d3b078'}
+     [ordered]@{path=$tensorPackageCopyrightSource;bytes=46;sha256='30bedab2f6c25a864a0c7ceac40f5c4ce1816684db188e87644e72acf6a2b8c3'}
+ )
+ foreach ($evidenceFile in $tensorLicenseEvidenceFiles) {
+     if (-not (Test-Path -LiteralPath $evidenceFile.path -PathType Leaf) -or
+         (Get-Item -LiteralPath $evidenceFile.path).Length -ne $evidenceFile.bytes -or
+         (Hash-File $evidenceFile.path) -cne $evidenceFile.sha256) {
+         throw ('Pinned Tensor license evidence is missing or has an unexpected identity: ' + $evidenceFile.path)
+     }
+ }
+ $nativeTokenizerMetadata = [ordered]@{
+     path='service/hf_tokenizers.dll'
+     bytes=$nativeTokenizerBytes
+     sha256=$nativeTokenizerSha256
+     target='x86_64-pc-windows-msvc'
+     sourceRepository='https://github.com/sappho192/Tokenizers.DotNet'
+     sourceCommit=$nativeSourceCommit
+     sourceArchive='runtime/s15-t6-native-build/tokenizers-dotnet-b8eaa77d-source.zip'
+     sourceArchiveBytes=$nativeSourceArchiveBytes
+     sourceArchiveSha256=$nativeSourceArchiveSha256
+     cargoLock='src/MetaBrain.Connections/native/provenance/Cargo.lock'
+     cargoLockSha256=$nativeCargoLockSha256
+     cargoPackageCount=86
+     registryPackageCount=85
+     thirdPartyNotices=$nativeNoticePath
+     thirdPartyNoticesBytes=$nativeNoticesBytes
+     thirdPartyNoticesSha256=$nativeNoticesSha256
+ }
+ $runtimePrerequisiteMetadata = [ordered]@{
+     name='Microsoft Visual C++ v14 x64 Redistributable'
+     minimumVersion='14.43.34808'
+     architecture='x64'
+     downloadPage='https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170'
+     installedSeparatelyByOwner=$true
+     bundled=$false
+     applicationDownloadsOrInstalls=$false
+     ucrtNote='Windows 10+ includes the OS Universal CRT; it does not supply the VCRUNTIME140.dll and VCRUNTIME140_1.dll imports.'
+ }
+ if (-not (Test-Path -LiteralPath $nativeSourceArchive -PathType Leaf) -or
+     (Get-Item -LiteralPath $nativeSourceArchive).Length -ne $nativeSourceArchiveBytes -or
+     (Hash-File $nativeSourceArchive) -ne $nativeSourceArchiveSha256) {
+     throw 'The pinned native tokenizer source archive is missing or has an unexpected identity.'
+ }
+ if (-not (Test-Path -LiteralPath $nativeCargoLock -PathType Leaf) -or
+     (Hash-File $nativeCargoLock) -ne $nativeCargoLockSha256) {
+     throw 'The pinned native tokenizer Cargo.lock is missing or has an unexpected identity.'
+ }
+ if (-not $nativeNoticesSha256) {
+     throw 'The native tokenizer third-party notices are missing.'
+ }
+ function Assert-NativeMetadata($nativeTokenizer, $runtimePrerequisite) {
+     if ($null -eq $nativeTokenizer -or
+         $nativeTokenizer.path -cne 'service/hf_tokenizers.dll' -or
+         $nativeTokenizer.bytes -ne $nativeTokenizerBytes -or
+         $nativeTokenizer.sha256 -cne $nativeTokenizerSha256 -or
+         $nativeTokenizer.target -cne 'x86_64-pc-windows-msvc' -or
+         $nativeTokenizer.sourceRepository -cne 'https://github.com/sappho192/Tokenizers.DotNet' -or
+         $nativeTokenizer.sourceCommit -cne $nativeSourceCommit -or
+         $nativeTokenizer.sourceArchive -cne 'runtime/s15-t6-native-build/tokenizers-dotnet-b8eaa77d-source.zip' -or
+         $nativeTokenizer.sourceArchiveBytes -ne $nativeSourceArchiveBytes -or
+         $nativeTokenizer.sourceArchiveSha256 -cne $nativeSourceArchiveSha256 -or
+         $nativeTokenizer.cargoLock -cne 'src/MetaBrain.Connections/native/provenance/Cargo.lock' -or
+         $nativeTokenizer.cargoLockSha256 -cne $nativeCargoLockSha256 -or
+         $nativeTokenizer.cargoPackageCount -ne 86 -or
+         $nativeTokenizer.registryPackageCount -ne 85 -or
+         $nativeTokenizer.thirdPartyNotices -cne $nativeNoticePath -or
+         $nativeTokenizer.thirdPartyNoticesBytes -ne $nativeNoticesBytes -or
+         $nativeTokenizer.thirdPartyNoticesSha256 -cne $nativeNoticesSha256) {
+         throw 'Native tokenizer package provenance or identity metadata is incomplete or unexpected.'
+     }
+     if ($null -eq $runtimePrerequisite -or
+         $runtimePrerequisite.name -cne 'Microsoft Visual C++ v14 x64 Redistributable' -or
+         $runtimePrerequisite.minimumVersion -cne '14.43.34808' -or
+         $runtimePrerequisite.architecture -cne 'x64' -or
+         $runtimePrerequisite.downloadPage -cne 'https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170' -or
+         $runtimePrerequisite.installedSeparatelyByOwner -ne $true -or
+         $runtimePrerequisite.bundled -ne $false -or
+         $runtimePrerequisite.applicationDownloadsOrInstalls -ne $false -or
+         $runtimePrerequisite.ucrtNote -cne 'Windows 10+ includes the OS Universal CRT; it does not supply the VCRUNTIME140.dll and VCRUNTIME140_1.dll imports.') {
+         throw 'The external Visual C++ runtime prerequisite metadata is incomplete or unexpected.'
+     }
+ }
+ function Assert-NativePackageFiles($files) {
+     $nativeDll = @($files | Where-Object { $_.path -ceq 'service/hf_tokenizers.dll' })
+     if ($nativeDll.Count -ne 1 -or
+         $nativeDll[0].bytes -ne $nativeTokenizerBytes -or
+         $nativeDll[0].sha256 -cne $nativeTokenizerSha256) {
+         throw 'The product package does not contain the exact pinned native tokenizer payload.'
+     }
+     $nativeNotices = @($files | Where-Object { $_.path -ceq $nativeNoticePath })
+     if ($nativeNotices.Count -ne 1 -or
+         $nativeNotices[0].bytes -ne $nativeNoticesBytes -or
+         $nativeNotices[0].sha256 -cne $nativeNoticesSha256) {
+         throw 'The product package does not contain the exact pinned native tokenizer license notices.'
+     }
+ }
+ function Assert-PackageManifestFiles($packageFiles, $actualFiles) {
+     $listedFiles = @($packageFiles | Sort-Object -Property path)
+     $actualPackageFiles = @($actualFiles | Where-Object { $_.path -cne 'package-manifest.json' } | Sort-Object -Property path)
+     if ($listedFiles.Count -ne $actualPackageFiles.Count) {
+         throw 'Product package manifest file inventory count mismatch.'
+     }
+     for ($index = 0; $index -lt $listedFiles.Count; $index++) {
+         if ($listedFiles[$index].path -cne $actualPackageFiles[$index].path -or
+             $listedFiles[$index].bytes -ne $actualPackageFiles[$index].bytes -or
+             $listedFiles[$index].sha256 -cne $actualPackageFiles[$index].sha256) {
+             throw ('Product package manifest file inventory mismatch: ' + $actualPackageFiles[$index].path)
+         }
+     }
+ }
+function Assert-TensorLicenseMetadata($dependencies, $actualFiles) {
+    $tensor = @($dependencies | Where-Object { $_.id -ceq $tensorPackageLicenseMetadata.id -and $_.version -ceq $tensorPackageLicenseMetadata.version })
+    if ($tensor.Count -ne 1) { throw 'The product package manifest must contain exactly one pinned System.Numerics.Tensors license record.' }
+    $entry = $tensor[0]
+    if ($entry.license -cne $tensorPackageLicenseMetadata.license -or
+        $entry.licenseText -cne $tensorPackageLicenseMetadata.licenseText -or
+        $entry.licenseTextBytes -ne $tensorPackageLicenseMetadata.licenseTextBytes -or
+        $entry.licenseTextSha256 -cne $tensorPackageLicenseMetadata.licenseTextSha256 -or
+        $entry.packageCopyright -cne $tensorPackageLicenseMetadata.copyright -or
+        $entry.packageCopyrightFile -cne $tensorPackageLicenseMetadata.copyrightText -or
+        $entry.packageCopyrightBytes -ne $tensorPackageLicenseMetadata.copyrightTextBytes -or
+        $entry.packageCopyrightSha256 -cne $tensorPackageLicenseMetadata.copyrightTextSha256 -or
+        $entry.licenseSourceRepository -cne $tensorPackageLicenseMetadata.sourceRepository -or
+        $entry.licenseSourceCommit -cne $tensorPackageLicenseMetadata.sourceCommit -or
+        $entry.licenseSourcePath -cne $tensorPackageLicenseMetadata.sourceLicensePath -or
+        $entry.licenseSourceUrl -cne $tensorPackageLicenseMetadata.sourceLicenseUrl -or
+        $entry.licenseDocumentationUrl -cne $tensorPackageLicenseMetadata.licenseDocumentationUrl -or
+        $entry.licenseDocumentationSha256 -cne $tensorPackageLicenseMetadata.licenseDocumentationSha256 -or
+        $entry.spdxDocumentationUrl -cne $tensorPackageLicenseMetadata.spdxDocumentationUrl -or
+        $entry.spdxDocumentationSha256 -cne $tensorPackageLicenseMetadata.spdxDocumentationSha256 -or
+        $entry.upstreamRepositoryNoticeUrl -cne $tensorPackageLicenseMetadata.repositoryNoticeUrl -or
+        $entry.upstreamRepositoryNoticeSha256 -cne $tensorPackageLicenseMetadata.repositoryNoticeSha256 -or
+        $entry.upstreamRepositoryNoticeScope -cne $tensorPackageLicenseMetadata.repositoryNoticeScope -or
+        $entry.provenanceText -cne $tensorPackageLicenseMetadata.provenanceText -or
+        $entry.thirdPartyNotices -ne $true -or
+        $entry.thirdPartyNoticeText -cne $tensorPackageLicenseMetadata.packageNoticePath -or
+        $entry.thirdPartyNoticeBytes -ne $tensorPackageLicenseMetadata.packageNoticeBytes -or
+        $entry.thirdPartyNoticeSha256 -cne $tensorPackageLicenseMetadata.packageNoticeSha256) {
+        throw 'System.Numerics.Tensors package license or attribution provenance is incomplete or unexpected.'
+    }
+    foreach ($expected in @(
+        [ordered]@{path=$tensorPackageLicenseMetadata.licenseText;bytes=$tensorPackageLicenseMetadata.licenseTextBytes;sha256=$tensorPackageLicenseMetadata.licenseTextSha256}
+        [ordered]@{path=$tensorPackageLicenseMetadata.copyrightText;bytes=$tensorPackageLicenseMetadata.copyrightTextBytes;sha256=$tensorPackageLicenseMetadata.copyrightTextSha256}
+        [ordered]@{path=$tensorPackageLicenseMetadata.provenanceText;bytes=0;sha256=''}
+        [ordered]@{path=$tensorPackageLicenseMetadata.packageNoticePath;bytes=$tensorPackageLicenseMetadata.packageNoticeBytes;sha256=$tensorPackageLicenseMetadata.packageNoticeSha256}
+    )) {
+        $actual = @($actualFiles | Where-Object { $_.path -ceq $expected.path })
+        if ($actual.Count -ne 1 -or
+            ($expected.bytes -gt 0 -and $actual[0].bytes -ne $expected.bytes) -or
+            ($expected.bytes -eq 0 -and ($actual[0].bytes -le 0 -or $actual[0].sha256 -notmatch '^[0-9a-f]{64}$')) -or
+            ($expected.sha256 -and $actual[0].sha256 -cne $expected.sha256)) {
+            throw ('The product package is missing pinned Tensor license evidence: ' + $expected.path)
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$entry.provenanceText)) {
+        throw 'System.Numerics.Tensors license provenance is missing.'
+    }
+}
 function Verify-Candidate([string] $Root) {
     $manifestPath = Join-Path $Root 'candidate-manifest.json'
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'Candidate manifest is missing.' }
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     if ($manifest.productVersion -ne $version -or $manifest.runtimeIdentifier -ne 'win-x64') { throw 'Candidate version or runtime identity mismatch.' }
+     Assert-NativeMetadata $manifest.nativeTokenizer $manifest.runtimePrerequisite
     foreach ($asset in $manifest.assets) {
         $path = Join-Path $Root $asset.name
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw ('Candidate asset missing: ' + $asset.name) }
@@ -94,6 +303,18 @@ function Verify-Candidate([string] $Root) {
                     throw ('Setup embedded payload member mismatch: ' + $actualFiles[$index].path)
                 }
             }
+             Assert-NativePackageFiles $actualFiles
+             Assert-NativeMetadata $inspection.packageManifest.nativeTokenizer $inspection.packageManifest.runtimePrerequisite
+             Assert-PackageManifestFiles $inspection.packageManifest.files $actualFiles
+             Assert-TensorLicenseMetadata $inspection.packageManifest.dependencies $actualFiles
+             if ($inspection.packageManifest.product -cne 'Meta Brain CLI' -or
+                 $inspection.packageManifest.productVersion -ne $version -or
+                 $inspection.packageManifest.runtimeIdentifier -ne 'win-x64' -or
+                 $inspection.packageManifest.selfContained -ne $true -or
+                 $inspection.packageManifest.source.head -cne $manifest.source.head -or
+                 $inspection.packageManifest.source.sourceTreeSha256 -cne $manifest.source.sourceTreeSha256) {
+                 throw 'CLI setup embedded package manifest identity mismatch.'
+             }
         }
         else {
             $zip = [System.IO.Compression.ZipFile]::OpenRead($path)
@@ -128,6 +349,14 @@ function Verify-Candidate([string] $Root) {
                         $packageManifest.transport -ne 'stdio') {
                         throw 'MCP package manifest identity or invocation contract mismatch.'
                     }
+                     Assert-NativePackageFiles $asset.files
+                     Assert-NativeMetadata $packageManifest.nativeTokenizer $packageManifest.runtimePrerequisite
+                     Assert-PackageManifestFiles $packageManifest.files $asset.files
+                     Assert-TensorLicenseMetadata $packageManifest.dependencies $asset.files
+                     if ($packageManifest.source.head -cne $manifest.source.head -or
+                         $packageManifest.source.sourceTreeSha256 -cne $manifest.source.sourceTreeSha256) {
+                         throw 'MCP package manifest source identity mismatch.'
+                     }
                     }
             } finally { $zip.Dispose() }
         }
@@ -179,24 +408,115 @@ function Add-PackageLicenses([string] $Stage, [string] $DepsPath, [string] $Prod
         $nuspec = Get-ChildItem -LiteralPath $packageDirectory -Filter '*.nuspec' | Select-Object -First 1
         $nupkg = Get-ChildItem -LiteralPath $packageDirectory -Filter '*.nupkg' | Select-Object -First 1
         if (-not $nuspec -or -not $nupkg) { throw ('Dependency package metadata unavailable: ' + $packageId + '/' + $packageVersion) }
-        $xml = [xml](Get-Content -LiteralPath $nuspec.FullName)
+        $xml = [xml](Get-Content -LiteralPath $nuspec.FullName -Raw)
         $licenseNode = $xml.SelectSingleNode("/*[local-name()='package']/*[local-name()='metadata']/*[local-name()='license']")
         $licenseUrlNode = $xml.SelectSingleNode("/*[local-name()='package']/*[local-name()='metadata']/*[local-name()='licenseUrl']")
+        $copyrightNode = $xml.SelectSingleNode("/*[local-name()='package']/*[local-name()='metadata']/*[local-name()='copyright']")
+        $repositoryNode = $xml.SelectSingleNode("/*[local-name()='package']/*[local-name()='metadata']/*[local-name()='repository']")
         $license = if ($licenseNode) { [string]$licenseNode.InnerText } elseif ($licenseUrlNode) { [string]$licenseUrlNode.InnerText } else { '' }
         if (-not $license) { throw ('Dependency has no declared license: ' + $packageId + '/' + $packageVersion) }
+        $isTensorPackage = $packageId -ceq $tensorPackageLicenseMetadata.id -and $packageVersion -ceq $tensorPackageLicenseMetadata.version
         $archive = [IO.Compression.ZipFile]::OpenRead($nupkg.FullName)
         try {
             $licenseEntry = $archive.Entries | Where-Object { $_.FullName -match '^LICENSE(\.TXT)?$' } | Select-Object -First 1
-            if (-not $licenseEntry) { throw ('Dependency license text missing from package: ' + $packageId + '/' + $packageVersion) }
-            $licenseTarget = Join-Path $licenseDirectory ($packageId + '-' + $packageVersion + '-LICENSE.txt')
-            $input = $licenseEntry.Open(); try { $output=[IO.File]::Create($licenseTarget); try { $input.CopyTo($output) } finally { $output.Dispose() } } finally { $input.Dispose() }
+            $licenseTextPath = 'licenses/' + $packageId + '-' + $packageVersion + '-LICENSE.txt'
+            if ($isTensorPackage) {
+                if ($license -cne $tensorPackageLicenseMetadata.license) {
+                    throw ('System.Numerics.Tensors declares an unexpected license expression: ' + $license)
+                }
+                if (-not $licenseUrlNode -or [string]$licenseUrlNode.InnerText -cne $tensorPackageLicenseMetadata.licenseDocumentationUrl) {
+                    throw ('System.Numerics.Tensors declares an unexpected license URL: ' + [string]$licenseUrlNode.InnerText)
+                }
+                if (-not $copyrightNode -or [string]$copyrightNode.InnerText -cne $tensorPackageLicenseMetadata.copyright) {
+                    throw ('System.Numerics.Tensors has unexpected package copyright metadata: ' + [string]$copyrightNode.InnerText)
+                }
+                if (-not $repositoryNode) { throw 'System.Numerics.Tensors package repository metadata is missing.' }
+                if ($repositoryNode.GetAttribute('url') -cne $tensorPackageLicenseMetadata.sourceRepository) {
+                    throw ('System.Numerics.Tensors declares an unexpected source repository: ' + $repositoryNode.GetAttribute('url'))
+                }
+                if ($repositoryNode.GetAttribute('commit') -cne $tensorPackageLicenseMetadata.sourceCommit) {
+                    throw ('System.Numerics.Tensors declares an unexpected source commit: ' + $repositoryNode.GetAttribute('commit'))
+                }
+                $licenseTextPath = $tensorPackageLicenseMetadata.licenseText
+                Copy-Item -LiteralPath $tensorPackageLicenseSource -Destination (Join-Path $Stage $licenseTextPath)
+                Copy-Item -LiteralPath $tensorPackageCopyrightSource -Destination (Join-Path $Stage $tensorPackageLicenseMetadata.copyrightText)
+                $provenanceText = @"
+System.Numerics.Tensors 10.0.14 license-source provenance
+
+Package metadata declares the MIT license expression and the package copyright in its nuspec.
+Package copyright (kept separate from upstream license text): $($tensorPackageLicenseMetadata.copyright)
+Official repository: $($tensorPackageLicenseMetadata.sourceRepository)
+Exact repository commit: $($tensorPackageLicenseMetadata.sourceCommit)
+License text path: $($tensorPackageLicenseMetadata.sourceLicensePath)
+License text URL: $($tensorPackageLicenseMetadata.sourceLicenseUrl)
+License text SHA-256: $($tensorPackageLicenseMetadata.licenseTextSha256)
+Nuspec license documentation: $($tensorPackageLicenseMetadata.licenseDocumentationUrl)
+Nuspec license documentation SHA-256: $($tensorPackageLicenseMetadata.licenseDocumentationSha256)
+Direct SPDX documentation: $($tensorPackageLicenseMetadata.spdxDocumentationUrl)
+Direct SPDX documentation SHA-256: $($tensorPackageLicenseMetadata.spdxDocumentationSha256)
+Pinned repository-root notice: $($tensorPackageLicenseMetadata.repositoryNoticeUrl)
+Repository-root notice SHA-256: $($tensorPackageLicenseMetadata.repositoryNoticeSha256)
+Repository-root notice scope: $($tensorPackageLicenseMetadata.repositoryNoticeScope)
+Package third-party notices are copied from the package archive member $($tensorPackageLicenseMetadata.packageNoticeMember), not inferred from the monorepo-wide notice.
+"@
+                [IO.File]::WriteAllText((Join-Path $Stage $tensorPackageLicenseMetadata.provenanceText), $provenanceText, [Text.UTF8Encoding]::new($false))
+            } elseif ($licenseEntry) {
+                $licenseTarget = Join-Path $Stage $licenseTextPath
+                $input = $licenseEntry.Open(); try { $output=[IO.File]::Create($licenseTarget); try { $input.CopyTo($output) } finally { $output.Dispose() } } finally { $input.Dispose() }
+            } elseif ($packageId -eq 'Tokenizers.DotNet' -and (Test-Path -LiteralPath (Join-Path $Stage $nativeNoticePath) -PathType Leaf)) {
+                $licenseTextPath = $nativeNoticePath
+            } else {
+                throw ('Dependency license text missing from package: ' + $packageId + '/' + $packageVersion)
+            }
             $noticeEntries = @($archive.Entries | Where-Object { $_.FullName -match '^(THIRD-PARTY-NOTICES|ThirdPartyNotices)(\.TXT|\.txt)?$' })
+            if ($isTensorPackage -and
+                ($noticeEntries.Count -ne 1 -or $noticeEntries[0].FullName -cne $tensorPackageLicenseMetadata.packageNoticeMember)) {
+                throw 'System.Numerics.Tensors package third-party notice member is missing or unexpected.'
+            }
             foreach ($noticeEntry in $noticeEntries) {
                 $noticeTarget = Join-Path $licenseDirectory ($packageId + '-' + $packageVersion + '-THIRD-PARTY-NOTICES.txt')
                 $input = $noticeEntry.Open(); try { $output=[IO.File]::Create($noticeTarget); try { $input.CopyTo($output) } finally { $output.Dispose() } } finally { $input.Dispose() }
             }
+            if ($isTensorPackage) {
+                $tensorNoticeTarget = Join-Path $Stage $tensorPackageLicenseMetadata.packageNoticePath
+                if ((Get-Item -LiteralPath $tensorNoticeTarget).Length -ne $tensorPackageLicenseMetadata.packageNoticeBytes -or
+                    (Hash-File $tensorNoticeTarget) -cne $tensorPackageLicenseMetadata.packageNoticeSha256) {
+                    throw 'System.Numerics.Tensors package third-party notice has an unexpected identity.'
+                }
+            }
         } finally { $archive.Dispose() }
-        $inventory += [ordered]@{id=$packageId;version=$packageVersion;type='runtime package';license=$license;licenseText=('licenses/' + $packageId + '-' + $packageVersion + '-LICENSE.txt');thirdPartyNotices=($noticeEntries.Count -gt 0)}
+        $packageInventory = [ordered]@{
+            id=$packageId
+            version=$packageVersion
+            type='runtime package'
+            license=$license
+            licenseText=$licenseTextPath
+            thirdPartyNotices=($noticeEntries.Count -gt 0 -or $packageId -eq 'Tokenizers.DotNet')
+        }
+        if ($isTensorPackage) {
+            $packageInventory['licenseTextBytes'] = $tensorPackageLicenseMetadata.licenseTextBytes
+            $packageInventory['licenseTextSha256'] = $tensorPackageLicenseMetadata.licenseTextSha256
+            $packageInventory['packageCopyright'] = $tensorPackageLicenseMetadata.copyright
+            $packageInventory['packageCopyrightFile'] = $tensorPackageLicenseMetadata.copyrightText
+            $packageInventory['packageCopyrightBytes'] = $tensorPackageLicenseMetadata.copyrightTextBytes
+            $packageInventory['packageCopyrightSha256'] = $tensorPackageLicenseMetadata.copyrightTextSha256
+            $packageInventory['provenanceText'] = $tensorPackageLicenseMetadata.provenanceText
+            $packageInventory['licenseSourceRepository'] = $tensorPackageLicenseMetadata.sourceRepository
+            $packageInventory['licenseSourceCommit'] = $tensorPackageLicenseMetadata.sourceCommit
+            $packageInventory['licenseSourcePath'] = $tensorPackageLicenseMetadata.sourceLicensePath
+            $packageInventory['licenseSourceUrl'] = $tensorPackageLicenseMetadata.sourceLicenseUrl
+            $packageInventory['licenseDocumentationUrl'] = $tensorPackageLicenseMetadata.licenseDocumentationUrl
+            $packageInventory['licenseDocumentationSha256'] = $tensorPackageLicenseMetadata.licenseDocumentationSha256
+            $packageInventory['spdxDocumentationUrl'] = $tensorPackageLicenseMetadata.spdxDocumentationUrl
+            $packageInventory['spdxDocumentationSha256'] = $tensorPackageLicenseMetadata.spdxDocumentationSha256
+            $packageInventory['upstreamRepositoryNoticeUrl'] = $tensorPackageLicenseMetadata.repositoryNoticeUrl
+            $packageInventory['upstreamRepositoryNoticeSha256'] = $tensorPackageLicenseMetadata.repositoryNoticeSha256
+            $packageInventory['upstreamRepositoryNoticeScope'] = $tensorPackageLicenseMetadata.repositoryNoticeScope
+            $packageInventory['thirdPartyNoticeText'] = $tensorPackageLicenseMetadata.packageNoticePath
+            $packageInventory['thirdPartyNoticeBytes'] = $tensorPackageLicenseMetadata.packageNoticeBytes
+            $packageInventory['thirdPartyNoticeSha256'] = $tensorPackageLicenseMetadata.packageNoticeSha256
+        }
+        $inventory += $packageInventory
     }
     return ,$inventory
 }
@@ -205,66 +525,71 @@ $assets = foreach ($d in $definitions) {
 $stage = Join-Path $destination ($d.product + '-stage'); New-Item -ItemType Directory -Path $stage | Out-Null
 foreach ($part in $d.paths) { Copy-Item -LiteralPath (Join-Path $bundle $part) -Destination $stage -Recurse }
 Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination (Join-Path $stage 'LICENSE')
-    $runtimeNote = ''
-    if ($d.product -eq 'CLI') {
-        $runtimeNote = 'Setup temporarily extracts its embedded payload under the current user''s %TEMP% folder and removes the staging directory when possible; the single-file host may also extract runtime support under %TEMP%\.net. Setup does not change global or profile environment settings.'
-    } elseif ($d.product -eq 'MCP') {
-        $runtimeNote = 'Extract the complete ZIP while preserving its directories; register the extracted mcp/MetaBrain.Mcp.exe as an absolute stdio command with --data-root <owner data-root> or --config <service-settings.json>. The package manifest records exact layout, version, tested client versions, dependencies and limits.'
-    }
-    $notice = @"
+     if ($d.product -eq 'CLI') {
+         $runtimeNote = 'The CLI setup requires the owner-installed Microsoft Visual C++ v14 x64 Redistributable version 14.43.34808 or later. Setup checks the x64 version and refuses before extracting or changing application/data files if it is missing or too old. Install it separately from https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170, then rerun setup. Meta Brain does not download, bundle, or install the runtime. Windows 10+ includes the OS Universal CRT; it does not supply the VCRUNTIME140.dll and VCRUNTIME140_1.dll imports. Setup temporarily extracts its payload under the current user''s %TEMP% and may use the .NET bundle cache; it changes no global/profile environment.'
+     } else {
+         $runtimeNote = 'The MCP server requires the owner-installed Microsoft Visual C++ v14 x64 Redistributable version 14.43.34808 or later. It checks the x64 version and refuses before creating a data root if it is missing or too old. Install it separately from https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170, then rerun the MCP entrypoint. Meta Brain does not download, bundle, or install the runtime. Windows 10+ includes the OS Universal CRT; it does not supply the VCRUNTIME140.dll and VCRUNTIME140_1.dll imports. Extract the complete ZIP and register mcp/MetaBrain.Mcp.exe as the absolute stdio command with --data-root <owner data-root> or --config <service-settings.json>.'
+     }
+     $notice = @"
 Meta Brain $version — $($d.product) distribution
 
 Project license: MIT; see LICENSE. Copyright (c) 2026 triet4p.
-Third-party runtime/dependency licenses and notices remain separate in licenses/.
+Third-party .NET dependency licenses are in licenses/. The complete native tokenizer notices are in $nativeNoticePath.
 Unsigned; SHA-256 detects byte changes but does not authenticate the publisher.
-Self-contained Windows x64 distribution; no installed .NET SDK/runtime, source repository or PowerShell is required.
+Self-contained Windows x64 distribution; no installed .NET SDK/runtime, source repository or PowerShell is required. The separate Microsoft Visual C++ x64 runtime prerequisite is not included.
 Supported OS limits: see docs/release-contract.md and the .NET 10 Windows x64 support matrix. Compatibility is not asserted for every listed SKU.
 $runtimeNote
 "@
-    [IO.File]::WriteAllText((Join-Path $stage 'RELEASE-NOTES.txt'), $notice, [Text.UTF8Encoding]::new($false))
-    $dependencyInventories[$d.product] = Add-PackageLicenses $stage $d.deps $d.product
-    $thirdParty = "The publish dependency graphs contain only Meta Brain project references and these self-contained .NET runtime packages:`n"
-    foreach ($dependency in $dependencyInventories[$d.product]) { if ($dependency.Contains('license')) { $thirdParty += ('- ' + $dependency.id + ' ' + $dependency.version + ' — license ' + $dependency.license + '; included text: ' + $dependency.licenseText + '; third-party notices: ' + $dependency.thirdPartyNotices + "`n") } else { $thirdParty += ('- ' + $dependency.id + ' ' + $dependency.version + ' — first-party Meta Brain project reference.' + "`n") } }
-    $thirdParty += "Project license: MIT (LICENSE at package root). Package-provided dependency LICENSE and THIRD-PARTY-NOTICES files are in licenses/. Refer to those texts for third-party terms.`n"
-    [IO.File]::WriteAllText((Join-Path $stage 'THIRD-PARTY-NOTICES.txt'), $thirdParty, [Text.UTF8Encoding]::new($false))
-    if ($d.product -eq 'MCP') {
-        $packageFiles = @(Get-ChildItem -LiteralPath $stage -Recurse -File | ForEach-Object {
-            $relative = $_.FullName.Substring($stage.Length + 1).Replace('\','/')
-            [ordered]@{path=$relative;bytes=$_.Length;sha256=(Hash-File $_.FullName)}
-        })
-        $packageManifest = [ordered]@{
-            schemaVersion=1
-            product='Meta Brain MCP'
-            productVersion=$version
-            runtimeIdentifier='win-x64'
-            selfContained=$true
-            license=[ordered]@{name='MIT';file='LICENSE';copyright='Copyright (c) 2026 triet4p'}
-            candidateId=$id
-            source=[ordered]@{head=$head;sourceTreeSha256=$treeHash;identity=$source}
-            entrypoint='mcp/MetaBrain.Mcp.exe'
-            sharedRuntime='service/MetaBrain.Connections.exe'
-            transport='stdio'
-            command='mcp/MetaBrain.Mcp.exe'
-            protocolVersions=@('2025-11-25','2025-06-18','2025-03-26','2024-11-05')
-            args=[ordered]@{dataRoot=@('--data-root','<data-root>');config=@('--config','<service-settings.json>')}
-            help='mcp/MetaBrain.Mcp.exe --help'
-            version='mcp/MetaBrain.Mcp.exe --version'
-            compatibility=[ordered]@{
-                codexCli=[ordered]@{configuration='process-scoped -c overrides';observedVersion='0.164.0';evidence='Sprint 9 T7 accepted package compatibility observation'}
-                ohMyPi=[ordered]@{configuration='project-local .omp/mcp.json';observedVersion='18.12.6';evidence='Sprint 9 T7 accepted package compatibility observation'}
-            }
-            knownLimits=@(
-                'Windows x64 only, on a Windows release supported by .NET 10; the exact supported Windows SKU matrix was not separately established for this MCP asset.',
-                'Linux, macOS and ARM are unsupported.',
-                'The MCP server exposes agent-scoped tools only; owner authority and key/bearer credentials are not passed through client configuration.',
-                'Client configuration is owner-authored and scoped to the process (Codex) or project (OMP); the package does not edit profiles or configuration.',
-                'Unsigned; SHA-256 verifies integrity but does not authenticate publisher identity.'
-            )
-            dependencies=$dependencyInventories[$d.product]
-            files=$packageFiles
-        }
-        [IO.File]::WriteAllText((Join-Path $stage 'package-manifest.json'),($packageManifest | ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
-    }
+     [IO.File]::WriteAllText((Join-Path $stage 'RELEASE-NOTES.txt'), $notice, [Text.UTF8Encoding]::new($false))
+     $dependencyInventories[$d.product] = Add-PackageLicenses $stage $d.deps $d.product
+     $thirdParty = "The .NET publish dependency graph contains these first-party projects and self-contained runtime packages:`n"
+     foreach ($dependency in $dependencyInventories[$d.product]) { if ($dependency.Contains('license')) { $thirdParty += ('- ' + $dependency.id + ' ' + $dependency.version + ' — license ' + $dependency.license + '; included text: ' + $dependency.licenseText + '; third-party notices: ' + $dependency.thirdPartyNotices + "`n") } else { $thirdParty += ('- ' + $dependency.id + ' ' + $dependency.version + ' — first-party Meta Brain project reference.' + "`n") } }
+     $thirdParty += "Project license: MIT (LICENSE at package root). Package-provided dependency license files are in licenses/. The native tokenizer's complete source and crate license documents are in $nativeNoticePath; its source commit, archive, lock identity, and external runtime prerequisite are in package-manifest.json.`n"
+     [IO.File]::WriteAllText((Join-Path $stage 'THIRD-PARTY-NOTICES.txt'), $thirdParty, [Text.UTF8Encoding]::new($false))
+     $packageFiles = @(Get-ChildItem -LiteralPath $stage -Recurse -File | ForEach-Object {
+         $relative = $_.FullName.Substring($stage.Length + 1).Replace('\','/')
+         [ordered]@{path=$relative;bytes=$_.Length;sha256=(Hash-File $_.FullName)}
+     })
+     $packageManifest = [ordered]@{
+         schemaVersion=1
+         product=$(if ($d.product -eq 'CLI') { 'Meta Brain CLI' } else { 'Meta Brain MCP' })
+         productVersion=$version
+         runtimeIdentifier='win-x64'
+         selfContained=$true
+         license=[ordered]@{name='MIT';file='LICENSE';copyright='Copyright (c) 2026 triet4p'}
+         candidateId=$id
+         source=[ordered]@{head=$head;sourceTreeSha256=$treeHash;identity=$source}
+         entrypoint=$(if ($d.product -eq 'CLI') { 'cli/MetaBrain.Cli.exe' } else { 'mcp/MetaBrain.Mcp.exe' })
+         sharedRuntime='service/MetaBrain.Connections.exe'
+         dependencies=$dependencyInventories[$d.product]
+         nativeTokenizer=$nativeTokenizerMetadata
+         runtimePrerequisite=$runtimePrerequisiteMetadata
+         files=$packageFiles
+     }
+     if ($d.product -eq 'MCP') {
+         $packageManifest['transport']='stdio'
+         $packageManifest['command']='mcp/MetaBrain.Mcp.exe'
+         $packageManifest['protocolVersions']=@('2025-11-25','2025-06-18','2025-03-26','2024-11-05')
+         $packageManifest['args']=[ordered]@{dataRoot=@('--data-root','<data-root>');config=@('--config','<service-settings.json>')}
+         $packageManifest['help']='mcp/MetaBrain.Mcp.exe --help'
+         $packageManifest['version']='mcp/MetaBrain.Mcp.exe --version'
+         $packageManifest['compatibility']=[ordered]@{
+             codexCli=[ordered]@{configuration='process-scoped -c overrides';observedVersion='0.164.0';evidence='Sprint 9 T7 accepted package compatibility observation'}
+             ohMyPi=[ordered]@{configuration='project-local .omp/mcp.json';observedVersion='18.12.6';evidence='Sprint 9 T7 accepted package compatibility observation'}
+         }
+         $packageManifest['knownLimits']=@(
+             'Windows x64 only, on a Windows release supported by .NET 10; the exact supported Windows SKU matrix was not separately established for this MCP asset.',
+             'Linux, macOS and ARM are unsupported.',
+             'The MCP server exposes agent-scoped tools only; owner authority and key/bearer credentials are not passed through client configuration.',
+             'Client configuration is owner-authored and scoped to the process (Codex) or project (OMP); the package does not edit profiles or configuration.',
+             'Unsigned; SHA-256 verifies integrity but does not authenticate publisher identity.'
+         )
+     } else {
+         $packageManifest['installMode']='dedicated CLI setup; installs and registers the cli component only'
+         $packageManifest['installRoot']='owner-selected app directory'
+         $packageManifest['dataRoot']='owner-selected data directory, kept separately from the app install root'
+     }
+     [IO.File]::WriteAllText((Join-Path $stage 'package-manifest.json'),($packageManifest | ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false))
     $layout = @(Get-ChildItem -LiteralPath $stage -Recurse -File | ForEach-Object { $rel=$_.FullName.Substring($stage.Length+1).Replace('\','/'); [ordered]@{path=$rel;bytes=$_.Length;sha256=(Hash-File $_.FullName)} })
     $assetPath = Join-Path $destination $d.name
     if ($d.product -eq 'CLI') {
@@ -279,7 +604,7 @@ $runtimeNote
         $identityArgument = '-p:CliSetupCandidateIdentity=' + $candidateIdentity
         $payloadArgument = '-p:CliSetupPayloadPath=' + $payloadPath
         $payloadHashArgument = '-p:CliSetupPayloadSha256=' + $payloadSha256
-        $dotnetRestore = & dotnet restore $setupProject -r win-x64 --source (Join-Path $repo 'runtime\dotnet-home\.nuget\packages') --nologo
+         $dotnetRestore = & dotnet restore $setupProject -r win-x64 --source (Join-Path $repo 'runtime\dotnet-home\.nuget\packages') --nologo -p:NuGetAudit=false
         $restoreExitCode = $LASTEXITCODE
         $dotnetRestore | ForEach-Object { Write-Host $_ }
         if ($restoreExitCode -ne 0) { throw ('Offline restore failed for dedicated ' + $d.product + ' setup; no package source outside the repository cache is used.') }
@@ -309,6 +634,8 @@ foreach ($p in @('CLI-stage','MCP-stage')) { Remove-Item -LiteralPath (Join-Path
 $manifest = [ordered]@{
     schemaVersion=1; product='Meta Brain'; productVersion=$version; runtimeIdentifier='win-x64'; selfContained=$true
     source=[ordered]@{head=$head;sourceTreeSha256=$treeHash;identity=$source;workingTreeIncluded=$true}
+     nativeTokenizer=$nativeTokenizerMetadata
+     runtimePrerequisite=$runtimePrerequisiteMetadata
     candidateId=$id; assembledAtUtc=[DateTime]::UtcNow.ToString('O')
     signing='unsigned; SHA-256 does not authenticate publisher'
     supportedPlatforms='64-bit Windows client/server releases supported by .NET 10 at publication time; the CLI and MCP server need no desktop/WPF capability. Exact product-tested SKU coverage is not asserted.'
