@@ -1,11 +1,18 @@
 # Meta Brain 1.5.0 — release record
 
-**Status: `release_pending` — prepared local candidate, not published.** The 1.5.0 candidate is
-assembled, independently reviewed and checkpoint-committed, and this publication delta (these
-documents and the static site) is prepared for its own review. Nothing has been tagged, uploaded or
-deployed: there is no public `v1.5.0` tag, Release, download URL or site deployment yet, and the
-latest public release remains 1.4.0. If a file ever claimed to be a 1.5.0 download does not match the
-size and SHA-256 recorded here, treat it as not verified and report it instead of guessing.
+**Status: published 2026-11-09 as `v1.5.0`.** The owner authorized publication after the reviewed
+candidate, evidence review, exact-snapshot checkpoint and final differential; the public assets were
+uploaded from the exact frozen candidate bytes under the public names below, and the sizes and
+SHA-256 values are recorded here. The reviewed `main` through
+`05ca71d1e3823b51edca298772f916fe7a98b76f` was pushed, the annotated tag `v1.5.0` and the
+GitHub Release were created, the static site was rebuilt against the published downloads and
+deployed, and the public assets and links were smoke-verified from the live URLs. The reviewed
+candidate checkpoint remains `fe9e585e1aa02107ebd2311e913ffaade47740a1`; the publication tag points
+at `05ca71d1e3823b51edca298772f916fe7a98b76f` and no candidate bytes were rebuilt or repacked.
+Independent public-evidence review and the fresh Bronze checkpoint remain separate records. If a
+file claimed to be a 1.5.0 download does not match the size and SHA-256 recorded here, treat it as
+not verified and report it instead of guessing.
+
 
 This is the prepublication release record for the two Meta Brain 1.5.0 products: the CLI setup and
 the standalone MCP server package. Sprint 15 accepted the encrypted structure-aware passage index
@@ -40,12 +47,17 @@ content plus its evidence-referenced documentation. The candidate is **not** reb
 identity look cosmetic, and the publication tag is expected to point at the reviewed publication
 commit carrying this delta, not at the assembly-instant HEAD.
 
-## Assets and download-name mapping (not published)
+## Assets and download-name mapping (published)
 
 | Product | Planned public asset name | Internal candidate filename | Bytes | SHA-256 |
 | --- | --- | --- | ---: | --- |
 | CLI setup | `MetaBrain-CLI-1.5.0.exe` | `MetaBrain-CLI-1.5.0-win-x64-c42911920f7d-tree1f1b68fec135-100079356d73.exe` | 233,550,554 | `cc4c05d5d9bf73247dbca640f2b9c468c6f7b2d4340ea99f84664f7dad62aefd` |
 | MCP package | `MetaBrain-MCP-1.5.0.zip` | `MetaBrain-MCP-1.5.0-win-x64-c42911920f7d-tree1f1b68fec135-100079356d73.zip` | 89,848,853 | `5ead1bc922596e719e158cf523eb6d4939bee9a32b368c7e03ecc28e117f9b94` |
+
+Published 2026-11-09 in the GitHub Release
+[`v1.5.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.5.0). The public download URL for
+each asset is `https://github.com/triet4p/my-meta-brain/releases/download/v1.5.0/<public asset name>`;
+the public files are byte copies of the frozen candidate assets below.
 
 The setup embeds a 134,776,841-byte payload with SHA-256
 `66efd1e3cf7054f9f4a02c84b10c1604dc4dbc23e63c8aa40d4ba0377d12e532` and 626 payload members; the
@@ -208,8 +220,9 @@ are not a blanket 1.0.0 replay, and the T1 numbers stay confined to their evalua
 
 Retained as the ordered procedure for the owner-authorized publication, which follows a fresh
 independent review of this delta, a fresh Bronze exact-snapshot checkpoint and Main's explicit
-execution release. None of these steps has been performed; until then the status stays
-`release_pending` and no 1.5.0 URL is live.
+execution release. Publication was executed on 2026-11-09 as `v1.5.0`; see
+`artifacts/sprint-15/publication/S15-PUBLISH-P2.md`. The status is now `published`; independent
+public-evidence review and the fresh Bronze checkpoint remain pending.
 
 1. Re-verify the candidate directory, both asset sizes/SHA-256 and the manifest, and re-run
    `powershell.exe -NoProfile -NonInteractive -File scripts/release/assemble-candidate.ps1

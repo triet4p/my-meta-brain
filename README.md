@@ -206,18 +206,22 @@ the owner cognitive workflows: six independent facets, encrypted revisioned pass
 review, grounded structuring results that stay pending, and lifecycle/intention/recall for memory
 items and classified annotations, all through the CLI. The MCP agent tool surface is unchanged.
 
-**1.5.0 is a prepared local candidate, not a published release.** It keeps the same two products —
-the CLI setup and the standalone MCP ZIP — and adds the encrypted structure-aware passage index,
-scoped hybrid workspace search with explicit `literal_match` / `semantic_candidate` output,
+**1.5.0 is published** at [`v1.5.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.5.0):
+[`MetaBrain-CLI-1.5.0.exe`](https://github.com/triet4p/my-meta-brain/releases/download/v1.5.0/MetaBrain-CLI-1.5.0.exe)
+and
+[`MetaBrain-MCP-1.5.0.zip`](https://github.com/triet4p/my-meta-brain/releases/download/v1.5.0/MetaBrain-MCP-1.5.0.zip),
+with its frozen hashes in the [1.5.0 release record](docs/release-1.5.0.md). It keeps the same two
+products — the CLI setup and the standalone MCP ZIP — and adds the encrypted structure-aware passage
+index, scoped hybrid workspace search with explicit `literal_match` / `semantic_candidate` output,
 purpose-aware recall regions, coalesced background refresh and `--open-rank` exact-revision opening,
 all through the owner CLI. A semantic candidate is an unconfirmed neighbour, not evidence or an
 answer; exact/lexical evidence still ranks first. Hybrid indexing and search require the owner to
 supply a pinned local E5 model directory explicitly — the product bundles no model weights, downloads
 none and calls no cloud embedding provider — and the dynamic tokenizer requires an owner-installed
 Microsoft Visual C++ v14 x64 Redistributable 14.43.34808 or later. The MCP agent tool surface is
-unchanged at 22 tools. The exact candidate identity, asset sizes, SHA-256 values and verification are
-in the [1.5.0 release record](docs/release-1.5.0.md); publication is a separate owner-authorized step
-and no 1.5.0 download or site link is live.
+unchanged at 22 tools. The publication and public smoke are recorded in
+[`artifacts/sprint-15/publication/S15-PUBLISH-P2.md`](artifacts/sprint-15/publication/S15-PUBLISH-P2.md);
+independent public-evidence review and the fresh Bronze checkpoint remain pending.
 
 ### Developer bundle: build the payload from a checkout
 

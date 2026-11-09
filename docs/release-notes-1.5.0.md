@@ -3,26 +3,27 @@
 Windows x64, self-contained, **unsigned**. SHA-256 verifies downloaded bytes only; it does not
 authenticate the publisher.
 
-**Status: release candidate, not published.** The 1.5.0 candidate is frozen, independently reviewed
-and checkpoint-committed; there is no public `v1.5.0` tag, Release, upload or deployment yet, and
-the latest public release remains 1.4.0. Publication is a separate owner-authorized step that follows
-the fresh review and checkpoint of the publication delta. Until then, download nothing from a URL
-that claims to be 1.5.0; the exact candidate identity, sizes, SHA-256 values and verification are in
-the [`1.5.0 release record`](release-1.5.0.md).
+**Status: published 2026-11-09 as `v1.5.0`.** The owner authorized publication after the reviewed
+candidate, evidence review, exact-snapshot checkpoint and final differential; the public assets were
+uploaded from the exact frozen candidate bytes under the public names below, and the sizes and
+SHA-256 values are recorded in the [`1.5.0 release record`](release-1.5.0.md). The verification
+described here was performed on the prepublication candidate and is retained unchanged; publication
+and the public smoke are recorded separately.
 
 ## Downloads
 
-1.5.0 ships exactly two products. The public filenames below are the planned download-name mapping;
-no 1.5.0 URL is live. The frozen candidate filenames and the exact sizes and SHA-256 values are in
-the [release record](release-1.5.0.md).
+1.5.0 ships exactly two products. The public filenames below are the published download-name mapping;
+the frozen candidate filenames and the exact sizes and SHA-256 values are in the
+[release record](release-1.5.0.md).
 
-- `MetaBrain-CLI-1.5.0.exe` — CLI setup. Installs `cli\MetaBrain.Cli.exe`, the shared runtime and the
-  shared installer, and registers the CLI component only. The owner CLI carries every cognitive
-  workflow plus the workspace, hybrid search and optional `open` document session. No new Owner UI
-  setup is shipped.
-- `MetaBrain-MCP-1.5.0.zip` — standalone MCP server package. Extract it completely and register the
-  absolute `mcp\MetaBrain.Mcp.exe` path. The scoped agent surface is unchanged at 22 tools and does
-  not expose owner workspace search.
+- [`MetaBrain-CLI-1.5.0.exe`](https://github.com/triet4p/my-meta-brain/releases/download/v1.5.0/MetaBrain-CLI-1.5.0.exe)
+  — CLI setup. Installs `cli\MetaBrain.Cli.exe`, the shared runtime and the shared installer, and
+  registers the CLI component only. The owner CLI carries every cognitive workflow plus the workspace,
+  hybrid search and optional `open` document session. No new Owner UI setup is shipped.
+- [`MetaBrain-MCP-1.5.0.zip`](https://github.com/triet4p/my-meta-brain/releases/download/v1.5.0/MetaBrain-MCP-1.5.0.zip)
+  — standalone MCP server package. Extract it completely and register the absolute
+  `mcp\MetaBrain.Mcp.exe` path. The scoped agent surface is unchanged at 22 tools and does not
+  expose owner workspace search.
 - There is **no** 1.5.0 Owner UI setup, `owner-ui` component or UI download, and no separate web
   console.
 
