@@ -6,6 +6,8 @@ All notable changes to Meta Brain are documented here.
 
 ### Added
 
+- Added the 1.5.0 release candidate (S15-T6): exactly two self-contained Windows x64 assets — the CLI setup and the standalone MCP server ZIP — assembled with one candidate identity, per-file and embedded-payload SHA-256 values, dependency and license inventories, the pinned source-built tokenizer payload with its complete notices, and truthful unsigned status. The candidate was independently reviewed and checkpoint-committed; publication remains a separate owner-authorized step, and this task publishes no 1.5.0 asset or download link.
+
 - Added a read-only x64 Microsoft Visual C++ v14 runtime prerequisite check for 1.5.0 CLI setup/direct install and MCP startup. When version 14.43.34808 or later is unavailable or cannot be verified, the app refuses before payload extraction, application/data-root changes or service changes and points the owner to Microsoft; Meta Brain does not download, bundle or install it. The Windows OS Universal CRT does not supply the imported VCRUNTIME DLLs.
 
 - Added a provenance-pinned MIT license text, separate package copyright text and the package-provided third-party notice for `System.Numerics.Tensors/10.0.14` to local 1.5.0 CLI/MCP candidate package generation.

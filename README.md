@@ -206,6 +206,19 @@ the owner cognitive workflows: six independent facets, encrypted revisioned pass
 review, grounded structuring results that stay pending, and lifecycle/intention/recall for memory
 items and classified annotations, all through the CLI. The MCP agent tool surface is unchanged.
 
+**1.5.0 is a prepared local candidate, not a published release.** It keeps the same two products —
+the CLI setup and the standalone MCP ZIP — and adds the encrypted structure-aware passage index,
+scoped hybrid workspace search with explicit `literal_match` / `semantic_candidate` output,
+purpose-aware recall regions, coalesced background refresh and `--open-rank` exact-revision opening,
+all through the owner CLI. A semantic candidate is an unconfirmed neighbour, not evidence or an
+answer; exact/lexical evidence still ranks first. Hybrid indexing and search require the owner to
+supply a pinned local E5 model directory explicitly — the product bundles no model weights, downloads
+none and calls no cloud embedding provider — and the dynamic tokenizer requires an owner-installed
+Microsoft Visual C++ v14 x64 Redistributable 14.43.34808 or later. The MCP agent tool surface is
+unchanged at 22 tools. The exact candidate identity, asset sizes, SHA-256 values and verification are
+in the [1.5.0 release record](docs/release-1.5.0.md); publication is a separate owner-authorized step
+and no 1.5.0 download or site link is live.
+
 ### Developer bundle: build the payload from a checkout
 
 ```powershell
@@ -409,7 +422,8 @@ the restore stays available, and the real renders of the view.
 The project follows the authoritative milestone roadmap in [`docs/PLAN.md`](docs/PLAN.md).
 Milestones 1–9 and Sprint 9's three-product delivery are complete; the public 1.0.0 release,
 asset-name cutover, updated Pages deployment and public smoke are complete. Sprints 11–14 published
-1.1.0–1.4.0; see [`docs/PLAN.md`](docs/PLAN.md) for the authoritative status.
+1.1.0–1.4.0, and Sprint 15 prepares the local 1.5.0 candidate (not yet published); see
+[`docs/PLAN.md`](docs/PLAN.md) for the authoritative status.
 
 - [x] **Milestone 1 (M1) — Encrypted Vault & Scoped Sharing (Sprint 1):** User-controlled key lifecycle, authenticated ciphertext, owner-approved catalog publication, single-use token issuance/redemption, and in-memory scoped reads verified with official Codex and OMP clients.
 - [x] **Milestone 2 (M2) — Durable Encrypted Core (Sprint 2):** Canonical encrypted item/source/zone/revision models, relations, and rebuildable protected index.

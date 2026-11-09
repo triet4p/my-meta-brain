@@ -1,47 +1,245 @@
-# Meta Brain 1.5.0 — candidate preparation record
+# Meta Brain 1.5.0 — release record
 
-**Status: unreleased, not review-ready, and not published.** The latest public release remains 1.4.0. Any candidate setup, MCP ZIP, manifest, and evidence are local ignored build outputs only; this file is not a manifest, release approval, download page, or claim that 1.5.0 is available.
+**Status: `release_pending` — prepared local candidate, not published.** The 1.5.0 candidate is
+assembled, independently reviewed and checkpoint-committed, and this publication delta (these
+documents and the static site) is prepared for its own review. Nothing has been tagged, uploaded or
+deployed: there is no public `v1.5.0` tag, Release, download URL or site deployment yet, and the
+latest public release remains 1.4.0. If a file ever claimed to be a 1.5.0 download does not match the
+size and SHA-256 recorded here, treat it as not verified and report it instead of guessing.
 
-## Intended product shape
+This is the prepublication release record for the two Meta Brain 1.5.0 products: the CLI setup and
+the standalone MCP server package. Sprint 15 accepted the encrypted structure-aware passage index
+(S15-T2), scoped hybrid ranking (S15-T3), purpose-aware recall and regions (S15-T4), the CLI search UX
+with background refresh and exact-revision open (S15-T5), and this release task (S15-T6). The S15-T6
+evidence review passed with zero actionable findings, the exact-snapshot checkpoint committed the
+reviewed content as `fe9e585e`, and the final sprint differential passed with zero actionable
+findings. No provider, model or official-client walkthrough is re-run or re-claimed here; no product
+source changed for this publication delta.
 
-The release contract remains the CLI setup plus the standalone MCP ZIP, with one shared runtime. The frozen 1.1.0 WPF Owner UI, a separate browser console, and model weights are not candidate products. Hybrid workspace recall is an owner CLI capability; the MCP agent interface has no owner workspace-search operation.
+## Frozen candidate identity
 
-`Directory.Build.props` is the single shared source of product version metadata. Its version, assembly version and file version are set to 1.5.0 / 1.5.0.0. CLI, MCP, shared runtime and installer callers read the shared product metadata; no source-level 1.4.0 caller override was found. The WPF source remains independently pinned to 1.1.0 and is not part of the release.
+| Field | Value |
+| --- | --- |
+| Product and version | `Meta Brain 1.5.0` for both products |
+| Candidate ID | `100079356d73` |
+| Candidate identity | `c42911920f7d-tree1f1b68fec135` |
+| Platform / runtime | Windows x64 (`win-x64`), self-contained |
+| Assembly base HEAD recorded in the manifest | `c42911920f7d522532b98141588b05c05eba9dd8` |
+| Assembled source-tree SHA-256 | `1f1b68fec13567718557907e7842d0958f545e6ec28d6796f914db114e0565fb` |
+| Assembled at (UTC) | `2026-11-09T04:31:21.7993695Z` |
+| Signing | Unsigned; SHA-256 verifies bytes, not publisher identity |
+| Reviewed checkpoint commit | `fe9e585e1aa02107ebd2311e913ffaade47740a1` on `main`, parent `c4291192` |
 
-The exact candidate identity, setup EXE, MCP ZIP, per-file inventory, hashes, dependency/license inventory and notices are generated only by the local candidate assembler. Their manifests and the task evidence—not this release record or prior releases—are authoritative for any candidate bytes. Local artifacts do not authorize distribution or publication.
+The candidate was assembled from the reviewed working tree while the branch HEAD was still
+`c4291192`, so the manifest records that pre-commit HEAD with `workingTreeIncluded: true` and the
+tree digest above. The S15-T6 checkpoint then committed exactly the reviewed candidate scope (22
+task-owned paths) as `fe9e585e`, and its record confirms the committed content matched the reviewed
+manifest for all of them. Those two identities are kept distinct on purpose: the manifest identity
+binds the frozen candidate bytes, while `fe9e585e` is the reviewed commit that carries the same
+content plus its evidence-referenced documentation. The candidate is **not** rebuilt to make a tag
+identity look cosmetic, and the publication tag is expected to point at the reviewed publication
+commit carrying this delta, not at the assembly-instant HEAD.
 
-## Included behavior and owner resource contract
+## Assets and download-name mapping (not published)
 
-The candidate user guide is [Meta Brain 1.5.0 candidate notes](release-notes-1.5.0.md). It documents the explicit local model directory, pinned file identities, consent boundary, failure codes, semantic candidate classifications, and measured limits. Hybrid indexing/search uses the pinned local E5 model only when the owner explicitly supplies its directory. Missing or invalid assets refuse with `workspace_index_model_missing` or `workspace_index_model_invalid`; hybrid mode does not silently become lexical-only. No model path is persisted, no automatic model download or cloud embedding call exists, and model/decoded passage state is limited to the unlocked process epoch.
+| Product | Planned public asset name | Internal candidate filename | Bytes | SHA-256 |
+| --- | --- | --- | ---: | --- |
+| CLI setup | `MetaBrain-CLI-1.5.0.exe` | `MetaBrain-CLI-1.5.0-win-x64-c42911920f7d-tree1f1b68fec135-100079356d73.exe` | 233,550,554 | `cc4c05d5d9bf73247dbca640f2b9c468c6f7b2d4340ea99f84664f7dad62aefd` |
+| MCP package | `MetaBrain-MCP-1.5.0.zip` | `MetaBrain-MCP-1.5.0-win-x64-c42911920f7d-tree1f1b68fec135-100079356d73.zip` | 89,848,853 | `5ead1bc922596e719e158cf523eb6d4939bee9a32b368c7e03ecc28e117f9b94` |
 
-The authenticated workspace passage index, hybrid owner search, D104 `literal_match` / `semantic_candidate` semantics, purpose-aware grouping and T5 background refresh/open behavior remain subject to the accepted S15-T2–T5 contracts. A semantic candidate is not supporting evidence or an answer; no unapproved similarity cutoff or general prose-abstention claim is added. Exact revision/anchor, scope-before-disclosure, corruption fail-closed, lock/cancellation and lifecycle invariants remain in force.
+The setup embeds a 134,776,841-byte payload with SHA-256
+`66efd1e3cf7054f9f4a02c84b10c1604dc4dbc23e63c8aa40d4ba0377d12e532` and 626 payload members; the
+MCP ZIP has 421 members. The full per-file inventory, embedded-payload membership, dependency and
+license inventories, native payload identity and prerequisite metadata are in the candidate
+`candidate-manifest.json`. Candidate assembly ran
+`powershell.exe -NoProfile -NonInteractive -File scripts/release/assemble-candidate.ps1` (exit 0,
+`VERIFIED`/`CANDIDATE`), and `-VerifyOnly` re-verified the same candidate directory with exit 0.
+The setup's own `--verify-payload` reported the exact payload size, hash and member count; the MCP
+ZIP members and the native DLL were independently checked against the manifest.
 
-## Existing evidence and measured limits
+The public names above are the download-name mapping a later owner-authorized publication would
+use, following the `MetaBrain-<product>-<version>.<ext>` contract. **No `v1.5.0` tag, Release or
+`https://github.com/triet4p/my-meta-brain/releases/download/v1.5.0/<name>` URL is live, and none may
+be described as live before the owner publishes it.** The public files must be byte copies of the
+frozen candidate assets. There is no 1.5.0 Owner UI asset, no `owner-ui` component and no separate
+document-console download; neither public name may be reused for a UI build. The published
+1.0.0–1.4.0 tags, Releases and assets are not rebuilt, renamed or withdrawn by this release.
 
-The inherited S15-T1–T5 observations below are accepted only on their assigned surfaces; S15-T6 native and A7 results are worker evidence, not independent review, package approval, or distribution authorization.
+The git-ignored candidate directory
+`runtime/release-candidates/1.5.0-win-x64-c42911920f7d-tree1f1b68fec135-100079356d73/` holds the two
+assets and the manifest. A publication release additionally carries `candidate-manifest.json`, a
+`SHA256SUMS.txt` generated from the two asset hashes and the repository `LICENSE`, matching the
+1.4.0 release-asset convention. None of these local files is a download page or publication
+approval.
 
-- **S15-T1 standalone model screen:** 25/27 expected sources at rank 5; seven pinned model/tokenizer/config assets totaled 492,421,754 bytes; process-private boundary delta was 559.1953 MiB; warm in-process p95 was 17.8471 ms after 10 warmups and 100 searches. These passed the approved T1 evaluator-specific screen. They do not set integrated CLI/service latency or memory limits.
-- **S15-T3 actual owner CLI/service:** 35 held-out synthetic queries over 114 files returned all 27 labeled expected-evidence cases; 13 were literal-baseline and 14 paraphrase/near-miss cases. Two paraphrase results ranked second and the other labeled cases ranked first. Four exact/no-evidence negatives and four folder-scope negatives returned no results; unrelated prose queries still returned explicit semantic candidates. See [S15-T3 evidence](../artifacts/sprint-15/task-3.md).
-- **S15-T5 integrated observations:** on its 112-file synthetic workload, 10 warmups and 100 fresh CLI-to-service queries measured nearest-rank p50/p95 of 291.65/379.81 ms; the first post-locked-restart query took 2,365.89 ms including model reload. At query-boundary samples, service private bytes were 810,008,576 before and 826,810,368 maximum/after; working set was 851,689,472 before and 863,821,824 maximum/after. These are observations under the recorded conditions, not new SLAs. See [S15-T5 evidence](../artifacts/sprint-15/task-5.md).
-- **Earlier S15-T6 source-runtime smoke (pre-native integration):** its 35-query and model-refusal results used the previous native payload and do not qualify the selected source-built DLL.
-- **S15-T6 A7 selected-payload source CLI/service smoke:** rebuilt the Debug smoke project with no restore (0 warnings/errors), then ran `s15-t3` against the Debug shared host and CLI. All 35 frozen queries passed: 27/27 labeled evidence (13 literal, 14 paraphrase/near-miss), four exact/no-evidence negatives, four folder-scope negatives, filters/ties/dedup/currentness/anchors/lock/cancellation/stale-generation checks, and explicit missing/invalid-model refusal with no silent fallback. First post-locked-restart query: 6,438.13 ms; after 10 warmups and 100 timed searches, nearest-rank p50/p95 were 519.10/837.26 ms. Service private bytes were 842,612,736 before and 844,554,240 maximum at query boundaries; working set was 873,529,344 before and 876,802,048 maximum; lifetime peak working set was 1,254,805,504. These are synthetic host observations, not latency/memory gates or package proof; the exact command and results are in A7 task evidence.
+## Product shape and included behavior
 
-Unchanged accepted gates are inherited by trace to their prior task/review/checkpoint records; they are not represented as a blanket 1.0.0 replay. T1 model-screen numbers remain confined to their approved evaluator surface. This record does not claim a candidate-package measurement.
+The release contract remains the CLI setup plus the standalone MCP ZIP over one shared runtime. The
+frozen 1.1.0 WPF Owner UI is not a 1.5.0 product, no new WPF installer is built, and no separate
+browser console exists. Product version metadata is single-sourced in `Directory.Build.props`
+(1.5.0 / 1.5.0.0); the WPF source stays independently pinned at 1.1.0.
 
-## Native tokenizer payload and external runtime prerequisite
+- **Encrypted structure-aware passage index (S15-T2).** `owner workspace-index-status`,
+  `workspace-index-rebuild` and `workspace-index-anchors` build and read one authenticated
+  AES-GCM-encrypted posting/semantic generation from the unlocked workspace. Anchors cite the exact
+  file, content revision and byte-range digest; Markdown headings/fenced code, CSV headers and
+  complete quoted records, known/raw JSONL records and plain-text passages are indexed. Rebuild
+  revalidates every revision and publishes atomically; failures preserve the prior generation.
+- **Scoped hybrid ranking (S15-T3).** `owner workspace-search --hybrid true` combines retained
+  exact/lexical/heading evidence with local semantic candidates over the authenticated generation.
+  Folder, field, currentness and content-date filters apply before totals are disclosed. Output
+  separates `literal_match` from `semantic_candidate`; a semantic candidate is an unconfirmed
+  neighbour, **not supporting evidence or an answer**. The lexical command remains a separate
+  explicit path and `--hybrid true` never silently degrades to literal-only output.
+- **Purpose-aware recall and regions (S15-T4).** `--purpose` accepts `auto`, `experience`, `temporal`,
+  `intention`, `action-effect` and `general`; it applies deterministic rule-first routing after the
+  existing filters and joins annotations, lifecycle and recall state on exact source revisions,
+  returning region representatives, scoped counts and selection reasons. Action/effect associations
+  do not establish causality; intention mentions and acknowledgements do not establish completion.
+- **Search UX, background refresh and exact open (S15-T5).** Successful owner content mutations
+  queue one coalesced background passage refresh inside the unlocked epoch; lock cancels it, clears
+  the model selection and decoded cache, and publishes nothing partial. `--open-rank N` opens a
+  returned hit at its exact file, content revision and byte anchor through the existing document
+  bridge, refusing stale or incomplete locations. The browser remains an optional document-only
+  preview/edit surface, not a search console.
+- **MCP agent surface unchanged.** Stdio transport, exactly one of `--data-root` or `--config`, the
+  existing 22-tool scoped agent API, and no owner workspace-search operation. The packaged manifest
+  declares protocol versions `2025-11-25`, `2025-06-18`, `2025-03-26` and `2024-11-05`; the packaged
+  consumer run observed `initialize` negotiating `2025-11-25`.
 
-The previously selected NuGet DLL (`a7ca979443378649ad2e18ab923f684390c2f57ff16f611f8671268e4da5986b`) is not used. The selected dynamic-CRT payload is kept in ignored repository-local staging at `runtime/s15-t6-native-build/target/x86_64-pc-windows-msvc/release/hf_tokenizers.dll` (3,198,464 bytes; SHA-256 `4595800ae02f9c7c96d583347e6cf1e2ddd17c26348ac8169c8314ca28b7480d`). Its source archive and generated Cargo graph/license inventory remain under the same ignored staging tree. The versioned product tree retains the exact Cargo lock at `src/MetaBrain.Connections/native/provenance/Cargo.lock`, build provenance text, and complete notice text. The official upstream commit is `b8eaa77d72bf9d9c768d75599bfa6a602e467b93`; the staged archive is 1,236,124 bytes with SHA-256 `2ee9c2d81aba55396ca67544765bd5cf2438ff35b5a959fe820915e449f77ded`, and the lock covers 86 packages (85 registry crates). Build/package scripts require these pinned repository-local inputs and use only approved local .NET feeds.
+## Explicit local model and external runtime prerequisites
 
-The A3 inventory records 172 license documents covering the upstream wrapper and all 85 locked registry crates, including nested native libraries; identical texts are grouped and mapped in `src/MetaBrain.Connections/native/THIRD-PARTY-NOTICES.txt`. A3 acquired the exact `csbindgen` 1.9.8 MIT text from its pinned official source; the generated `NativeMethods.cs` remains build-only and is not part of the native DLL. The A7 offline release bundle contains the complete native notice at `service/licenses/native-tokenizer/THIRD-PARTY-NOTICES.txt` (219,767 bytes; SHA-256 `1d67c3d687bc74fcd4226ce4288896938a903542c16b02faaf8ae866d1f6f94e`); candidate assembly stopped before a candidate manifest was produced. Notice coverage and bundle identity are evidence, not legal approval or proof that every attribution obligation is closed; exact native obligations remain for release review.
+Hybrid indexing and search require an owner-selected local model directory for the pinned E5 revision
+`614241f622f53c4eeff9890bdc4f31cfecc418b3`, ending in `model/`. The two verified runtime inputs are
+`onnx/model.onnx` (470,268,510 bytes; SHA-256
+`ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665`) and `onnx/tokenizer.json`
+(17,082,730 bytes; SHA-256
+`0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39`). The seven approved
+model/tokenizer/config assets total 492,421,754 bytes in the evaluation staging set — a measured
+staged size, not an installed-product footprint. The product does not bundle model weights, download
+them, call a cloud embedding provider, persist the selected path or choose a model implicitly. Missing
+or invalid assets fail with `workspace_index_model_missing` / `workspace_index_model_invalid`, never a
+lexical-only substitute; the model directory and decoded passage reuse are process-memory-only for the
+unlocked epoch.
 
-For the exact `System.Numerics.Tensors/10.0.14` package, its nuspec-declared repository is `https://github.com/dotnet/dotnet` at commit `0427b9abbead3fa64c6655eb4290c537397131fa`. The local candidate assembler now pins that commit's upstream `LICENSE.TXT` (1,115 bytes; SHA-256 `ae48df11a335dc1a615f4f938b69cba73bcf4485c4f97af49b38efb0f216353b`) for the declared MIT expression, keeps the nuspec copyright `© Microsoft Corporation. All rights reserved.` (without an inferred year or merging it into the upstream `.NET Foundation and Contributors` text), and copies the package-provided `THIRD-PARTY-NOTICES.TXT` unchanged (78,041 bytes; SHA-256 `6d15e10a101c6bfff2ab4429ed061bf76c456fc4b23ad6b03e0d0f8377148a21`). The pinned VMR root notice (265,586 bytes; SHA-256 `5a90be9000b5c2f928dead74be4e86952420d1160fa38f6f2d34526eeee49ff6`) is staged only as monorepo provenance, not represented as this package's notice. The NuGet and directly linked SPDX MIT pages have generic copyright placeholders and are documentation, not substituted package-specific text. This is source/attribution evidence, not a legal conclusion; native tokenizer notices and their review remain a separate gate.
+The selected dynamic native tokenizer is the source-built `hf_tokenizers.dll` (3,198,464 bytes;
+SHA-256 `4595800ae02f9c7c96d583347e6cf1e2ddd17c26348ac8169c8314ca28b7480d`) from pinned upstream
+commit `b8eaa77d72bf9d9c768d75599bfa6a602e467b93` of
+`https://github.com/sappho192/Tokenizers.DotNet`. Versioned product source carries the generated
+`Cargo.lock` (86 packages: upstream wrapper + 85 registry crates; SHA-256
+`7597e8861f7368d02ea5daded9b71cbc226286ffbf1bbe7ad57f3d719b53d48f`), the build provenance record
+and the complete mapped third-party notices (172 license documents, including vendored Oniguruma and
+mimalloc and the build-only `csbindgen` MIT text; 219,767 bytes; SHA-256
+`1d67c3d687bc74fcd4226ce4288896938a903542c16b02faaf8ae866d1f6f94e`). The exact native DLL, its
+source archive and generated inventories stay in ignored repository-local staging by design. Notice
+coverage is evidence, not a legal conclusion or proof that every attribution obligation is closed.
 
-The dynamic PE imports `VCRUNTIME140.dll` and `VCRUNTIME140_1.dll`; it does not include those files. The package therefore requires an owner-installed Microsoft Visual C++ v14 x64 Redistributable whose version is at least the build tool version, 14.43.34808. The latest supported Microsoft page lists the current supported Windows matrix and x64 download: [Latest supported Visual C++ Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170). Setup, direct install, and MCP startup read only the 64-bit x64 runtime version and refuse before application extraction, data-root creation, or service changes if it is missing, unreadable, malformed, or too old. They show the Microsoft page; Meta Brain does not fetch, bundle, or install the prerequisite. MCP users install it independently before starting the ZIP entrypoint.
+The dynamic PE imports `VCRUNTIME140.dll` and `VCRUNTIME140_1.dll` and does not include them. The
+package therefore requires an **owner-installed** Microsoft Visual C++ v14 x64 Redistributable at
+version **14.43.34808 or later**. CLI setup, direct install and MCP startup read only the installed
+x64 version and refuse before payload extraction, application/data-root changes or service changes
+when it is missing, unreadable, malformed or too old, pointing the owner to Microsoft's
+[latest supported downloads](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170).
+Windows 10+ includes the OS Universal CRT, which does not supply these VCRUNTIME imports. Meta Brain
+does not fetch, bundle, install or chain the prerequisite; it is a separate owner action, and the
+`System.Numerics.Tensors/10.0.14` notice mapping (pinned MIT `LICENSE.TXT`, separate package
+copyright and packaged `THIRD-PARTY-NOTICES.TXT`) is part of candidate assembly.
 
-The owner reports no applicable Visual Studio/MSVC license. This does not establish a blanket legal conclusion about all MSVC build use, and direct owner installation of Microsoft's runtime is not treated as a legal determination. The Microsoft Visual C++ v14 x64 prerequisite is not bundled, downloaded, or installed by Meta Brain. Exact native third-party license/attribution closure remains separate from that prerequisite and is still required before distribution.
+## Accepted evidence and measured limits
 
-## Candidate and host-action boundary
+The inherited S15-T1–T5 observations are accepted only on their assigned surfaces; S15-T6 results are
+worker evidence reviewed by the independent evidence gate, not a legal conclusion.
 
-Lifecycle evidence is limited to explicitly disposable repository-local install and data roots, after inspecting the exact current path. A fresh install uses no `--start`; an upgrade is allowed only against that isolated instance with no live shared host. The permitted paths write app/data files only beneath their selected roots. No ACL, registry write, service registration, system/global environment, or profile change is authorized; no owner live root or service may be used.
+- **S15-T1 standalone model screen:** 25/27 expected sources at rank 5; seven pinned
+  model/tokenizer/config assets totaling 492,421,754 bytes; process-private boundary delta
+  559.1953 MiB; warm in-process p95 17.8471 ms after 10 warmups and 100 searches. These passed the
+  approved evaluator-specific screen and do not set integrated CLI/service limits.
+- **S15-T3 actual owner CLI/service:** 35 held-out synthetic queries over 114 files returned all 27
+  labeled expected-evidence cases (13 literal-baseline, 14 paraphrase/near-miss; two paraphrase
+  results ranked second, the rest first). Four exact/no-evidence and four folder-scope negatives
+  returned no results; unrelated prose still returns explicit semantic candidates. See
+  [S15-T3 evidence](../artifacts/sprint-15/task-3.md).
+- **S15-T5 integrated observations:** 112 synthetic files, 10 warmups and 100 fresh CLI-to-service
+  queries measured nearest-rank p50/p95 291.65/379.81 ms; the first post-locked-restart query took
+  2,365.89 ms including model reload. Query-boundary private bytes were 810,008,576 before and
+  826,810,368 maximum/after; working set 851,689,472 before and 863,821,824 maximum/after. These are
+  observations under the recorded conditions, not integrated SLAs. See
+  [S15-T5 evidence](../artifacts/sprint-15/task-5.md).
+- **S15-T6 selected-payload source CLI/service smoke:** the Debug smoke project rebuilt with no
+  restore (0 warnings/errors), then the frozen `s15-t3` scenario ran against the Debug CLI and shared
+  host with the selected dynamic tokenizer. All 35 frozen queries passed, including 27/27 labeled
+  evidence, the four exact/no-evidence and four folder-scope negatives,
+  filters/ties/dedup/currentness/anchors/lock/cancellation/stale-generation checks, and
+  missing/invalid-model refusal with no silent fallback. First post-locked-restart query 6,438.13 ms;
+  after 10 warmups and 100 timed searches p50/p95 519.10/837.26 ms; private bytes 842,612,736 before
+  and 844,554,240 maximum; working set 873,529,344 before and 876,802,048 maximum; lifetime peak
+  working set 1,254,805,504. Synthetic host observations, not SLAs or package proof.
+- **Packaged consumer and lifecycle proof (A10, reviewed):** the extracted candidate MCP negotiated
+  `protocolVersion: 2025-11-25`, reported `serverInfo` version 1.5.0, listed 22 tools and served
+  catalog operations; the committed `s4-t1` smoke passed after the restored initialize field. An
+  isolated 1.4.0 → 1.5.0 upgrade changed only `data-root-owner.json`, kept every pre-upgrade canonical
+  vault file, settings and pipe endpoints byte-identical, preserved the 162-byte synthetic workspace
+  file, its anchor, memory item and vault unlock (passphrase and recovery key), refused a second
+  installation sharing the data root before any write, and stopped cleanly. No host mutation or owner
+  data was used.
 
-The A7 source CLI/service smoke passed, but candidate assembly did not complete: the offline self-contained publish bundle was produced, then the candidate assembler stopped because the approved local `System.Numerics.Tensors/10.0.14` package declares MIT but contains no root `LICENSE` file. No setup EXE, MCP ZIP, candidate manifest, or package/member verification resulted. Packaged MCP stdio, 1.4-to-1.5 isolated install/upgrade/data preservation, exact dependency-license closure, review/PASS, fresh Bronze checkpoint and final differential remain open. Published 1.4.0 assets and website remain unchanged; no commit or publication occurred.
+Unchanged accepted gates are inherited by trace to their prior task/review/checkpoint records; they
+are not a blanket 1.0.0 replay, and the T1 numbers stay confined to their evaluator surface.
+
+## Known limits and publication boundary
+
+- The tests are synthetic and host-specific. Recall quality on owner data, large workspaces and
+  every query family is not established, and hybrid output remains a candidate list rather than
+  verified facts; there is no approved cosine cutoff or general natural-language abstention claim.
+- Latency/RAM figures above are observations, not support promises. The first query after a locked
+  restart reloads the model. Model acquisition and placement are owner-controlled and are not
+  product downloads.
+- The VC++ v14 x64 runtime is an external owner prerequisite; the interactive setup-GUI refusal on a
+  runtime-absent machine was verified at code-path/registry level, not as a full clean-machine
+  installation.
+- Lifecycle evidence is limited to disposable repository-local roots. No ACL, registry, service
+  registration, system/global environment, profile change or owner live root/service was used.
+- The optional `open` document session needs an installed Chromium-based browser; it stays a
+  document-only surface and this release adds no search console.
+- Candidate setup/MCP bytes, manifests and site previews are ignored local build outputs. They are
+  not distribution approval, a published Release or a legal conclusion about third-party terms.
+
+## Publication checklist (not executed)
+
+Retained as the ordered procedure for the owner-authorized publication, which follows a fresh
+independent review of this delta, a fresh Bronze exact-snapshot checkpoint and Main's explicit
+execution release. None of these steps has been performed; until then the status stays
+`release_pending` and no 1.5.0 URL is live.
+
+1. Re-verify the candidate directory, both asset sizes/SHA-256 and the manifest, and re-run
+   `powershell.exe -NoProfile -NonInteractive -File scripts/release/assemble-candidate.ps1
+   -VerifyOnly -CandidateDirectory runtime/release-candidates/1.5.0-win-x64-c42911920f7d-tree1f1b68fec135-100079356d73`
+   (expect `VERIFIED`). Do not rebuild, change the manifest or reuse a historical asset name.
+2. Collision-check tag `v1.5.0`, its Release, `MetaBrain-CLI-1.5.0.exe`,
+   `MetaBrain-MCP-1.5.0.zip`, `candidate-manifest.json`, `SHA256SUMS.txt` and `LICENSE`. Any
+   existing target stops the operation; never overwrite an old tag or asset and never force.
+3. Push the reviewed `main` (fast-forward from `origin/main` `bf6e8bc` through the reviewed Sprint 15
+   commits and the reviewed publication commit), create annotated tag `v1.5.0` on that reviewed
+   commit, create the GitHub Release, upload the exact candidate bytes under the public names (copy,
+   never rename the candidate files) and set the release body from `docs/release-notes-1.5.0.md`.
+4. In this record, change the status block to published, fill the public URL cells and the
+   publication date, and record the observed public smoke. In `README.md`, change the 1.5.0
+   prepared-candidate paragraph to published with the release link. In `CHANGELOG.md`, insert
+   `## [1.5.0] - <publication date>` under `[Unreleased]` and move only the 1.5.0 entries under it.
+5. Build the published site with
+   `powershell.exe -NoProfile -File scripts/site/build.ps1 -ReleaseDownloadBaseUrl https://github.com/triet4p/my-meta-brain/releases/download/v1.5.0`,
+   deploy the six site files to the `gh-pages` branch (Pages is legacy `gh-pages /`, HTTPS
+   enforced), and confirm Pages builds that commit.
+6. Public smoke: download both public assets and compare exact sizes and SHA-256 (independent
+   hashing plus GitHub asset digests), run the downloaded setup's `--version` without installing,
+   extract the downloaded MCP ZIP completely and run `mcp\MetaBrain.Mcp.exe --version`, confirm the
+   site pages return 200 with the 1.5.0 published framing, both 1.5.0 download actions, the
+   documented model/runtime prerequisites and the unchanged historical 1.0.0–1.4.0 links, and confirm
+   the MCP protocol/version behavior is unchanged on the public bytes. Record the observed results,
+   not a local candidate claim; the public proof is distinct from the local build evidence.
+
+## Record ownership
+
+This record, the candidate manifest and task evidence are the authority for candidate bytes and
+behavior. It is not an independent review, checkpoint record, publication execution or public
+proof. Evidence review, checkpoint ownership and Main's status remain separate records.

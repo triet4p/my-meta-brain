@@ -27,22 +27,29 @@ PowerShell. Both are unsigned: SHA-256 verifies the bytes and never authenticate
 Product-specific known limits are in the [1.2.0 release record](release-1.2.0.md).
 
 
-## Candidate product matrix for 1.5.0 (S15-T6; unreleased)
+## Product and support matrix for 1.5.0 (S15-T6)
 
-The 1.5.0 release remains unreleased; the latest published product is 1.4.0. This section is not a compatibility promise or download notice. Exact candidate assets and manifests are generated only in ignored local release staging and do not create public assets or distribution approval. The pinned source-built native payload and its source/lock/notice inputs are recorded in the [candidate release record](release-1.5.0.md); see the [candidate notes](release-notes-1.5.0.md) for owner requirements.
+The 1.5.0 candidate is assembled, independently reviewed and checkpoint-committed, and its
+publication delta is prepared; **the release remains unpublished** and the latest published product
+is 1.4.0. The planned public names below are the download-name mapping an owner-authorized
+publication would use; no 1.5.0 URL is live, and this section is not a compatibility promise or
+download notice. Exact candidate assets and manifests are generated only in ignored local release
+staging and do not create public assets or distribution approval. The pinned source-built native
+payload and its source/lock/notice inputs are recorded in the [release record](release-1.5.0.md); see
+the [candidate notes](release-notes-1.5.0.md) for owner requirements.
 
-| Product | Intended version / asset | Candidate scope |
+| Product | Version / asset (public name planned, not live) | Scope |
 | --- | --- | --- |
-| CLI | 1.5.0; local candidate filename is bound in its ignored manifest; no public filename is assigned | Dedicated Windows x64 setup for the owner CLI and shared runtime, self-contained for .NET. The dynamic tokenizer requires a separate owner-installed Microsoft Visual C++ v14 x64 Redistributable version 14.43.34808 or later. Setup checks it read-only and refuses before extraction/install when unavailable; the owner installs it directly from Microsoft. No model weights are bundled. |
-| MCP Server | 1.5.0; local candidate filename is bound in its ignored manifest; no public filename is assigned | Standalone MCP server ZIP and shared runtime, self-contained for .NET; requires the same owner-installed x64 v14 runtime. MCP startup checks it read-only and refuses before creating a data root when unavailable. The ZIP does not bundle, download, or install the runtime. It remains the scoped agent surface and does not expose owner workspace search. |
+| CLI | 1.5.0; planned public download `MetaBrain-CLI-1.5.0.exe`; candidate filename stays provenance-bound in the manifest | Dedicated Windows x64 setup for the owner CLI and shared runtime, self-contained for .NET. The dynamic tokenizer requires a separate owner-installed Microsoft Visual C++ v14 x64 Redistributable version 14.43.34808 or later. Setup checks it read-only and refuses before extraction/install when unavailable; the owner installs it directly from Microsoft. No model weights are bundled. Hybrid search additionally requires an owner-selected local model directory with the pinned E5 revision files. |
+| MCP Server | 1.5.0; planned public download `MetaBrain-MCP-1.5.0.zip`; candidate filename stays provenance-bound in the manifest | Standalone MCP server ZIP and shared runtime, self-contained for .NET; requires the same owner-installed x64 v14 runtime. MCP startup checks it read-only and refuses before creating a data root when unavailable. The ZIP does not bundle, download, or install the runtime. The 22-tool scoped agent surface is unchanged and does not expose owner workspace search. |
 | Document surface | No separate product asset | The existing optional document preview/edit surface remains part of the CLI/shared runtime; this task does not change its behavior. |
 | Owner UI | None | The 1.1.0 WPF Owner UI remains frozen; no 1.5.0 WPF build, installer or download is planned. |
 
-The intended support boundary remains 64-bit Windows releases supported for .NET 10 at publication time; the Microsoft v14 x64 prerequisite documentation lists Windows 10/11 and Server 2016/2019/2022/2025, but product-tested SKU coverage is not asserted. The source-built tokenizer DLL/archive/generated graph stay in ignored repository-local staging; the versioned Cargo lock, text provenance and complete notice source are identity-pinned. A3 native admission and the A7 source CLI/service smoke are worker evidence only, not package approval. Candidate assembly stopped because the local `System.Numerics.Tensors/10.0.14` package has no root license file; package/MCP/lifecycle proof and exact license closure remain open. The external v14 runtime remains an owner-installed prerequisite and is not part of either asset.
+The intended support boundary remains 64-bit Windows releases supported for .NET 10 at publication time; the Microsoft v14 x64 prerequisite documentation lists Windows 10/11 and Server 2016/2019/2022/2025, but product-tested SKU coverage is not asserted. The source-built tokenizer DLL/archive/generated graph stay in ignored repository-local staging; the versioned Cargo lock, text provenance and complete notice source are identity-pinned. Candidate assembly, member/hash verification, packaged MCP consumer proof and the isolated 1.4→1.5 upgrade/data-preservation proof were recorded in the reviewed S15-T6 evidence; that review PASS, the exact-snapshot checkpoint and the final differential are sprint gates, not publication authority or a legal conclusion about third-party terms. The external v14 runtime remains an owner-installed prerequisite and is not part of either asset.
 
 ## Product and support matrix for 1.4.0 (S14-T6)
 
-This is the current 1.4.0 product matrix. It is the supported-OS and product-scope statement that the
+This is the current published 1.4.0 product matrix. It is the supported-OS and product-scope statement that the
 packaged `RELEASE-NOTES.txt` in every 1.4.0 asset points at; the 1.3.0, 1.2.0, 1.1.0 and 1.0.0
 matrices remain their own historical contracts and are unchanged.
 

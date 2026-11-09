@@ -1,27 +1,97 @@
-# Meta Brain 1.5.0 — candidate notes (not a release)
+# Meta Brain 1.5.0
 
-**Status: unreleased candidate preparation only.** 1.5.0 has not been published or made available for download; the latest public release remains 1.4.0. Any locally generated candidate packages and manifests remain ignored build artifacts and are not installation instructions for the current 1.4.0 downloads.
+Windows x64, self-contained, **unsigned**. SHA-256 verifies downloaded bytes only; it does not
+authenticate the publisher.
 
-## Candidate scope
+**Status: release candidate, not published.** The 1.5.0 candidate is frozen, independently reviewed
+and checkpoint-committed; there is no public `v1.5.0` tag, Release, upload or deployment yet, and
+the latest public release remains 1.4.0. Publication is a separate owner-authorized step that follows
+the fresh review and checkpoint of the publication delta. Until then, download nothing from a URL
+that claims to be 1.5.0; the exact candidate identity, sizes, SHA-256 values and verification are in
+the [`1.5.0 release record`](release-1.5.0.md).
 
-The planned release keeps the two-product CLI + MCP shape. Hybrid workspace recall is an owner CLI feature; the MCP agent tool surface remains separate and does not expose owner workspace search. The frozen 1.1.0 WPF Owner UI is not part of this release. No standalone browser console or UI installer is planned.
+## Downloads
 
-The owner CLI's hybrid workspace path combines existing exact/lexical evidence with local semantic candidates from the authenticated encrypted workspace passage index. Results retain the exact file identity, content revision, byte range and digest. Folder, field, currentness and content-date filters apply before results and totals are disclosed. Output distinguishes `literal_match` from `semantic_candidate`; a semantic candidate is an unconfirmed neighbor, not supporting evidence or an answer. There is no approved similarity cutoff and no general natural-language no-answer guarantee. Action/effect associations do not establish causality, and an intention mention or acknowledgement does not establish completion.
+1.5.0 ships exactly two products. The public filenames below are the planned download-name mapping;
+no 1.5.0 URL is live. The frozen candidate filenames and the exact sizes and SHA-256 values are in
+the [release record](release-1.5.0.md).
 
-The existing lexical command remains a separate explicit path. `--hybrid true` does not silently fall back to literal-only output when its local model or authenticated generation is missing, invalid, stale or unavailable.
+- `MetaBrain-CLI-1.5.0.exe` — CLI setup. Installs `cli\MetaBrain.Cli.exe`, the shared runtime and the
+  shared installer, and registers the CLI component only. The owner CLI carries every cognitive
+  workflow plus the workspace, hybrid search and optional `open` document session. No new Owner UI
+  setup is shipped.
+- `MetaBrain-MCP-1.5.0.zip` — standalone MCP server package. Extract it completely and register the
+  absolute `mcp\MetaBrain.Mcp.exe` path. The scoped agent surface is unchanged at 22 tools and does
+  not expose owner workspace search.
+- There is **no** 1.5.0 Owner UI setup, `owner-ui` component or UI download, and no separate web
+  console.
 
-## Explicit local model selection
+The published 1.0.0–1.4.0 assets stay available and byte-unchanged. This release does not rebuild,
+rename or withdraw them, and it does not upgrade or replace the 1.1.0 WPF console.
 
-Hybrid indexing and search require the owner to explicitly select a local E5 model directory. The expected directory is the pinned model revision `614241f622f53c4eeff9890bdc4f31cfecc418b3`, ending in `model/`, with these verified runtime inputs:
+## What is new in 1.5.0
 
-| Relative file | Bytes | SHA-256 |
-|---|---:|---|
-| `onnx/model.onnx` | 470,268,510 | `ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665` |
-| `onnx/tokenizer.json` | 17,082,730 | `0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39` |
+- **Encrypted, structure-aware passage index.** `owner workspace-index-status`,
+  `workspace-index-rebuild` and `workspace-index-anchors` maintain one authenticated
+  AES-GCM-encrypted posting/semantic generation from the unlocked owner workspace. It indexes
+  Markdown headings and fenced code, CSV headers and complete quoted records, known/raw JSONL
+  records and plain text, and every anchor cites the exact file, content revision and byte-range
+  digest. A rebuild revalidates revisions and data formats and publishes atomically; a failed
+  rebuild preserves the prior generation.
+- **Scoped hybrid workspace search.** `owner workspace-search --hybrid true` runs one server-side
+  retrieval pass that keeps the existing exact/lexical/heading evidence and adds local semantic
+  candidates from the pinned model. Folder, field, currentness and content-date filters apply before
+  results and totals are disclosed. Every result is labelled `literal_match` or
+  `semantic_candidate`; a semantic candidate is an unconfirmed neighbour, **not an answer or
+  supporting evidence**. Literal evidence and exact symbols are not displaced by semantic similarity,
+  ties are deterministic, and duplicates are merged.
+- **Purpose-aware recall and regions.** `--purpose` accepts `auto`, `experience`, `temporal`,
+  `intention`, `action-effect` and `general`; it applies deterministic rule-first routing after the
+  owner's filters, joins cognitive annotations, lifecycle and recall state on exact revisions, and
+  returns region representatives, scoped counts and the reason each region was chosen. A region
+  summary never reveals files outside the owner's scope. Action/effect associations do not establish
+  causality, and intention mentions or acknowledgements do not establish completion.
+- **Search UX, background refresh and exact open.** Successful owner content mutations queue one
+  coalesced background passage refresh inside the unlocked epoch; vault lock cancels it, removes the
+  `.building` stage, clears the model selection and decoded cache, and publishes nothing partial.
+  `--open-rank N` opens a hit from the returned page at its exact file, content revision and byte
+  anchor in the existing document bridge; stale or incomplete locations refuse. The browser stays an
+  optional document-only preview/edit surface.
+- **Explicit local model, no implicit egress.** Hybrid indexing and search require the owner to
+  select a local E5 model directory; the product never downloads model weights, calls a cloud
+  embedding provider, persists the selected path or falls back silently to lexical-only output.
+- **Same two-product release contract.** One shared runtime and one version for the CLI, MCP server,
+  shared host and installer (1.5.0); candidate-bound manifests, per-file and embedded-payload SHA-256
+  values, dependency/license inventories, native tokenizer notices and truthful unsigned status.
 
-The model, tokenizer, SentencePiece file and four configuration assets in the approved local evaluation set occupy 492,421,754 bytes in total. That is a measured staged asset size, not an installed-product footprint. The product release does not bundle model weights. Obtaining or placing model assets is an owner-controlled action; Meta Brain does not download them, call a cloud embedding provider, persist the selected model path, or select a model implicitly.
+## Prerequisites and installation
 
-Example commands (replace the placeholders with the owner's actual pipe and local model directory):
+- **Windows x64** on the framework-supported boundary in the
+  [release contract](release-contract.md#product-and-support-matrix-for-150-s15-t6). The CLI setup
+  and MCP package are self-contained; they need no installed .NET runtime, SDK, repository or
+  PowerShell at runtime.
+- **Microsoft Visual C++ v14 x64 Redistributable, version 14.43.34808 or later**, installed by the
+  owner from Microsoft's
+  [latest supported downloads](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170).
+  Setup, direct install and MCP startup check it read-only and refuse before touching files or a data
+  root when it is missing or too old. Meta Brain does not bundle, download, chain or install it.
+  Windows 10+ includes the OS Universal CRT, which does not supply the required `VCRUNTIME140.dll`
+  and `VCRUNTIME140_1.dll` imports.
+- **Hybrid search only:** an owner-selected local model directory for the pinned E5 revision
+  `614241f622f53c4eeff9890bdc4f31cfecc418b3`. The expected directory ends in `model/` and contains
+  `onnx/model.onnx` (470,268,510 bytes; SHA-256
+  `ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665`) and `onnx/tokenizer.json`
+  (17,082,730 bytes; SHA-256
+  `0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39`). The seven approved
+  model/tokenizer/config assets occupy 492,421,754 bytes in the evaluation staging set; that is a
+  staged asset size, not an installed-product footprint. Lexical search, capture, workspace, the
+  cognitive workflows and the document session do not need a model.
+- Model files are not part of the release and are never fetched by Meta Brain. Missing or invalid
+  assets refuse with `workspace_index_model_missing` or `workspace_index_model_invalid`; the
+  model directory and decoded passage reuse are process-memory-only and are cleared on vault lock or
+  host exit.
+
+Example hybrid path (replace the placeholders with the actual pipe and model directory):
 
 ```powershell
 $cli = '<install-root>\cli\MetaBrain.Cli.exe'
@@ -31,27 +101,92 @@ $model = '<owner-selected-pinned-E5-model-directory>'
 & $cli owner workspace-search --control-pipe '<control-pipe>' --query 'your query' --hybrid true --model-directory $model --format json
 ```
 
-`workspace-index-rebuild` explicitly creates a current encrypted passage generation. Hybrid search and rebuild fail closed for absent model assets with `workspace_index_model_missing`, and for incomplete, mismatched or unusable assets with `workspace_index_model_invalid`; they do not return a lexical-only substitute. The model directory and decoded passage reuse are process-memory-only for the unlocked epoch and are cleared on vault lock or host exit. Background refresh is limited to successful owner workspace mutations and an already explicitly supplied in-memory model path; it does not enroll or scan external folders.
+## Compatibility and upgrade
 
-## Evidence and measured limits
+- The isolated 1.4.0 → 1.5.0 verification required no migration: every pre-upgrade canonical vault
+  file, `service-settings.json` and pipe endpoint stayed byte-identical, and only the data-root
+  ownership marker changed. The passage/vector generation is additional encrypted state under the
+  existing vault; an upgraded 1.5 instance reports it as `not_materialized` until the owner explicitly
+  rebuilds it, and no model is selected automatically.
+- **Upgrade in place from 1.2.0, 1.3.0 or 1.4.0 is supported.** The 1.5.0 CLI setup drains/stops the
+  shared host, replaces the application files, keeps the selected data root, vault, settings and pipe
+  endpoints, and changes no owner data. The isolated 1.4.0 → 1.5.0 verification changed only the
+  data-root ownership marker and kept every pre-upgrade canonical vault file byte-identical.
+  Re-running the setup is the ordinary reinstall path.
+- **Pre-1.2 installations are refused in place.** A 1.1.0 WPF installation, an unknown/mixed
+  component registration, a data root owned by another installation or a live endpoint speaking
+  another protocol revision is refused before the host is stopped or any file changes. Install this
+  release beside it with separate install/data roots and distinct endpoints; the old installation and
+  its data are untouched.
+- **Uninstall keeps the data root.** Removing the CLI (or the final component) removes application
+  files only; the data root, vault, backups and recovery material remain. Reinstalling and
+  reselecting the same data root opens the same data with the owner's credential.
+- **Rollback.** To return to 1.4.0, stop the 1.5 host, take an encrypted `owner backup`, and run the
+  published 1.4.0 CLI setup as an upgrade over the same install root; the data root is preserved. A
+  1.4 build does not provide hybrid search, so take and verify the backup before downgrading. The
+  1.4.0 record remains the authority for 1.4 behavior.
 
-The 35-query held-out hybrid scenario exercised the actual owner CLI and service over synthetic source files. The accepted S15-T3 result returned all 27 labeled expected-evidence cases (13 literal-baseline and 14 paraphrase/near-miss cases); two expected paraphrase cases ranked second and the remaining labeled cases ranked first. Four frozen exact/no-evidence negatives and four folder-scope negatives returned no results. Unrelated natural-language queries did produce explicitly labeled semantic candidates, so this does not establish general prose abstention. See [S15-T3 evidence](../artifacts/sprint-15/task-3.md).
+## Security and attribution boundaries
 
-The approved standalone S15-T1 model screen used pre-tokenized Hugging Face IDs, not the product CLI/service. It observed 25/27 expected sources at rank 5, 492,421,754 bytes across seven pinned model/tokenizer/config files, a 559.1953 MiB process-private boundary delta, and 17.8471 ms warm in-process p95 after 10 warmups and 100 searches. Those results met the approved T1 screen on that evaluator only; they are not CLI/service latency or memory limits. See [S15-T1 evidence](../artifacts/sprint-15/task-1.md).
+- Workspace content, the passage/vector generation and annotations are encrypted with the vault data
+  key. Every read, rebuild and search goes through the owner control pipe under the unlocked vault;
+  a locked service refuses private reads, cancels background work and clears decoded caches.
+- Scope is applied before disclosure: folder, field, currentness and content-date filters bound the
+  result set and totals, and a region summary never reveals an out-of-scope file.
+- Hybrid output is locally computed relevance, not verified fact. There is no approved similarity
+  cutoff, no general natural-language abstention guarantee and no automatic truth promotion. Exact
+  symbols, currentness and source anchors remain separate correctness requirements.
+- The product makes no model or provider download and no cloud embedding call. A separately
+  consented provider/model job remains governed by the existing job consent and budget and is not
+  part of this release's local verification.
+- The MCP agent surface is unchanged at 22 tools with no owner-authority tool; cognitive records,
+  the passage index and the document bridge are not agent tools.
+- The optional browser session remains document-only: the browser receives no vault key, filesystem
+  handle, private path or owner search API, and the product writes no plaintext HTML, draft or temp
+  file.
 
-The accepted S15-T5 integrated observation used 112 synthetic files and 35 frozen queries. After 10 warmups and 100 fresh CLI-to-service searches, nearest-rank p50/p95 were 291.65/379.81 ms; the first query after a locked restart took 2,365.89 ms including model reload. Service private bytes were 810,008,576 before and 826,810,368 at the maximum sampled query boundary; working set was 851,689,472 before and 863,821,824 at the maximum sample. These are host- and fixture-specific observations, not an approved integrated SLA or candidate-package proof. See [S15-T5 evidence](../artifacts/sprint-15/task-5.md).
+## Signing and licensing
 
-- **S15-T6 A7 selected-payload source CLI/service smoke:** rebuilt the Debug smoke project with no restore (0 warnings/errors), then ran the actual `s15-t3` scenario against the Debug CLI and shared host with the pinned dynamic tokenizer. All 35 frozen queries passed, including 27/27 labeled evidence, four exact/no-evidence and four folder-scope negatives, missing/invalid-model refusal, no silent fallback, and filter/anchor/dedup/tie/lock/cancellation/stale-generation checks. First post-locked-restart query was 6,438.13 ms; after 10 warmups and 100 timed searches, p50/p95 were 519.10/837.26 ms. Private bytes were 842,612,736 before and 844,554,240 maximum; working set was 873,529,344 before and 876,802,048 maximum; lifetime peak working set was 1,254,805,504. This is one synthetic source-runtime observation, not an SLA, package proof or independent review; see [S15-T6 worker evidence](../artifacts/sprint-15/task-6.md).
+- Both assets are **unsigned**. SHA-256 is an integrity check only; it does not authenticate the
+  publisher. Never disable SmartScreen, Defender or a security policy to install.
+- Project license: MIT, `Copyright (c) 2026 triet4p`. Each asset carries the project `LICENSE`,
+  per-dependency license texts and third-party notices. The self-contained runtime includes
+  `Microsoft.NETCore.App.Runtime.win-x64 10.0.14` (MIT), `Microsoft.ML.OnnxRuntime` and
+  `Microsoft.ML.OnnxRuntime.Managed` 1.31.1, `Tokenizers.DotNet` 1.4.1 and
+  `System.Numerics.Tensors` 10.0.14. The selected native tokenizer DLL ships with the complete mapped
+  notices for its 86-package Cargo graph. The Microsoft Visual C++ runtime is not included and is not
+  covered by those notices; its owner installation is separate. Nothing here is a legal conclusion.
 
-Hybrid search returns locally computed relevance candidates, not verified facts. It applies no raw cosine threshold. Exact symbols, currentness and source anchors remain separate correctness requirements; the synthetic results do not establish quality on owner data, large workspaces or every query family. The browser remains an optional document-only preview/edit surface and is not required for search.
+## Known limits
 
-
-## Native runtime prerequisite
-
-The selected dynamic native tokenizer imports `VCRUNTIME140.dll` and `VCRUNTIME140_1.dll` and requires an owner-installed Microsoft Visual C++ v14 x64 Redistributable version 14.43.34808 or later. CLI setup, direct install and MCP startup read only the installed x64 version and refuse before payload extraction, application/data-root changes or service changes if it is missing, unreadable, malformed or too old. Meta Brain does not fetch, bundle or install the prerequisite; the owner uses [Microsoft's latest supported downloads](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170). Windows 10+ includes the OS Universal CRT, but that does not supply these VCRUNTIME imports.
+- Windows x64 only on the framework-supported boundary in the
+  [release contract](release-contract.md#product-and-support-matrix-for-150-s15-t6); not every listed
+  Windows SKU was exercised.
+- Hybrid search quality is established only on the frozen synthetic evaluation and held-out query
+  sets. It does not establish quality on owner data, large workspaces or every query family, and a
+  semantic candidate is not evidence.
+- Integrated latency and memory figures from the task evidence are host- and fixture-specific
+  observations, not approved SLAs. The first query after a locked restart reloads the model.
+- The interactive setup-GUI refusal on a machine without the VC++ runtime was verified at
+  code-path/registry level, not as a full clean-machine installation.
+- The optional `open` document session needs an installed Chromium-based browser and is not a search
+  console. Browser-managed memory, extensions and OS swap cannot be erased by the product.
+- A workspace act carries at most 1 MiB of original bytes; larger files are refused rather than
+  truncated. Source-session JSONL records remain read-only and are never served.
+- The exact candidate identity, asset sizes, SHA-256 values, provenance, dependency/license
+  inventories and the verification actually performed are in the
+  [1.5.0 release record](release-1.5.0.md).
 
 ## Distribution status
 
-The 1.5.0 candidate remains unreleased. Local candidate setup/MCP assets, when assembled, and their candidate/package manifests are written only under ignored `runtime/release-candidates/`; their generated manifests and the task evidence are the source for exact filenames, sizes and hashes. The old selected DLL (`a7ca979443378649ad2e18ab923f684390c2f57ff16f611f8671268e4da5986b`) is not used. The selected dynamic payload remains at `runtime/s15-t6-native-build/target/x86_64-pc-windows-msvc/release/hf_tokenizers.dll` (3,198,464 bytes; SHA-256 `4595800ae02f9c7c96d583347e6cf1e2ddd17c26348ac8169c8314ca28b7480d`), outside versioned product source. The versioned Cargo lock, build provenance, and complete native notice text remain under `src/MetaBrain.Connections/native/`.
-
-This payload imports the Microsoft x64 v14 runtime, which the packages do not include. The runtime prerequisite is a separate owner install from Microsoft; its setup terms and the app's direct-link/manual-install path are not a legal determination. The native source/notices, Microsoft runtime prerequisite, and final candidate/package review remain distinct gates. The notes are unreleased and the 1.4.0 public downloads and website stay unchanged.
+The 1.5.0 candidate remains unreleased. Local candidate setup/MCP assets and their manifests are
+written only under ignored `runtime/release-candidates/`; the generated manifest and the task evidence
+are the source for exact filenames, sizes and hashes. The old selected native DLL
+(`a7ca979443378649ad2e18ab923f684390c2f57ff16f611f8671268e4da5986b`) is not used. The selected
+dynamic payload remains in ignored staging at
+`runtime/s15-t6-native-build/target/x86_64-pc-windows-msvc/release/hf_tokenizers.dll` (3,198,464
+bytes; SHA-256 `4595800ae02f9c7c96d583347e6cf1e2ddd17c26348ac8169c8314ca28b7480d`), outside versioned
+product source. The versioned Cargo lock, build provenance and complete native notice text remain
+under `src/MetaBrain.Connections/native/`. The native notices, the Microsoft runtime prerequisite and
+the candidate/package review are distinct gates; the notes stay unreleased and the 1.4.0 public
+downloads and website remain the live ones until publication is executed and smoke-verified.
