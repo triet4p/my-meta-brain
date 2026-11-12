@@ -6,16 +6,16 @@ namespace MetaBrain.Connections;
 
 /// <summary>
 /// Minimal stdio MCP bridge over the agent named pipe (S4-T1 transport and
-/// capability dispatch). Exposes only the agent-channel surface (catalog
-/// discovery, access requests/status, token redemption via explicit handoff
-/// path, session inspect, scoped reads); it never touches the vault, keys,
-/// owner operations, or token minting. Capability negotiation honors the
-/// client's requested protocol version instead of forcing one revision; the
-/// initialize reply echoes a supported version the client offered. Key/token
-/// material never enters MCP arguments, logs, or model context: the redeem
-/// tool takes only DPAPI handoff/session file paths and lets the existing
-/// owner CLI resolve them locally. Approved scoped-read bodies stream in
-/// memory through the MCP tool result; the bridge creates no output files.
+/// capability dispatch). It exposes only agent-channel tools: catalog/access
+/// requests, handoff-based redemption, session inspection, scoped reads and
+/// exact-scope relation proposals/actions. Relation calls stay agent proposals;
+/// it cannot perform owner acceptance or share workspace endpoints. Reads and writes
+/// delegate to the existing CLI/shared service rather than a second vault, key
+/// or token-store implementation. Capability negotiation honors the client's
+/// offered protocol version. Key/token material never enters MCP arguments,
+/// logs or model context; redemption takes only local DPAPI handoff paths.
+/// Approved read bodies stream in memory through MCP results; no output files
+/// are created by the bridge.
 /// </summary>
 internal static class McpAgentBridge
 {

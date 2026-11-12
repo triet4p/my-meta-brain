@@ -170,7 +170,7 @@ internal sealed class EncryptedWorkspaceStore
     // the store refuses a larger original with a real code instead of the
     // transport cutting the line. A bigger format needs a separately approved
     // chunking specification, not an invented one here.
-    internal const int MaximumContentBytes = 1024 * 1024;
+    internal const int MaximumContentBytes = WorkspaceContentRevisionInfo.MaximumContentBytes;
 
     private const int CurrentEnvelopeVersion = 1;
     private const int MaximumStateBytes = 64 * 1024 * 1024;
@@ -1245,10 +1245,10 @@ internal sealed class EncryptedWorkspaceStore
     /// export formats, the selected node, every in-scope node with its identity,
     /// exact name, parent, hierarchy path and retained revisions, and the
     /// anchors of those files. Nodes and anchors outside the scope are absent,
-    /// never summarised. Relations are reported as unsupported rather than
-    /// invented, because workspace relations are not implemented. The document
-    /// is streamed with its digest computed on the same write, so no second copy
-    /// of it is held.
+    /// never summarised. This export selects workspace content, not relation
+    /// records, because it has no relation selector. Omitted edges do not create
+    /// relation-derived endpoint IDs, names or stubs. The document is streamed
+    /// with its digest computed on the same write, so no second copy is held.
     /// </summary>
     private static string WriteExportSidecar(
         WorkspaceStateRecord state,
@@ -1330,11 +1330,12 @@ internal sealed class EncryptedWorkspaceStore
             writer.WriteEndArray();
             writer.WriteString(
                 "relationSupport",
-                "Workspace relations are not implemented in this export format version, so the relations array is empty rather than inferred.");
+                "Workspace export selects file/folder content, not relation records; no edge, history or relation stub is emitted. Omitted edges disclose no endpoint identifiers or names beyond those already present for selected content. Encrypted backup preserves the canonical edge history.");
             writer.WriteStartArray("notes");
             writer.WriteStringValue("Only the selected node and the live nodes beneath it are included; every other node, the selected node's parent identity, titles, grants and private index stay in the vault.");
             writer.WriteStringValue("Each file is written from the retained revision this document names, which is the revision the owner previewed; a later revision is not substituted.");
             writer.WriteStringValue("Tombstones beneath the selected folder are not part of the live tree and are not exported; their count is reported in the preview.");
+            writer.WriteStringValue("Relation records are deliberately omitted from this workspace-only selection; omitted edges disclose no out-of-scope endpoint identifiers or names.");
             writer.WriteEndArray();
             writer.WriteEndObject();
             writer.Flush();

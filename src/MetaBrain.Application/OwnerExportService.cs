@@ -22,16 +22,18 @@ public sealed record OwnerExportDocument(
 /// S8-T2 the owner-selected plaintext export.
 /// <para>
 /// An export is a disclosure, so it is never implicit and never a dump. The
-/// owner names the records that leave the vault; the export writes exactly
-/// those records, the relations that connect them, and the lifecycle state
-/// the owner asked for. Everything else stays in the vault.
+/// owner selects managed vault ResourceIds; workspace tree selectors belong
+/// to a separate export surface. The export writes those selected records and
+/// lifecycle state, and includes a managed edge only when both readable endpoints
+/// and its required evidence revision are in the selected scope.
 /// </para>
 /// <para>
 /// A citation is private provenance. It is written only when the source it
-/// names is itself one of the selected records; a citation to a source
-/// outside the scope is withheld whole, because naming the source, its
-/// locator or its span would disclose the out-of-scope record it points at.
-/// The same rule holds for a relation endpoint outside the scope.
+/// names is itself one of the selected records; a citation to an outside source
+/// is withheld whole. Relation edges follow the same scope rule: without both
+/// readable endpoints and required evidence in selected revisions, an edge is
+/// withheld whole and only the omission count is reported, with no excluded
+/// endpoint ID, name, or stub.
 /// </para>
 /// <para>
 /// The export is a copy outside the vault. Deleting the file, purging the
@@ -69,6 +71,19 @@ public sealed class OwnerExportService
         }
 
         var selectedSet = new HashSet<string>(selected, StringComparer.Ordinal);
+        var exportedRevisions = scope.IncludeRelations
+            ? new Dictionary<string, long>(StringComparer.Ordinal)
+            : null;
+        if (exportedRevisions is not null)
+        {
+            foreach (var resource in store.ListResources())
+            {
+                if (selectedSet.Contains(resource.ResourceId))
+                {
+                    exportedRevisions[resource.ResourceId] = resource.Revision;
+                }
+            }
+        }
         var builder = new StringBuilder();
         var recordCount = 0;
         var relationCount = 0;
@@ -78,9 +93,18 @@ public sealed class OwnerExportService
 
         foreach (var resourceId in selected)
         {
-            var section = RenderRecord(context, store, resourceId, selectedSet, scope, ref withheldCitations, ref withheldRecords);
+            var section = exportedRevisions is null
+                ? RenderRecord(
+                    context, store, resourceId, null, selectedSet, scope, exportedRevisions,
+                    ref withheldCitations, ref withheldRecords)
+                : exportedRevisions.TryGetValue(resourceId, out var expectedRevision)
+                    ? RenderRecord(
+                        context, store, resourceId, expectedRevision, selectedSet, scope, exportedRevisions,
+                        ref withheldCitations, ref withheldRecords)
+                    : null;
             if (section is null)
             {
+                exportedRevisions?.Remove(resourceId);
                 withheldRecords++;
                 builder.Append("## ").Append(resourceId).AppendLine(" — not exported");
                 builder.AppendLine();
@@ -95,8 +119,9 @@ public sealed class OwnerExportService
 
         if (scope.IncludeRelations)
         {
+            var revisionScope = exportedRevisions!;
             var relations = new StringBuilder();
-            foreach (var result in new RelationService().List(context, store, _ => true))
+            foreach (var result in new RelationService().List(context, store, _ => true, workspace: store))
             {
                 var relation = result.Relation;
                 if (relation is null)
@@ -104,17 +129,20 @@ public sealed class OwnerExportService
                     continue;
                 }
 
-                var fromInScope = selectedSet.Contains(relation.From.ResourceId);
-                var toInScope = selectedSet.Contains(relation.To.ResourceId);
+                var fromSelected = selectedSet.Contains(relation.From.ResourceId);
+                var toSelected = selectedSet.Contains(relation.To.ResourceId);
                 var selectedItself = selectedSet.Contains(relation.Id);
-                if (!selectedItself && !(fromInScope && toInScope))
+                if (!selectedItself && !fromSelected && !toSelected)
                 {
                     continue;
                 }
 
-                if (!fromInScope || !toInScope)
+                var fromInScope = revisionScope.ContainsKey(relation.From.ResourceId);
+                var toInScope = revisionScope.ContainsKey(relation.To.ResourceId);
+                if (!fromInScope || !toInScope || !RequiredEvidenceIsSelected(relation, revisionScope))
                 {
                     withheldRelations++;
+                    continue;
                 }
 
                 relationCount++;
@@ -122,9 +150,28 @@ public sealed class OwnerExportService
                 relations.Append("- Revision: ").Append(relation.Revision.ToString(CultureInfo.InvariantCulture)).AppendLine();
                 relations.Append("- Kind: ").Append(relation.Kind.ToString()).AppendLine();
                 relations.Append("- State: ").Append(relation.State.ToString()).AppendLine();
-                relations.Append("- From: ").Append(EndpointText(relation.From, fromInScope)).AppendLine();
-                relations.Append("- To: ").Append(EndpointText(relation.To, toInScope)).AppendLine();
-                relations.Append("- Reason: ").AppendLine(relation.Reason ?? "(none)");
+                relations.Append("- Origin: ").Append(relation.Origin.ToString()).AppendLine();
+                relations.Append("- Executor: ").Append(relation.Executor.ToString()).AppendLine();
+                relations.Append("- Creation method: ").Append(relation.CreationMethod.ToString()).AppendLine();
+                relations.Append("- From: ").Append(EndpointText(relation.From)).AppendLine();
+                relations.Append("- To: ").Append(EndpointText(relation.To)).AppendLine();
+                relations.Append("- Reason: ").AppendLine(relation.Reason);
+                relations.Append("- State reason: ").AppendLine(relation.StateReason ?? "(none)");
+                if (relation.History is { Length: > 0 } history)
+                {
+                    relations.AppendLine("History:");
+                    foreach (var act in history)
+                    {
+                        relations.Append("- ").Append(act.Action.ToString())
+                            .Append(" state=").Append(act.State.ToString())
+                            .Append(" actor=").Append(act.Actor.ToString())
+                            .Append(" method=").Append(act.Method.ToString())
+                            .Append(" expectedRevision=").Append(act.ExpectedRelationRevision.ToString(CultureInfo.InvariantCulture))
+                            .Append(" recordedAtUtc=").Append(act.RecordedAtUtc.ToString("O", CultureInfo.InvariantCulture))
+                            .Append(" reason=").AppendLine(act.Reason);
+                    }
+                }
+
                 relations.AppendLine();
             }
 
@@ -189,7 +236,7 @@ public sealed class OwnerExportService
         header.Append("- Withheld citations: ").Append(withheldCitations.ToString(CultureInfo.InvariantCulture))
             .AppendLine(" (a citation to a source outside the selected scope; the source, its locator and its span stay in the vault)");
         header.Append("- Withheld relations: ").Append(withheldRelations.ToString(CultureInfo.InvariantCulture))
-            .AppendLine(" (a relation with an endpoint outside the selected scope; the endpoint stays in the vault)");
+            .AppendLine(" (an edge whose endpoints or required evidence are outside the selected revisions; no omitted endpoint IDs or names are exported)");
         header.Append("- Withheld records: ").Append(withheldRecords.ToString(CultureInfo.InvariantCulture))
             .AppendLine(" (a selected record that has no readable export form)");
         header.Append("- Disclosure: every selected record is written in full and in plaintext, exactly as the vault stores it.").AppendLine();
@@ -210,15 +257,17 @@ public sealed class OwnerExportService
         AuthenticatedContext context,
         IVaultOperation store,
         string resourceId,
+        long? expectedRevision,
         IReadOnlySet<string> selectedSet,
         OwnerExportScope scope,
+        IReadOnlyDictionary<string, long>? exportedRevisions,
         ref int withheldCitations,
         ref int withheldRecords)
     {
         byte[]? raw = null;
         try
         {
-            raw = store.ReadContent(resourceId, null);
+            raw = store.ReadContent(resourceId, expectedRevision);
         }
         catch (Exception ex) when (ex is IOException or ArgumentException or UnauthorizedAccessException)
         {
@@ -325,13 +374,38 @@ public sealed class OwnerExportService
                     return null;
                 }
 
+                if (exportedRevisions is null ||
+                    !exportedRevisions.ContainsKey(relation.From.ResourceId) ||
+                    !exportedRevisions.ContainsKey(relation.To.ResourceId) ||
+                    !RequiredEvidenceIsSelected(relation, exportedRevisions))
+                {
+                    return null;
+                }
+
                 builder.Append("- Record: relation").AppendLine();
                 builder.Append("- Zone: ").Append(relation.ZoneId).AppendLine();
                 builder.Append("- Kind: ").Append(relation.Kind.ToString()).AppendLine();
                 builder.Append("- State: ").Append(relation.State.ToString()).AppendLine();
-                builder.Append("- From: ").Append(EndpointText(relation.From, selectedSet.Contains(relation.From.ResourceId))).AppendLine();
-                builder.Append("- To: ").Append(EndpointText(relation.To, selectedSet.Contains(relation.To.ResourceId))).AppendLine();
-                builder.Append("- Reason: ").AppendLine(relation.Reason ?? "(none)");
+                builder.Append("- Origin: ").Append(relation.Origin.ToString()).AppendLine();
+                builder.Append("- Executor: ").Append(relation.Executor.ToString()).AppendLine();
+                builder.Append("- Creation method: ").Append(relation.CreationMethod.ToString()).AppendLine();
+                builder.Append("- From: ").Append(EndpointText(relation.From)).AppendLine();
+                builder.Append("- To: ").Append(EndpointText(relation.To)).AppendLine();
+                builder.Append("- Reason: ").AppendLine(relation.Reason);
+                builder.Append("- State reason: ").AppendLine(relation.StateReason ?? "(none)");
+                if (relation.History is { Length: > 0 } history)
+                {
+                    foreach (var act in history)
+                    {
+                        builder.Append("- History: ").Append(act.Action.ToString())
+                            .Append(" state=").Append(act.State.ToString())
+                            .Append(" actor=").Append(act.Actor.ToString())
+                            .Append(" method=").Append(act.Method.ToString())
+                            .Append(" expectedRevision=").Append(act.ExpectedRelationRevision.ToString(CultureInfo.InvariantCulture))
+                            .Append(" recordedAtUtc=").Append(act.RecordedAtUtc.ToString("O", CultureInfo.InvariantCulture))
+                            .Append(" reason=").AppendLine(act.Reason);
+                    }
+                }
                 builder.AppendLine();
                 return builder.ToString();
             }
@@ -457,10 +531,59 @@ public sealed class OwnerExportService
         }
     }
 
-    private static string EndpointText(RelationEndpoint endpoint, bool inScope) =>
-        inScope
-            ? $"{endpoint.ResourceId}@{endpoint.Revision} ({endpoint.EndpointKind})"
-            : "(withheld: outside the selected scope)";
+    private static bool RequiredEvidenceIsSelected(
+        Relation relation,
+        IReadOnlyDictionary<string, long> exportedRevisions) =>
+        RequiredEvidenceIsSelected(relation.Kind, relation.From, relation.To, exportedRevisions);
+
+    private static bool RequiredEvidenceIsSelected(
+        StoredRelation relation,
+        IReadOnlyDictionary<string, long> exportedRevisions) =>
+        RequiredEvidenceIsSelected(relation.Kind, relation.From, relation.To, exportedRevisions);
+
+    private static bool RequiredEvidenceIsSelected(
+        RelationKind kind,
+        RelationEndpoint from,
+        RelationEndpoint to,
+        IReadOnlyDictionary<string, long> exportedRevisions)
+    {
+        var evidenceSide = RelationSemantics.EvidenceSide(kind);
+        if (evidenceSide == RelationEvidenceSide.None)
+        {
+            return true;
+        }
+
+        var endpoint = evidenceSide == RelationEvidenceSide.From ? from : to;
+        return exportedRevisions.TryGetValue(endpoint.ResourceId, out var revision) &&
+            revision == endpoint.Revision;
+    }
+
+    private static string EndpointText(RelationEndpoint endpoint)
+    {
+        var text = new StringBuilder()
+            .Append(endpoint.ResourceId)
+            .Append('@')
+            .Append(endpoint.Revision.ToString(CultureInfo.InvariantCulture))
+            .Append(" (")
+            .Append(endpoint.EndpointKind.ToString());
+        if (endpoint.Span is { } span)
+        {
+            text.Append(" offset=").Append(span.Start.ToString(CultureInfo.InvariantCulture))
+                .Append(" length=").Append((span.End - span.Start).ToString(CultureInfo.InvariantCulture));
+        }
+
+        if (endpoint.WorkspacePin?.Sha256 is { } sha256)
+        {
+            text.Append(" sha256=").Append(sha256);
+        }
+
+        if (endpoint.WorkspacePin?.TreeRevision is { } treeRevision)
+        {
+            text.Append(" treeRevision=").Append(treeRevision.ToString(CultureInfo.InvariantCulture));
+        }
+
+        return text.Append(')').ToString();
+    }
 
     /// <summary>
     /// Wraps the owner's own text in a fence that is longer than any run of

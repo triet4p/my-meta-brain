@@ -927,3 +927,18 @@ the assignment can fail before the sentinel check or any child starts.
 **Fix / workaround:** Restore the `protocolVersion` entry from `NegotiateProtocolVersion(rawParams)` in the `initialize` result and exercise the existing `s4-t1` smoke scenario (current, legacy, unknown offer and notification silence) before packaging.
 
 **Watch out for:** `initialize` results must carry `protocolVersion`, `capabilities` and `serverInfo` together; an unused negotiation helper is a signal that the field was dropped rather than a harmless leftover.
+
+## [2026-11-12] A stale workspace edge poisoned fresh relations sharing a stable endpoint
+
+**Symptom:** After revising one workspace file, a newly created relation pinned to both current revisions was read as needing review even though neither of its pins had advanced since creation.
+**Root cause:** Review evaluation used stable file identities for both direct content staleness and transitive dependent propagation, so an older stale edge's affected identity made every new edge on that file appear stale.
+**Fix / workaround:** Compare each target workspace file/passage pin directly with the current tree when reporting direct stale endpoints; apply propagated review only to the target's evidence endpoint when its own reason includes `DependencyNeedsReview`.
+**Watch out for:** File identity intentionally survives revisions. Do not use stable endpoint identity alone to conclude that a new revision-pinned relation is stale; keep direct pin-change and transitive dependency state distinct.
+
+## [2026-11-12] dotnet restore targeted an inaccessible user package cache
+
+**Symptom:** `dotnet run` failed during restore with access denied for `C:\\Users\\admin\\.nuget\\packages`, while the repository's prior assets and package cache were under `runtime/dotnet-home/.nuget/packages`.
+**Root cause:** The command triggered a fresh restore using the default global package path instead of the existing project-local cache.
+**Fix / workaround:** Build the targeted smoke project with `--no-restore` using its existing assets, then invoke its DLL with `dotnet exec`.
+**Watch out for:** In this environment, avoid a fresh default restore when the user package directory is inaccessible; use an existing local restore state without changing host permissions or profile settings.
+

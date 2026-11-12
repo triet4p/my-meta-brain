@@ -643,7 +643,8 @@ public sealed record RelationEndpointWire(
     string ResourceId,
     string EndpointKind,
     long Revision,
-    Core.Domain.SourceSpan? Span);
+    Core.Domain.SourceSpan? Span,
+    Core.Domain.WorkspaceRelationPin? WorkspacePin = null);
 
 public sealed record RelationReviewWire(
     string State,
@@ -654,6 +655,15 @@ public sealed record RelationRequestEvidenceWire(
     string Text,
     string Executor,
     DateTimeOffset RecordedAtUtc);
+
+public sealed record RelationHistoryActWire(
+    string Action,
+    string State,
+    string Actor,
+    string Method,
+    string Reason,
+    DateTimeOffset RecordedAtUtc,
+    long ExpectedRelationRevision);
 
 public sealed record RelationEndpointCandidateWire(
     string ResourceId,
@@ -680,7 +690,9 @@ public sealed record RelationWire(
     string StateExecutor,
     DateTimeOffset StateRecordedAtUtc,
     RelationReviewWire Review,
-    RelationRequestEvidenceWire[]? RequestEvidence = null);
+    RelationRequestEvidenceWire[]? RequestEvidence = null,
+    string Origin = "legacy",
+    RelationHistoryActWire[]? History = null);
 
 public sealed record LifecycleStampWire(
     string Precision,
@@ -3904,7 +3916,7 @@ public sealed class ServiceRequestHandler
         {
             return Error("invalid_request");
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or WorkspaceRefusalException)
         {
             return Error("export_failed");
         }
@@ -6224,12 +6236,12 @@ public sealed class ServiceRequestHandler
         contentBase64);
 
     /// <summary>
-    /// S2-T4 owner relation store: create-only over the shared encrypted
-    /// canonical store. Both endpoints must exist at the live revision the link
-    /// pins and must decode as the declared kind (memory item or registered
-    /// source); derivation cycles are refused with their own code so an owner
-    /// caller can say which rule rejected the link. A duplicate create fails
-    /// closed through the vault revision gate.
+    /// S2-T4/S16-T2 owner relation store: create-only over the shared encrypted
+    /// canonical family. Managed endpoints pin live registered records;
+    /// workspace file/folder/passage endpoints are owner-only and validate
+    /// against one authenticated tree snapshot and exact retained bytes. New
+    /// workspace edges keep explicit origin and attributed history; derivation
+    /// cycles are refused, and duplicate creates fail closed at the revision gate.
     /// </summary>
     private ServiceReply HandleRelationCreate(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
     {
@@ -6246,9 +6258,18 @@ public sealed class ServiceRequestHandler
         {
             RequireNotPurged(operation, request.ResourceId);
             draft = Convert.FromBase64String(request.ContentBase64);
-            var created = new RelationService().Create(context, request.ResourceId, request.ZoneId, draft, operation);
+            var created = new RelationService().Create(
+                context, request.ResourceId, request.ZoneId, draft, operation, workspace: operation);
             return new ServiceReply(CurrentProtocolVersion, "relation_created", "owner", null,
                 ResourceRevision: created.Relation.Revision, Relation: ToRelationWire(created.Relation, created.Review, includeRequestEvidence: true));
+        }
+        catch (RelationNeedsReviewException)
+        {
+            return Error("relation_needs_review");
+        }
+        catch (WorkspaceRefusalException refusal)
+        {
+            return WorkspaceRefusal(refusal.Code);
         }
         catch (FormatException)
         {
@@ -6302,12 +6323,12 @@ public sealed class ServiceRequestHandler
             draft = request.ContentBase64 is null ? null : Convert.FromBase64String(request.ContentBase64);
             var service = new RelationService();
             var result = string.Equals(transitionOperation, RelationAcceptOperation, StringComparison.Ordinal)
-                ? service.Accept(context, request.ResourceId, expectedRevision, draft, operation)
+                ? service.Accept(context, request.ResourceId, expectedRevision, draft, operation, workspace: operation)
                 : string.Equals(transitionOperation, RelationRejectOperation, StringComparison.Ordinal)
-                    ? service.Reject(context, request.ResourceId, expectedRevision, draft, operation)
+                    ? service.Reject(context, request.ResourceId, expectedRevision, draft, operation, workspace: operation)
                     : string.Equals(transitionOperation, RelationUnlinkOperation, StringComparison.Ordinal)
-                        ? service.Unlink(context, request.ResourceId, expectedRevision, draft, operation)
-                        : service.Relink(context, request.ResourceId, expectedRevision, draft, operation);
+                        ? service.Unlink(context, request.ResourceId, expectedRevision, draft, operation, workspace: operation)
+                        : service.Relink(context, request.ResourceId, expectedRevision, draft, operation, workspace: operation);
             var status = string.Equals(transitionOperation, RelationAcceptOperation, StringComparison.Ordinal)
                 ? "relation_accepted"
                 : string.Equals(transitionOperation, RelationRejectOperation, StringComparison.Ordinal)
@@ -6318,6 +6339,10 @@ public sealed class ServiceRequestHandler
             return new ServiceReply(CurrentProtocolVersion, status, "owner", null,
                 ResourceRevision: result.Relation.Revision, Relation: ToRelationWire(result.Relation, result.Review, includeRequestEvidence: true));
         }
+        catch (WorkspaceRefusalException refusal)
+        {
+            return WorkspaceRefusal(refusal.Code);
+        }
         catch (FormatException)
         {
             return Error("invalid_request");
@@ -6325,6 +6350,10 @@ public sealed class ServiceRequestHandler
         catch (RelationCycleException)
         {
             return Error("relation_cycle");
+        }
+        catch (RelationNeedsReviewException)
+        {
+            return Error("relation_needs_review");
         }
         catch (ArgumentException)
         {
@@ -6358,7 +6387,8 @@ public sealed class ServiceRequestHandler
 
         try
         {
-            var result = new RelationService().Read(context, request.ResourceId, request.ResourceRevision, operation);
+            var result = new RelationService().Read(
+                context, request.ResourceId, request.ResourceRevision, operation, workspace: operation);
             if (result.Relation is null || result.Review is null)
             {
                 return Error("invalid_request");
@@ -6366,6 +6396,10 @@ public sealed class ServiceRequestHandler
 
             return new ServiceReply(CurrentProtocolVersion, "relation", "owner", null,
                 ResourceRevision: result.Relation.Revision, Relation: ToRelationWire(result.Relation, result.Review, includeRequestEvidence: true));
+        }
+        catch (WorkspaceRefusalException refusal)
+        {
+            return WorkspaceRefusal(refusal.Code);
         }
         catch (ArgumentException)
         {
@@ -6844,13 +6878,25 @@ public sealed class ServiceRequestHandler
                 entry.Text,
                 ToWireToken(entry.Executor.ToString()),
                 entry.RecordedAtUtc)).ToArray()
+            : null,
+        ToWireToken(relation.Origin.ToString()),
+        includeRequestEvidence
+            ? relation.History?.Select(entry => new RelationHistoryActWire(
+                ToWireToken(entry.Action.ToString()),
+                ToWireToken(entry.State.ToString()),
+                ToWireToken(entry.Actor.ToString()),
+                ToWireToken(entry.Method.ToString()),
+                entry.Reason,
+                entry.RecordedAtUtc,
+                entry.ExpectedRelationRevision)).ToArray()
             : null);
 
     private static RelationEndpointWire ToRelationEndpointWire(Core.Domain.RelationEndpoint endpoint) => new(
         endpoint.ResourceId,
         ToWireToken(endpoint.EndpointKind.ToString()),
         endpoint.Revision,
-        endpoint.Span);
+        endpoint.Span,
+        endpoint.WorkspacePin);
 
     private static RelationReviewWire ToRelationReviewWire(Core.Domain.RelationReview review) => new(
         ToWireToken(review.State.ToString()),
@@ -9760,15 +9806,22 @@ public sealed class ServiceRequestHandler
             return Error("vault_locked");
         }
 
-        var listed = new RelationService().List(context, operation, _ => true);
-        var wires = new RelationWire[listed.Length];
-        for (var index = 0; index < listed.Length; index++)
+        try
         {
-            var entry = listed[index];
-            wires[index] = ToRelationWire(entry.Relation!, entry.Review!, includeRequestEvidence: true);
-        }
+            var listed = new RelationService().List(context, operation, _ => true, workspace: operation);
+            var wires = new RelationWire[listed.Length];
+            for (var index = 0; index < listed.Length; index++)
+            {
+                var entry = listed[index];
+                wires[index] = ToRelationWire(entry.Relation!, entry.Review!, includeRequestEvidence: true);
+            }
 
-        return new ServiceReply(CurrentProtocolVersion, "relations", "owner", null, Relations: wires);
+            return new ServiceReply(CurrentProtocolVersion, "relations", "owner", null, Relations: wires);
+        }
+        catch (WorkspaceRefusalException refusal)
+        {
+            return WorkspaceRefusal(refusal.Code);
+        }
     }
 
     /// <summary>

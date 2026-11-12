@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using MetaBrain.Core.Security;
 
 namespace MetaBrain.Core.Domain;
 
@@ -22,15 +23,18 @@ public enum RelationKind
 }
 
 /// <summary>
-/// Which kind of endpoint a relation records. Endpoints are never raw managed
-/// resources: a relation links memory items and registered sources only, and
-/// the kind is verified against the decoded endpoint at write time.
+/// Which kind of endpoint a relation records. Managed endpoints are verified
+/// against encrypted memory/source records; workspace file/folder/passage
+/// endpoints are verified against the authenticated workspace state and pins.
 /// </summary>
 public enum RelationEndpointKind
 {
     Unknown = 0,
     MemoryItem = 1,
-    RegisteredSource = 2
+    RegisteredSource = 2,
+    WorkspaceFile = 3,
+    WorkspaceFolder = 4,
+    WorkspacePassage = 5
 }
 
 /// <summary>
@@ -68,9 +72,55 @@ public sealed record RelationRequestEvidence(
     DateTimeOffset RecordedAtUtc);
 
 /// <summary>
-/// Which endpoint of a relation carries the evidence for the other. related_to
-/// and contradicts are identity assertions with no evidence side; every other
-/// kind cites one endpoint as the basis of the other.
+/// Where an edge originated, independent of the trusted executor and method
+/// that recorded it. Legacy values are never inferred from current state.
+/// </summary>
+public enum RelationOrigin
+{
+    Legacy = 0,
+    Owner = 1,
+    ImportedFileLink = 2,
+    AiSuggestion = 3,
+    AgentSuggestion = 4,
+    Unknown = 255
+}
+
+/// <summary>The immutable act appended to a newly-created workspace edge.</summary>
+public enum RelationHistoryAction
+{
+    Unknown = 0,
+    Created = 1,
+    Accepted = 2,
+    Rejected = 3,
+    Retracted = 4,
+    Restored = 5
+}
+
+/// <summary>
+/// One attributed edge act. ExpectedRelationRevision is the exact relation
+/// revision the actor saw before committing this act (zero for creation).
+/// </summary>
+public sealed record RelationHistoryAct(
+    RelationHistoryAction Action,
+    RelationState State,
+    ExecutorKind Actor,
+    CreationMethod Method,
+    string Reason,
+    DateTimeOffset RecordedAtUtc,
+    long ExpectedRelationRevision);
+
+/// <summary>
+/// Additional immutable context for a workspace selector: file and passage
+/// endpoints pin a digest; folder endpoints retain the tree revision observed
+/// when the stable folder identity was selected.
+/// </summary>
+public sealed record WorkspaceRelationPin(string? Sha256 = null, long? TreeRevision = null);
+
+/// <summary>
+/// One evidence side of a managed relation. In the legacy managed contract,
+/// related_to and contradicts are identity-only and have no single evidence
+/// side. Workspace contradicts is bilateral pinned evidence and is checked on
+/// both endpoints, rather than being represented as one side here.
 /// </summary>
 public enum RelationEvidenceSide
 {
@@ -105,15 +155,16 @@ public enum RelationReviewReason
 
 /// <summary>
 /// One relation endpoint: an opaque resource ID, its verified kind, the exact
-/// revision the link was made against, and an optional evidence span. The
-/// revision is a truthful historical record: only the live revision is retained
-/// by the vault, so a pinned revision cannot be re-read as current content.
+/// revision the link was made against, and an optional evidence span. Managed
+/// endpoints pin the live resource revision; workspace file/passage endpoints
+/// may pin retained content revisions, while folder revisions are creation context.
 /// </summary>
 public sealed record RelationEndpoint(
     string ResourceId,
     RelationEndpointKind EndpointKind,
     long Revision,
-    SourceSpan? Span = null);
+    SourceSpan? Span = null,
+    WorkspaceRelationPin? WorkspacePin = null);
 
 /// <summary>
 /// Client-supplied relation draft: no identity, executor, schema, or revision.
@@ -131,14 +182,18 @@ public sealed record RelationDraft(
     string? StateReason,
     DateTimeOffset? OccurredAtUtc,
     DateTimeOffset? RecordedAtUtc,
-    string? RequestEvidence = null);
+    string? RequestEvidence = null,
+    RelationOrigin? Origin = null);
 
 /// <summary>
 /// Client-supplied lifecycle transition draft. Only the rationale for the new
 /// state travels here; endpoints, kind, and the original reason are immutable
 /// after creation, so a link is never silently re-pointed or re-justified.
 /// </summary>
-public sealed record RelationTransitionDraft(string? StateReason, string? RequestEvidence = null);
+public sealed record RelationTransitionDraft(
+    string? StateReason,
+    string? RequestEvidence = null,
+    string? ActReason = null);
 
 /// <summary>
 /// Server-persisted relation (encrypted bytes). Revision lives in the vault
@@ -160,7 +215,9 @@ public sealed record StoredRelation(
     DateTimeOffset RecordedAtUtc,
     ExecutorKind StateExecutor,
     DateTimeOffset StateRecordedAtUtc,
-    RelationRequestEvidence[]? RequestEvidence = null);
+    RelationRequestEvidence[]? RequestEvidence = null,
+    RelationOrigin Origin = RelationOrigin.Legacy,
+    RelationHistoryAct[]? History = null);
 
 /// <summary>
 /// Owner-facing read model: stored relation plus the live descriptor revision.
@@ -182,7 +239,9 @@ public sealed record Relation(
     DateTimeOffset RecordedAtUtc,
     ExecutorKind StateExecutor,
     DateTimeOffset StateRecordedAtUtc,
-    RelationRequestEvidence[]? RequestEvidence = null);
+    RelationRequestEvidence[]? RequestEvidence = null,
+    RelationOrigin Origin = RelationOrigin.Legacy,
+    RelationHistoryAct[]? History = null);
 
 /// <summary>
 /// Computed review state for a stored relation, evaluated at read time against
@@ -201,6 +260,7 @@ public static class RelationCodec
     public const int MaximumStateReasonLength = 2000;
     public const int MaximumRequestEvidenceLength = 2000;
     public const int MaximumRequestEvidenceEntries = 64;
+    public const int MaximumHistoryEntries = 1024;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -356,21 +416,35 @@ public static class RelationValidator
         ValidateEndpoints(draft.From, draft.To);
         ValidateTimes(draft.OccurredAtUtc, draft.RecordedAtUtc);
         ValidateRequestEvidenceText(draft.RequestEvidence, required: false);
+        if (draft.Origin is { } origin &&
+            (!Enum.IsDefined(origin) || origin is RelationOrigin.Legacy or RelationOrigin.Unknown))
+        {
+            throw new ArgumentException("A new relation origin must be known and explicit.");
+        }
     }
 
-    public static void ValidateTransition(RelationTransitionDraft transition, RelationState current, RelationState target)
+    public static void ValidateTransition(
+        RelationTransitionDraft transition,
+        RelationState current,
+        RelationState target,
+        bool requireActReason = false)
     {
         ArgumentNullException.ThrowIfNull(transition);
 
-        // Relink deliberately carries no rationale: the restored state is a
-        // proposal, and the original link rationale stays the record's basis.
+        // Relink deliberately carries no state rationale: it returns to a
+        // proposal, while workspace history records the explicit act reason
+        // separately in ActReason.
         if (target == RelationState.Proposed && transition.StateReason is not null)
         {
-            throw new ArgumentException("A relink transition carries no rationale; the restored state is proposed.");
+            throw new ArgumentException("A relink transition carries no state rationale; the restored state is proposed.");
         }
 
         var required = target is RelationState.Rejected or RelationState.Retracted;
         ValidateStateReason(transition.StateReason, required);
+        if (requireActReason)
+        {
+            ValidateReason(transition.ActReason);
+        }
 
         if (!IsTransitionAllowed(current, target))
         {
@@ -434,6 +508,33 @@ public static class RelationValidator
         ValidateStateReason(relation.StateReason, required: false);
         ValidateEndpoints(relation.From, relation.To);
         ValidateTimes(relation.OccurredAtUtc, relation.RecordedAtUtc);
+        if (!Enum.IsDefined(relation.Origin))
+        {
+            throw new ArgumentException("A relation origin is invalid.");
+        }
+
+        var hasWorkspaceEndpoint =
+            RelationEndpointSemantics.IsWorkspace(relation.From.EndpointKind) ||
+            RelationEndpointSemantics.IsWorkspace(relation.To.EndpointKind);
+        if (hasWorkspaceEndpoint && relation.Origin == RelationOrigin.Legacy)
+        {
+            throw new ArgumentException("A workspace relation requires an explicit origin.");
+        }
+
+        if (relation.Origin == RelationOrigin.AgentSuggestion && hasWorkspaceEndpoint)
+        {
+            throw new ArgumentException("Workspace relation sharing is not enabled for agent-created links.");
+        }
+
+        if (relation.Origin == RelationOrigin.ImportedFileLink &&
+            relation.From.EndpointKind is not (RelationEndpointKind.WorkspaceFile or RelationEndpointKind.WorkspacePassage) &&
+            relation.To.EndpointKind is not (RelationEndpointKind.WorkspaceFile or RelationEndpointKind.WorkspacePassage))
+        {
+            throw new ArgumentException("An imported-file relation must name a workspace file or passage.");
+        }
+
+
+        ValidateHistory(relation, hasWorkspaceEndpoint);
         ValidateRequestEvidence(relation.RequestEvidence, relation.RecordedAtUtc);
 
         if (relation.RecordedAtUtc.Offset != TimeSpan.Zero || relation.StateRecordedAtUtc.Offset != TimeSpan.Zero)
@@ -451,6 +552,81 @@ public static class RelationValidator
             throw new ArgumentException("A relation state time cannot be in the future.");
         }
     }
+    private static void ValidateHistory(StoredRelation relation, bool hasWorkspaceEndpoint)
+    {
+        var history = relation.History;
+        if (history is null)
+        {
+            if (hasWorkspaceEndpoint)
+            {
+                throw new ArgumentException("A workspace relation must preserve its attributed history.");
+            }
+
+            return;
+        }
+
+        if (history.Length is 0 or > RelationCodec.MaximumHistoryEntries)
+        {
+            throw new ArgumentException("A relation history is empty or exceeds its event limit.");
+        }
+
+        RelationState? previousState = null;
+        DateTimeOffset previousTime = DateTimeOffset.MinValue;
+        for (var index = 0; index < history.Length; index++)
+        {
+            var act = history[index];
+            if (act is null ||
+                !Enum.IsDefined(act.Action) || act.Action == RelationHistoryAction.Unknown ||
+                !Enum.IsDefined(act.State) || act.State is not (RelationState.Proposed or RelationState.Accepted or RelationState.Rejected or RelationState.Retracted) ||
+                !Enum.IsDefined(act.Actor) || act.Actor == ExecutorKind.Unknown ||
+                !Enum.IsDefined(act.Method) || act.Method == CreationMethod.Unknown ||
+                act.ExpectedRelationRevision != index ||
+                act.RecordedAtUtc.Offset != TimeSpan.Zero ||
+                act.RecordedAtUtc < previousTime ||
+                act.RecordedAtUtc > DateTimeOffset.UtcNow.AddMinutes(5))
+            {
+                throw new ArgumentException("A relation history act has invalid attribution, revision, state or time.");
+            }
+
+            ValidateReason(act.Reason);
+            if (index == 0)
+            {
+                if (act.Action != RelationHistoryAction.Created || act.ExpectedRelationRevision != 0 ||
+                    act.Actor != relation.Executor || act.Method != relation.CreationMethod ||
+                    act.RecordedAtUtc != relation.RecordedAtUtc ||
+                    !string.Equals(act.Reason, relation.Reason, StringComparison.Ordinal) ||
+                    (relation.Origin is RelationOrigin.ImportedFileLink or RelationOrigin.AiSuggestion &&
+                        act.State != RelationState.Proposed))
+                {
+                    throw new ArgumentException("A relation creation history act does not match its canonical record.");
+                }
+            }
+            else if (previousState is not { } prior ||
+                !RelationValidator.IsTransitionAllowed(prior, act.State) ||
+                !HistoryActionMatchesState(act.Action, act.State))
+            {
+                throw new ArgumentException("A relation history transition is not a valid lifecycle act.");
+            }
+
+            previousState = act.State;
+            previousTime = act.RecordedAtUtc;
+        }
+
+        var last = history[^1];
+        if (last.State != relation.State || last.Actor != relation.StateExecutor ||
+            last.RecordedAtUtc != relation.StateRecordedAtUtc)
+        {
+            throw new ArgumentException("The latest relation history act does not match its current state attribution.");
+        }
+    }
+
+    private static bool HistoryActionMatchesState(RelationHistoryAction action, RelationState state) =>
+        (action, state) is
+            (RelationHistoryAction.Accepted, RelationState.Accepted) or
+            (RelationHistoryAction.Rejected, RelationState.Rejected) or
+            (RelationHistoryAction.Retracted, RelationState.Retracted) or
+            (RelationHistoryAction.Restored, RelationState.Proposed);
+
 
     private static void ValidateEndpoints(RelationEndpoint? from, RelationEndpoint? to)
     {
@@ -459,13 +635,11 @@ public static class RelationValidator
             throw new ArgumentException("A relation requires exactly two endpoints.");
         }
 
-        // Endpoints are memory items or registered sources: never a relation
-        // (reserved ID prefix) and never each other ("hai endpoint").
         ValidateEndpoint(from);
         ValidateEndpoint(to);
-        if (string.Equals(from.ResourceId, to.ResourceId, StringComparison.Ordinal))
+        if (RelationEndpointSemantics.SameLogicalEndpoint(from, to))
         {
-            throw new ArgumentException("A relation requires two distinct endpoints.");
+            throw new ArgumentException("A relation requires two distinct logical endpoints.");
         }
     }
 
@@ -473,7 +647,7 @@ public static class RelationValidator
     {
         if (!DomainIdentifiers.IsDomainIdentifier(endpoint.ResourceId))
         {
-            throw new ArgumentException("A relation endpoint must be an opaque memory item or registered source identifier.");
+            throw new ArgumentException("A relation endpoint must name an opaque domain or workspace identifier.");
         }
 
         if (!Enum.IsDefined(endpoint.EndpointKind) || endpoint.EndpointKind == RelationEndpointKind.Unknown)
@@ -486,22 +660,84 @@ public static class RelationValidator
             throw new ArgumentException("A relation endpoint must pin a positive revision.");
         }
 
-        if (endpoint.Span is null)
+        switch (endpoint.EndpointKind)
+        {
+            case RelationEndpointKind.MemoryItem:
+                if (endpoint.Span is not null || endpoint.WorkspacePin is not null)
+                {
+                    throw new ArgumentException("A memory-item endpoint cannot carry a source span or workspace pin.");
+                }
+
+                return;
+            case RelationEndpointKind.RegisteredSource:
+                if (endpoint.WorkspacePin is not null)
+                {
+                    throw new ArgumentException("A registered-source endpoint cannot carry a workspace pin.");
+                }
+
+                ValidateSpan(endpoint.Span);
+                return;
+            case RelationEndpointKind.WorkspaceFile:
+                if (endpoint.Span is not null || endpoint.WorkspacePin?.TreeRevision is not null)
+                {
+                    throw new ArgumentException("A workspace file endpoint pins its full-file digest without a span or tree revision.");
+                }
+
+                ValidateWorkspaceDigest(endpoint.WorkspacePin?.Sha256);
+                return;
+            case RelationEndpointKind.WorkspacePassage:
+                ValidateWorkspaceSpan(endpoint.Span);
+                if (endpoint.Span is null || endpoint.WorkspacePin?.TreeRevision is not null)
+                {
+                    throw new ArgumentException("A workspace passage endpoint requires a byte span and exact-content digest.");
+                }
+
+                ValidateWorkspaceDigest(endpoint.WorkspacePin?.Sha256);
+                return;
+            case RelationEndpointKind.WorkspaceFolder:
+                if (endpoint.Span is not null || endpoint.WorkspacePin?.Sha256 is not null ||
+                    endpoint.WorkspacePin?.TreeRevision is not > 0)
+                {
+                    throw new ArgumentException("A workspace folder endpoint requires its observed tree revision only.");
+                }
+
+                return;
+            default:
+                throw new ArgumentException("A relation endpoint kind is unsupported.");
+        }
+    }
+
+    private static void ValidateSpan(SourceSpan? span)
+    {
+        if (span is null)
         {
             return;
         }
 
-        if (endpoint.EndpointKind != RelationEndpointKind.RegisteredSource)
-        {
-            throw new ArgumentException("A relation span must anchor to a registered source endpoint.");
-        }
-
-        var span = endpoint.Span;
         if (span.Start < 0 || span.End <= span.Start ||
             span.End > MemoryEnvelopeCodec.MaximumSpanEnd ||
             span.End - span.Start > MemoryEnvelopeCodec.MaximumSpanLength)
         {
             throw new ArgumentException("A relation span must be a non-empty bounded range.");
+        }
+    }
+
+    private static void ValidateWorkspaceSpan(SourceSpan? span)
+    {
+        if (span is null || span.Start < 0 || span.End <= span.Start ||
+            span.End > WorkspaceContentRevisionInfo.MaximumContentBytes ||
+            span.End - span.Start > WorkspaceContentRevisionInfo.MaximumContentBytes)
+        {
+            throw new ArgumentException("A workspace passage range must be non-empty and within the workspace content limit.");
+        }
+    }
+
+    private static void ValidateWorkspaceDigest(string? sha256)
+    {
+        if (sha256 is not { Length: 64 } ||
+            sha256.Any(character => character is not (>= '0' and <= '9') and not (>= 'a' and <= 'f')))
+        {
+            throw new ArgumentException("A workspace relation pin requires a lowercase SHA-256 digest.");
         }
     }
 
@@ -655,13 +891,27 @@ public sealed class RelationCycleException : ArgumentException
 public static class RelationSemantics
 {
     /// <summary>
-    /// Evidence links keep the exact revision (and optional span) they used, so
-    /// a change to the cited endpoint marks the link for review. related_to and
-    /// contradicts assert identity, not a revision of record.
+    /// Legacy managed-memory/source semantics: evidence kinds pin the live
+    /// evidence revision; related_to and contradicts remain identity-only.
+    /// Workspace content assertions use PinsWorkspaceRevision instead, so the
+    /// D107 bilateral contradicts pin does not change legacy behavior.
     /// </summary>
     public static bool PinsRevision(RelationKind kind) => kind
         is RelationKind.DerivedFrom
         or RelationKind.Supports
+        or RelationKind.Supersedes
+        or RelationKind.AppliesTo
+        or RelationKind.Addresses;
+
+    /// <summary>
+    /// D107 workspace file/passage assertions pin both content endpoints for
+    /// every semantic kind except identity-only related_to. Contradicts is
+    /// bilateral evidence here, not a one-sided managed EvidenceSide.
+    /// </summary>
+    public static bool PinsWorkspaceRevision(RelationKind kind) => kind
+        is RelationKind.DerivedFrom
+        or RelationKind.Supports
+        or RelationKind.Contradicts
         or RelationKind.Supersedes
         or RelationKind.AppliesTo
         or RelationKind.Addresses;
@@ -673,6 +923,11 @@ public static class RelationSemantics
         is RelationKind.DerivedFrom
         or RelationKind.Supersedes;
 
+    /// <summary>
+    /// The evidence side for managed edges. Workspace contradicts is bilateral
+    /// pinned evidence, so its workspace review path checks both endpoints
+    /// rather than assigning a singular side here.
+    /// </summary>
     public static RelationEvidenceSide EvidenceSide(RelationKind kind) => kind switch
     {
         RelationKind.DerivedFrom or RelationKind.Supports or RelationKind.Supersedes => RelationEvidenceSide.To,
@@ -687,3 +942,80 @@ public static class RelationSemantics
         _ => RelationEvidenceSide.None
     };
 }
+
+/// <summary>
+/// Review identity includes the workspace content selector; constrained-cycle
+/// identity is separately the stable logical resource, independent of revision
+/// or passage span.
+/// </summary>
+public static class RelationEndpointSemantics
+{
+    public static bool IsWorkspace(RelationEndpointKind kind) =>
+        kind is RelationEndpointKind.WorkspaceFile or
+            RelationEndpointKind.WorkspaceFolder or
+            RelationEndpointKind.WorkspacePassage;
+
+    public static bool HasWorkspaceEndpoint(StoredRelation relation) =>
+        IsWorkspace(relation.From.EndpointKind) || IsWorkspace(relation.To.EndpointKind);
+
+    public static bool SameLogicalEndpoint(RelationEndpoint left, RelationEndpoint right)
+    {
+        if (!string.Equals(left.ResourceId, right.ResourceId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var leftWorkspace = IsWorkspace(left.EndpointKind);
+        var rightWorkspace = IsWorkspace(right.EndpointKind);
+        if (!leftWorkspace && !rightWorkspace)
+        {
+            return true;
+        }
+
+        return leftWorkspace && rightWorkspace && IdentityOf(left) == IdentityOf(right);
+    }
+
+    public static RelationEndpointIdentity IdentityOf(RelationEndpoint endpoint)
+    {
+        if (endpoint.EndpointKind == RelationEndpointKind.WorkspacePassage)
+        {
+            return new RelationEndpointIdentity(
+                endpoint.ResourceId,
+                endpoint.EndpointKind,
+                endpoint.Revision,
+                endpoint.Span!.Start,
+                endpoint.Span.End,
+                endpoint.WorkspacePin!.Sha256);
+        }
+
+        return IsWorkspace(endpoint.EndpointKind)
+            ? new RelationEndpointIdentity(endpoint.ResourceId, endpoint.EndpointKind, 0, 0, 0, null)
+            : new RelationEndpointIdentity(endpoint.ResourceId, RelationEndpointKind.Unknown, 0, 0, 0, null);
+    }
+
+    /// <summary>
+    /// Stable graph node identity for derived_from/supersedes. Workspace
+    /// passages are evidence selectors on their stable file node: differing
+    /// revisions or spans do not create distinct DAG nodes.
+    /// </summary>
+    public static RelationEndpointIdentity CycleIdentityOf(RelationEndpoint endpoint)
+    {
+        if (!IsWorkspace(endpoint.EndpointKind))
+        {
+            return new RelationEndpointIdentity(endpoint.ResourceId, RelationEndpointKind.Unknown, 0, 0, 0, null);
+        }
+
+        var nodeKind = endpoint.EndpointKind == RelationEndpointKind.WorkspaceFolder
+            ? RelationEndpointKind.WorkspaceFolder
+            : RelationEndpointKind.WorkspaceFile;
+        return new RelationEndpointIdentity(endpoint.ResourceId, nodeKind, 0, 0, 0, null);
+    }
+}
+
+public readonly record struct RelationEndpointIdentity(
+    string ResourceId,
+    RelationEndpointKind EndpointKind,
+    long Revision,
+    long Start,
+    long End,
+    string? Sha256);

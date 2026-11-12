@@ -21,6 +21,15 @@ public sealed record RelationReadResult(Relation? Relation, RelationReview? Revi
 /// looking current by construction.
 /// </summary>
 public sealed record RelationWriteResult(Relation Relation, RelationReview Review);
+
+/// <summary>An owner tried to confirm a workspace edge whose pinned evidence needs review.</summary>
+public sealed class RelationNeedsReviewException : Exception
+{
+    public RelationNeedsReviewException()
+        : base("The workspace relation pins changed or unavailable evidence and needs review.")
+    {
+    }
+}
 public sealed record RelationEndpointCandidate(
     string ResourceId,
     RelationEndpointKind EndpointKind,
@@ -31,15 +40,14 @@ public sealed record RelationResolveResult(RelationEndpointCandidate[] Candidate
 
 
 /// <summary>
-/// S2-T4 typed relation authority over the shared encrypted canonical store.
-/// A relation is an ordinary revision-gated canonical resource: no second link
-/// store, no second crypto, no key or grant state is touched here, so adding,
-/// revising, or evaluating relations cannot expand an approved snapshot (R11).
-/// Identity comes from trusted request params (minted server-side for agent
-/// links), executor from the trusted context, revision from the vault
-/// descriptor. Endpoints pin the exact revision the link was made against and
-/// are verified to exist at that live revision when the link is written, so a
-/// relation can never be created against a missing or already-changed endpoint.
+/// S2-T4/S16-T2 typed relation authority over the shared encrypted canonical store.
+/// Relations remain canonical resources with the same revision gate and crypto;
+/// there is no second link or adjacency truth and no change to key or grant state.
+/// Relation reads/writes never expand an approved agent snapshot (R11).
+/// Managed endpoints pin live managed revisions. Owner-only workspace endpoints
+/// use stable file/folder/passage identities and authenticated retained-content
+/// pins. Executors come from trusted context; agent relation identities are minted
+/// server-side and agent writes always remain proposals.
 /// </summary>
 public sealed class RelationService
 {
@@ -50,15 +58,17 @@ public sealed class RelationService
     /// relation state this service canonicalizes instead of duplicating it.
     /// </summary>
     private const int MaximumPropagationSteps = 4096;
+    private static readonly object RelationMutationGate = new();
 
     public RelationWriteResult Create(
         AuthenticatedContext context,
         string relationId,
         string zoneId,
         byte[] draftJson,
-        IManagedResourceStore store)
+        IManagedResourceStore store,
+        IWorkspacePersistence? workspace = null)
     {
-        return Write(context, relationId, zoneId, draftJson, store, expectedRevision: 0, forceProposed: false);
+        return Write(context, relationId, zoneId, draftJson, store, workspace, expectedRevision: 0, forceProposed: false);
     }
 
     /// <summary>
@@ -100,7 +110,7 @@ public sealed class RelationService
         var zoneId = store.TryGetZone(parsed.From.ResourceId, out var zone) && !string.IsNullOrEmpty(zone)
             ? zone
             : throw new ArgumentException("The relation subject endpoint has no registered zone.");
-        return Write(context, MintRelationId(), zoneId, draftJson, store, expectedRevision: 0, forceProposed: true);
+        return Write(context, MintRelationId(), zoneId, draftJson, store, workspace: null, expectedRevision: 0, forceProposed: true);
     }
 
     public RelationWriteResult Accept(
@@ -108,24 +118,27 @@ public sealed class RelationService
         string relationId,
         long expectedRevision,
         byte[]? transitionJson,
-        IManagedResourceStore store) =>
-        Transition(context, relationId, expectedRevision, RelationState.Accepted, transitionJson, store);
+        IManagedResourceStore store,
+        IWorkspacePersistence? workspace = null) =>
+        Transition(context, relationId, expectedRevision, RelationState.Accepted, transitionJson, store, workspace);
 
     public RelationWriteResult Reject(
         AuthenticatedContext context,
         string relationId,
         long expectedRevision,
         byte[]? transitionJson,
-        IManagedResourceStore store) =>
-        Transition(context, relationId, expectedRevision, RelationState.Rejected, transitionJson, store);
+        IManagedResourceStore store,
+        IWorkspacePersistence? workspace = null) =>
+        Transition(context, relationId, expectedRevision, RelationState.Rejected, transitionJson, store, workspace);
 
     public RelationWriteResult Unlink(
         AuthenticatedContext context,
         string relationId,
         long expectedRevision,
         byte[]? transitionJson,
-        IManagedResourceStore store) =>
-        Transition(context, relationId, expectedRevision, RelationState.Retracted, transitionJson, store);
+        IManagedResourceStore store,
+        IWorkspacePersistence? workspace = null) =>
+        Transition(context, relationId, expectedRevision, RelationState.Retracted, transitionJson, store, workspace);
 
     /// <summary>
     /// Agent unlink is an explicit, reversible relation action. The caller's
@@ -139,7 +152,7 @@ public sealed class RelationService
         byte[]? transitionJson,
         IManagedResourceStore store) =>
         Transition(context, relationId, expectedRevision, RelationState.Retracted, transitionJson, store,
-            RelationRequestAction.Remove);
+            workspace: null, requestAction: RelationRequestAction.Remove);
 
     /// <summary>
     /// Undo for an agent unlink returns the relation to proposed, never accepted.
@@ -151,7 +164,7 @@ public sealed class RelationService
         byte[]? transitionJson,
         IManagedResourceStore store) =>
         Transition(context, relationId, expectedRevision, RelationState.Proposed, transitionJson, store,
-            RelationRequestAction.Restore);
+            workspace: null, requestAction: RelationRequestAction.Restore);
 
 
     /// <summary>
@@ -164,15 +177,17 @@ public sealed class RelationService
         string relationId,
         long expectedRevision,
         byte[]? transitionJson,
-        IManagedResourceStore store) =>
-        Transition(context, relationId, expectedRevision, RelationState.Proposed, transitionJson, store);
+        IManagedResourceStore store,
+        IWorkspacePersistence? workspace = null) =>
+        Transition(context, relationId, expectedRevision, RelationState.Proposed, transitionJson, store, workspace);
 
     public RelationReadResult Read(
         AuthenticatedContext context,
         string relationId,
         long? expectedRevision,
         IManagedResourceStore store,
-        Func<RelationEndpoint, bool>? endpointAuthorizer = null)
+        Func<RelationEndpoint, bool>? endpointAuthorizer = null,
+        IWorkspacePersistence? workspace = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(store);
@@ -205,18 +220,14 @@ public sealed class RelationService
             }
         }
 
-        // Every endpoint of the relation must be inside the caller's authority
-        // before the record is served; a cross-zone or ungranted endpoint is a
-        // generic denial, never a partial projection.
-        if (endpointAuthorizer is not null)
+        var hasWorkspaceEndpoint =
+            RelationEndpointSemantics.IsWorkspace(stored.From.EndpointKind) ||
+            RelationEndpointSemantics.IsWorkspace(stored.To.EndpointKind);
+        if ((hasWorkspaceEndpoint && (workspace is null || context.Kind == PrincipalKind.Agent)) ||
+            (endpointAuthorizer is not null &&
+                (!endpointAuthorizer(stored.From) || !endpointAuthorizer(stored.To))))
         {
-            foreach (var endpoint in new[] { stored.From, stored.To })
-            {
-                if (!endpointAuthorizer(endpoint))
-                {
-                    return new RelationReadResult(null, null);
-                }
-            }
+            return new RelationReadResult(null, null);
         }
 
         long revision;
@@ -230,7 +241,15 @@ public sealed class RelationService
         }
 
         var relations = LoadRelations(store);
-        var review = EvaluateReview(stored, relations, store, endpointAuthorizer);
+        if (workspace is null || context.Kind == PrincipalKind.Agent)
+        {
+            relations = relations
+                .Where(relation => !RelationEndpointSemantics.HasWorkspaceEndpoint(relation))
+                .ToArray();
+        }
+        var workspaceReview = PrepareWorkspaceReviewSnapshot(workspace, relations, stored);
+
+        var review = EvaluateReview(stored, relations, store, endpointAuthorizer, workspaceReview);
         return new RelationReadResult(ToRelation(stored, revision), review);
     }
 
@@ -242,7 +261,8 @@ public sealed class RelationService
     public RelationReadResult[] List(
         AuthenticatedContext context,
         IManagedResourceStore store,
-        Func<RelationEndpoint, bool> endpointAuthorizer)
+        Func<RelationEndpoint, bool> endpointAuthorizer,
+        IWorkspacePersistence? workspace = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(store);
@@ -250,6 +270,14 @@ public sealed class RelationService
         EnsureTrusted(context);
 
         var relations = LoadRelations(store);
+        if (workspace is null || context.Kind == PrincipalKind.Agent)
+        {
+            relations = relations
+                .Where(relation => !RelationEndpointSemantics.HasWorkspaceEndpoint(relation))
+                .ToArray();
+        }
+        var workspaceReview = PrepareWorkspaceReviewSnapshot(workspace, relations, target: null);
+
         var liveRevisions = store.ListResources()
             .Where(resource => DomainIdentifiers.IsRelationId(resource.ResourceId))
             .ToDictionary(resource => resource.ResourceId, resource => resource.Revision, StringComparer.Ordinal);
@@ -262,7 +290,7 @@ public sealed class RelationService
                 continue;
             }
 
-            var review = EvaluateReview(stored, relations, store, endpointAuthorizer);
+            var review = EvaluateReview(stored, relations, store, endpointAuthorizer, workspaceReview);
             results.Add(new RelationReadResult(ToRelation(stored, revision), review));
         }
 
@@ -380,6 +408,7 @@ public sealed class RelationService
         string zoneId,
         byte[] draftJson,
         IManagedResourceStore store,
+        IWorkspacePersistence? workspace,
         long expectedRevision,
         bool forceProposed)
     {
@@ -387,15 +416,18 @@ public sealed class RelationService
         ArgumentNullException.ThrowIfNull(store);
         EnsureTrusted(context);
         ArgumentNullException.ThrowIfNull(draftJson);
-
-        RelationDraft draft;
-        try
+        if (context.Kind == PrincipalKind.Agent && !forceProposed)
         {
-            draft = RelationCodec.DecodeDraft(draftJson);
+            throw new UnauthorizedAccessException("Agent relation writes must use the scoped proposal path.");
         }
-        catch (ArgumentException)
+
+        var draft = RelationCodec.DecodeDraft(draftJson);
+        var origin = forceProposed ? RelationOrigin.AgentSuggestion : draft.Origin ?? RelationOrigin.Owner;
+        if (!Enum.IsDefined(origin) ||
+            origin is RelationOrigin.Legacy or RelationOrigin.Unknown ||
+            (!forceProposed && origin == RelationOrigin.AgentSuggestion))
         {
-            throw;
+            throw new ArgumentException("A relation origin is invalid for this actor.");
         }
 
         DateTimeOffset? serverRecordedAtUtc = null;
@@ -414,24 +446,52 @@ public sealed class RelationService
                 CreationMethod = CreationMethod.Paraphrase,
                 StateReason = null,
                 OccurredAtUtc = null,
-                RecordedAtUtc = serverRecordedAtUtc
+                RecordedAtUtc = serverRecordedAtUtc,
+                Origin = origin
             };
+        }
+        else if (origin is RelationOrigin.ImportedFileLink or RelationOrigin.AiSuggestion)
+        {
+            serverRecordedAtUtc = DateTimeOffset.UtcNow;
+            draft = draft with
+            {
+                State = RelationState.Proposed,
+                StateReason = null,
+                RecordedAtUtc = serverRecordedAtUtc,
+                Origin = origin
+            };
+        }
+        else
+        {
+            draft = draft with { Origin = origin };
         }
 
         RelationValidator.ValidateDraft(draft, relationId, zoneId);
+        var fromDraft = draft.From!;
+        var toDraft = draft.To!;
+        var hasWorkspaceEndpoint =
+            RelationEndpointSemantics.IsWorkspace(fromDraft.EndpointKind) ||
+            RelationEndpointSemantics.IsWorkspace(toDraft.EndpointKind);
+        if (hasWorkspaceEndpoint && (workspace is null || context.Kind == PrincipalKind.Agent))
+        {
+            throw new ArgumentException("Workspace relations are owner-only and require the shared workspace store.");
+        }
+
+        if (origin == RelationOrigin.ImportedFileLink &&
+            fromDraft.EndpointKind is not (RelationEndpointKind.WorkspaceFile or RelationEndpointKind.WorkspacePassage) &&
+            toDraft.EndpointKind is not (RelationEndpointKind.WorkspaceFile or RelationEndpointKind.WorkspacePassage))
+        {
+            throw new ArgumentException("An imported-file relation must name a workspace file or passage.");
+        }
+
+        var workspaceTree = hasWorkspaceEndpoint ? workspace!.ReadWorkspaceTree() : null;
+        var from = VerifyEndpoint(store, fromDraft, workspace, workspaceTree);
+        var to = VerifyEndpoint(store, toDraft, workspace, workspaceTree);
         var kind = draft.Kind!.Value;
-
-        // Endpoints must exist right now, at the live revision the link pins,
-        // and with the declared kind. This is also what keeps spans anchored to
-        // registered sources only.
-        var from = VerifyEndpoint(store, draft.From!);
-        var to = VerifyEndpoint(store, draft.To!);
-
-        var relations = LoadRelations(store);
-        EnsureNoCycle(relations, kind, from.ResourceId, to.ResourceId, relationId);
-
         var now = serverRecordedAtUtc ?? DateTimeOffset.UtcNow;
-        var recordedAtUtc = forceProposed ? now : draft.RecordedAtUtc ?? now;
+        var recordedAtUtc = hasWorkspaceEndpoint || forceProposed
+            ? now
+            : draft.RecordedAtUtc ?? now;
         var executor = ExecutorOf(context);
         var requestEvidence = forceProposed
             ? new[]
@@ -443,6 +503,19 @@ public sealed class RelationService
                     now)
             }
             : Array.Empty<RelationRequestEvidence>();
+        var history = hasWorkspaceEndpoint
+            ? new[]
+            {
+                new RelationHistoryAct(
+                    RelationHistoryAction.Created,
+                    draft.State!.Value,
+                    executor,
+                    draft.CreationMethod!.Value,
+                    draft.Reason!,
+                    recordedAtUtc,
+                    ExpectedRelationRevision: 0)
+            }
+            : null;
         var stored = new StoredRelation(
             RelationCodec.CurrentSchemaVersion,
             relationId,
@@ -459,23 +532,40 @@ public sealed class RelationService
             recordedAtUtc,
             executor,
             now,
-            requestEvidence);
-        var payload = RelationCodec.EncodeStored(stored);
-        try
+            requestEvidence,
+            origin,
+            history);
+
+        lock (RelationMutationGate)
         {
-            // Revision-gated exactly like canonical memory writes: 0 creates
-            // only when absent, N revises only the live revision N; a stale
-            // concurrent transition fails closed and publishes nothing.
-            var revision = store.WriteContent(relationId, zoneId, payload, expectedRevision);
-            return new RelationWriteResult(ToRelation(stored, revision), ReviewOf(stored, store));
-        }
-        catch (ManagedResourceUnavailableException ex)
-        {
-            throw new ArgumentException("The relation write was rejected by vault storage.", ex);
-        }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(payload);
+            var relations = LoadRelations(store);
+            EnsureNoCycle(relations, kind, from, to, relationId);
+            if (hasWorkspaceEndpoint && stored.State == RelationState.Accepted)
+            {
+                var candidateRelations = relations.Append(stored).ToArray();
+                var workspaceReview = PrepareWorkspaceReviewSnapshot(workspace, candidateRelations, stored);
+                var review = EvaluateReview(
+                    stored, candidateRelations, store, endpointAuthorizer: null, workspaceReview: workspaceReview);
+                if (review.State == RelationReviewState.NeedsReview)
+                {
+                    throw new RelationNeedsReviewException();
+                }
+            }
+
+            var payload = RelationCodec.EncodeStored(stored);
+            try
+            {
+                var revision = store.WriteContent(relationId, zoneId, payload, expectedRevision);
+                return new RelationWriteResult(ToRelation(stored, revision), ReviewOf(stored, store, workspace));
+            }
+            catch (ManagedResourceUnavailableException ex)
+            {
+                throw new ArgumentException("The relation write was rejected by vault storage.", ex);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(payload);
+            }
         }
     }
 
@@ -486,6 +576,7 @@ public sealed class RelationService
         RelationState target,
         byte[]? transitionJson,
         IManagedResourceStore store,
+        IWorkspacePersistence? workspace,
         RelationRequestAction? requestAction = null)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -497,7 +588,6 @@ public sealed class RelationService
         }
 
         var transition = RelationCodec.DecodeTransitionDraft(transitionJson);
-
         byte[]? raw = null;
         StoredRelation stored;
         try
@@ -521,7 +611,13 @@ public sealed class RelationService
             }
         }
 
-        RelationValidator.ValidateTransition(transition, stored.State, target);
+        var hasWorkspaceEndpoint = RelationEndpointSemantics.HasWorkspaceEndpoint(stored);
+        if (hasWorkspaceEndpoint && (workspace is null || context.Kind == PrincipalKind.Agent))
+        {
+            throw new UnauthorizedAccessException("Workspace relation actions are owner-only.");
+        }
+
+        RelationValidator.ValidateTransition(transition, stored.State, target, requireActReason: hasWorkspaceEndpoint);
         if (requestAction is not null &&
             (context.Kind != PrincipalKind.Agent || string.IsNullOrWhiteSpace(transition.RequestEvidence) ||
                 transition.RequestEvidence.Length > RelationCodec.MaximumRequestEvidenceLength))
@@ -529,42 +625,76 @@ public sealed class RelationService
             throw new ArgumentException("An agent relation transition requires bounded caller-reported request evidence.");
         }
 
-        // Endpoints and kind are immutable, but the derivation graph around
-        // them can have changed: an edge that becomes active again (accept or
-        // relink) is re-checked against the current graph.
-        if (target is RelationState.Proposed or RelationState.Accepted &&
-            RelationSemantics.ConstrainsCycles(stored.Kind))
+        var now = DateTimeOffset.UtcNow;
+        var executor = ExecutorOf(context);
+        lock (RelationMutationGate)
         {
             var relations = LoadRelations(store);
-            EnsureNoCycle(relations, stored.Kind, stored.From.ResourceId, stored.To.ResourceId, relationId);
-        }
+            if (target is RelationState.Proposed or RelationState.Accepted &&
+                RelationSemantics.ConstrainsCycles(stored.Kind))
+            {
+                EnsureNoCycle(relations, stored.Kind, stored.From, stored.To, relationId);
+            }
 
-        var now = DateTimeOffset.UtcNow;
-        var next = stored with
-        {
-            State = target,
-            StateReason = transition.StateReason,
-            StateExecutor = ExecutorOf(context),
-            StateRecordedAtUtc = now,
-            RequestEvidence = requestAction is null
-                ? stored.RequestEvidence
-                : (stored.RequestEvidence ?? Array.Empty<RelationRequestEvidence>())
-                    .Append(new RelationRequestEvidence(requestAction.Value, transition.RequestEvidence!, ExecutorOf(context), now))
-                    .ToArray()
-        };
-        var payload = RelationCodec.EncodeStored(next);
-        try
-        {
-            var revision = store.WriteContent(relationId, stored.ZoneId, payload, expectedRevision);
-            return new RelationWriteResult(ToRelation(next, revision), ReviewOf(next, store));
-        }
-        catch (ManagedResourceUnavailableException ex)
-        {
-            throw new ArgumentException("The relation write was rejected by vault storage.", ex);
-        }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(payload);
+            if (hasWorkspaceEndpoint && target == RelationState.Accepted)
+            {
+                var workspaceReview = PrepareWorkspaceReviewSnapshot(workspace, relations, stored);
+                var review = EvaluateReview(stored, relations, store, endpointAuthorizer: null, workspaceReview: workspaceReview);
+                if (review.State == RelationReviewState.NeedsReview)
+                {
+                    throw new RelationNeedsReviewException();
+                }
+            }
+
+            RelationHistoryAct[]? history = stored.History;
+            if (hasWorkspaceEndpoint)
+            {
+                if (history is null)
+                {
+                    throw new ArgumentException("The workspace relation history is unavailable.");
+                }
+                if (history.Length >= RelationCodec.MaximumHistoryEntries)
+                {
+                    throw new ArgumentException("The workspace relation history reached its safe event limit.");
+                }
+
+                history = history.Append(new RelationHistoryAct(
+                    HistoryActionFor(target),
+                    target,
+                    executor,
+                    CreationMethod.DirectWrite,
+                    transition.ActReason!,
+                    now,
+                    expectedRevision)).ToArray();
+            }
+
+            var next = stored with
+            {
+                State = target,
+                StateReason = transition.StateReason,
+                StateExecutor = executor,
+                StateRecordedAtUtc = now,
+                RequestEvidence = requestAction is null
+                    ? stored.RequestEvidence
+                    : (stored.RequestEvidence ?? Array.Empty<RelationRequestEvidence>())
+                        .Append(new RelationRequestEvidence(requestAction.Value, transition.RequestEvidence!, executor, now))
+                        .ToArray(),
+                History = history
+            };
+            var payload = RelationCodec.EncodeStored(next);
+            try
+            {
+                var revision = store.WriteContent(relationId, stored.ZoneId, payload, expectedRevision);
+                return new RelationWriteResult(ToRelation(next, revision), ReviewOf(next, store, workspace));
+            }
+            catch (ManagedResourceUnavailableException ex)
+            {
+                throw new ArgumentException("The relation write was rejected by vault storage.", ex);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(payload);
+            }
         }
     }
 
@@ -572,17 +702,75 @@ public sealed class RelationService
     /// Review state of a just-written relation, evaluated with full owner
     /// authority: write responses never withhold a flag the caller may act on.
     /// </summary>
-    private static RelationReview ReviewOf(StoredRelation stored, IManagedResourceStore store) =>
-        EvaluateReview(stored, LoadRelations(store), store, endpointAuthorizer: null);
+    private static RelationReview ReviewOf(
+        StoredRelation stored,
+        IManagedResourceStore store,
+        IWorkspacePersistence? workspace)
+    {
+        var relations = LoadRelations(store);
+        var workspaceReview = PrepareWorkspaceReviewSnapshot(workspace, relations, stored);
+        return EvaluateReview(
+            stored, relations, store, endpointAuthorizer: null, workspaceReview: workspaceReview);
+    }
+
+    private sealed record WorkspaceRelationReviewSnapshot(
+        IReadOnlyDictionary<string, WorkspaceNodeInfo> Nodes);
+
+    private static WorkspaceRelationReviewSnapshot? PrepareWorkspaceReviewSnapshot(
+        IWorkspacePersistence? workspace,
+        IReadOnlyList<StoredRelation> relations,
+        StoredRelation? target)
+    {
+        if (workspace is null ||
+            (target is null
+                ? !relations.Any(RelationEndpointSemantics.HasWorkspaceEndpoint)
+                : !RelationEndpointSemantics.HasWorkspaceEndpoint(target) &&
+                    !relations.Any(RelationEndpointSemantics.HasWorkspaceEndpoint)))
+        {
+            return null;
+        }
+
+        var tree = workspace.ReadWorkspaceTree();
+        return new WorkspaceRelationReviewSnapshot(
+            tree is null
+                ? new Dictionary<string, WorkspaceNodeInfo>(StringComparer.Ordinal)
+                : tree.Nodes.ToDictionary(node => node.Id, StringComparer.Ordinal));
+    }
+
+    private static bool TryGetWorkspaceNode(
+        WorkspaceRelationReviewSnapshot? snapshot,
+        RelationEndpoint endpoint,
+        out WorkspaceNodeInfo node)
+    {
+        if (snapshot is not null &&
+            snapshot.Nodes.TryGetValue(endpoint.ResourceId, out node!) &&
+            (endpoint.EndpointKind == RelationEndpointKind.WorkspaceFolder
+                ? node.Kind == WorkspaceNodeKind.Folder
+                : node.Kind == WorkspaceNodeKind.File))
+        {
+            return true;
+        }
+
+        node = null!;
+        return false;
+    }
 
     /// <summary>
-    /// Verifies an endpoint against live state: the resource must exist in the
-    /// encrypted manifest, the link must pin its current revision, it must
-    /// decode as the declared kind (memory item or registered source, never a
-    /// relation or a raw resource), and a span requires a registered source.
+    /// Verifies a managed endpoint against the encrypted manifest and declared
+    /// record kind, or verifies a workspace endpoint against one authenticated
+    /// tree snapshot and its retained bytes/pins.
     /// </summary>
-    private static RelationEndpoint VerifyEndpoint(IManagedResourceStore store, RelationEndpoint endpoint)
+    private static RelationEndpoint VerifyEndpoint(
+        IManagedResourceStore store,
+        RelationEndpoint endpoint,
+        IWorkspacePersistence? workspace,
+        WorkspaceSnapshot? workspaceTree)
     {
+        if (RelationEndpointSemantics.IsWorkspace(endpoint.EndpointKind))
+        {
+            return VerifyWorkspaceEndpoint(workspace, workspaceTree, endpoint);
+        }
+
         var live = SourceRegistryService.TryGetLiveRevision(store, endpoint.ResourceId);
         if (live is null)
         {
@@ -591,13 +779,94 @@ public sealed class RelationService
 
         if (live.Value != endpoint.Revision)
         {
-            throw new ArgumentException("A relation endpoint must pin the live revision.");
+            throw new ArgumentException("A managed relation endpoint must pin its live revision.");
         }
 
         var kind = DetectEndpointKind(store, endpoint.ResourceId);
         if (kind != endpoint.EndpointKind)
         {
             throw new ArgumentException("A relation endpoint kind does not match the registered resource.");
+        }
+
+        return endpoint;
+    }
+
+    private static RelationEndpoint VerifyWorkspaceEndpoint(
+        IWorkspacePersistence? workspace,
+        WorkspaceSnapshot? tree,
+        RelationEndpoint endpoint)
+    {
+        if (workspace is null || tree is null)
+        {
+            throw new ArgumentException("The workspace endpoint is unavailable.");
+        }
+
+        var node = tree.Nodes.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, endpoint.ResourceId, StringComparison.Ordinal));
+        if (node is null)
+        {
+            throw new ArgumentException("A workspace relation endpoint must name a live node.");
+        }
+
+        if (endpoint.EndpointKind == RelationEndpointKind.WorkspaceFolder)
+        {
+            if (node.Kind != WorkspaceNodeKind.Folder || node.Revision != endpoint.Revision ||
+                tree.Revision != endpoint.WorkspacePin!.TreeRevision)
+            {
+                throw new ArgumentException("A workspace folder endpoint must pin its live node and observed tree revisions.");
+            }
+
+            return endpoint;
+        }
+
+        if (node.Kind != WorkspaceNodeKind.File ||
+            !node.Revisions.Any(revision => revision.Revision == endpoint.Revision))
+        {
+            throw new ArgumentException("A workspace file or passage endpoint must name a retained file revision.");
+        }
+
+        var content = workspace.ReadWorkspaceFile(endpoint.ResourceId, endpoint.Revision);
+        try
+        {
+            var retained = node.Revisions.First(revision => revision.Revision == endpoint.Revision);
+            var contentSha256 = Convert.ToHexStringLower(SHA256.HashData(content.Content));
+            if (content.Revision != endpoint.Revision ||
+                !string.Equals(content.Sha256, retained.Sha256, StringComparison.Ordinal) ||
+                !string.Equals(content.Sha256, contentSha256, StringComparison.Ordinal))
+            {
+                throw new ArgumentException("The workspace endpoint content does not match its authenticated retained revision.");
+            }
+
+            if (endpoint.EndpointKind == RelationEndpointKind.WorkspaceFile)
+            {
+                if (!string.Equals(endpoint.WorkspacePin!.Sha256, contentSha256, StringComparison.Ordinal))
+                {
+                    throw new ArgumentException("The workspace file endpoint digest does not match the named revision.");
+                }
+            }
+            else
+            {
+                var span = endpoint.Span!;
+                var length = span.End - span.Start;
+                if (span.End > content.Content.LongLength || span.Start > int.MaxValue || length > int.MaxValue)
+                {
+                    throw new ArgumentException("The workspace passage range is outside the named retained content.");
+                }
+
+                var passageSha256 = Convert.ToHexStringLower(
+                    SHA256.HashData(content.Content.AsSpan((int)span.Start, (int)length)));
+                if (!string.Equals(endpoint.WorkspacePin!.Sha256, passageSha256, StringComparison.Ordinal))
+                {
+                    throw new ArgumentException("The workspace passage digest does not match the exact named bytes.");
+                }
+            }
+        }
+        finally
+        {
+            if (content.Content.Length > 0)
+            {
+                CryptographicOperations.ZeroMemory(content.Content);
+            }
         }
 
         return endpoint;
@@ -644,16 +913,15 @@ public sealed class RelationService
     }
 
     /// <summary>
-    /// Rejects `derived_from`/`supersedes` cycles, including mixed chains:
-    /// both kinds are derivation/replacement edges over one DAG, so adding an
-    /// edge whose object can already reach the subject is refused. other kinds,
-    /// including `related_to`, may carry cycles.
+    /// Rejects derived_from/supersedes cycles over stable logical resource IDs
+    /// across every stored relation state. Workspace revisions and passage spans
+    /// pin evidence but do not create new graph nodes; a passage maps to its file.
     /// </summary>
     private static void EnsureNoCycle(
         IReadOnlyList<StoredRelation> relations,
         RelationKind kind,
-        string fromResourceId,
-        string toResourceId,
+        RelationEndpoint from,
+        RelationEndpoint to,
         string relationId)
     {
         if (!RelationSemantics.ConstrainsCycles(kind))
@@ -661,7 +929,7 @@ public sealed class RelationService
             return;
         }
 
-        var edges = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var edges = new Dictionary<RelationEndpointIdentity, List<RelationEndpointIdentity>>();
         foreach (var relation in relations)
         {
             if (!RelationSemantics.ConstrainsCycles(relation.Kind) ||
@@ -670,18 +938,20 @@ public sealed class RelationService
                 continue;
             }
 
-            if (!edges.TryGetValue(relation.From.ResourceId, out var targets))
+            var source = RelationEndpointSemantics.CycleIdentityOf(relation.From);
+            if (!edges.TryGetValue(source, out var targets))
             {
-                targets = new List<string>();
-                edges[relation.From.ResourceId] = targets;
+                targets = new List<RelationEndpointIdentity>();
+                edges.Add(source, targets);
             }
 
-            targets.Add(relation.To.ResourceId);
+            targets.Add(RelationEndpointSemantics.CycleIdentityOf(relation.To));
         }
 
-        var pending = new Stack<string>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        pending.Push(toResourceId);
+        var fromIdentity = RelationEndpointSemantics.CycleIdentityOf(from);
+        var pending = new Stack<RelationEndpointIdentity>();
+        var seen = new HashSet<RelationEndpointIdentity>();
+        pending.Push(RelationEndpointSemantics.CycleIdentityOf(to));
         while (pending.Count > 0)
         {
             var node = pending.Pop();
@@ -690,42 +960,40 @@ public sealed class RelationService
                 continue;
             }
 
-            if (string.Equals(node, fromResourceId, StringComparison.Ordinal))
+            if (node == fromIdentity)
             {
                 throw new RelationCycleException();
             }
 
             if (edges.TryGetValue(node, out var targets))
             {
-                foreach (var target in targets)
+                foreach (var next in targets)
                 {
-                    pending.Push(target);
+                    pending.Push(next);
                 }
             }
         }
     }
 
     /// <summary>
-    /// Read-time review evaluation over live state. A relation needs review
-    /// when an endpoint is missing, when the cited evidence endpoint moved to a
-    /// new revision, when the cited registered source is not available, or when
-    /// the evidence endpoint is itself the dependent side of a relation that
-    /// needs review (bounded transitive propagation). Nothing is rewritten and
-    /// no link is dropped: the stored record stays the truthful history and the
-    /// computed state says how far it can still be trusted.
+    /// Read-time review uses content selectors rather than cycle-node identity.
+    /// Managed edges preserve their legacy one-sided evidence semantics;
+    /// workspace semantic edges except related_to pin and review both file or
+    /// passage endpoints, including both sides of contradicts. Nothing is
+    /// rewritten: stale pins and dependent evidence are reported as review-needed.
     /// </summary>
     private static RelationReview EvaluateReview(
         StoredRelation target,
         IReadOnlyList<StoredRelation> relations,
         IManagedResourceStore store,
-        Func<RelationEndpoint, bool>? endpointAuthorizer)
+        Func<RelationEndpoint, bool>? endpointAuthorizer,
+        WorkspaceRelationReviewSnapshot? workspaceReview)
     {
         var liveRevisions = new Dictionary<string, long>(StringComparer.Ordinal);
         foreach (var resource in store.ListResources())
         {
             liveRevisions[resource.ResourceId] = resource.Revision;
         }
-
         var availabilityCache = new Dictionary<string, SourceAvailability?>(StringComparer.Ordinal);
         SourceAvailability? AvailabilityOf(string resourceId, long revision)
         {
@@ -764,39 +1032,62 @@ public sealed class RelationService
         }
 
         var reasons = new Dictionary<string, RelationReviewReason>(StringComparer.Ordinal);
-        var affected = new HashSet<string>(StringComparer.Ordinal);
+        var affected = new HashSet<RelationEndpointIdentity>();
         var pending = new Queue<StoredRelation>();
-
         foreach (var relation in relations)
         {
-            var direct = RelationReviewReason.None;
-            foreach (var endpoint in new[] { relation.From, relation.To })
+            if (workspaceReview is null && RelationEndpointSemantics.HasWorkspaceEndpoint(relation))
             {
-                if (!liveRevisions.ContainsKey(endpoint.ResourceId))
-                {
-                    direct |= RelationReviewReason.EndpointMissing;
-                    affected.Add(endpoint.ResourceId);
-                }
+                continue;
             }
-
-            var side = RelationSemantics.EvidenceSide(relation.Kind);
-            if (side != RelationEvidenceSide.None)
+            var direct = RelationReviewReason.None;
+            for (var endpointIndex = 0; endpointIndex < 2; endpointIndex++)
             {
-                var evidence = SideEndpoint(relation, side);
-                if (liveRevisions.TryGetValue(evidence.ResourceId, out var live))
+                var endpoint = endpointIndex == 0 ? relation.From : relation.To;
+                var identity = RelationEndpointSemantics.IdentityOf(endpoint);
+                if (RelationEndpointSemantics.IsWorkspace(endpoint.EndpointKind))
                 {
-                    if (evidence.EndpointKind == RelationEndpointKind.RegisteredSource &&
-                        AvailabilityOf(evidence.ResourceId, live) != SourceAvailability.Available)
+                    if (!TryGetWorkspaceNode(workspaceReview, endpoint, out var node))
                     {
-                        direct |= RelationReviewReason.SourceUnavailable;
-                        affected.Add(evidence.ResourceId);
+                        direct |= RelationReviewReason.EndpointMissing;
+                        affected.Add(identity);
                     }
-
-                    if (RelationSemantics.PinsRevision(relation.Kind) && live != evidence.Revision)
+                    else if (RelationSemantics.PinsWorkspaceRevision(relation.Kind) &&
+                        (endpoint.EndpointKind is RelationEndpointKind.WorkspaceFile or RelationEndpointKind.WorkspacePassage) &&
+                        node.ContentRevision != endpoint.Revision)
                     {
                         direct |= RelationReviewReason.EndpointRevisionChanged;
-                        affected.Add(evidence.ResourceId);
+                        affected.Add(identity);
                     }
+
+                    continue;
+                }
+
+                if (!liveRevisions.TryGetValue(endpoint.ResourceId, out var live))
+                {
+                    direct |= RelationReviewReason.EndpointMissing;
+                    affected.Add(identity);
+                    continue;
+                }
+
+                var side = RelationSemantics.EvidenceSide(relation.Kind);
+                if (side == RelationEvidenceSide.None ||
+                    !RelationEndpointSemantics.IdentityOf(SideEndpoint(relation, side)).Equals(identity))
+                {
+                    continue;
+                }
+
+                if (endpoint.EndpointKind == RelationEndpointKind.RegisteredSource &&
+                    AvailabilityOf(endpoint.ResourceId, live) != SourceAvailability.Available)
+                {
+                    direct |= RelationReviewReason.SourceUnavailable;
+                    affected.Add(identity);
+                }
+
+                if (RelationSemantics.PinsRevision(relation.Kind) && live != endpoint.Revision)
+                {
+                    direct |= RelationReviewReason.EndpointRevisionChanged;
+                    affected.Add(identity);
                 }
             }
 
@@ -819,24 +1110,24 @@ public sealed class RelationService
                 continue;
             }
 
-            var dependent = SideEndpoint(relation, dependentSide).ResourceId;
-            if (!affected.Add(dependent))
+            var dependent = SideEndpoint(relation, dependentSide);
+            var dependentIdentity = RelationEndpointSemantics.IdentityOf(dependent);
+            if (!affected.Add(dependentIdentity))
             {
-                // Already handled as a directly changed or missing endpoint:
-                // relations citing it are already flagged directly.
                 continue;
             }
 
             foreach (var other in relations)
             {
-                if (needsReview.Contains(other.Id))
+                if (needsReview.Contains(other.Id) ||
+                    (workspaceReview is null && RelationEndpointSemantics.HasWorkspaceEndpoint(other)))
                 {
                     continue;
                 }
 
                 var otherSide = RelationSemantics.EvidenceSide(other.Kind);
                 if (otherSide == RelationEvidenceSide.None ||
-                    !string.Equals(SideEndpoint(other, otherSide).ResourceId, dependent, StringComparison.Ordinal))
+                    RelationEndpointSemantics.IdentityOf(SideEndpoint(other, otherSide)) != dependentIdentity)
                 {
                     continue;
                 }
@@ -850,31 +1141,52 @@ public sealed class RelationService
 
         reasons.TryGetValue(target.Id, out var targetReasons);
         var stale = new List<string>();
-        foreach (var endpoint in new[] { target.From, target.To })
+        for (var endpointIndex = 0; endpointIndex < 2; endpointIndex++)
         {
-            if (!liveRevisions.ContainsKey(endpoint.ResourceId))
+            var endpoint = endpointIndex == 0 ? target.From : target.To;
+
+            var identity = RelationEndpointSemantics.IdentityOf(endpoint);
+            var unavailable = RelationEndpointSemantics.IsWorkspace(endpoint.EndpointKind)
+                ? !TryGetWorkspaceNode(workspaceReview, endpoint, out _)
+                : !liveRevisions.ContainsKey(endpoint.ResourceId);
+            if (unavailable)
             {
                 stale.Add(endpoint.ResourceId);
+                continue;
             }
-        }
 
-        var evidenceSide = RelationSemantics.EvidenceSide(target.Kind);
-        if (evidenceSide != RelationEvidenceSide.None)
-        {
-            var evidence = SideEndpoint(target, evidenceSide);
-            if (affected.Contains(evidence.ResourceId))
+            if (RelationEndpointSemantics.IsWorkspace(endpoint.EndpointKind))
             {
-                stale.Add(evidence.ResourceId);
+                var contentRevisionChanged = RelationSemantics.PinsWorkspaceRevision(target.Kind) &&
+                    (endpoint.EndpointKind is RelationEndpointKind.WorkspaceFile or RelationEndpointKind.WorkspacePassage) &&
+                    TryGetWorkspaceNode(workspaceReview, endpoint, out var workspaceNode) &&
+                    workspaceNode.ContentRevision != endpoint.Revision;
+                var evidenceSide = RelationSemantics.EvidenceSide(target.Kind);
+                var dependencyNeedsReview = RelationSemantics.PinsWorkspaceRevision(target.Kind) &&
+                    (targetReasons & RelationReviewReason.DependencyNeedsReview) != 0 &&
+                    evidenceSide != RelationEvidenceSide.None &&
+                    RelationEndpointSemantics.IdentityOf(SideEndpoint(target, evidenceSide)) == identity &&
+                    affected.Contains(identity);
+                if (contentRevisionChanged || dependencyNeedsReview)
+                {
+                    stale.Add(endpoint.ResourceId);
+                }
+            }
+            else
+            {
+                var evidenceSide = RelationSemantics.EvidenceSide(target.Kind);
+                if (evidenceSide != RelationEvidenceSide.None &&
+                    RelationEndpointSemantics.IdentityOf(SideEndpoint(target, evidenceSide)) == identity &&
+                    affected.Contains(identity))
+                {
+                    stale.Add(endpoint.ResourceId);
+                }
             }
         }
 
         var state = targetReasons == RelationReviewReason.None && stale.Count == 0
             ? RelationReviewState.Current
             : RelationReviewState.NeedsReview;
-
-        // Only endpoints of the served relation are ever named, and only when
-        // the caller is authorized for them: chain members outside the
-        // caller's authority contribute the flag but never an identity.
         var disclosed = endpointAuthorizer is null
             ? stale.Distinct(StringComparer.Ordinal).ToArray()
             : stale
@@ -954,6 +1266,14 @@ public sealed class RelationService
     internal static string MintRelationId() =>
         DomainIdentifiers.RelationIdPrefix + Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
 
+    private static RelationHistoryAction HistoryActionFor(RelationState target) => target switch
+    {
+        RelationState.Accepted => RelationHistoryAction.Accepted,
+        RelationState.Rejected => RelationHistoryAction.Rejected,
+        RelationState.Retracted => RelationHistoryAction.Retracted,
+        RelationState.Proposed => RelationHistoryAction.Restored,
+        _ => throw new ArgumentException("The target relation state has no history action.")
+    };
     internal static Relation ToRelation(StoredRelation stored, long revision) => new(
         stored.Id,
         stored.ZoneId,
@@ -971,7 +1291,9 @@ public sealed class RelationService
         stored.RecordedAtUtc,
         stored.StateExecutor,
         stored.StateRecordedAtUtc,
-        stored.RequestEvidence);
+        stored.RequestEvidence,
+        stored.Origin,
+        stored.History);
 
     private static long ResolveLiveRevision(IManagedResourceStore store, string relationId)
     {

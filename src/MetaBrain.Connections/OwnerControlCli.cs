@@ -5341,15 +5341,22 @@ internal static class OwnerControlCli
 
     private static void PrintRelationElement(JsonElement relation)
     {
-        Console.WriteLine($"RELATION id={JsonValueText(relation, "id")} zone={JsonValueText(relation, "zoneId")} revision={JsonValueText(relation, "revision")} kind={JsonValueText(relation, "kind")} state={JsonValueText(relation, "state")}");
+        Console.WriteLine(
+            $"RELATION id={JsonValueText(relation, "id")} zone={JsonValueText(relation, "zoneId")} " +
+            $"revision={JsonValueText(relation, "revision")} kind={JsonValueText(relation, "kind")} " +
+            $"state={JsonValueText(relation, "state")} origin={JsonValueText(relation, "origin")}");
         if (relation.TryGetProperty("from", out var from) && from.ValueKind == JsonValueKind.Object)
         {
-            Console.WriteLine($"from resource={JsonValueText(from, "resourceId")} kind={JsonValueText(from, "endpointKind")} revision={JsonValueText(from, "revision")} span={SpanText(from)}");
+            Console.WriteLine(
+                $"from resource={JsonValueText(from, "resourceId")} kind={JsonValueText(from, "endpointKind")} " +
+                $"revision={JsonValueText(from, "revision")} span={SpanText(from)}{WorkspacePinText(from)}");
         }
 
         if (relation.TryGetProperty("to", out var to) && to.ValueKind == JsonValueKind.Object)
         {
-            Console.WriteLine($"to resource={JsonValueText(to, "resourceId")} kind={JsonValueText(to, "endpointKind")} revision={JsonValueText(to, "revision")} span={SpanText(to)}");
+            Console.WriteLine(
+                $"to resource={JsonValueText(to, "resourceId")} kind={JsonValueText(to, "endpointKind")} " +
+                $"revision={JsonValueText(to, "revision")} span={SpanText(to)}{WorkspacePinText(to)}");
         }
 
         Console.WriteLine($"executor={JsonValueText(relation, "executor")} method={JsonValueText(relation, "creationMethod")} recordedUtc={JsonValueText(relation, "recordedAtUtc")} stateExecutor={JsonValueText(relation, "stateExecutor")} stateRecordedUtc={JsonValueText(relation, "stateRecordedAtUtc")}");
@@ -5357,6 +5364,18 @@ internal static class OwnerControlCli
         if (relation.TryGetProperty("stateReason", out var stateReason) && stateReason.ValueKind == JsonValueKind.String)
         {
             Console.WriteLine($"stateReason={stateReason.GetString()}");
+        }
+
+        if (relation.TryGetProperty("history", out var history) && history.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var act in history.EnumerateArray())
+            {
+                Console.WriteLine(
+                    $"history action={JsonValueText(act, "action")} state={JsonValueText(act, "state")} " +
+                    $"actor={JsonValueText(act, "actor")} method={JsonValueText(act, "method")} " +
+                    $"expectedRevision={JsonValueText(act, "expectedRelationRevision")} " +
+                    $"recordedUtc={JsonValueText(act, "recordedAtUtc")} reason={JsonValueText(act, "reason")}");
+            }
         }
 
         if (relation.TryGetProperty("requestEvidence", out var evidence) && evidence.ValueKind == JsonValueKind.Array)
@@ -5385,6 +5404,22 @@ internal static class OwnerControlCli
         endpoint.TryGetProperty("span", out var span) && span.ValueKind == JsonValueKind.Object
             ? $"{JsonValueText(span, "start")}-{JsonValueText(span, "end")}"
             : "none";
+
+    private static string WorkspacePinText(JsonElement endpoint)
+    {
+        if (!endpoint.TryGetProperty("workspacePin", out var pin) || pin.ValueKind != JsonValueKind.Object)
+        {
+            return string.Empty;
+        }
+
+        var digest = pin.TryGetProperty("sha256", out var sha) && sha.ValueKind == JsonValueKind.String
+            ? $" sha256={sha.GetString()}"
+            : string.Empty;
+        var treeRevision = pin.TryGetProperty("treeRevision", out var tree) && tree.ValueKind == JsonValueKind.Number
+            ? $" treeRevision={tree.GetInt64().ToString(CultureInfo.InvariantCulture)}"
+            : string.Empty;
+        return digest + treeRevision;
+    }
 
     /// <summary>
     /// Creates the lifecycle record of one subject item. The resource ID is
@@ -7341,11 +7376,6 @@ internal static class OwnerControlCli
             }
         }
 
-        if (isRelink || isAccept)
-        {
-            return reason is null ? null : null;
-        }
-
         if (reason is null)
         {
             return null;
@@ -7353,7 +7383,19 @@ internal static class OwnerControlCli
 
         try
         {
-            return System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new { stateReason = reason, requestEvidence = (string?)null });
+            return isRelink || isAccept
+                ? System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new
+                {
+                    stateReason = (string?)null,
+                    requestEvidence = (string?)null,
+                    actReason = reason
+                })
+                : System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new
+                {
+                    stateReason = reason,
+                    requestEvidence = (string?)null,
+                    actReason = reason
+                });
         }
         catch (ArgumentException)
         {
@@ -10444,13 +10486,13 @@ internal static class OwnerControlCli
         "proposal-read" => "owner proposal-read --control-pipe <pipe> --resource-id <prop-id> [--resource-revision N]: pending proposal with proposed content and citation review.",
         "proposal-publish" => "owner proposal-publish --control-pipe <pipe> --resource-id <prop-id> --resource-revision <rev> (--body ... same attribution as proposal-read plus --title/--project/--environment/--version/--cite ... | --input-file <reviewed-draft.json>): publish the reviewed content. Attribution must equal the proposal; a stale revision fails closed. Prints the written item + publication state.",
         "proposal-reject" => "owner proposal-reject --control-pipe <pipe> --resource-id <prop-id> --resource-revision <rev> --reason text: reject with rationale; the proposal content is recorded as the rejected review item, the revise subject is untouched.",
-        "relation-create" => "owner relation-create --control-pipe <pipe> --resource-id <rel-id> --zone-id <zone> --kind relatedTo|derivedFrom|supports|contradicts|supersedes|appliesTo|addresses [--state proposed|accepted] --from <id@rev>|source:<id@rev> --to ... --reason text [--state-reason text] [--method M] | --input-file <draft.json>: explicit typed link with provenance. Evidence links pin revisions.",
-        "relation-accept" => "owner relation-accept --control-pipe <pipe> --resource-id <rel-id> --expected-revision <live>: accept a proposed link (state only).",
-        "relation-reject" => "owner relation-reject --control-pipe <pipe> --resource-id <rel-id> --expected-revision <live> --reason text: reject with rationale (use --input-file for the exact transition JSON instead).",
+        "relation-create" => "owner relation-create --control-pipe <pipe> --resource-id <rel-id> --zone-id <zone> --input-file <draft.json>: explicit typed link with provenance; use workspaceFile/workspaceFolder/workspacePassage endpoints with workspacePin SHA-256 and (for folders) treeRevision. origin=importedFileLink or aiSuggestion always remains proposed; embeddings do not create supports edges.",
+        "relation-accept" => "owner relation-accept --control-pipe <pipe> --resource-id <rel-id> --expected-revision <live> [--reason text]: accept a proposed link; workspace acts require a reason and record the revision precondition/history.",
+        "relation-reject" => "owner relation-reject --control-pipe <pipe> --resource-id <rel-id> --expected-revision <live> --reason text: reject with rationale (use --input-file for exact transition JSON).",
         "relation-unlink" => "owner relation-unlink --control-pipe <pipe> --resource-id <rel-id> --expected-revision <live> --reason text: retract with rationale.",
-        "relation-relink" => "owner relation-relink --control-pipe <pipe> --resource-id <rel-id> --expected-revision <live>: undo a removal back to proposed (no rationale).",
-        "relation-read" => "owner relation-read --control-pipe <pipe> --resource-id <rel-id> [--resource-revision N]: one link with provenance and review state.",
-        "relation-list" => "owner relation-list --control-pipe <pipe>: every relation with live revision, provenance and review state.",
+        "relation-relink" => "owner relation-relink --control-pipe <pipe> --resource-id <rel-id> --expected-revision <live> [--reason text]: restore to proposed; workspace acts require a reason and record history.",
+        "relation-read" => "owner relation-read --control-pipe <pipe> --resource-id <rel-id> [--resource-revision N]: inspect typed endpoints, origin, provenance, history and computed review state.",
+        "relation-list" => "owner relation-list --control-pipe <pipe>: every relation with live revision, provenance, history and computed review state.",
         "cognitive-annotation-create" => "owner cognitive-annotation-create --control-pipe <pipe> --file-id <workspace-file-id> --input-file <draft.json>: create an encrypted annotation for one existing live workspace anchor; JSON supplies anchorId, optional facets/kind/author/creationMethod/evidence/level, and suggestion=true creates a pending AI suggestion. Omitted classification axes stay Unknown.",
         "cognitive-annotation-list" => "owner cognitive-annotation-list --control-pipe <pipe>: list annotation IDs, live revisions and zones without reading annotation contents.",
         "cognitive-annotation-query" => "owner cognitive-annotation-query --control-pipe <pipe> [--facet world|experience|opinion|habit|intention|action-effect] [--kind claim|observation|question|hypothesis|decision|lesson|procedure|synthesis|preference|intention|unknown] [--review-status pending|accepted|rejected|unknown] [--origin owner|ai-suggestion|unknown] [--source-availability available|unavailable|unknown]: AND-filters annotations and reports exact annotation/source revisions, facet/kind, origin/review, author/executor/evidence, anchor range/digest/state and availability; no passage text is copied.",

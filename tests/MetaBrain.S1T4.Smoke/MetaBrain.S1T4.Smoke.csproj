@@ -27,5 +27,6 @@
     <ProjectReference Include="..\..\src\MetaBrain.OwnerUi\MetaBrain.OwnerUi.csproj" />
     <ProjectReference Include="..\..\src\MetaBrain.Cli\MetaBrain.Cli.csproj" />
     <ProjectReference Include="..\..\src\MetaBrain.Installer\MetaBrain.Installer.csproj" />
+    <ProjectReference Include="..\..\src\MetaBrain.Mcp\MetaBrain.Mcp.csproj" />
   </ItemGroup>
 </Project>

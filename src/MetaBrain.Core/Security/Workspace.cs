@@ -58,7 +58,10 @@ public static class WorkspaceAnchorStates
 /// is owner-visible metadata: it is not derived from a path and it is never
 /// recomputed from a rewritten file.
 /// </remarks>
-public sealed record WorkspaceContentRevisionInfo(long Revision, long Length, string Sha256);
+public sealed record WorkspaceContentRevisionInfo(long Revision, long Length, string Sha256)
+{
+    public const int MaximumContentBytes = 1024 * 1024;
+}
 
 /// <summary>
 /// One node of the logical tree as the owner sees it. <see cref="ParentId"/> is
