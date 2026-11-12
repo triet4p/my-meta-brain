@@ -40,7 +40,7 @@ Không đánh đổi provenance hoặc khả năng sửa sai để lấy sự đ
 - Embedding model, search/index libraries và cách triển khai relation engine; không còn mở lựa chọn tiếp tục WPF/full web console sau CR03.
 - CR02 đã chốt và triển khai folder/partial parsing ở 1.1.0; source text indexing và editor support mới vẫn theo sprint tương ứng, không suy preservation thành đã hiểu.
 
-[Roadmap tới 2.0.0](ROADMAP-2.0.md): Sprint 11/1.1.0 Complete; Sprint 12–18/G2 Planned. Mỗi sprint có release 1.x.0 rồi G2 major; CR03 đổi từ ba products sang CLI installer + MCP ZIP từ 1.2.0, browser assets bundle từ 1.3.0. Không deadline, performance threshold hoặc implementation authorization mới.
+[Roadmap tới 2.0.0](ROADMAP-2.0.md): Sprint 11/1.1.0, 12/1.2.0, 13/1.3.0, 14/1.4.0 và 15/1.5.0 Complete/published; Sprint 16–18/G2 Planned. Mỗi sprint có release 1.x.0 rồi G2 major; CR03 đổi từ ba products sang CLI installer + MCP ZIP từ 1.2.0, browser assets bundle từ 1.3.0. Không deadline, performance threshold hoặc implementation authorization mới.
 
 ## 3. Mô hình workspace file-first
 

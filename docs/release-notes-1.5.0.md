@@ -180,14 +180,21 @@ $model = '<owner-selected-pinned-E5-model-directory>'
 
 ## Distribution status
 
-The 1.5.0 candidate remains unreleased. Local candidate setup/MCP assets and their manifests are
-written only under ignored `runtime/release-candidates/`; the generated manifest and the task evidence
-are the source for exact filenames, sizes and hashes. The old selected native DLL
-(`a7ca979443378649ad2e18ab923f684390c2f57ff16f611f8671268e4da5986b`) is not used. The selected
-dynamic payload remains in ignored staging at
-`runtime/s15-t6-native-build/target/x86_64-pc-windows-msvc/release/hf_tokenizers.dll` (3,198,464
-bytes; SHA-256 `4595800ae02f9c7c96d583347e6cf1e2ddd17c26348ac8169c8314ca28b7480d`), outside versioned
-product source. The versioned Cargo lock, build provenance and complete native notice text remain
-under `src/MetaBrain.Connections/native/`. The native notices, the Microsoft runtime prerequisite and
-the candidate/package review are distinct gates; the notes stay unreleased and the 1.4.0 public
-downloads and website remain the live ones until publication is executed and smoke-verified.
+1.5.0 is published as `v1.5.0` on 2026-11-09. The public assets are
+`MetaBrain-CLI-1.5.0.exe` (233,550,554 bytes; SHA-256
+`cc4c05d5d9bf73247dbca640f2b9c468c6f7b2d4340ea99f84664f7dad62aefd`) and
+`MetaBrain-MCP-1.5.0.zip` (89,848,853 bytes; SHA-256
+`5ead1bc922596e719e158cf523eb6d4939bee9a32b368c7e03ecc28e117f9b94`), plus
+`candidate-manifest.json`, `SHA256SUMS.txt` and `LICENSE`; the source/tag is `05ca71d1`, candidate
+`100079356d73`, and the publication-docs checkpoint is `9780091f`. See
+[`release-1.5.0.md`](release-1.5.0.md) for the full record. Public smoke passed and the live website
+is deployed.
+
+Useful native-payload provenance retained: the selected native tokenizer DLL
+(`a7ca979443378649ad2e18ab923f684390c2f57ff16f611f8671268e4da5986b` is not used) remains in ignored
+staging at `runtime/s15-t6-native-build/target/x86_64-pc-windows-msvc/release/hf_tokenizers.dll`
+(3,198,464 bytes; SHA-256
+`4595800ae02f9c7c96d583347e6cf1e2ddd17c26348ac8169c8314ca28b7480d`), outside versioned product
+source. The versioned Cargo lock, build provenance and complete native notice text remain under
+`src/MetaBrain.Connections/native/`. The native notices, the Microsoft runtime prerequisite and the
+candidate/package review are distinct gates.

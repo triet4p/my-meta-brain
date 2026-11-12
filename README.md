@@ -221,7 +221,7 @@ none and calls no cloud embedding provider — and the dynamic tokenizer require
 Microsoft Visual C++ v14 x64 Redistributable 14.43.34808 or later. The MCP agent tool surface is
 unchanged at 22 tools. The publication and public smoke are recorded in
 [`artifacts/sprint-15/publication/S15-PUBLISH-P2.md`](artifacts/sprint-15/publication/S15-PUBLISH-P2.md);
-independent public-evidence review and the fresh Bronze checkpoint remain pending.
+independent public-evidence review [`artifacts/sprint-15/reviews/S15-PUBLIC-C1-R1.md`](artifacts/sprint-15/reviews/S15-PUBLIC-C1-R1.md) (PASS) and the fresh Bronze checkpoint [`artifacts/sprint-15/checkpoints/S15-PUBLIC-C1.md`](artifacts/sprint-15/checkpoints/S15-PUBLIC-C1.md) (`9780091f`) are complete.
 
 ### Developer bundle: build the payload from a checkout
 
@@ -425,8 +425,8 @@ the restore stays available, and the real renders of the view.
 
 The project follows the authoritative milestone roadmap in [`docs/PLAN.md`](docs/PLAN.md).
 Milestones 1–9 and Sprint 9's three-product delivery are complete; the public 1.0.0 release,
-asset-name cutover, updated Pages deployment and public smoke are complete. Sprints 11–14 published
-1.1.0–1.4.0, and Sprint 15 prepares the local 1.5.0 candidate (not yet published); see
+asset-name cutover, updated Pages deployment and public smoke are complete. Sprints 11–15 published
+1.1.0–1.5.0; see
 [`docs/PLAN.md`](docs/PLAN.md) for the authoritative status.
 
 - [x] **Milestone 1 (M1) — Encrypted Vault & Scoped Sharing (Sprint 1):** User-controlled key lifecycle, authenticated ciphertext, owner-approved catalog publication, single-use token issuance/redemption, and in-memory scoped reads verified with official Codex and OMP clients.

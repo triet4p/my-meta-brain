@@ -2,7 +2,7 @@
 
 ## Goal và trạng thái
 
-- Status: **In progress — S16-T1 active**. Owner explicitly approved the complete endpoint/revision proposal A–E on 2026-11-12; contract documentation, independent evidence review and Bronze checkpoint remain pending. Release mục tiêu cuối sprint: **1.6.0**; chưa build/publish.
+- Status: **In progress — S16-T1 Complete; S16-T2–T6 unlaunched**. Owner-approved endpoint/revision contract D107 passed independent evidence review and exact-snapshot checkpoint `99994878`. Release mục tiêu cuối sprint: **1.6.0**; chưa build/publish.
 - Entry: Sprint 15 complete và 1.5.0 published.
 - Scope/trace: P2-07, P2-10, P2-12; R08, R14, R15, R23, R25, R36. Các P2 là candidates, không thay baseline khi chưa có approval.
 - Root: `F:/ai-ml/my-meta-brain`; target ref `main`; exact base/worktree/ownership resolve khi execution.
@@ -26,7 +26,7 @@ The approved normative [workspace relation contract](../META-BRAIN.md#41-approve
 
 Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [release contract](../ROADMAP-2.0.md#7-definition-of-release-mỗi-sprint). Status `[ ]` pending; `[~]` active/blocked; `[x]` chỉ sau acceptance và gates.
 
-- [~] **S16-T1 — Relation endpoint và revision contract.**
+- [x] **S16-T1 — Relation endpoint và revision contract.**
     - Change: Chốt file/folder/passage endpoints, membership vs semantic links, related/supports/contradicts/supersedes/applies_to/derived_from và history. Folder applicability không tự áp evidence cho mọi child.
     - Acceptance: Owner review endpoint semantics; stable identity, pinned evidence và cycle/stale rules rõ; adjacency index rebuildable, explicit edges durable và exportable.
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
@@ -66,4 +66,4 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
 
 ## Gate record
 
-S16-T1 [endpoint/revision proposal](../../artifacts/sprint-16/task-1.md) received explicit owner approval on 2026-11-12. Contract completion, independent evidence review and Bronze checkpoint are pending; no PASS claimed. S16-T2–T6 remain unlaunched.
+S16-T1 Complete: owner approved A–E on 2026-11-12; [contract evidence R1 PASS](../../artifacts/sprint-16/reviews/S16-T1-C1-R1.md), zero actionable findings; [Bronze checkpoint C2](../../artifacts/sprint-16/checkpoints/S16-T1-C2.md) committed exact reviewed snapshot as `9999487812724ffe2f85756f4c9162954fb482e0`. Documentation/static checks only; workspace relation runtime remains downstream work. S16-T2–T6 remain unlaunched; no push or publication.

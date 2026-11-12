@@ -222,7 +222,7 @@ Retained as the ordered procedure for the owner-authorized publication, which fo
 independent review of this delta, a fresh Bronze exact-snapshot checkpoint and Main's explicit
 execution release. Publication was executed on 2026-11-09 as `v1.5.0`; see
 `artifacts/sprint-15/publication/S15-PUBLISH-P2.md`. The status is now `published`; independent
-public-evidence review and the fresh Bronze checkpoint remain pending.
+public-evidence review [`artifacts/sprint-15/reviews/S15-PUBLIC-C1-R1.md`](../artifacts/sprint-15/reviews/S15-PUBLIC-C1-R1.md) (PASS) and the fresh Bronze checkpoint [`artifacts/sprint-15/checkpoints/S15-PUBLIC-C1.md`](../artifacts/sprint-15/checkpoints/S15-PUBLIC-C1.md) (`9780091f`) are complete.
 
 1. Re-verify the candidate directory, both asset sizes/SHA-256 and the manifest, and re-run
    `powershell.exe -NoProfile -NonInteractive -File scripts/release/assemble-candidate.ps1
