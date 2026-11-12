@@ -2,7 +2,7 @@
 
 ## Goal và trạng thái
 
-- Status: **In progress — S16-T1 Complete; S16-T2 active; S16-T3–T6 unlaunched**. Owner-approved endpoint/revision contract D107 passed independent evidence review and exact-snapshot checkpoint `99994878`. Release mục tiêu cuối sprint: **1.6.0**; chưa build/publish.
+- Status: **In progress — S16-T1–T2 Complete; S16-T3–T6 unlaunched**. T2 independent evidence R2 PASS and exact-snapshot checkpoint `24b8ac0b`; release mục tiêu cuối sprint: **1.6.0**, chưa build/publish.
 - Entry: Sprint 15 complete và 1.5.0 published.
 - Scope/trace: P2-07, P2-10, P2-12; R08, R14, R15, R23, R25, R36. Các P2 là candidates, không thay baseline khi chưa có approval.
 - Root: `F:/ai-ml/my-meta-brain`; target ref `main`; exact base/worktree/ownership resolve khi execution.
@@ -17,6 +17,8 @@ Full OMP route; task tuần tự T1 → T6. Mỗi task cần worker evidence, in
 Owner authorized launch of **S16-T1 only**, with a Gold worker, independent evidence review and a separate Bronze exact-snapshot commit checkpoint on `main`. Endpoint semantics require owner review before the contract is settled. No authorization for S16-T2–T6, push/tag/upload/deploy/provider access. Tối đa hai active agents, một implementation task. Worker đọc implement-atomic-task và mọi regular file trực tiếp dưới ~/.agents/rules/. Artifacts tại `artifacts/sprint-16/task-<M>.md`, reviews/checkpoints dưới cùng sprint; không tạo trước PASS giả.
 
 Owner authorized **S16-T2** with a Silver worker, full route, independent evidence review and a separate Bronze exact-snapshot commit checkpoint on `main`. Commit scope is the reviewed T2 snapshot only; unrelated changes are excluded. No S16-T3–T6 launch, push or publication is authorized.
+
+Owner-approved T2-only verification exception: the standing normal Codex/OMP MCP-client check is replaced here by actual packaged `MetaBrain.Mcp.exe` stdio proposal/denial smoke with a disclosed synthetic JSON-RPC driver. This unblocks the reviewed T2 checkpoint without claiming real-client proof; normal-client smoke remains mandatory at T6 before publication. No profile/settings/provider changes are authorized.
 
 Không host mutation/ACL/permissions/profile edits; synthetic data mặc định. Không downgrade baseline security, reset data hoặc lấy test suite thay runtime smoke. Decision còn mở/contract thay đổi phải owner-approved và sync docs trước implementation affected path.
 
@@ -33,7 +35,7 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
     - Acceptance: Owner review endpoint semantics; stable identity, pinned evidence và cycle/stale rules rõ; adjacency index rebuildable, explicit edges durable và exportable.
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
 
-- [~] **S16-T2 — Shared relation operations.**
+- [x] **S16-T2 — Shared relation operations.**
     - Change: Create/inspect/confirm/retract/restore typed edges có provenance và revision preconditions; import file links có origin riêng, AI suggestions pending.
     - Acceptance: Rename/move giữ edges; stale endpoint và cycle bị báo đúng; similarity không thành supports, agent claim không owner acceptance; index rebuild/backup restore giữ edges.
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
@@ -68,4 +70,6 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
 
 ## Gate record
 
-S16-T1 Complete: owner approved A–E on 2026-11-12; [contract evidence R1 PASS](../../artifacts/sprint-16/reviews/S16-T1-C1-R1.md), zero actionable findings; [Bronze checkpoint C2](../../artifacts/sprint-16/checkpoints/S16-T1-C2.md) committed exact reviewed snapshot as `9999487812724ffe2f85756f4c9162954fb482e0`. Documentation/static checks only; workspace relation runtime remains downstream work. S16-T2–T6 remain unlaunched; no push or publication.
+S16-T1 Complete: owner approved A–E on 2026-11-12; [contract evidence R1 PASS](../../artifacts/sprint-16/reviews/S16-T1-C1-R1.md), zero actionable findings; [Bronze checkpoint C2](../../artifacts/sprint-16/checkpoints/S16-T1-C2.md) committed exact reviewed snapshot as `9999487812724ffe2f85756f4c9162954fb482e0`. T1 verification was documentation/static only; runtime implementation followed in T2.
+
+S16-T2 Complete: [worker evidence](../../artifacts/sprint-16/task-2.md), [R2 PASS](../../artifacts/sprint-16/reviews/S16-T2-C1-R2.md), zero remaining actionable findings after R1 corrections; [Bronze checkpoint C1](../../artifacts/sprint-16/checkpoints/S16-T2-C1.md) committed exact reviewed snapshot as `24b8ac0b53576cd4714e5c764519a9efed6d3774`. Narrow build, actual CLI/service and packaged-MCP stdio smoke, legacy relation regression passed; normal-client limit/owner exception above. S16-T3–T6 unlaunched; no push or publication.
