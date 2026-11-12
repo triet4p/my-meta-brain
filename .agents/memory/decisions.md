@@ -1422,3 +1422,14 @@ The encrypted workspace-blob read bound covers the six-byte JSON-escape worst ca
 **Reason:** Both-endpoint pins expose changed assertions and preserve reproducible evidence without changing legacy semantics; stable byte selectors avoid a second passage identity truth. The existing conservative mixed DAG is preserved rather than silently allowing cycles through stored retracted/rejected edges. Scope-limited export prevents metadata disclosure, while prospective history avoids claiming acts the legacy store never recorded.
 
 **Consequences:** More workspace edits can require review and scoped exports can omit cross-boundary edges; historical folder membership cannot be inferred from a folder assertion. Future implementation must preserve legacy consumers, authorization, lock, provenance, purge and backup, validate pins, and preserve attributed acts without legacy backfill. This approval is documentation only: no workspace relation runtime, migration, sharing approval, release or evidence PASS is implied.
+
+## [2026-11-12] Keep S16-T3 relational candidates separate from direct hits
+
+**Decision:** S16-T3 returns an unranked `relationCandidates` companion array from the returned hybrid hit page, traversing accepted/current workspace relations in stored direction to a maximum of two edges and the existing request-limit candidate count.
+
+**Alternatives considered:** Merge relation-derived candidates into direct `hits` and totals before T4; expose relation paths/reasons in T3; traverse every reachable neighbor.
+
+**Reason:** D104's literal/semantic totals and direct ranking remain unchanged, and S16-T4 owns relational ranking/explanations. D107 requires exact endpoint scope/currentness and bounded disclosure; separate candidates discover multi-hop evidence/refutation without promoting links to matches or truth.
+
+**Consequences:** T3 callers must treat the companion list as bounded and unranked; `relationExpansionBoundReached` signals that a safety bound withheld eligible in-scope candidates rather than claiming full graph reachability. This implementation choice does not alter D107 or grant MCP/agents workspace access.
+

@@ -908,6 +908,8 @@ internal static class OwnerControlCli
             $"contentDateTo={JsonSerializer.Serialize(JsonValueText(page, "contentDateTo"))} total={JsonValueText(page, "total")} " +
             $"literalTotal={JsonValueText(page, "literalTotal")} " +
             $"semanticCandidateTotal={JsonValueText(page, "semanticCandidateTotal")} " +
+            $"relationCandidateCount={JsonValueText(page, "relationCandidateCount")} " +
+            $"relationExpansionBoundReached={JsonFlagText(page, "relationExpansionBoundReached")} " +
             $"offset={JsonValueText(page, "offset")} limit={JsonValueText(page, "limit")} " +
             $"hasMore={JsonFlagText(page, "hasMore")} semanticStatus={JsonValueText(page, "semanticStatus")} " +
             $"modelRevision={JsonSerializer.Serialize(JsonValueText(page, "modelRevision"))} " +
@@ -921,6 +923,18 @@ internal static class OwnerControlCli
         foreach (var hit in hits.EnumerateArray())
         {
             WriteWorkspaceHybridHit(hit);
+        }
+        if (page.TryGetProperty("relationCandidates", out var relationCandidates) &&
+            relationCandidates.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var candidate in relationCandidates.EnumerateArray())
+            {
+                Console.WriteLine(
+                    $"RELATION_CANDIDATE fileId={JsonValueText(candidate, "fileId")} " +
+                    $"path={JsonSerializer.Serialize(JsonValueText(candidate, "path"))} " +
+                    $"revision={JsonValueText(candidate, "contentRevision")} " +
+                    $"isCurrent={JsonFlagText(candidate, "isCurrent")}");
+            }
         }
     }
     private static void WriteWorkspaceRecallSummary(JsonElement page)

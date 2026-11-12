@@ -1317,6 +1317,9 @@ public sealed record WorkspaceHybridSearchPageWire(
     string? ModelRevision,
     int? VectorDimensions,
     WorkspaceHybridHitWire[] Hits,
+    int RelationCandidateCount,
+    bool RelationExpansionBoundReached,
+    WorkspaceRelationalSearchCandidate[] RelationCandidates,
     WorkspaceRecallSummary? Recall = null);
 
 public sealed record ServiceReply(
@@ -12082,6 +12085,9 @@ public sealed class ServiceRequestHandler
                     hit.Similarity,
                     hit.Recall))
                 .ToArray(),
+            outcome.RelationCandidateCount,
+            outcome.RelationExpansionBoundReached,
+            outcome.RelationCandidates,
             outcome.Recall);
 
     private static bool TryParseSearchDate(string? value, out DateOnly? date)

@@ -44,6 +44,18 @@ public sealed record WorkspaceHybridSearchHit(
     int? ChunkOrdinal,
     double? Similarity,
     WorkspaceRecallHit? Recall = null);
+/// <summary>
+/// One exact workspace file endpoint discovered through bounded relation
+/// traversal. This is candidate discovery only; no relation explanation or
+/// truth assertion is attached.
+/// </summary>
+public sealed record WorkspaceRelationalSearchCandidate(
+    string FileId,
+    string Path,
+    long ContentRevision,
+    string FileSha256,
+    bool IsCurrent);
+
 
 /// <summary>One scoped, ranked and bounded hybrid result page.</summary>
 public sealed record WorkspaceHybridSearchOutcome(
@@ -65,6 +77,9 @@ public sealed record WorkspaceHybridSearchOutcome(
     string? ModelRevision,
     int? VectorDimensions,
     WorkspaceHybridSearchHit[] Hits,
+    int RelationCandidateCount,
+    bool RelationExpansionBoundReached,
+    WorkspaceRelationalSearchCandidate[] RelationCandidates,
     WorkspaceRecallSummary? Recall = null);
 
 /// <summary>One exact timestamp value, retaining the domain's stated precision.</summary>
@@ -162,6 +177,7 @@ public sealed class WorkspaceHybridSearchService
     public const int MaximumLimit = 100;
     public const int DefaultLimit = 20;
     public const int EvidenceSnippetChars = 240;
+    private const int MaximumRelationHops = 2;
 
     // A bounded content-date scan: the filter looks for ISO-8601 dates in the
     // anchored evidence, never at an unbounded line or record.
@@ -211,6 +227,7 @@ public sealed class WorkspaceHybridSearchService
                 request.ContentDateTo?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                 0, 0, 0, request.Offset, request.Limit, false,
                 WorkspaceHybridSemanticStatus.NotApplicableEmptyScope, null, null, [],
+                0, false, [],
                 route is null ? null : EmptyRecall(route, request));
         }
 
@@ -359,6 +376,8 @@ public sealed class WorkspaceHybridSearchService
         }
 
         var nodes = snapshot.Nodes.ToDictionary(node => node.Id, StringComparer.Ordinal);
+        var relationExpansion = ExpandRelationCandidates(
+            context, operation, paths, folderPath, scopeRevisions, nodes, pageCandidates, request.Limit, cancellationToken);
         var evidence = BuildPageEvidence(workspace, nodes, evidenceCandidates, cancellationToken);
         var evidenceByCandidate = new Dictionary<CandidateIdentity, string>(evidenceCandidates.Count);
         for (var index = 0; index < evidenceCandidates.Count; index++)
@@ -432,8 +451,196 @@ public sealed class WorkspaceHybridSearchService
             modelRevision,
             vectorDimensions,
             page,
+            relationExpansion.Candidates.Length,
+            relationExpansion.BoundReached,
+            relationExpansion.Candidates,
             recall);
     }
+    /// <summary>
+    /// Expands only the returned hybrid page's seeds. Each file/passage
+    /// endpoint must be in the caller's folder and selected exact-revision
+    /// scope; a folder endpoint is authorized only by its stable in-scope
+    /// identity. Only accepted/current relations in stored From-to-To direction
+    /// are eligible. Folder membership is never expanded; results expose only
+    /// the scoped target path/revision/digest, not relation metadata, reasons,
+    /// traversal paths, titles, or content snippets.
+    /// </summary>
+    private static (WorkspaceRelationalSearchCandidate[] Candidates, bool BoundReached) ExpandRelationCandidates(
+        AuthenticatedContext context,
+        IVaultOperation operation,
+        IReadOnlyDictionary<string, string> paths,
+        string? folderPath,
+        IReadOnlyList<ScopeRevision> scopeRevisions,
+        IReadOnlyDictionary<string, WorkspaceNodeInfo> nodes,
+        IReadOnlyList<WorkspaceHybridCandidate> seeds,
+        int maximumCandidates,
+        CancellationToken cancellationToken)
+    {
+        if (seeds.Count == 0)
+        {
+            return (Array.Empty<WorkspaceRelationalSearchCandidate>(), false);
+        }
+
+        var scopedRevisions = new Dictionary<(string FileId, long Revision), ScopeRevision>(scopeRevisions.Count);
+        foreach (var scopeRevision in scopeRevisions)
+        {
+            scopedRevisions.Add((scopeRevision.Node.Id, scopeRevision.Revision.Revision), scopeRevision);
+        }
+
+        bool IsEndpointInScope(RelationEndpoint endpoint)
+        {
+            if (!RelationEndpointSemantics.IsWorkspace(endpoint.EndpointKind) ||
+                !nodes.TryGetValue(endpoint.ResourceId, out var node) ||
+                !paths.TryGetValue(endpoint.ResourceId, out var path) ||
+                !IsWithinFolderScope(path, folderPath))
+            {
+                return false;
+            }
+
+            return endpoint.EndpointKind switch
+            {
+                RelationEndpointKind.WorkspaceFolder => node.Kind == WorkspaceNodeKind.Folder,
+                RelationEndpointKind.WorkspaceFile or RelationEndpointKind.WorkspacePassage =>
+                    node.Kind == WorkspaceNodeKind.File &&
+                    scopedRevisions.ContainsKey((endpoint.ResourceId, endpoint.Revision)),
+                _ => false
+            };
+        }
+
+        var relationReads = new RelationService().List(context, operation, IsEndpointInScope, operation);
+        var relations = new List<Relation>(relationReads.Length);
+        foreach (var relationRead in relationReads)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (relationRead.Relation is { State: RelationState.Accepted } relation &&
+                relationRead.Review is { State: RelationReviewState.Current } &&
+                IsTraversableRelationKind(relation.Kind))
+            {
+                relations.Add(relation);
+            }
+        }
+
+        relations.Sort(static (left, right) => StringComparer.Ordinal.Compare(left.Id, right.Id));
+
+        var visited = new HashSet<(string FileId, long Revision)>();
+        var frontier = new HashSet<(string FileId, long Revision)>();
+        foreach (var seed in seeds)
+        {
+            var seedIdentity = (seed.FileId, seed.ContentRevision);
+            if (visited.Add(seedIdentity))
+            {
+                frontier.Add(seedIdentity);
+            }
+        }
+
+        var candidates = new List<WorkspaceRelationalSearchCandidate>(Math.Min(maximumCandidates, seeds.Count));
+        var boundReached = false;
+        for (var hop = 0; hop < MaximumRelationHops && frontier.Count > 0; hop++)
+        {
+            var frontierIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var endpoint in frontier)
+            {
+                frontierIds.Add(endpoint.FileId);
+            }
+
+            var nextFrontier = new HashSet<(string FileId, long Revision)>();
+            foreach (var relation in relations)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var sourceMatches = relation.Kind == RelationKind.RelatedTo
+                    ? frontierIds.Contains(relation.From.ResourceId)
+                    : frontier.Contains((relation.From.ResourceId, relation.From.Revision));
+                var targetIdentity = (relation.To.ResourceId, relation.To.Revision);
+                if (relation.From.EndpointKind is not (RelationEndpointKind.WorkspaceFile or RelationEndpointKind.WorkspacePassage) ||
+                    !sourceMatches ||
+                    relation.To.EndpointKind is not (RelationEndpointKind.WorkspaceFile or RelationEndpointKind.WorkspacePassage) ||
+                    !scopedRevisions.TryGetValue(targetIdentity, out var targetRevision) ||
+                    visited.Contains(targetIdentity))
+                {
+                    continue;
+                }
+
+                if (candidates.Count >= maximumCandidates)
+                {
+                    boundReached = true;
+                    break;
+                }
+
+                visited.Add(targetIdentity);
+                candidates.Add(new WorkspaceRelationalSearchCandidate(
+                    relation.To.ResourceId,
+                    targetRevision.Path,
+                    targetRevision.Revision.Revision,
+                    targetRevision.Revision.Sha256,
+                    targetRevision.IsCurrent));
+                nextFrontier.Add(targetIdentity);
+            }
+
+            if (boundReached || nextFrontier.Count == 0)
+            {
+                break;
+            }
+
+            frontier = nextFrontier;
+            if (hop + 1 == MaximumRelationHops)
+            {
+                var nextFrontierIds = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var endpoint in frontier)
+                {
+                    nextFrontierIds.Add(endpoint.FileId);
+                }
+
+                if (HasExpandableRelationCandidate(relations, frontier, nextFrontierIds, visited, scopedRevisions))
+                {
+                    boundReached = true;
+                }
+            }
+        }
+
+        return (candidates.ToArray(), boundReached);
+    }
+
+    private static bool HasExpandableRelationCandidate(
+        IReadOnlyList<Relation> relations,
+        HashSet<(string FileId, long Revision)> frontier,
+        HashSet<string> frontierIds,
+        HashSet<(string FileId, long Revision)> visited,
+        IReadOnlyDictionary<(string FileId, long Revision), ScopeRevision> scopedRevisions)
+    {
+        foreach (var relation in relations)
+        {
+            var sourceMatches = relation.Kind == RelationKind.RelatedTo
+                ? frontierIds.Contains(relation.From.ResourceId)
+                : frontier.Contains((relation.From.ResourceId, relation.From.Revision));
+            if (relation.From.EndpointKind is (RelationEndpointKind.WorkspaceFile or RelationEndpointKind.WorkspacePassage) &&
+                sourceMatches &&
+                relation.To.EndpointKind is (RelationEndpointKind.WorkspaceFile or RelationEndpointKind.WorkspacePassage) &&
+                !visited.Contains((relation.To.ResourceId, relation.To.Revision)) &&
+                scopedRevisions.ContainsKey((relation.To.ResourceId, relation.To.Revision)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsTraversableRelationKind(RelationKind kind) =>
+        kind is RelationKind.RelatedTo or
+            RelationKind.DerivedFrom or
+            RelationKind.Supports or
+            RelationKind.Contradicts or
+            RelationKind.Supersedes or
+            RelationKind.AppliesTo or
+            RelationKind.Addresses;
+
+    private static bool IsWithinFolderScope(string path, string? folderPath) =>
+        string.IsNullOrEmpty(folderPath) ||
+        string.Equals(path, folderPath, StringComparison.Ordinal) ||
+        (path.Length > folderPath.Length &&
+         path.StartsWith(folderPath, StringComparison.Ordinal) &&
+         path[folderPath.Length] == '/');
+
 
 
     private static WorkspaceRecallSummary EmptyRecall(

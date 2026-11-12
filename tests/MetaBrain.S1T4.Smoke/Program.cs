@@ -34,6 +34,8 @@ internal static class Program
             string.Equals(args[0], "s15-t2", StringComparison.Ordinal);
         var s16T2Scenario = args.Length == 4 &&
             string.Equals(args[0], "s16-t2", StringComparison.Ordinal);
+        var s16T3Scenario = args.Length == 3 &&
+            string.Equals(args[0], "s16-t3", StringComparison.Ordinal);
         var s15T3Scenario = args.Length == 3 &&
             string.Equals(args[0], "s15-t3", StringComparison.Ordinal);
         var s15T4Scenario = args.Length == 3 &&
@@ -42,6 +44,7 @@ internal static class Program
             string.Equals(args[0], "s15-t5", StringComparison.Ordinal);
         var scenario = s15T2Scenario ? "s15-t2" :
             s16T2Scenario ? "s16-t2" :
+            s16T3Scenario ? "s16-t3" :
             s15T3Scenario ? "s15-t3" :
             s15T4Scenario ? "s15-t4" :
             s15T5Scenario ? "s15-t5" : args.Length == 2 &&
@@ -204,6 +207,7 @@ internal static class Program
             Console.Error.WriteLine("S15-T1 invocation: MetaBrain.S1T4.Smoke.exe s15-t1 <MetaBrain.Connections.exe>");
             Console.Error.WriteLine("S15-T2 invocation: MetaBrain.S1T4.Smoke.exe s15-t2 <MetaBrain.Connections.exe> <MetaBrain.Cli.exe>");
             Console.Error.WriteLine("S16-T2 invocation: MetaBrain.S1T4.Smoke.exe s16-t2 <MetaBrain.Connections.exe> <MetaBrain.Cli.exe>");
+            Console.Error.WriteLine("S16-T3 invocation: MetaBrain.S1T4.Smoke.exe s16-t3 <MetaBrain.Connections.exe> <MetaBrain.Cli.exe>");
             Console.Error.WriteLine("S15-T3 invocation: MetaBrain.S1T4.Smoke.exe s15-t3 <MetaBrain.Connections.exe> <MetaBrain.Cli.exe>");
             Console.Error.WriteLine("S15-T4 invocation: MetaBrain.S1T4.Smoke.exe s15-t4 <MetaBrain.Connections.exe> <MetaBrain.Cli.exe>");
             Console.Error.WriteLine("S15-T5 invocation: MetaBrain.S1T4.Smoke.exe s15-t5 <MetaBrain.Connections.exe> <MetaBrain.Cli.exe> (needs an installed Chromium browser or CHROME_PATH)");
@@ -332,6 +336,10 @@ internal static class Program
                 case "s16-t2":
                     await OwnerServiceSmoke.RunS16T2WorkspaceRelationsAsync(
                         fullPath, Path.GetFullPath(args[2]), Path.GetFullPath(args[3])).ConfigureAwait(false);
+                    break;
+                case "s16-t3":
+                    await OwnerServiceSmoke.RunS16T3RelationalExpansionAsync(
+                        fullPath, Path.GetFullPath(args[2])).ConfigureAwait(false);
                     break;
                 case "s15-t3":
                     await OwnerServiceSmoke.RunS15T3HybridSearchAsync(fullPath, Path.GetFullPath(args[2])).ConfigureAwait(false);
