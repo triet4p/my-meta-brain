@@ -1,5 +1,5 @@
 # Operations — installing and running Meta Brain every day
-**Release status:** 1.5.0 is published as `v1.5.0` on 2026-11-09; its two downloads are the current products. Candidate-only model/resource guidance is labeled in §3.2.7. The published 1.4.0 downloads remain available and byte-unchanged.
+**Release status:** 1.5.0 is published as `v1.5.0` on 2026-11-09; its two downloads are the current public products. A 1.6.0 CLI/MCP candidate carrying the Sprint 16 typed workspace relations and relational search is assembled and verified locally, but it is **not published**: no `v1.6.0` tag, Release or download exists. Candidate-only model/resource guidance is labeled in §3.2.7. The published 1.4.0 downloads remain available and byte-unchanged.
 
 Meta Brain is installed for **one owner account** on Windows. The owner installs it, starts it,
 unlocks it, and uses it; the agents connect to it as scoped clients. Nothing in this runbook needs
@@ -561,7 +561,7 @@ Model directories and decoded passage groups are process-memory-only for the unl
 
 The 1.5.0 hybrid workspace path is published 1.5.0 behavior available from the `v1.5.0` download; the published 1.4.0 downloads do not include it. See the [1.5.0 release notes](release-notes-1.5.0.md). Hybrid indexing and search are owner-CLI operations only. MCP remains the scoped agent surface and does not expose owner workspace search.
 
-The 1.5.0 candidate's dynamic native tokenizer requires Microsoft Visual C++ v14 x64 Redistributable version 14.43.34808 or later. Install it directly from Microsoft's [latest supported downloads](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170) before CLI setup or MCP startup. CLI setup, direct install and MCP startup read only the installed x64 runtime version and refuse before payload extraction, application/data-root changes or service changes if it is missing, unreadable, malformed or too old. Meta Brain does not download, bundle or install the runtime. Windows 10+ includes the OS Universal CRT; it does not provide the `VCRUNTIME140.dll` and `VCRUNTIME140_1.dll` imports. This prerequisite applies only to the unreleased 1.5.0 candidate and does not change the published 1.4.0 products.
+The 1.6.0 candidate's dynamic native tokenizer requires Microsoft Visual C++ v14 x64 Redistributable version 14.43.34808 or later. Install it directly from Microsoft's [latest supported downloads](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170) before CLI setup or MCP startup. CLI setup, direct install and MCP startup read only the installed x64 runtime version and refuse before payload extraction, application/data-root changes or service changes if it is missing, unreadable, malformed or too old. Meta Brain does not download, bundle or install the runtime. Windows 10+ includes the OS Universal CRT; it does not provide the `VCRUNTIME140.dll` and `VCRUNTIME140_1.dll` imports. This prerequisite applies only to the unreleased 1.5.0 candidate and does not change the published 1.4.0 products.
 
 The owner must explicitly choose a local model directory when rebuilding or searching in hybrid mode. The approved repository-local model root is `runtime/s15-t1-model-staging/614241f622f53c4eeff9890bdc4f31cfecc418b3/model`; another owner-selected path is valid only when it contains the same pinned files under `onnx/`:
 
@@ -659,8 +659,9 @@ Use `workspace-tree` for one row per logical folder/file and `cognitive-annotati
 ### 3.2.8 Workspace search and the optional `open` document session (S13-T4–T6)
 
 Both surfaces are owner CLI features of the current runtime (search and editing added in 1.3.0;
-1.4.0 kept them unchanged; the Sprint 15 hybrid pass below is prepared 1.5.0 work that is not yet
-published).
+1.4.0 kept them unchanged; the Sprint 15 hybrid path is published in 1.5.0, and the Sprint 16
+relation-candidate and ranked-evidence additions described below are part of the prepared 1.6.0
+candidate).
 Search and revision-gated editing work
 with no browser at all; `open` is an optional convenience that serves exactly one document to a
 local browser.
@@ -2017,6 +2018,19 @@ removes the fixture when the run ends.
   `v1.3.0` on 2026-11-03 and 1.4.0 as `v1.4.0` on 2026-11-05 after the owner authorized publication.
   1.5.0 was assembled, reviewed and checkpoint-committed, and was published as `v1.5.0` on
   2026-11-09; the public assets and links were smoke-verified.
+- 1.6.0 is a prepared, locally verified CLI + MCP candidate, **not a published release**: there is no
+  `v1.6.0` tag, Release, download or public smoke. The current public products remain 1.5.0.
+- Workspace relations and relational retrieval were exercised on frozen synthetic workspaces.
+  Graph correctness/quality on owner corpora and very large relation graphs is not established.
+  Expansion is limited to two stored hops and the request limit; only accepted/current edges expand,
+  and folder relations never imply child evidence. The disclosed why-case 0/7 → 7/7 labelled-evidence
+  observation is one synthetic case, not an approved threshold.
+- Relation history is prospective; earlier managed-relation states were not backfilled. A relation is
+  attributed review state, not verified truth, and no similarity score, confidence or newest-wins
+  rule exists. Contradictions are retained rather than filtered.
+- The MCP agent surface is unchanged at 22 tools; agent relation calls stay proposals and cannot
+  accept or share owner workspace relations. There is no agent owner-search route and no relation or
+  graph workbench in any surface.
 - 1.5.0 adds hybrid workspace search only when the owner explicitly supplies a local E5 model
   directory; the release bundles no model weights, downloads none, calls no cloud embedding provider
   and never falls back silently to lexical-only output. The dynamic native tokenizer requires an

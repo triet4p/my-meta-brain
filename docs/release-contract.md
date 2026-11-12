@@ -6,6 +6,32 @@ This is the release/install/site contract for Sprint 10. It does not change prod
 
 **Future transition clarification (D090):** For 1.2, refuse a 1.1 WPF or unknown/mixed installation before stopping or changing files; recommend separate installation, data root and endpoints, with no live shared data root or competing writers. Independently refuse mismatched wire/version endpoints before private operations, including manually mixed binaries. A separately confirmed owner transition requires proof of preserved components/data. See [workspace specification](META-BRAIN.md#134-approved-workspace-contract--d090); this is a future requirement, not evidence that the historical installer implements it.
 
+## Product and support matrix for 1.6.0 (S16-T6)
+
+This is the prepared-candidate 1.6.0 product matrix. It is the supported-OS and product-scope
+statement the packaged `RELEASE-NOTES.txt` in every 1.6.0 asset points at; the 1.5.0 and earlier
+matrices later in this file remain their own historical contracts and are unchanged. Nothing here
+claims that `v1.6.0` is published; the candidate is assembled and verified locally and publication
+remains an owner-authorized step after review, checkpoint and final differential.
+
+| Product | Version / asset | Entry and lifecycle |
+| --- | --- | --- |
+| CLI | `1.6.0`; intended public download `MetaBrain-CLI-1.6.0.exe`; candidate filename stays provenance-bound in the manifest | Dedicated Windows x64 setup EXE. Installs `cli/MetaBrain.Cli.exe`, the shared runtime under `service/`, the shared installer under `installer/` and `install-state.json`, and registers the `cli` component only. The owner CLI carries every cognitive workflow plus the workspace, typed-relation lifecycle/inspection, scoped hybrid search with relation candidates/ranked evidence and the optional document session. No Owner UI, SDK, repository or PowerShell glue is needed. |
+| MCP Server | `1.6.0`; intended public download `MetaBrain-MCP-1.6.0.zip`; candidate filename stays provenance-bound in the manifest | Standalone self-contained ZIP with `mcp/MetaBrain.Mcp.exe`, the shared runtime under `service/`, `package-manifest.json`, the project `LICENSE`, `RELEASE-NOTES.txt`, `THIRD-PARTY-NOTICES.txt` and per-dependency license texts. Stdio transport; the argument list is exactly one of `--data-root <owner data root>` or `--config <service-settings.json>`. The agent surface is unchanged at 22 tools and adds no owner workspace-search or owner relation-acceptance authority; agent relation calls remain proposals. |
+| Document surface | no separate product asset | The existing optional document preview/edit shell and loopback bridge remain compiled into the CLI/shared runtime. There is no relation or graph workbench, static site, separately installable UI or general web console. |
+| Owner UI | none in 1.6 | No 1.6 setup, `owner-ui` component, build or download. The 1.1.0 WPF product, its published downloads, bytes and source remain unchanged history; 1.6 refuses to modify a 1.1 installation or share its live data root and endpoints. |
+
+**Supported platform for these two 1.6.0 products:** 64-bit Windows releases that Microsoft lists as
+supported for .NET 10 at release/publication time. The CLI and the MCP server need no desktop/WPF
+capability, so Server Core/Nano Server is not excluded by a UI requirement. Linux, macOS and ARM are
+out of scope. This is a framework-supported boundary, not a claim that every listed Windows SKU was
+exercised. The self-contained assets need no installed .NET runtime, SDK, source checkout or
+PowerShell. The owner-installed Microsoft Visual C++ v14 x64 Redistributable 14.43.34808 or later
+remains a separate prerequisite for the dynamic native tokenizer, and neither asset bundles,
+installs or downloads it. Both assets are unsigned: SHA-256 verifies the bytes and never
+authenticates the publisher. Product-specific known limits are in the
+[1.6.0 release record](release-1.6.0.md).
+
 ## Product and support matrix for 1.2.0 (S12-T6)
 
 This is the current 1.2.0 product matrix. It is the supported-OS and product-scope statement that the
