@@ -2,7 +2,7 @@
 
 ## Goal và trạng thái
 
-- Status: **In progress — S16-T1–T5 Complete; S16-T6 active**. T5 independent evidence R1 PASS and exact-snapshot checkpoint `022eeed6`; release mục tiêu cuối sprint: **1.6.0**, chưa build/publish.
+- Status: **Complete — S16-T1–T6 Complete; M15 / 1.6.0 published 2026-11-12**. Source/tag `d131e406`, candidate `a98342690266`; final differential D2 and public evidence R2/closure PASS. Post-publication docs checkpoint `8ba66ce3`; site `121425f7`. Sprint 17 remains unlaunched.
 - Entry: Sprint 15 complete và 1.5.0 published.
 - Scope/trace: P2-07, P2-10, P2-12; R08, R14, R15, R23, R25, R36. Các P2 là candidates, không thay baseline khi chưa có approval.
 - Root: `F:/ai-ml/my-meta-brain`; target ref `main`; exact base/worktree/ownership resolve khi execution.
@@ -63,7 +63,7 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
     - Acceptance: Actual CLI add → inspect → source revise → needs-review → remove/undo; đọc endpoint đúng revision, lock chặn private responses; cognitive filters và folder listing không tạo duplicate data.
     - Check: CLI/service relation lifecycle và retrieval thật, MCP khi affected; browser chỉ cho changed document path.
 
-- [~] **S16-T6 — Release 1.6.0.**
+- [x] **S16-T6 — Release 1.6.0.**
     - Change: Publish typed relations/relational search và scope/interpretation limits.
     - Acceptance: Runtime CLI retrieval/relations và changed MCP/API negatives, exact candidate measured; release contract chung đạt.
     - Check: Exercise packaged CLI/service/MCP affected paths; document browser khi changed, không WPF proof.
@@ -87,3 +87,7 @@ S16-T3 Complete: [worker evidence](../../artifacts/sprint-16/task-3.md), [R1 PAS
 S16-T4 Complete: [worker evidence](../../artifacts/sprint-16/task-4.md), [R1 PASS](../../artifacts/sprint-16/reviews/S16-T4-C1-R1.md), zero actionable findings; [Bronze checkpoint C1](../../artifacts/sprint-16/checkpoints/S16-T4-C1.md) committed exact reviewed snapshot as `e7e0433aad2f221f114aeb9938b1875d2e973236`. Narrow build, actual owner CLI/service ranking/explanations smoke and T3 regression passed. Frozen synthetic why-case quality and resource observations are disclosed in worker evidence, not real-corpus/semantic-model proof or release thresholds. MCP/browser unchanged; no T5 launch or publication.
 
 S16-T5 Complete: [worker evidence](../../artifacts/sprint-16/task-5.md), [R1 PASS](../../artifacts/sprint-16/reviews/S16-T5-C1-R1.md), zero actionable findings; [Bronze checkpoint C1](../../artifacts/sprint-16/checkpoints/S16-T5-C1.md) committed exact reviewed snapshot as `022eeed63807a0df2fb5f27a83d5372f50c57c32`. Targeted build, actual CLI relation lifecycle/pinned reads/lock denial, exact-node filtering and no-duplicate folder/cognitive cases passed; T3/T4 regressions passed. Synthetic fixtures only; MCP/browser unchanged. T6 authorized, publication still gated.
+
+S16-T6 Complete: [worker evidence](../../artifacts/sprint-16/task-6.md), [candidate R1 PASS](../../artifacts/sprint-16/reviews/S16-T6-C1-R1.md), [Bronze C1](../../artifacts/sprint-16/checkpoints/S16-T6-C1.md) `d131e406ea03c388fbd4290b1bb25d06665336c8`; candidate `a98342690266`. Packaged relation/retrieval negatives, isolated 1.5→1.6 upgrade preservation and actual normal OMP MCP tool invocation passed; fixture/coverage limits remain disclosed.
+
+Publication Complete: [final differential D2 PASS](../../artifacts/sprint-16/reviews/S16-DEEP-D2.md), zero actionable findings after a reviewer-owned naming erratum; [publication execution](../../artifacts/sprint-16/publication/S16-PUBLISH-P1.md), [public evidence R2 PASS and procedural closure](../../artifacts/sprint-16/reviews/S16-PUBLIC-C1-R2.md), [post-publication Bronze C2](../../artifacts/sprint-16/checkpoints/S16-PUBLIC-C2.md) `8ba66ce3bcaad7ec5aca197de88d56787a740b80`. [Release 1.6.0](https://github.com/triet4p/my-meta-brain/releases/tag/v1.6.0) and [site](https://triet4p.github.io/my-meta-brain/) published; downloaded bytes match reviewed candidate, public executable/MCP and Chromium checks passed. [Corrected site publication](../../artifacts/sprint-16/publication/S16-SITE-PUBLISH-P3.md) `121425f724a7fbcd599ace28c2f00c4d197bfceb` preserves all historical links. No host/global configuration or permission changes; no Sprint 17 launch.
