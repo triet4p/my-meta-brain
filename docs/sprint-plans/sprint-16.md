@@ -2,7 +2,7 @@
 
 ## Goal và trạng thái
 
-- Status: **In progress — S16-T1–T4 Complete; S16-T5 active; S16-T6 authorized/pending**. T4 independent evidence R1 PASS and exact-snapshot checkpoint `e7e0433a`; release mục tiêu cuối sprint: **1.6.0**, chưa build/publish.
+- Status: **In progress — S16-T1–T5 Complete; S16-T6 active**. T5 independent evidence R1 PASS and exact-snapshot checkpoint `022eeed6`; release mục tiêu cuối sprint: **1.6.0**, chưa build/publish.
 - Entry: Sprint 15 complete và 1.5.0 published.
 - Scope/trace: P2-07, P2-10, P2-12; R08, R14, R15, R23, R25, R36. Các P2 là candidates, không thay baseline khi chưa có approval.
 - Root: `F:/ai-ml/my-meta-brain`; target ref `main`; exact base/worktree/ownership resolve khi execution.
@@ -58,12 +58,12 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
     - Acceptance: Câu vì-sao/quyết-định ưu tiên bằng chứng liên quan, vẫn giữ contradictions; không newest-wins hoặc confidence tự tăng vì nhiều link lặp cùng nguồn. Đo quality delta và tài nguyên trước release.
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
 
-- [~] **S16-T5 — Owner relation workflows qua CLI.**
+- [x] **S16-T5 — Owner relation workflows qua CLI.**
     - Change: CLI nối file/folder và inspect evidence neighborhood/provenance/review state qua shared APIs; đọc endpoint tại revision hoặc optional `open` tài liệu. Không browser graph/relation controls.
     - Acceptance: Actual CLI add → inspect → source revise → needs-review → remove/undo; đọc endpoint đúng revision, lock chặn private responses; cognitive filters và folder listing không tạo duplicate data.
     - Check: CLI/service relation lifecycle và retrieval thật, MCP khi affected; browser chỉ cho changed document path.
 
-- [ ] **S16-T6 — Release 1.6.0.**
+- [~] **S16-T6 — Release 1.6.0.**
     - Change: Publish typed relations/relational search và scope/interpretation limits.
     - Acceptance: Runtime CLI retrieval/relations và changed MCP/API negatives, exact candidate measured; release contract chung đạt.
     - Check: Exercise packaged CLI/service/MCP affected paths; document browser khi changed, không WPF proof.
@@ -85,3 +85,5 @@ S16-T2 Complete: [worker evidence](../../artifacts/sprint-16/task-2.md), [R2 PAS
 S16-T3 Complete: [worker evidence](../../artifacts/sprint-16/task-3.md), [R1 PASS](../../artifacts/sprint-16/reviews/S16-T3-C1-R1.md), zero actionable findings; [Bronze checkpoint C1](../../artifacts/sprint-16/checkpoints/S16-T3-C1.md) committed exact reviewed snapshot as `dae708e3d9758e64c910de12be9279128a637cd0`. Narrow build and actual owner CLI/service frozen-case smoke passed: seven-kind directed multi-hop, scope non-disclosure, lifecycle/currentness, cycle/fan-out bounds and lock/agent denial. Literal-seed synthetic proof only; no semantic-model/T4 quality claim. MCP unaffected independently verified; no inherited T2 exception. S16-T4–T6 unlaunched; no push or publication.
 
 S16-T4 Complete: [worker evidence](../../artifacts/sprint-16/task-4.md), [R1 PASS](../../artifacts/sprint-16/reviews/S16-T4-C1-R1.md), zero actionable findings; [Bronze checkpoint C1](../../artifacts/sprint-16/checkpoints/S16-T4-C1.md) committed exact reviewed snapshot as `e7e0433aad2f221f114aeb9938b1875d2e973236`. Narrow build, actual owner CLI/service ranking/explanations smoke and T3 regression passed. Frozen synthetic why-case quality and resource observations are disclosed in worker evidence, not real-corpus/semantic-model proof or release thresholds. MCP/browser unchanged; no T5 launch or publication.
+
+S16-T5 Complete: [worker evidence](../../artifacts/sprint-16/task-5.md), [R1 PASS](../../artifacts/sprint-16/reviews/S16-T5-C1-R1.md), zero actionable findings; [Bronze checkpoint C1](../../artifacts/sprint-16/checkpoints/S16-T5-C1.md) committed exact reviewed snapshot as `022eeed63807a0df2fb5f27a83d5372f50c57c32`. Targeted build, actual CLI relation lifecycle/pinned reads/lock denial, exact-node filtering and no-duplicate folder/cognitive cases passed; T3/T4 regressions passed. Synthetic fixtures only; MCP/browser unchanged. T6 authorized, publication still gated.
