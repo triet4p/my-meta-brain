@@ -898,6 +898,10 @@ internal static class OwnerControlCli
             return;
         }
 
+        var rankedEvidenceCount = page.TryGetProperty("rankedEvidence", out var rankedEvidence) &&
+            rankedEvidence.ValueKind == JsonValueKind.Array
+            ? rankedEvidence.GetArrayLength().ToString(CultureInfo.InvariantCulture)
+            : "0";
         Console.WriteLine(
             $"HYBRID_SEARCH query={JsonSerializer.Serialize(JsonValueText(page, "query"))} " +
             $"workspaceRevision={JsonValueText(page, "workspaceRevision")} " +
@@ -910,6 +914,7 @@ internal static class OwnerControlCli
             $"semanticCandidateTotal={JsonValueText(page, "semanticCandidateTotal")} " +
             $"relationCandidateCount={JsonValueText(page, "relationCandidateCount")} " +
             $"relationExpansionBoundReached={JsonFlagText(page, "relationExpansionBoundReached")} " +
+            $"rankedEvidenceCount={rankedEvidenceCount} " +
             $"offset={JsonValueText(page, "offset")} limit={JsonValueText(page, "limit")} " +
             $"hasMore={JsonFlagText(page, "hasMore")} semanticStatus={JsonValueText(page, "semanticStatus")} " +
             $"modelRevision={JsonSerializer.Serialize(JsonValueText(page, "modelRevision"))} " +
@@ -923,6 +928,22 @@ internal static class OwnerControlCli
         foreach (var hit in hits.EnumerateArray())
         {
             WriteWorkspaceHybridHit(hit);
+        }
+        if (page.TryGetProperty("rankedEvidence", out var rankedEvidenceEntries) &&
+            rankedEvidenceEntries.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var entry in rankedEvidenceEntries.EnumerateArray())
+            {
+                Console.WriteLine(
+                    $"RANKED_EVIDENCE rank={JsonValueText(entry, "rank")} " +
+                    $"fileId={JsonValueText(entry, "fileId")} " +
+                    $"path={JsonSerializer.Serialize(JsonValueText(entry, "path"))} " +
+                    $"revision={JsonValueText(entry, "contentRevision")} " +
+                    $"class={JsonValueText(entry, "evidenceClass")} " +
+                    $"reasons={JsonSerializer.Serialize(entry.GetProperty("reasons"))} " +
+                    $"directRank={(entry.TryGetProperty("directRank", out var directRank) && directRank.ValueKind != JsonValueKind.Null ? JsonValueText(entry, "directRank") : "-")} " +
+                    $"relationPath={JsonSerializer.Serialize(entry.GetProperty("relationPath"))}");
+            }
         }
         if (page.TryGetProperty("relationCandidates", out var relationCandidates) &&
             relationCandidates.ValueKind == JsonValueKind.Array)

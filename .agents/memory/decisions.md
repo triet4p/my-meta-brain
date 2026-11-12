@@ -1433,3 +1433,13 @@ The encrypted workspace-blob read bound covers the six-byte JSON-escape worst ca
 
 **Consequences:** T3 callers must treat the companion list as bounded and unranked; `relationExpansionBoundReached` signals that a safety bound withheld eligible in-scope candidates rather than claiming full graph reachability. This implementation choice does not alter D107 or grant MCP/agents workspace access.
 
+
+## [2026-11-12] Rank relation evidence beside direct hits without recency or link-count scoring
+
+**Decision:** S16-T4 adds one `rankedEvidence` projection to owner hybrid search that combines the returned direct page with bounded accepted/current relation evidence. Relation entries expose stable reason codes and the selected hop-by-hop stored path; direct `hits`, totals, counts and ordering stay unchanged, and the T3 `relationCandidates` discovery array is retained. One source/revision is emitted once: repeated links or multiple paths select one deterministic path. Direct literal evidence stays ahead of semantic-only neighbours; why/decision questions order evidential kinds before identity `related_to` and retain contradictions; ordinary queries remain proximity-first. No ordering component uses content revision, timestamp or link count, and entries carry no score/confidence field.
+
+**Alternatives considered:** Merge relation evidence into `hits`/`total` and re-page the direct results; treat each accepted link as extra support/confidence; use newest revision or creation time as a tie-break; return only the raw unranked T3 candidates; invent a fixed quality/threshold gate.
+
+**Reason:** D104 requires literal/semantic classes and direct totals to remain distinguishable, and D107 requires exact endpoint scope/currentness with bounded traversal. A separate ranked projection adds explanations without silently rewriting direct search, while one selected path per source prevents repeated links or same-source lineage from inflating rank. Why/decision ordering is deterministic lexical routing, not truth or causality; contradictions are retained deliberately. Quality and resource measurement stays observational because no owner-approved hard threshold exists.
+
+**Consequences:** Callers read `rankedEvidence` for explanation/order and `relationCandidates` for bounded discovery; the two must agree on the eligible set. Reversing to merged direct hits, newest-wins or link-count scoring would break frozen direct-search expectations and the no-confidence-inflation contract. The rank is evidence ordering only, never confirmation, support truth or owner acceptance, and no MCP/agent authority follows.

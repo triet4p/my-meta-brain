@@ -1320,6 +1320,7 @@ public sealed record WorkspaceHybridSearchPageWire(
     int RelationCandidateCount,
     bool RelationExpansionBoundReached,
     WorkspaceRelationalSearchCandidate[] RelationCandidates,
+    WorkspaceRankedEvidence[] RankedEvidence,
     WorkspaceRecallSummary? Recall = null);
 
 public sealed record ServiceReply(
@@ -12088,6 +12089,7 @@ public sealed class ServiceRequestHandler
             outcome.RelationCandidateCount,
             outcome.RelationExpansionBoundReached,
             outcome.RelationCandidates,
+            outcome.RankedEvidence,
             outcome.Recall);
 
     private static bool TryParseSearchDate(string? value, out DateOnly? date)

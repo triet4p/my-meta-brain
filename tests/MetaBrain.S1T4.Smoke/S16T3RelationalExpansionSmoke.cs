@@ -309,11 +309,12 @@ internal static partial class OwnerServiceSmoke
         string kind,
         string state,
         object from,
-        object to)
+        object to,
+        string reason = "Synthetic relation reason must not appear in candidate discovery.")
     {
         var bytes = S16T2RelationDraft(
             kind, state, from, to,
-            "Synthetic relation reason must not appear in candidate discovery.", "owner");
+            reason, "owner");
         var path = Path.Combine(fixture.OutputDirectory, "s16t3-relation-" + Guid.NewGuid().ToString("N") + ".json");
         try
         {

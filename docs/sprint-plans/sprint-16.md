@@ -2,7 +2,7 @@
 
 ## Goal và trạng thái
 
-- Status: **In progress — S16-T1–T3 Complete; S16-T4–T6 unlaunched**. T3 independent evidence R1 PASS and exact-snapshot checkpoint `dae708e3`; release mục tiêu cuối sprint: **1.6.0**, chưa build/publish.
+- Status: **In progress — S16-T1–T3 Complete; S16-T4 active; S16-T5–T6 unlaunched**. T3 independent evidence R1 PASS and exact-snapshot checkpoint `dae708e3`; release mục tiêu cuối sprint: **1.6.0**, chưa build/publish.
 - Entry: Sprint 15 complete và 1.5.0 published.
 - Scope/trace: P2-07, P2-10, P2-12; R08, R14, R15, R23, R25, R36. Các P2 là candidates, không thay baseline khi chưa có approval.
 - Root: `F:/ai-ml/my-meta-brain`; target ref `main`; exact base/worktree/ownership resolve khi execution.
@@ -21,6 +21,8 @@ Owner authorized **S16-T2** with a Silver worker, full route, independent eviden
 Owner-approved T2-only verification exception: the standing normal Codex/OMP MCP-client check is replaced here by actual packaged `MetaBrain.Mcp.exe` stdio proposal/denial smoke with a disclosed synthetic JSON-RPC driver. This unblocks the reviewed T2 checkpoint without claiming real-client proof; normal-client smoke remains mandatory at T6 before publication. No profile/settings/provider changes are authorized.
 
 Owner authorized **S16-T3** with a Silver worker, full route, runtime verification, independent evidence review and a separate Bronze exact-snapshot checkpoint on `main`, including T3 documentation/status. Only reviewed T3 scope may be committed; unrelated changes are excluded. No T4–T6 launch, push or publication; the T2-only MCP verification exception does not extend to T3.
+
+Owner authorized **S16-T4** with a Gold worker, full route, actual changed-surface verification, independent evidence review and a separate Bronze exact-snapshot checkpoint on `main`, including T4 documentation/status. Stage only reviewed T4-owned changes; exclude unrelated changes. No T5–T6 launch, push or publication; the T2-only MCP verification exception does not extend to T4.
 
 Không host mutation/ACL/permissions/profile edits; synthetic data mặc định. Không downgrade baseline security, reset data hoặc lấy test suite thay runtime smoke. Decision còn mở/contract thay đổi phải owner-approved và sync docs trước implementation affected path.
 
@@ -47,7 +49,7 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
     - Acceptance: Multi-hop evidence/refutation tìm được trên frozen cases, no traversal leak ở titles/counts/paths; cycle, fan-out và irrelevant neighbors không làm context vô hạn.
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
 
-- [ ] **S16-T4 — Relational ranking và explanations.**
+- [~] **S16-T4 — Relational ranking và explanations.**
     - Change: Rank relation-derived hits cùng direct hits, dedupe source/lineage và expose lý do/đường dẫn phù hợp.
     - Acceptance: Câu vì-sao/quyết-định ưu tiên bằng chứng liên quan, vẫn giữ contradictions; không newest-wins hoặc confidence tự tăng vì nhiều link lặp cùng nguồn. Đo quality delta và tài nguyên trước release.
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.

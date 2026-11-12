@@ -35,6 +35,8 @@ public static class WorkspaceHybridEvidenceClass
 {
     public const string LiteralMatch = "literal_match";
     public const string SemanticCandidate = "semantic_candidate";
+    public const string RelatedEvidence = "related_evidence";
+    public const string ContradictingEvidence = "contradicting_evidence";
 }
 
 /// <summary>The literal fields a hybrid request may narrow to.</summary>
@@ -183,6 +185,52 @@ public static class WorkspaceHybridSearchPolicy
         }
 
         return digits > 0 || delimiters > 0 || (letters >= 2 && lowercaseLetters == 0);
+    }
+
+    private static readonly string[] WhyOrDecisionTerms =
+    [
+        "why", "reason", "reasons", "rationale", "decision", "decisions", "decide", "decided",
+        "choice", "chose", "chosen", "tradeoff", "trade-off", "because", "cause",
+        "vì sao", "tại sao", "lý do", "quyết định", "lựa chọn", "chọn", "nguyên nhân"
+    ];
+
+    /// <summary>
+    /// True for a why/decision question, detected with the same deterministic
+    /// boundary rule the recall router uses. This only changes which explicit
+    /// relation evidence is surfaced first; it never proves causality or
+    /// raises a candidate's truth, currentness or confidence.
+    /// </summary>
+    public static bool IsWhyOrDecisionQuery(string? query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return false;
+        }
+
+        foreach (var term in WhyOrDecisionTerms)
+        {
+            var start = 0;
+            while (start <= query.Length - term.Length)
+            {
+                var found = query.IndexOf(term, start, StringComparison.OrdinalIgnoreCase);
+                if (found < 0)
+                {
+                    break;
+                }
+
+                var end = found + term.Length;
+                var leftBoundary = found == 0 || !char.IsLetterOrDigit(query[found - 1]);
+                var rightBoundary = end == query.Length || !char.IsLetterOrDigit(query[end]);
+                if (leftBoundary && rightBoundary)
+                {
+                    return true;
+                }
+
+                start = found + 1;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

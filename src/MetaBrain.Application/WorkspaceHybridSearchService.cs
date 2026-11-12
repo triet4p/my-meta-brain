@@ -56,6 +56,39 @@ public sealed record WorkspaceRelationalSearchCandidate(
     string FileSha256,
     bool IsCurrent);
 
+/// <summary>
+/// One stored relation edge on an explained evidence path. IDs and paths are
+/// disclosed only for endpoints that already passed the owner's folder and
+/// exact-revision scope.
+/// </summary>
+public sealed record WorkspaceRelationHop(
+    string RelationId,
+    string Kind,
+    string FromFileId,
+    string FromPath,
+    long FromContentRevision,
+    string ToFileId,
+    string ToPath,
+    long ToContentRevision);
+
+/// <summary>
+/// One de-duplicated evidence entry ranked with the direct hits. A relation
+/// entry cites its selected stored path instead of a score, so repeated links
+/// or multiple paths to the same source cannot raise a candidate's rank.
+/// Revision and time are identities, never ranking inputs.
+/// </summary>
+public sealed record WorkspaceRankedEvidence(
+    int Rank,
+    string FileId,
+    string Path,
+    long ContentRevision,
+    string FileSha256,
+    bool IsCurrent,
+    string EvidenceClass,
+    string[] Reasons,
+    int? DirectRank,
+    WorkspaceRelationHop[] RelationPath);
+
 
 /// <summary>One scoped, ranked and bounded hybrid result page.</summary>
 public sealed record WorkspaceHybridSearchOutcome(
@@ -80,6 +113,7 @@ public sealed record WorkspaceHybridSearchOutcome(
     int RelationCandidateCount,
     bool RelationExpansionBoundReached,
     WorkspaceRelationalSearchCandidate[] RelationCandidates,
+    WorkspaceRankedEvidence[] RankedEvidence,
     WorkspaceRecallSummary? Recall = null);
 
 /// <summary>One exact timestamp value, retaining the domain's stated precision.</summary>
@@ -227,7 +261,7 @@ public sealed class WorkspaceHybridSearchService
                 request.ContentDateTo?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                 0, 0, 0, request.Offset, request.Limit, false,
                 WorkspaceHybridSemanticStatus.NotApplicableEmptyScope, null, null, [],
-                0, false, [],
+                0, false, [], [],
                 route is null ? null : EmptyRecall(route, request));
         }
 
@@ -378,6 +412,14 @@ public sealed class WorkspaceHybridSearchService
         var nodes = snapshot.Nodes.ToDictionary(node => node.Id, StringComparer.Ordinal);
         var relationExpansion = ExpandRelationCandidates(
             context, operation, paths, folderPath, scopeRevisions, nodes, pageCandidates, request.Limit, cancellationToken);
+        var rankedEvidence = BuildRankedEvidence(
+            pageCandidates,
+            pageStart + 1,
+            relationExpansion.Traces,
+            string.Equals(route?.Purpose, WorkspaceRecallPurposes.ActionEffect, StringComparison.Ordinal) ||
+            WorkspaceHybridSearchPolicy.IsWhyOrDecisionQuery(request.Query))
+            .Select((entry, index) => entry.Evidence with { Rank = index + 1 })
+            .ToArray();
         var evidence = BuildPageEvidence(workspace, nodes, evidenceCandidates, cancellationToken);
         var evidenceByCandidate = new Dictionary<CandidateIdentity, string>(evidenceCandidates.Count);
         for (var index = 0; index < evidenceCandidates.Count; index++)
@@ -454,6 +496,7 @@ public sealed class WorkspaceHybridSearchService
             relationExpansion.Candidates.Length,
             relationExpansion.BoundReached,
             relationExpansion.Candidates,
+            rankedEvidence,
             recall);
     }
     /// <summary>
@@ -465,7 +508,7 @@ public sealed class WorkspaceHybridSearchService
     /// the scoped target path/revision/digest, not relation metadata, reasons,
     /// traversal paths, titles, or content snippets.
     /// </summary>
-    private static (WorkspaceRelationalSearchCandidate[] Candidates, bool BoundReached) ExpandRelationCandidates(
+    private static RelationExpansion ExpandRelationCandidates(
         AuthenticatedContext context,
         IVaultOperation operation,
         IReadOnlyDictionary<string, string> paths,
@@ -478,7 +521,7 @@ public sealed class WorkspaceHybridSearchService
     {
         if (seeds.Count == 0)
         {
-            return (Array.Empty<WorkspaceRelationalSearchCandidate>(), false);
+            return new RelationExpansion([], false);
         }
 
         var scopedRevisions = new Dictionary<(string FileId, long Revision), ScopeRevision>(scopeRevisions.Count);
@@ -522,100 +565,146 @@ public sealed class WorkspaceHybridSearchService
 
         relations.Sort(static (left, right) => StringComparer.Ordinal.Compare(left.Id, right.Id));
 
-        var visited = new HashSet<(string FileId, long Revision)>();
-        var frontier = new HashSet<(string FileId, long Revision)>();
+        var discoveredHops = new Dictionary<(string FileId, long Revision), int>();
+        var traces = new Dictionary<(string FileId, long Revision), RelationTrace>();
+        var frontier = new List<FrontierState>();
         foreach (var seed in seeds)
         {
             var seedIdentity = (seed.FileId, seed.ContentRevision);
-            if (visited.Add(seedIdentity))
+            if (discoveredHops.TryAdd(seedIdentity, 0))
             {
-                frontier.Add(seedIdentity);
+                frontier.Add(new FrontierState(seed.FileId, seed.ContentRevision, seed.Path, [], RelationKind.Unknown, 0));
             }
         }
 
-        var candidates = new List<WorkspaceRelationalSearchCandidate>(Math.Min(maximumCandidates, seeds.Count));
-        var boundReached = false;
         for (var hop = 0; hop < MaximumRelationHops && frontier.Count > 0; hop++)
         {
-            var frontierIds = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var endpoint in frontier)
+            var nextIdentities = new HashSet<(string FileId, long Revision)>();
+            foreach (var state in frontier)
             {
-                frontierIds.Add(endpoint.FileId);
+                foreach (var relation in relations)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (relation.From.EndpointKind is not (RelationEndpointKind.WorkspaceFile or RelationEndpointKind.WorkspacePassage) ||
+                        relation.To.EndpointKind is not (RelationEndpointKind.WorkspaceFile or RelationEndpointKind.WorkspacePassage))
+                    {
+                        continue;
+                    }
+
+                    var sourceMatches = relation.Kind == RelationKind.RelatedTo
+                        ? string.Equals(state.FileId, relation.From.ResourceId, StringComparison.Ordinal)
+                        : state.FileId == relation.From.ResourceId && state.Revision == relation.From.Revision;
+                    var targetIdentity = (relation.To.ResourceId, relation.To.Revision);
+                    if (!sourceMatches ||
+                        !scopedRevisions.TryGetValue(targetIdentity, out var targetRevision) ||
+                        (discoveredHops.TryGetValue(targetIdentity, out var discoveredAt) && discoveredAt < hop + 1))
+                    {
+                        continue;
+                    }
+
+                    var targetPath = targetRevision.Path;
+                    var edge = new WorkspaceRelationHop(
+                        relation.Id,
+                        RelationKindToken(relation.Kind),
+                        state.FileId,
+                        state.Path,
+                        state.Revision,
+                        targetRevision.Node.Id,
+                        targetPath,
+                        targetRevision.Revision.Revision);
+                    var hopPath = new WorkspaceRelationHop[state.Hops.Length + 1];
+                    Array.Copy(state.Hops, hopPath, state.Hops.Length);
+                    hopPath[^1] = edge;
+                    var trace = new RelationTrace(
+                        new WorkspaceRelationalSearchCandidate(
+                            targetRevision.Node.Id,
+                            targetPath,
+                            targetRevision.Revision.Revision,
+                            targetRevision.Revision.Sha256,
+                            targetRevision.IsCurrent),
+                        MorePrimary(state.PrimaryKind, relation.Kind),
+                        hop + 1,
+                        string.Join('\n', hopPath.Select(item => item.RelationId)),
+                        hopPath);
+
+                    if (traces.TryGetValue(targetIdentity, out var existing))
+                    {
+                        if (CompareRelationTraceSelection(trace, existing) < 0)
+                        {
+                            traces[targetIdentity] = trace;
+                        }
+                    }
+                    else
+                    {
+                        traces[targetIdentity] = trace;
+                        discoveredHops.Add(targetIdentity, hop + 1);
+                        nextIdentities.Add(targetIdentity);
+                    }
+                }
             }
 
-            var nextFrontier = new HashSet<(string FileId, long Revision)>();
-            foreach (var relation in relations)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var sourceMatches = relation.Kind == RelationKind.RelatedTo
-                    ? frontierIds.Contains(relation.From.ResourceId)
-                    : frontier.Contains((relation.From.ResourceId, relation.From.Revision));
-                var targetIdentity = (relation.To.ResourceId, relation.To.Revision);
-                if (relation.From.EndpointKind is not (RelationEndpointKind.WorkspaceFile or RelationEndpointKind.WorkspacePassage) ||
-                    !sourceMatches ||
-                    relation.To.EndpointKind is not (RelationEndpointKind.WorkspaceFile or RelationEndpointKind.WorkspacePassage) ||
-                    !scopedRevisions.TryGetValue(targetIdentity, out var targetRevision) ||
-                    visited.Contains(targetIdentity))
-                {
-                    continue;
-                }
-
-                if (candidates.Count >= maximumCandidates)
-                {
-                    boundReached = true;
-                    break;
-                }
-
-                visited.Add(targetIdentity);
-                candidates.Add(new WorkspaceRelationalSearchCandidate(
-                    relation.To.ResourceId,
-                    targetRevision.Path,
-                    targetRevision.Revision.Revision,
-                    targetRevision.Revision.Sha256,
-                    targetRevision.IsCurrent));
-                nextFrontier.Add(targetIdentity);
-            }
-
-            if (boundReached || nextFrontier.Count == 0)
+            if (nextIdentities.Count == 0)
             {
                 break;
             }
 
-            frontier = nextFrontier;
-            if (hop + 1 == MaximumRelationHops)
+            frontier = [];
+            foreach (var identity in nextIdentities)
             {
-                var nextFrontierIds = new HashSet<string>(StringComparer.Ordinal);
-                foreach (var endpoint in frontier)
-                {
-                    nextFrontierIds.Add(endpoint.FileId);
-                }
-
-                if (HasExpandableRelationCandidate(relations, frontier, nextFrontierIds, visited, scopedRevisions))
-                {
-                    boundReached = true;
-                }
+                var trace = traces[identity];
+                frontier.Add(new FrontierState(
+                    trace.Candidate.FileId,
+                    trace.Candidate.ContentRevision,
+                    trace.Candidate.Path,
+                    trace.Hops,
+                    trace.PrimaryKind,
+                    trace.HopCount));
             }
         }
 
-        return (candidates.ToArray(), boundReached);
+        var boundReached = traces.Count > maximumCandidates;
+        if (!boundReached && MaximumRelationHops > 0)
+        {
+            var frontierIdentities = new HashSet<(string FileId, long Revision)>();
+            foreach (var trace in traces.Values)
+            {
+                if (trace.HopCount == MaximumRelationHops)
+                {
+                    frontierIdentities.Add((trace.Candidate.FileId, trace.Candidate.ContentRevision));
+                }
+            }
+
+            if (HasExpandableRelationCandidate(relations, frontierIdentities, discoveredHops, scopedRevisions))
+            {
+                boundReached = true;
+            }
+        }
+
+        var selected = traces.Values.ToArray();
+        Array.Sort(selected, static (left, right) => CompareRelationTraceSelection(left, right));
+        if (selected.Length > maximumCandidates)
+        {
+            Array.Resize(ref selected, maximumCandidates);
+        }
+
+        return new RelationExpansion(selected, boundReached);
     }
 
     private static bool HasExpandableRelationCandidate(
         IReadOnlyList<Relation> relations,
         HashSet<(string FileId, long Revision)> frontier,
-        HashSet<string> frontierIds,
-        HashSet<(string FileId, long Revision)> visited,
+        IReadOnlyDictionary<(string FileId, long Revision), int> discovered,
         IReadOnlyDictionary<(string FileId, long Revision), ScopeRevision> scopedRevisions)
     {
         foreach (var relation in relations)
         {
             var sourceMatches = relation.Kind == RelationKind.RelatedTo
-                ? frontierIds.Contains(relation.From.ResourceId)
+                ? frontier.Any(endpoint => string.Equals(endpoint.FileId, relation.From.ResourceId, StringComparison.Ordinal))
                 : frontier.Contains((relation.From.ResourceId, relation.From.Revision));
             if (relation.From.EndpointKind is (RelationEndpointKind.WorkspaceFile or RelationEndpointKind.WorkspacePassage) &&
                 sourceMatches &&
                 relation.To.EndpointKind is (RelationEndpointKind.WorkspaceFile or RelationEndpointKind.WorkspacePassage) &&
-                !visited.Contains((relation.To.ResourceId, relation.To.Revision)) &&
+                !discovered.ContainsKey((relation.To.ResourceId, relation.To.Revision)) &&
                 scopedRevisions.ContainsKey((relation.To.ResourceId, relation.To.Revision)))
             {
                 return true;
@@ -633,6 +722,173 @@ public sealed class WorkspaceHybridSearchService
             RelationKind.Supersedes or
             RelationKind.AppliesTo or
             RelationKind.Addresses;
+
+    private static RelationKind MorePrimary(RelationKind current, RelationKind candidate) =>
+        current == RelationKind.Unknown || RelationPriority(candidate) < RelationPriority(current)
+            ? candidate
+            : current;
+
+    private static int RelationPriority(RelationKind kind) => kind switch
+    {
+        RelationKind.Contradicts => 0,
+        RelationKind.Supports => 1,
+        RelationKind.DerivedFrom => 2,
+        RelationKind.AppliesTo => 3,
+        RelationKind.Addresses => 4,
+        RelationKind.Supersedes => 5,
+        RelationKind.RelatedTo => 6,
+        _ => 7
+    };
+
+    private static string RelationKindToken(RelationKind kind) => kind switch
+    {
+        RelationKind.RelatedTo => "related_to",
+        RelationKind.DerivedFrom => "derived_from",
+        RelationKind.Supports => "supports",
+        RelationKind.Contradicts => "contradicts",
+        RelationKind.Supersedes => "supersedes",
+        RelationKind.AppliesTo => "applies_to",
+        RelationKind.Addresses => "addresses",
+        _ => "unknown"
+    };
+
+    /// <summary>
+    /// Selects the single exposed path to one source. At the same hop an
+    /// explicitly evidential kind outranks identity-only related_to; the
+    /// stored relation IDs then provide a stable tie-break. Revision and time
+    /// never participate, so a newer link or revision cannot win by recency.
+    /// </summary>
+    private static int CompareRelationTraceSelection(RelationTrace left, RelationTrace right)
+    {
+        var priority = RelationPriority(left.PrimaryKind).CompareTo(RelationPriority(right.PrimaryKind));
+        if (priority != 0)
+        {
+            return priority;
+        }
+
+        var hop = left.HopCount.CompareTo(right.HopCount);
+        if (hop != 0)
+        {
+            return hop;
+        }
+
+        var order = string.CompareOrdinal(left.OrderKey, right.OrderKey);
+        if (order != 0)
+        {
+            return order;
+        }
+
+        var path = string.CompareOrdinal(left.Candidate.Path, right.Candidate.Path);
+        return path != 0
+            ? path
+            : string.CompareOrdinal(left.Candidate.FileId, right.Candidate.FileId);
+    }
+
+    /// <summary>
+    /// Orders relation evidence. A why/decision question compares evidential
+    /// kind first, so a contradiction or support is not buried under identity
+    /// links; an ordinary query stays proximity-first. Every other comparison
+    /// is stable and excludes time and revision.
+    /// </summary>
+    private static int CompareRelationTraceOrder(RelationTrace left, RelationTrace right, bool decisionQuestion)
+    {
+        var priority = RelationPriority(left.PrimaryKind).CompareTo(RelationPriority(right.PrimaryKind));
+        var hop = left.HopCount.CompareTo(right.HopCount);
+        var comparison = decisionQuestion
+            ? priority != 0 ? priority : hop
+            : hop != 0 ? hop : priority;
+        if (comparison != 0)
+        {
+            return comparison;
+        }
+
+        comparison = string.CompareOrdinal(left.OrderKey, right.OrderKey);
+        if (comparison != 0)
+        {
+            return comparison;
+        }
+
+        comparison = string.CompareOrdinal(left.Candidate.Path, right.Candidate.Path);
+        return comparison != 0
+            ? comparison
+            : string.CompareOrdinal(left.Candidate.FileId, right.Candidate.FileId);
+    }
+
+    private static RankedEvidenceEntry[] BuildRankedEvidence(
+        IReadOnlyList<WorkspaceHybridCandidate> directPage,
+        int firstDirectRank,
+        IReadOnlyList<RelationTrace> relationTraces,
+        bool decisionQuestion)
+    {
+        var entries = new List<RankedEvidenceEntry>(directPage.Count + relationTraces.Count);
+        for (var index = 0; index < directPage.Count; index++)
+        {
+            var candidate = directPage[index];
+            var directRank = firstDirectRank + index;
+            var evidence = new WorkspaceRankedEvidence(
+                directRank,
+                candidate.FileId,
+                candidate.Path,
+                candidate.ContentRevision,
+                candidate.FileSha256,
+                !candidate.Stale,
+                WorkspaceHybridSearchPolicy.EvidenceClassOf(candidate),
+                [candidate.IsLiteral ? "direct_literal" : "direct_semantic"],
+                directRank,
+                []);
+            entries.Add(new RankedEvidenceEntry(evidence, candidate.IsLiteral ? 0 : 2, null));
+        }
+
+        foreach (var trace in relationTraces)
+        {
+            var relationReasons = trace.Hops
+                .Select(hop => "relation_" + hop.Kind)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            var evidence = new WorkspaceRankedEvidence(
+                0,
+                trace.Candidate.FileId,
+                trace.Candidate.Path,
+                trace.Candidate.ContentRevision,
+                trace.Candidate.FileSha256,
+                trace.Candidate.IsCurrent,
+                trace.PrimaryKind == RelationKind.Contradicts
+                    ? WorkspaceHybridEvidenceClass.ContradictingEvidence
+                    : WorkspaceHybridEvidenceClass.RelatedEvidence,
+                relationReasons,
+                null,
+                trace.Hops);
+            entries.Add(new RankedEvidenceEntry(evidence, 1, trace));
+        }
+
+        entries.Sort((left, right) =>
+        {
+            var tier = left.Tier.CompareTo(right.Tier);
+            if (tier != 0)
+            {
+                return tier;
+            }
+
+            if (left.Tier is 0 or 2)
+            {
+                var direct = left.Evidence.DirectRank!.Value.CompareTo(right.Evidence.DirectRank!.Value);
+                return direct != 0 ? direct : CompareEvidenceIdentity(left.Evidence, right.Evidence);
+            }
+
+            var relation = CompareRelationTraceOrder(left.Relation!, right.Relation!, decisionQuestion);
+            return relation != 0 ? relation : CompareEvidenceIdentity(left.Evidence, right.Evidence);
+        });
+
+        return entries.ToArray();
+    }
+
+    private static int CompareEvidenceIdentity(WorkspaceRankedEvidence left, WorkspaceRankedEvidence right)
+    {
+        var comparison = string.CompareOrdinal(left.Path, right.Path);
+        return comparison != 0
+            ? comparison
+            : string.CompareOrdinal(left.FileId, right.FileId);
+    }
 
     private static bool IsWithinFolderScope(string path, string? folderPath) =>
         string.IsNullOrEmpty(folderPath) ||
@@ -1497,6 +1753,32 @@ public sealed class WorkspaceHybridSearchService
 
     private static string Digest(ReadOnlySpan<byte> bytes) =>
         Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+    private sealed record RelationExpansion(RelationTrace[] Traces, bool BoundReached)
+    {
+        public WorkspaceRelationalSearchCandidate[] Candidates =>
+            Traces.Select(trace => trace.Candidate).ToArray();
+    }
+
+    private sealed record RelationTrace(
+        WorkspaceRelationalSearchCandidate Candidate,
+        RelationKind PrimaryKind,
+        int HopCount,
+        string OrderKey,
+        WorkspaceRelationHop[] Hops);
+
+    private sealed record FrontierState(
+        string FileId,
+        long Revision,
+        string Path,
+        WorkspaceRelationHop[] Hops,
+        RelationKind PrimaryKind,
+        int HopCount);
+
+    private sealed record RankedEvidenceEntry(
+        WorkspaceRankedEvidence Evidence,
+        int Tier,
+        RelationTrace? Relation);
 
     private readonly record struct CandidateIdentity(
         string FileId,
