@@ -6,7 +6,7 @@ Baseline 2026-09-28 được owner thay security scope bằng CR01/D016 ngày 20
 
 Mỗi requirement có một sprint chịu trách nhiệm chính và có thể cần nhiều task bảo toàn nó. Sprint sau không được làm hỏng requirement đã pass. Các yêu cầu cross-cutting vẫn áp dụng trước sprint nghiệm thu chính nếu surface tương ứng đã xuất hiện.
 
-**Current scope:** 1.3.0/Sprint 13 published/Complete theo [PLAN](PLAN.md); các trạng thái cũ trong baseline/change records là lịch sử. Owner-approved **CR03/D089 (2026-11-01)** thay owner surface/support contract từ Sprint 12/1.2.0: CLI owner-complete + MCP, browser document preview/edit từ Sprint 13; WPF 1.1.0 frozen. Không coi planning này là implementation hoặc gate PASS.
+**Current scope:** 1.4.0/Sprint 14 published/Complete theo [PLAN](PLAN.md); các trạng thái cũ trong baseline/change records là lịch sử. Owner-approved **CR03/D089 (2026-11-01)** thay owner surface/support contract từ Sprint 12/1.2.0: CLI owner-complete + MCP, browser document preview/edit từ Sprint 13; WPF 1.1.0 frozen. Không coi planning này là implementation hoặc gate PASS.
 
 ## Requirement Registry
 
@@ -264,3 +264,22 @@ The owner approved “Duyệt reuse vault và semantics đề nghị” for D1�
 - **R34/R35:** original empty/binary/encoded bytes round-trip; only explicit scoped export creates plaintext and discloses destination/irreversibility. Refuse 1.2 installation over 1.1 WPF or unknown/mixed candidate before stopping/changing files; separate install/data roots/endpoints, no shared live root or competing writers. An independently proven, separately confirmed owner transition is the only alternative. Wire/version mismatch must also fail closed before private operations for manually mixed binaries/endpoints; do not promise old WPF/new runtime compatibility.
 - **Downstream and limits:** S12-T2–T6 must implement and exercise these requirements and CLI workflow gaps; existing vault behavior, 1.1 releases and this approval do not prove them. No automatic migration, source-file sync, host mutation, release or publication is authorized by D090; other sharing/engine/migration approvals remain separate.
 
+## Owner-approved hybrid exposure contract — S15-T3 / D104 (2026-11-08)
+
+The owner selected explicit semantic candidate discovery after reviewing measured alternatives: 27/27 labeled evidence retained with unrelated prose returning model neighbours, versus 21/27 under content-term grounding. This replaces the proposed generalized natural-language abstention-before-exposure gate for S15, not scope, revision, attribution or exact-match protections; it does not retroactively establish abstention.
+
+- Hybrid responses MUST distinguish literal matches from unconfirmed semantic candidates with a per-hit class and separate counts, and keep literal matches ahead of semantic-only candidates. Neither class alone establishes truth, support or owner confirmation.
+- Semantic retrieval is candidate discovery, not a verified answer or supporting evidence. No similarity cutoff or generalized natural-language abstention is implemented or claimed; identifier-shaped, scope and currentness negatives retain their no-answer behaviour.
+- Scope-before-disclosure, exact byte/revision anchors, complete eligible-candidate scoring before global ranking/totals/paging, deterministic ties and lock cancellation remain required. No new grants, cloud/provider access, host mutation or publication authority follows from this approval.
+
+## Owner-approved workspace relation contract — S16-T1 / D107 (2026-11-12)
+
+The owner approved proposal 1–5 and choices A–E (“Duyệt hết”). The normative [endpoint and revision contract](META-BRAIN.md#41-approved-workspace-relation-contract-s16-t1-d107) clarifies these retained requirements; approval is not runtime implementation or acceptance.
+
+- **R10/R14/R15:** Stable file/folder identity and revision/byte-range/digest passage selectors; preserve seven typed directions and lifecycle, explicit attribution and no implied approval. Workspace content-sensitive assertions pin and review both file/passage endpoints, including `contradicts`; `related_to` is identity-only. Legacy evidence-side-only review and identity-only legacy `contradicts` remain distinct. Immutable attributed workspace-edge history is prospective, with no invented legacy acts.
+- **R06/R08/R11/R15:** Tree membership, folder applicability and explicit relations neither imply child evidence nor grant access or declassification. Both endpoints and their exact revisions require authority; scope, lock, revoke and non-disclosure apply.
+- **R13/R14:** The mixed `derived_from`/`supersedes` union is a DAG across all stored states; creation/reactivation checks are atomic. Other semantic cycles do not authorize unbounded traversal.
+- **R23/R25:** Downstream retrieval must respect evidence pins, stale/unavailable state, scope and bounded traversal; similarity alone is not supporting evidence.
+- **R29/R33/R34/R36/R39:** Authenticated encrypted canonical edges/history survive backup/restore subject to purge; encrypted adjacency is rebuildable. Scoped plaintext export includes an edge only with both endpoints and required evidence selected, and omits out-of-scope stubs and identifying details. No reset or implied migration.
+
+S16-T2–T5, S17 sharing and S18 migration/portability remain separate work and gates; no existing code or previous evidence proves the new workspace relation contract. See the [Sprint 16 tasks](sprint-plans/sprint-16.md#atomic-tasks).
