@@ -9791,16 +9791,16 @@ public sealed class ServiceRequestHandler
     }
 
     /// <summary>
-    /// S5-T5 owner relation workbench read: the whole relation set of this
-    /// owner's vault, each record with its live revision and its computed review
-    /// state. Owner authority is this vault's owner, so every endpoint is in
-    /// scope; the relation store, the revision gate and the review evaluation
-    /// stay exactly the shared ones, so this view can never disagree with the
-    /// scoped agent projection about a relation.
+    /// Owner relation workbench read: all relations, or the explicit workspace
+    /// endpoint neighborhood named by ResourceId. File, folder and passage
+    /// endpoints match by stable node id; folder membership never expands the
+    /// result. Revision gates and review evaluation remain in the shared service.
     /// </summary>
     private ServiceReply HandleOwnerRelationList(AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
     {
-        if (context.Kind != PrincipalKind.Owner || HasRelationListExtras(request))
+        if (context.Kind != PrincipalKind.Owner ||
+            (request.ResourceId is not null && !DomainIdentifiers.IsSafeIdentifier(request.ResourceId)) ||
+            HasRelationListExtras(request))
         {
             return Error("invalid_request");
         }
@@ -9812,7 +9812,8 @@ public sealed class ServiceRequestHandler
 
         try
         {
-            var listed = new RelationService().List(context, operation, _ => true, workspace: operation);
+            var listed = new RelationService().List(
+                context, operation, _ => true, workspace: operation, workspaceNodeId: request.ResourceId);
             var wires = new RelationWire[listed.Length];
             for (var index = 0; index < listed.Length; index++)
             {
@@ -13180,14 +13181,12 @@ public sealed class ServiceRequestHandler
         request.DisclosureContext is not null || request.RequestId is not null;
 
     /// <summary>
-    /// The owner relation list carries no filter and no identity: it reads this
-    /// owner's own relation set, so a request that names a resource, a revision,
-    /// a zone, a query, a session, a credential or an egress claim is refused
-    /// rather than silently narrowed.
+    /// The owner relation list may carry one optional workspace node id to
+    /// select explicit file/folder/passage endpoints. It cannot select revisions
+    /// or add credentials, scope, query, session, or egress fields.
     /// </summary>
     private static bool HasRelationListExtras(ServiceRequest request) =>
-        request.ResourceId is not null || request.ResourceRevision is not null ||
-        HasContentReadExtras(request);
+        request.ResourceRevision is not null || HasContentReadExtras(request);
 
     /// <summary>
     /// Agent link creation carries only the session bearer, the access

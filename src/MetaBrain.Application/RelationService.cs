@@ -255,14 +255,16 @@ public sealed class RelationService
 
     /// <summary>
     /// Enumerates relation metadata only when both pinned endpoints pass the
-    /// caller's frozen-scope authorizer. The caller must separately authorize
-    /// the relation-list operation before invoking this projection.
+    /// caller's frozen-scope authorizer. An optional workspace node selector
+    /// matches explicit file/folder/passage endpoints by stable id; it never
+    /// expands folder membership. The caller separately authorizes list access.
     /// </summary>
     public RelationReadResult[] List(
         AuthenticatedContext context,
         IManagedResourceStore store,
         Func<RelationEndpoint, bool> endpointAuthorizer,
-        IWorkspacePersistence? workspace = null)
+        IWorkspacePersistence? workspace = null,
+        string? workspaceNodeId = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(store);
@@ -284,6 +286,14 @@ public sealed class RelationService
         var results = new List<RelationReadResult>();
         foreach (var stored in relations)
         {
+            if (workspaceNodeId is not null &&
+                !(RelationEndpointSemantics.IsWorkspace(stored.From.EndpointKind) &&
+                    string.Equals(stored.From.ResourceId, workspaceNodeId, StringComparison.Ordinal)) &&
+                !(RelationEndpointSemantics.IsWorkspace(stored.To.EndpointKind) &&
+                    string.Equals(stored.To.ResourceId, workspaceNodeId, StringComparison.Ordinal)))
+            {
+                continue;
+            }
             if (!endpointAuthorizer(stored.From) || !endpointAuthorizer(stored.To) ||
                 !liveRevisions.TryGetValue(stored.Id, out var revision))
             {

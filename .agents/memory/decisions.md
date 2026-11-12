@@ -1443,3 +1443,13 @@ The encrypted workspace-blob read bound covers the six-byte JSON-escape worst ca
 **Reason:** D104 requires literal/semantic classes and direct totals to remain distinguishable, and D107 requires exact endpoint scope/currentness with bounded traversal. A separate ranked projection adds explanations without silently rewriting direct search, while one selected path per source prevents repeated links or same-source lineage from inflating rank. Why/decision ordering is deterministic lexical routing, not truth or causality; contradictions are retained deliberately. Quality and resource measurement stays observational because no owner-approved hard threshold exists.
 
 **Consequences:** Callers read `rankedEvidence` for explanation/order and `relationCandidates` for bounded discovery; the two must agree on the eligible set. Reversing to merged direct hits, newest-wins or link-count scoring would break frozen direct-search expectations and the no-confidence-inflation contract. The rank is evidence ordering only, never confirmation, support truth or owner acceptance, and no MCP/agent authority follows.
+
+## [2026-11-12] Filter owner relation reads by explicit workspace endpoint
+
+**Decision:** Extend the shared owner relation-list operation with an optional stable workspace node id and expose it as `relation-list --workspace-node-id`.
+
+**Alternatives considered:** Keep only the all-relations list and require owners to scan every relation; or infer a folder's neighborhood from its children.
+
+**Reason:** The owner needs a practical way to inspect one file or folder's evidence neighborhood while reusing the existing relation service's endpoint validation, provenance and review calculation. Exact node matching also preserves D107's rule that folder membership is not a semantic edge, evidence set or authorization boundary.
+
+**Consequences:** File and passage selectors match their stable file id, while a folder query returns only relations with that explicit folder endpoint. The unfiltered list stays unchanged, relation records remain canonical and shared, and no agent/MCP workspace authority or duplicate workspace data is introduced.

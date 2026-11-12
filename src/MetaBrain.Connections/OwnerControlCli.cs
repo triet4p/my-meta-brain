@@ -5273,16 +5273,25 @@ internal static class OwnerControlCli
         RelationTransitionAsync(options, ServiceRequestHandler.RelationRelinkOperation);
 
     /// <summary>
-    /// S5-T5 owner relation list: the whole relation set of this owner's vault,
-    /// each record with its live revision, its provenance and its computed
-    /// review state. Owner authority is this vault's owner, so no endpoint is
-    /// filtered here; an agent session sees its own scoped projection instead.
+    /// Relation list defaults to the owner's complete relation set; an optional
+    /// workspace node selector returns only the explicit endpoint neighborhood.
+    /// Each row carries the shared service's live revision, provenance and review
+    /// state; agents use their separately scoped projection.
     /// </summary>
     private static async Task<int> RelationListAsync(CommandOptions options)
     {
-        options.RequireOnly("--control-pipe");
+        options.RequireOnly("--control-pipe", "--workspace-node-id");
+        var workspaceNodeId = options.Optional("--workspace-node-id");
+        if (workspaceNodeId is not null && !ServiceSettingsLoader.IsSafeIdentifier(workspaceNodeId))
+        {
+            return Usage();
+        }
+
         var result = await InvokeOwnerAsync(ControlPipe(options),
-            new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion, ServiceRequestHandler.OwnerRelationListOperation)).ConfigureAwait(false);
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerRelationListOperation,
+                ResourceId: workspaceNodeId)).ConfigureAwait(false);
         if (!result.Success || !HasStatus(result.Reply, "relations"))
         {
             WriteServiceError(result);
@@ -10527,7 +10536,7 @@ internal static class OwnerControlCli
         "relation-unlink" => "owner relation-unlink --control-pipe <pipe> --resource-id <rel-id> --expected-revision <live> --reason text: retract with rationale.",
         "relation-relink" => "owner relation-relink --control-pipe <pipe> --resource-id <rel-id> --expected-revision <live> [--reason text]: restore to proposed; workspace acts require a reason and record history.",
         "relation-read" => "owner relation-read --control-pipe <pipe> --resource-id <rel-id> [--resource-revision N]: inspect typed endpoints, origin, provenance, history and computed review state.",
-        "relation-list" => "owner relation-list --control-pipe <pipe>: every relation with live revision, provenance, history and computed review state.",
+        "relation-list" => "owner relation-list --control-pipe <pipe> [--workspace-node-id <file-or-folder-id>]: every relation, or the explicit file/folder/passage endpoint neighborhood, with live revision, provenance, history and computed review state; passage endpoints match their file id, and folder membership does not expand.",
         "cognitive-annotation-create" => "owner cognitive-annotation-create --control-pipe <pipe> --file-id <workspace-file-id> --input-file <draft.json>: create an encrypted annotation for one existing live workspace anchor; JSON supplies anchorId, optional facets/kind/author/creationMethod/evidence/level, and suggestion=true creates a pending AI suggestion. Omitted classification axes stay Unknown.",
         "cognitive-annotation-list" => "owner cognitive-annotation-list --control-pipe <pipe>: list annotation IDs, live revisions and zones without reading annotation contents.",
         "cognitive-annotation-query" => "owner cognitive-annotation-query --control-pipe <pipe> [--facet world|experience|opinion|habit|intention|action-effect] [--kind claim|observation|question|hypothesis|decision|lesson|procedure|synthesis|preference|intention|unknown] [--review-status pending|accepted|rejected|unknown] [--origin owner|ai-suggestion|unknown] [--source-availability available|unavailable|unknown]: AND-filters annotations and reports exact annotation/source revisions, facet/kind, origin/review, author/executor/evidence, anchor range/digest/state and availability; no passage text is copied.",

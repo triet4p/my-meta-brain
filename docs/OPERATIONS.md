@@ -596,6 +596,66 @@ The store keeps names, paths, node metadata, the citation anchors, tombstone sta
 
 The authenticated workspace format and metadata schema are both version 1. Version 1 is the workspace shape first released in 1.2.0, and the node lifecycle state, the deletion group and the anchors are optional members of that same shape: a state that omits them means "every node is live and there are no anchors". A workspace therefore never changes version as a side effect of an ordinary act, and no automatic migration or conversion exists; an unknown or newer version is refused before any mutation instead. 1.1.0 and earlier have no workspace store at all, so no released build wrote a different workspace version. Purge of retained tombstones, scoped plaintext export, encrypted backup/restore and the remaining CLI coverage are delivered by S12-T4/T5 and were exercised in the accepted sprint evidence; the 1.2.0 candidate repeats the packaged end-to-end path.
 
+#### File and folder relations (S16-T5)
+
+Use the owner relation commands to connect stable workspace file, folder and passage endpoints, then inspect the service-computed provenance and review state. A relation draft is owner-owned input to the existing shared API; the service validates the exact retained content revisions, ranges and digests before creating the canonical encrypted edge.
+
+```text
+cli\MetaBrain.Cli.exe owner relation-create --control-pipe <pipe> --resource-id <relation-id> --zone-id <zone-id> --input-file <relation-draft.json>
+cli\MetaBrain.Cli.exe owner relation-list --control-pipe <pipe> --workspace-node-id <file-or-folder-id>
+cli\MetaBrain.Cli.exe owner relation-read --control-pipe <pipe> --resource-id <relation-id>
+cli\MetaBrain.Cli.exe owner workspace-read --control-pipe <pipe> --file-id <endpoint-file-id> --revision <pinned-content-revision> [--output-file <new-file>]
+cli\MetaBrain.Cli.exe owner workspace-revise --control-pipe <pipe> --file-id <file-id> --expected-content-revision <live> --input-file <replacement-bytes>
+cli\MetaBrain.Cli.exe owner relation-unlink --control-pipe <pipe> --resource-id <relation-id> --expected-revision <live-relation-revision> --reason <text>
+cli\MetaBrain.Cli.exe owner relation-relink --control-pipe <pipe> --resource-id <relation-id> --expected-revision <live-relation-revision> --reason <text>
+```
+
+Example file-to-passage draft (replace ids, revisions, offsets and digests with values from `workspace-tree`/`workspace-read`; offsets and lengths are bytes):
+
+```json
+{
+  "kind": "supports",
+  "state": "proposed",
+  "from": {
+    "resourceId": "<assertion-file-id>",
+    "endpointKind": "workspaceFile",
+    "revision": 1,
+    "span": null,
+    "workspacePin": {
+      "sha256": "<full-file-sha256>",
+      "treeRevision": null
+    }
+  },
+  "to": {
+    "resourceId": "<evidence-file-id>",
+    "endpointKind": "workspacePassage",
+    "revision": 4,
+    "span": {
+      "start": 120,
+      "end": 160
+    },
+    "workspacePin": {
+      "sha256": "<exact-passage-sha256>",
+      "treeRevision": null
+    }
+  },
+  "creationMethod": "directWrite",
+  "reason": "The selected passage records the observed evidence.",
+  "stateReason": null,
+  "occurredAtUtc": null,
+  "recordedAtUtc": "2026-11-12T00:00:00Z",
+  "requestEvidence": null,
+  "origin": "owner"
+}
+```
+
+
+`relation-list --workspace-node-id` reads the shared owner relation list and selects only edges with that exact stable workspace endpoint id. File and passage endpoints use their file id; a folder selects only explicit folder edges and never expands to its descendants. The result preserves relation ids, endpoint pins, origin, creator/executor, reason, immutable history and service-computed `current|needsReview` state. `relation-read --resource-revision` can inspect a retained relation record revision; the endpoint's own bytes are read separately with `workspace-read --revision`.
+
+For `workspaceFile` endpoints, the draft's `revision` and `workspacePin.sha256` identify the retained content revision and its full-file digest. For `workspacePassage`, provide the file id, retained content revision, byte `span` and SHA-256 of those exact bytes. For `workspaceFolder`, provide the folder node revision and the observed `treeRevision` as context; membership is not a child snapshot. Use explicit `origin=owner` for owner-created links. A content-sensitive relation that loses or advances either pinned file/passage endpoint becomes `needsReview` without rebinding its original pins; a `relatedTo` identity link is not evidence and stays current across content edits. The owner cannot accept stale evidence (`relation_needs_review`); unlink is reversible, and relink restores `proposed`, never `accepted`.
+
+Use `workspace-tree` for one row per logical folder/file and `cognitive-annotation-query` for its independent facet/kind/review/origin/source-availability filters. Relations and passage annotations remain separate encrypted canonical records and do not create duplicate file or folder nodes. The exact-revision CLI read is sufficient; `open <file-id>` remains an optional foreground document session, not a relation console or authorization step. These are owner-only operations; MCP and agent workspace relation access are unchanged.
+
 ### 3.2.8 Workspace search and the optional `open` document session (S13-T4–T6)
 
 Both surfaces are owner CLI features of the current runtime (search and editing added in 1.3.0;

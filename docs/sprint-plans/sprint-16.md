@@ -2,7 +2,7 @@
 
 ## Goal và trạng thái
 
-- Status: **In progress — S16-T1–T4 Complete; S16-T5–T6 unlaunched**. T4 independent evidence R1 PASS and exact-snapshot checkpoint `e7e0433a`; release mục tiêu cuối sprint: **1.6.0**, chưa build/publish.
+- Status: **In progress — S16-T1–T4 Complete; S16-T5 active; S16-T6 authorized/pending**. T4 independent evidence R1 PASS and exact-snapshot checkpoint `e7e0433a`; release mục tiêu cuối sprint: **1.6.0**, chưa build/publish.
 - Entry: Sprint 15 complete và 1.5.0 published.
 - Scope/trace: P2-07, P2-10, P2-12; R08, R14, R15, R23, R25, R36. Các P2 là candidates, không thay baseline khi chưa có approval.
 - Root: `F:/ai-ml/my-meta-brain`; target ref `main`; exact base/worktree/ownership resolve khi execution.
@@ -23,6 +23,10 @@ Owner-approved T2-only verification exception: the standing normal Codex/OMP MCP
 Owner authorized **S16-T3** with a Silver worker, full route, runtime verification, independent evidence review and a separate Bronze exact-snapshot checkpoint on `main`, including T3 documentation/status. Only reviewed T3 scope may be committed; unrelated changes are excluded. No T4–T6 launch, push or publication; the T2-only MCP verification exception does not extend to T3.
 
 Owner authorized **S16-T4** with a Gold worker, full route, actual changed-surface verification, independent evidence review and a separate Bronze exact-snapshot checkpoint on `main`, including T4 documentation/status. Stage only reviewed T4-owned changes; exclude unrelated changes. No T5–T6 launch, push or publication; the T2-only MCP verification exception does not extend to T4.
+
+Owner authorized the remaining **S16-T5 (Silver) and S16-T6 (Gold)**, corrections, required reviews/Bronze checkpoints and documentation/status commits, followed by final differential review and publication of 1.6.0 after all required gates PASS. External authority covers scoped S16 commit push, new `v1.6.0` tag/release/assets and repository Pages; never overwrite historical releases/assets. No Sprint 17 launch. Main selects safe defaults for subsequent in-scope decisions without another ask; acceptance/security gates remain binding.
+
+T6 normal-client proof remains required. Owner permits OMP clients/providers using synthetic fixture data and a dedicated project-local configuration folder (`mcp.json` or equivalent), but forbids changing any global configuration or permissions. No global/profile/settings edits or host mutation; no inherited synthetic-driver exception.
 
 Không host mutation/ACL/permissions/profile edits; synthetic data mặc định. Không downgrade baseline security, reset data hoặc lấy test suite thay runtime smoke. Decision còn mở/contract thay đổi phải owner-approved và sync docs trước implementation affected path.
 
@@ -54,7 +58,7 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
     - Acceptance: Câu vì-sao/quyết-định ưu tiên bằng chứng liên quan, vẫn giữ contradictions; không newest-wins hoặc confidence tự tăng vì nhiều link lặp cùng nguồn. Đo quality delta và tài nguyên trước release.
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
 
-- [ ] **S16-T5 — Owner relation workflows qua CLI.**
+- [~] **S16-T5 — Owner relation workflows qua CLI.**
     - Change: CLI nối file/folder và inspect evidence neighborhood/provenance/review state qua shared APIs; đọc endpoint tại revision hoặc optional `open` tài liệu. Không browser graph/relation controls.
     - Acceptance: Actual CLI add → inspect → source revise → needs-review → remove/undo; đọc endpoint đúng revision, lock chặn private responses; cognitive filters và folder listing không tạo duplicate data.
     - Check: CLI/service relation lifecycle và retrieval thật, MCP khi affected; browser chỉ cho changed document path.
