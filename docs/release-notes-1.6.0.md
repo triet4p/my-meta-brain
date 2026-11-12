@@ -3,17 +3,18 @@
 Windows x64, self-contained, **unsigned**. SHA-256 verifies downloaded bytes only; it does not
 authenticate the publisher.
 
-**Status: prepared candidate, not published.** The two assets were assembled and verified locally
-for Sprint 16 and exercised on their actual packaged surfaces. No `v1.6.0` tag, GitHub Release or
-public download URL exists, and none may be described as live before the owner authorizes
-publication after the required reviews and checkpoints. Exact candidate identity, sizes and
-SHA-256 values are in the [1.6.0 release record](release-1.6.0.md).
+**Status: published.** Meta Brain 1.6.0 was published on 2026-11-12 as the GitHub Release
+[`v1.6.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.6.0). The two assets were
+assembled and verified locally for Sprint 16, exercised on their actual packaged surfaces, then
+uploaded as byte copies of the frozen candidate. Exact candidate identity, sizes and SHA-256 values
+are in the [1.6.0 release record](release-1.6.0.md); the public download and launch observations are
+in the [publication record](../artifacts/sprint-16/publication/S16-PUBLISH-P1.md).
 
 ## Downloads
 
-1.6.0 ships exactly two products. When published, the public names below are the download-name
-mapping; the frozen candidate filenames and the exact sizes and SHA-256 values are in the
-[release record](release-1.6.0.md).
+1.6.0 ships exactly two products, published under the names below. The frozen candidate filenames
+and the exact sizes and SHA-256 values are in the [release record](release-1.6.0.md). Both files
+download from <https://github.com/triet4p/my-meta-brain/releases/tag/v1.6.0>.
 
 - `MetaBrain-CLI-1.6.0.exe` — CLI setup. Installs `cli\MetaBrain.Cli.exe`, the shared runtime and
   the shared installer, and registers the CLI component only. The owner CLI carries every cognitive
@@ -193,7 +194,14 @@ $cli = '<install-root>\cli\MetaBrain.Cli.exe'
 
 ## Distribution status
 
-**Not published.** 1.6.0 exists only as the locally assembled, verified candidate described in the
-[1.6.0 release record](release-1.6.0.md). The public names above are the intended download-name
-mapping and are not live URLs. String `v1.6.0` is not an existing tag or Release in this repository
-until the owner-authorized publication step creates it from the reviewed candidate.
+**Published.** 1.6.0 is the GitHub Release
+[`v1.6.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.6.0), published on 2026-11-12
+from the reviewed candidate described in the [1.6.0 release record](release-1.6.0.md). The tag and
+both download URLs above are live, the Release carries the two product assets plus
+`candidate-manifest.json`, `SHA256SUMS.txt` and `LICENSE` as byte copies of the frozen candidate
+files, and the public bytes were downloaded, hashed and launched as recorded in the
+[publication record](../artifacts/sprint-16/publication/S16-PUBLISH-P1.md).
+
+This document is the release-note source. The published Release body was derived from it and its
+status, download and distribution blocks were rewritten to the published state, so a later edit
+here does not rewrite that body.

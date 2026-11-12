@@ -223,8 +223,13 @@ unchanged at 22 tools. The publication and public smoke are recorded in
 [`artifacts/sprint-15/publication/S15-PUBLISH-P2.md`](artifacts/sprint-15/publication/S15-PUBLISH-P2.md);
 independent public-evidence review [`artifacts/sprint-15/reviews/S15-PUBLIC-C1-R1.md`](artifacts/sprint-15/reviews/S15-PUBLIC-C1-R1.md) (PASS) and the fresh Bronze checkpoint [`artifacts/sprint-15/checkpoints/S15-PUBLIC-C1.md`](artifacts/sprint-15/checkpoints/S15-PUBLIC-C1.md) (`9780091f`) are complete.
 
-**1.6.0 is a prepared, locally verified candidate — not published.** No `v1.6.0` tag, Release or
-download exists. The candidate keeps the same two products and adds Sprint 16 typed workspace
+**1.6.0 is published** as [`v1.6.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.6.0)
+on 2026-11-12: [`MetaBrain-CLI-1.6.0.exe`](https://github.com/triet4p/my-meta-brain/releases/download/v1.6.0/MetaBrain-CLI-1.6.0.exe)
+and [`MetaBrain-MCP-1.6.0.zip`](https://github.com/triet4p/my-meta-brain/releases/download/v1.6.0/MetaBrain-MCP-1.6.0.zip),
+byte copies of the frozen candidate, with the hashes in the
+[1.6.0 release record](docs/release-1.6.0.md); the public download, launch and site observations are
+in the [publication record](artifacts/sprint-16/publication/S16-PUBLISH-P1.md). The release keeps the
+same two products and adds Sprint 16 typed workspace
 relations between stable file, folder and passage endpoints: attributed create/inspect/accept/
 reject/retract/restore with exact revision pins, review-needed staleness, a rebuildable adjacency
 derivative and scoped export. Owner hybrid search returns bounded `relationCandidates` and one
@@ -234,7 +239,7 @@ contradictions; traversal stays within folder and exact-revision scope and is li
 current edges, two hops and the request limit. `owner relation-list --workspace-node-id` inspects the
 exact endpoint neighborhood without expanding folder membership. The MCP agent surface is unchanged
 at 22 tools; agent relation calls remain proposals and cannot accept or share owner workspace
-relations. The candidate identity and hashes are in the [1.6.0 release record](docs/release-1.6.0.md);
+relations. The release identity and hashes are in the [1.6.0 release record](docs/release-1.6.0.md);
 the [release contract](docs/release-contract.md#product-and-support-matrix-for-160-s16-t6) and
 [release notes](docs/release-notes-1.6.0.md) state the exact scope and limits.
 
@@ -440,9 +445,9 @@ the restore stays available, and the real renders of the view.
 
 The project follows the authoritative milestone roadmap in [`docs/PLAN.md`](docs/PLAN.md).
 Milestones 1–9 and Sprint 9's three-product delivery are complete; the public 1.0.0 release,
-asset-name cutover, updated Pages deployment and public smoke are complete. Sprints 11–15 published
-1.1.0–1.5.0; Sprint 16 has a locally verified 1.6.0 candidate awaiting review, checkpoint and
-owner-authorized publication. See
+asset-name cutover, updated Pages deployment and public smoke are complete. Sprints 11–16 published
+1.1.0–1.6.0; Sprint 16's 1.6.0 was published on 2026-11-12 after the review PASS, exact-snapshot
+checkpoint, final differential and owner authorization. See
 [`docs/PLAN.md`](docs/PLAN.md) for the authoritative status.
 
 - [x] **Milestone 1 (M1) — Encrypted Vault & Scoped Sharing (Sprint 1):** User-controlled key lifecycle, authenticated ciphertext, owner-approved catalog publication, single-use token issuance/redemption, and in-memory scoped reads verified with official Codex and OMP clients.

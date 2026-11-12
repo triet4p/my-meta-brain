@@ -8,16 +8,16 @@ This is the release/install/site contract for Sprint 10. It does not change prod
 
 ## Product and support matrix for 1.6.0 (S16-T6)
 
-This is the prepared-candidate 1.6.0 product matrix. It is the supported-OS and product-scope
-statement the packaged `RELEASE-NOTES.txt` in every 1.6.0 asset points at; the 1.5.0 and earlier
-matrices later in this file remain their own historical contracts and are unchanged. Nothing here
-claims that `v1.6.0` is published; the candidate is assembled and verified locally and publication
-remains an owner-authorized step after review, checkpoint and final differential.
+This is the published 1.6.0 product matrix. It is the supported-OS and product-scope statement the
+packaged `RELEASE-NOTES.txt` in every 1.6.0 asset points at; the 1.5.0 and earlier matrices later in
+this file remain their own historical contracts and are unchanged. Meta Brain 1.6.0 was published as
+`v1.6.0` on 2026-11-12 with byte copies of the reviewed candidate; identity, sizes and the public
+smoke are in the [1.6.0 release record](release-1.6.0.md).
 
 | Product | Version / asset | Entry and lifecycle |
 | --- | --- | --- |
-| CLI | `1.6.0`; intended public download `MetaBrain-CLI-1.6.0.exe`; candidate filename stays provenance-bound in the manifest | Dedicated Windows x64 setup EXE. Installs `cli/MetaBrain.Cli.exe`, the shared runtime under `service/`, the shared installer under `installer/` and `install-state.json`, and registers the `cli` component only. The owner CLI carries every cognitive workflow plus the workspace, typed-relation lifecycle/inspection, scoped hybrid search with relation candidates/ranked evidence and the optional document session. No Owner UI, SDK, repository or PowerShell glue is needed. |
-| MCP Server | `1.6.0`; intended public download `MetaBrain-MCP-1.6.0.zip`; candidate filename stays provenance-bound in the manifest | Standalone self-contained ZIP with `mcp/MetaBrain.Mcp.exe`, the shared runtime under `service/`, `package-manifest.json`, the project `LICENSE`, `RELEASE-NOTES.txt`, `THIRD-PARTY-NOTICES.txt` and per-dependency license texts. Stdio transport; the argument list is exactly one of `--data-root <owner data root>` or `--config <service-settings.json>`. The agent surface is unchanged at 22 tools and adds no owner workspace-search or owner relation-acceptance authority; agent relation calls remain proposals. |
+| CLI | `1.6.0`; public download `MetaBrain-CLI-1.6.0.exe`; candidate filename stays provenance-bound in the manifest | Dedicated Windows x64 setup EXE. Installs `cli/MetaBrain.Cli.exe`, the shared runtime under `service/`, the shared installer under `installer/` and `install-state.json`, and registers the `cli` component only. The owner CLI carries every cognitive workflow plus the workspace, typed-relation lifecycle/inspection, scoped hybrid search with relation candidates/ranked evidence and the optional document session. No Owner UI, SDK, repository or PowerShell glue is needed. |
+| MCP Server | `1.6.0`; public download `MetaBrain-MCP-1.6.0.zip`; candidate filename stays provenance-bound in the manifest | Standalone self-contained ZIP with `mcp/MetaBrain.Mcp.exe`, the shared runtime under `service/`, `package-manifest.json`, the project `LICENSE`, `RELEASE-NOTES.txt`, `THIRD-PARTY-NOTICES.txt` and per-dependency license texts. Stdio transport; the argument list is exactly one of `--data-root <owner data root>` or `--config <service-settings.json>`. The agent surface is unchanged at 22 tools and adds no owner workspace-search or owner relation-acceptance authority; agent relation calls remain proposals. |
 | Document surface | no separate product asset | The existing optional document preview/edit shell and loopback bridge remain compiled into the CLI/shared runtime. There is no relation or graph workbench, static site, separately installable UI or general web console. |
 | Owner UI | none in 1.6 | No 1.6 setup, `owner-ui` component, build or download. The 1.1.0 WPF product, its published downloads, bytes and source remain unchanged history; 1.6 refuses to modify a 1.1 installation or share its live data root and endpoints. |
 
