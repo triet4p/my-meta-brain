@@ -20,7 +20,10 @@ public sealed record AgentSession(
     DateTimeOffset ExpiresAtUtc,
     ScopeGrantEgress? Egress,
     long PolicyGeneration,
-    long UnlockEpoch);
+    long UnlockEpoch,
+    WorkspaceFolderSessionMember[]? WorkspaceFolderMembers = null,
+    int WorkspaceScopeSemanticsVersion = 0,
+    long WorkspaceScopeSemanticsGeneration = 0);
 
 /// <summary>
 /// Authoritative session snapshot safe to disclose to the session holder.
@@ -38,7 +41,10 @@ public sealed record AgentSessionSnapshot(
     DateTimeOffset ExpiresAtUtc,
     ScopeGrantEgress? Egress,
     long PolicyGeneration,
-    long UnlockEpoch);
+    long UnlockEpoch,
+    WorkspaceFolderSessionMember[]? WorkspaceFolderMembers = null,
+    int WorkspaceScopeSemanticsVersion = 0,
+    long WorkspaceScopeSemanticsGeneration = 0);
 
 public enum AgentRedeemStatus
 {

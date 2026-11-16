@@ -26,7 +26,8 @@ internal sealed record WorkspaceNodeRecord(
     long ContentRevision,
     WorkspaceRevisionRecord[] Revisions,
     string? State,
-    string? DeletionId);
+    string? DeletionId,
+    long AccessLifecycleGeneration = 0);
 
 /// <summary>
 /// One citation anchor as the encrypted tree stores it: a document id, one
@@ -1613,7 +1614,8 @@ internal sealed class EncryptedWorkspaceStore
             {
                 State = WorkspaceNodeStates.Deleted,
                 DeletionId = deletionId,
-                Revision = checked(candidate.Revision + 1)
+                Revision = checked(candidate.Revision + 1),
+                AccessLifecycleGeneration = checked(candidate.AccessLifecycleGeneration + 1)
             };
             if (IsFolder(candidate))
             {
@@ -2492,7 +2494,8 @@ internal sealed class EncryptedWorkspaceStore
         var byId = new Dictionary<string, WorkspaceNodeRecord>(state.Nodes.Length, StringComparer.Ordinal);
         foreach (var node in state.Nodes)
         {
-            if (node is null || !IsIdentifier(node.Id) || node.Revision < 1 || !byId.TryAdd(node.Id, node))
+            if (node is null || !IsIdentifier(node.Id) || node.Revision < 1 ||
+                node.AccessLifecycleGeneration < 0 || !byId.TryAdd(node.Id, node))
             {
                 throw new InvalidDataException("Invalid workspace node.");
             }

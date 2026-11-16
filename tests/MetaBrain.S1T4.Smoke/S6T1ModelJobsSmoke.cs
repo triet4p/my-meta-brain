@@ -1587,6 +1587,18 @@ internal static partial class OwnerServiceSmoke
         public byte[][] ReadBatch(IReadOnlyList<ScopeResourceRevision> batch, int maxDegreeOfParallelism, CancellationToken cancellationToken) => _inner.ReadBatch(batch, maxDegreeOfParallelism, cancellationToken);
         public OwnerScopeGrantState LoadScopeGrantState() => _inner.LoadScopeGrantState();
         public T UpdateScopeGrantState<T>(Func<OwnerScopeGrantState, (OwnerScopeGrantState State, T Result)> update) => _inner.UpdateScopeGrantState(update);
+        public WorkspaceFolderGrantSnapshot ReadWorkspaceFolderGrantSnapshot() => _inner.ReadWorkspaceFolderGrantSnapshot();
+        public T UpdateWorkspaceFolderGrantState<T>(
+            Func<OwnerScopeGrantState, WorkspaceSnapshot?, (OwnerScopeGrantState State, T Result)> update) =>
+            _inner.UpdateWorkspaceFolderGrantState(update);
+        public WorkspaceFileContent ReadWorkspaceFileForGrant(
+            string grantId, int scopeSemanticsVersion, long scopeSemanticsGeneration, string fileId, long revision) =>
+            _inner.ReadWorkspaceFileForGrant(
+                grantId, scopeSemanticsVersion, scopeSemanticsGeneration, fileId, revision);
+        public bool IsWorkspaceFileAuthorizedForGrant(
+            string grantId, int scopeSemanticsVersion, long scopeSemanticsGeneration, string fileId, long revision) =>
+            _inner.IsWorkspaceFileAuthorizedForGrant(
+                grantId, scopeSemanticsVersion, scopeSemanticsGeneration, fileId, revision);
         public OwnerCatalogState LoadCatalogState() => _inner.LoadCatalogState();
         public T UpdateCatalogState<T>(Func<OwnerCatalogState, (OwnerCatalogState State, T Result)> update) => _inner.UpdateCatalogState(update);
         public OwnerRecallPolicyState LoadRecallPolicyState() => _inner.LoadRecallPolicyState();

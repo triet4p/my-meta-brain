@@ -202,7 +202,7 @@ public interface IOperationsAuditPersistence
 /// Scoped unlocked access to private resource metadata and content. The
 /// application disposes this lease only after the operation response is sent.
 /// </summary>
-public interface IVaultOperation : IManagedResourceStore, IScopeGrantPersistence, ICatalogPersistence, ISourceEnrollmentPersistence, IRecallPolicyPersistence, IReviewStatePersistence, IPurgeLedgerPersistence, IOperationsAuditPersistence, IPurgeResourceDeletion, IWorkspacePersistence, IDisposable
+public interface IVaultOperation : IManagedResourceStore, IScopeGrantPersistence, ICatalogPersistence, ISourceEnrollmentPersistence, IRecallPolicyPersistence, IReviewStatePersistence, IPurgeLedgerPersistence, IOperationsAuditPersistence, IPurgeResourceDeletion, IWorkspacePersistence, IWorkspaceFolderGrantPersistence, IDisposable
 {
  }
 

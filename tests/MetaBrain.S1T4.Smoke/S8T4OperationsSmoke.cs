@@ -959,6 +959,16 @@ internal sealed class S8T4AuditFailureOperation : IVaultOperation
     public T UpdateScopeGrantState<T>(
         Func<OwnerScopeGrantState, (OwnerScopeGrantState State, T Result)> update) => throw new NotSupportedException();
 
+    public WorkspaceFolderGrantSnapshot ReadWorkspaceFolderGrantSnapshot() => throw new NotSupportedException();
+    public T UpdateWorkspaceFolderGrantState<T>(
+        Func<OwnerScopeGrantState, WorkspaceSnapshot?, (OwnerScopeGrantState State, T Result)> update) =>
+        throw new NotSupportedException();
+    public WorkspaceFileContent ReadWorkspaceFileForGrant(
+        string grantId, int scopeSemanticsVersion, long scopeSemanticsGeneration, string fileId, long revision) =>
+        throw new NotSupportedException();
+    public bool IsWorkspaceFileAuthorizedForGrant(
+        string grantId, int scopeSemanticsVersion, long scopeSemanticsGeneration, string fileId, long revision) =>
+        throw new NotSupportedException();
     public OwnerCatalogState LoadCatalogState() => throw new NotSupportedException();
 
     public T UpdateCatalogState<T>(

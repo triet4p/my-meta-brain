@@ -691,6 +691,18 @@ internal static partial class OwnerServiceSmoke
             return result;
         }
 
+        public WorkspaceFolderGrantSnapshot ReadWorkspaceFolderGrantSnapshot() => _inner.ReadWorkspaceFolderGrantSnapshot();
+        public T UpdateWorkspaceFolderGrantState<T>(
+            Func<OwnerScopeGrantState, WorkspaceSnapshot?, (OwnerScopeGrantState State, T Result)> update) =>
+            _inner.UpdateWorkspaceFolderGrantState(update);
+        public WorkspaceFileContent ReadWorkspaceFileForGrant(
+            string grantId, int scopeSemanticsVersion, long scopeSemanticsGeneration, string fileId, long revision) =>
+            _inner.ReadWorkspaceFileForGrant(
+                grantId, scopeSemanticsVersion, scopeSemanticsGeneration, fileId, revision);
+        public bool IsWorkspaceFileAuthorizedForGrant(
+            string grantId, int scopeSemanticsVersion, long scopeSemanticsGeneration, string fileId, long revision) =>
+            _inner.IsWorkspaceFileAuthorizedForGrant(
+                grantId, scopeSemanticsVersion, scopeSemanticsGeneration, fileId, revision);
         public byte[] ReadContent(string resourceId, long? expectedRevision = null) => _inner.ReadContent(resourceId, expectedRevision);
         public void ValidateRegistration(string resourceId, long? expectedRevision = null) => _inner.ValidateRegistration(resourceId, expectedRevision);
         public IReadOnlyList<ScopeResourceRevision> ListResources() => _inner.ListResources();

@@ -942,3 +942,10 @@ the assignment can fail before the sentinel check or any child starts.
 **Fix / workaround:** Build the targeted smoke project with `--no-restore` using its existing assets, then invoke its DLL with `dotnet exec`.
 **Watch out for:** In this environment, avoid a fresh default restore when the user package directory is inaccessible; use an existing local restore state without changing host permissions or profile settings.
 
+
+## [2026-11-16] An expiry smoke waited thousands of seconds
+
+**Symptom:** The focused S17-T2 runtime proof reached its expiry scenario, then timed out after 360 seconds without completing.
+**Root cause:** The intended 6.5-second expiry wait used `TimeSpan.FromSeconds(6500)`, which requests 6,500 seconds.
+**Fix / workaround:** Use `TimeSpan.FromMilliseconds(6500)` so the wait extends six seconds past the six-second grant expiry.
+**Watch out for:** When an expiry test expresses milliseconds through `TimeSpan`, do not pass the raw millisecond count to `FromSeconds`.

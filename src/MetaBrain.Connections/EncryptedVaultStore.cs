@@ -63,7 +63,8 @@ internal sealed class EncryptedVaultStore
     private const int CurrentManifestSchemaVersion = 1;
     private const int CurrentResourceSchemaVersion = 1;
     private const int CurrentScopeGrantSchemaVersion = OwnerScopeGrantState.CurrentSchemaVersion;
-    private const int PreviousScopeGrantSchemaVersion = 3;
+    private const int PreviousScopeGrantSchemaVersion = 4;
+    private const int PreviousLegacyScopeGrantSchemaVersion = 3;
     private const int LegacyScopeGrantSchemaVersion = 2;
     private const int KdfIterations = 600_000;
     // S8-T3 key-format compatibility: the wrapper records the cost it was
@@ -353,9 +354,20 @@ internal sealed class EncryptedVaultStore
                 {
                     Clear(associatedData);
                     associatedData = ResourceAssociatedData(
-                        manifest.VaultId, "scope-grants", LegacyScopeGrantSchemaVersion, 1);
-                    plaintext = DecryptPayload(
-                        envelope, dataKey, associatedData, LegacyScopeGrantSchemaVersion, 1, MaximumScopeGrantBytes);
+                        manifest.VaultId, "scope-grants", PreviousLegacyScopeGrantSchemaVersion, 1);
+                    try
+                    {
+                        plaintext = DecryptPayload(
+                            envelope, dataKey, associatedData, PreviousLegacyScopeGrantSchemaVersion, 1, MaximumScopeGrantBytes);
+                    }
+                    catch (CryptographicException)
+                    {
+                        Clear(associatedData);
+                        associatedData = ResourceAssociatedData(
+                            manifest.VaultId, "scope-grants", LegacyScopeGrantSchemaVersion, 1);
+                        plaintext = DecryptPayload(
+                            envelope, dataKey, associatedData, LegacyScopeGrantSchemaVersion, 1, MaximumScopeGrantBytes);
+                    }
                 }
             }
             return JsonSerializer.Deserialize<OwnerScopeGrantState>(plaintext, JsonOptions)
@@ -1876,7 +1888,7 @@ internal sealed class EncryptedVaultStore
     /// S8-T3 reads the stored schema version of the owner scope-grant state.
     /// The version is the one bound into the file's associated data, not a
     /// guess from the JSON: the state is decrypted with the current binding
-    /// first and then with the two published legacy bindings, exactly like
+    /// first and then with the three supported legacy bindings, exactly like
     /// <see cref="LoadScopeGrantState"/>, so the report names the binding the
     /// file actually carries. A missing file reports 0.
     /// </summary>
@@ -1906,7 +1918,8 @@ internal sealed class EncryptedVaultStore
             ?? throw new InvalidDataException("Invalid encrypted owner scope envelope.");
         foreach (var version in new[]
                  {
-                     CurrentScopeGrantSchemaVersion, PreviousScopeGrantSchemaVersion, LegacyScopeGrantSchemaVersion
+                     CurrentScopeGrantSchemaVersion, PreviousScopeGrantSchemaVersion,
+                     PreviousLegacyScopeGrantSchemaVersion, LegacyScopeGrantSchemaVersion
                  })
         {
             var associatedData = ResourceAssociatedData(manifest.VaultId, "scope-grants", version, 1);

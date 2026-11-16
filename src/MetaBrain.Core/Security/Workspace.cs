@@ -78,7 +78,14 @@ public sealed record WorkspaceNodeInfo(
     string Name,
     long Revision,
     long ContentRevision,
-    WorkspaceContentRevisionInfo[] Revisions);
+    WorkspaceContentRevisionInfo[] Revisions)
+{
+    /// <summary>
+    /// Monotonic per-identity generation advanced by delete. A restored file
+    /// keeps the newer value so an earlier folder grant cannot revive it.
+    /// </summary>
+    public long AccessLifecycleGeneration { get; init; }
+}
 
 /// <summary>
 /// One consistent read of the logical workspace tree: the workspace identity,

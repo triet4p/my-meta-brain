@@ -70,6 +70,11 @@ public sealed class AgentSessionAuthority
                         return (state, (AgentRedeemStatus.Expired, null));
                     }
 
+                    if (grant.RevokedAtUtc is not null)
+                    {
+                        return (state, (AgentRedeemStatus.Revoked, null));
+                    }
+
                     if (grant.UnlockEpoch != currentUnlockEpoch)
                     {
                         return (state, (AgentRedeemStatus.Superseded, null));
@@ -110,6 +115,9 @@ public sealed class AgentSessionAuthority
                 while (!_sessionIds.Add(sessionId));
 
                 var grant = consumption.Grant;
+                var workspaceMembers = grant.WorkspaceFolderScope?.Members
+                    .Select(member => new WorkspaceFolderSessionMember(member.FileId, member.ContentRevision))
+                    .ToArray();
                 var session = new AgentSession(
                     sessionId,
                     grant.GrantId,
@@ -121,7 +129,10 @@ public sealed class AgentSessionAuthority
                     grant.ExpiresAtUtc,
                     grant.Egress is null ? null : grant.Egress with { },
                     grant.PolicyGeneration,
-                    currentUnlockEpoch);
+                    currentUnlockEpoch,
+                    workspaceMembers,
+                    grant.ScopeSemanticsVersion,
+                    grant.ScopeSemanticsGeneration);
                 _sessionsByVerifier.Add(sessionVerifier, session);
                 _sessionVerifierById.Add(sessionId, sessionVerifier);
                 return new AgentRedeemResult(
@@ -240,6 +251,31 @@ public sealed class AgentSessionAuthority
             _terminalById.Clear();
         }
     }
+    public void SynchronizeWorkspaceGrants(IReadOnlyList<PersistedScopeGrant> grants)
+    {
+        ArgumentNullException.ThrowIfNull(grants);
+        var byId = grants.ToDictionary(grant => grant.GrantId, StringComparer.Ordinal);
+        lock (_gate)
+        {
+            foreach (var session in _sessionsByVerifier.Values.ToArray())
+            {
+                if (session.WorkspaceFolderMembers is null)
+                {
+                    continue;
+                }
+
+                if (!byId.TryGetValue(session.GrantId, out var grant) ||
+                    grant.WorkspaceFolderScope is null ||
+                    grant.RevokedAtUtc is not null ||
+                    grant.ScopeSemanticsVersion != session.WorkspaceScopeSemanticsVersion ||
+                    grant.ScopeSemanticsGeneration != session.WorkspaceScopeSemanticsGeneration)
+                {
+                    RemoveSessionLocked(session, AgentSessionLookupStatus.Revoked);
+                }
+            }
+        }
+    }
+
 
     private AgentSessionLookupStatus LookupVerifierLocked(
         string verifier,
@@ -359,6 +395,20 @@ public sealed class AgentSessionAuthority
                 return IsInScope(session.Resources, request.ResourceId, request.ResourceRevision)
                     ? Allow(policyGeneration)
                     : Deny("resource_unavailable", policyGeneration);
+            case WorkspaceFolderGrantAuthority.WorkspaceFileReadOperation:
+                if (request.DestinationResourceId is not null || request.DestinationRevision is not null ||
+                    HasEgressFields(request) || string.IsNullOrWhiteSpace(request.ResourceId) ||
+                    request.ResourceRevision is not > 0)
+                {
+                    return Deny("invalid_request", policyGeneration);
+                }
+
+                return session.WorkspaceFolderMembers?.Any(member =>
+                        string.Equals(member.FileId, request.ResourceId, StringComparison.Ordinal) &&
+                        member.ContentRevision == request.ResourceRevision.Value) == true
+                    ? Allow(policyGeneration)
+                    : Deny("resource_unavailable", policyGeneration);
+
             case "proposal.create":
                 if (request.ResourceId is not null || request.ResourceRevision is not null ||
                     request.DestinationResourceId is null || request.DestinationRevision is null ||
@@ -502,5 +552,8 @@ public sealed class AgentSessionAuthority
         session.ExpiresAtUtc,
         session.Egress is null ? null : session.Egress with { },
         session.PolicyGeneration,
-        session.UnlockEpoch);
+        session.UnlockEpoch,
+        session.WorkspaceFolderMembers?.Select(member => member with { }).ToArray(),
+        session.WorkspaceScopeSemanticsVersion,
+        session.WorkspaceScopeSemanticsGeneration);
 }

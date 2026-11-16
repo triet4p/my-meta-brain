@@ -424,6 +424,118 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
             return result;
         }
     }
+    private WorkspaceFolderGrantSnapshot ReadWorkspaceFolderGrantSnapshot()
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            var state = OwnerScopeGrantAuthority.ValidateAndMigrateState(
+                _store.LoadScopeGrantState(_manifest!, _dataKey!));
+            var workspace = _workspace is null ? null : ReadWorkspaceTreeLocked();
+            return new WorkspaceFolderGrantSnapshot(state, workspace);
+        }
+    }
+
+    private T UpdateWorkspaceFolderGrantState<T>(
+        Func<OwnerScopeGrantState, WorkspaceSnapshot?, (OwnerScopeGrantState State, T Result)> update)
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            var state = OwnerScopeGrantAuthority.ValidateAndMigrateState(
+                _store.LoadScopeGrantState(_manifest!, _dataKey!));
+            var workspace = _workspace is null ? null : ReadWorkspaceTreeLocked();
+            var (nextState, result) = update(state, workspace);
+            if (!ReferenceEquals(nextState, state))
+            {
+                nextState = OwnerScopeGrantAuthority.ValidateAndMigrateState(nextState);
+                _store.SaveScopeGrantState(_manifest!, _dataKey!, nextState);
+            }
+
+            return result;
+        }
+    }
+
+    private WorkspaceFileContent ReadWorkspaceFileForGrant(
+        string grantId,
+        int scopeSemanticsVersion,
+        long scopeSemanticsGeneration,
+        string fileId,
+        long revision)
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            if (_workspace is null || !IsWorkspaceFileAuthorizedForGrantLocked(
+                    grantId, scopeSemanticsVersion, scopeSemanticsGeneration, fileId, revision))
+            {
+                throw new WorkspaceFolderGrantRefusalException("workspace_file_unavailable");
+            }
+
+            return _workspaceStore.ReadContent(
+                _manifest!.VaultId, _dataKey!, _workspace, fileId, revision);
+        }
+    }
+
+    private bool IsWorkspaceFileAuthorizedForGrant(
+        string grantId,
+        int scopeSemanticsVersion,
+        long scopeSemanticsGeneration,
+        string fileId,
+        long revision)
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            return IsWorkspaceFileAuthorizedForGrantLocked(
+                grantId, scopeSemanticsVersion, scopeSemanticsGeneration, fileId, revision);
+        }
+    }
+
+    private bool IsWorkspaceFileAuthorizedForGrantLocked(
+        string grantId,
+        int scopeSemanticsVersion,
+        long scopeSemanticsGeneration,
+        string fileId,
+        long revision)
+    {
+        if (_manifest is null || _dataKey is null || _workspace is null)
+        {
+            return false;
+        }
+
+        var state = OwnerScopeGrantAuthority.ValidateAndMigrateState(
+            _store.LoadScopeGrantState(_manifest, _dataKey));
+        var grant = state.Grants.FirstOrDefault(candidate =>
+            string.Equals(candidate.GrantId, grantId, StringComparison.Ordinal));
+        if (grant is null || !WorkspaceFolderGrantAuthority.IsActiveGrant(
+                state, grant, scopeSemanticsVersion, scopeSemanticsGeneration) ||
+            grant.WorkspaceFolderScope is not { } scope)
+        {
+            return false;
+        }
+
+        var workspace = ReadWorkspaceTreeLocked();
+        if (WorkspaceFolderGrantEvaluator.AllowsRead(workspace, scope, fileId, revision))
+        {
+            return true;
+        }
+
+        var member = WorkspaceFolderGrantEvaluator.FindMember(scope.Members, fileId);
+        if (workspace is not null && member is not null && member.ContentRevision != revision)
+        {
+            var nodes = WorkspaceFolderGrantEvaluator.BuildNodeIndex(workspace);
+            if (nodes.TryGetValue(fileId, out var current) &&
+                current.Kind == WorkspaceNodeKind.File && current.ContentRevision == revision &&
+                WorkspaceFolderGrantEvaluator.IsMemberLive(nodes, scope, member))
+            {
+                throw new WorkspaceFolderGrantRefusalException("workspace_revision_stale");
+            }
+        }
+
+        return false;
+    }
+
 
     private OwnerCatalogState LoadCatalogState()
     {
@@ -898,17 +1010,28 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
                 return null;
             }
 
-            return new WorkspaceSnapshot(
-                _workspace.WorkspaceId,
-                _workspace.FormatVersion,
-                _workspace.MetadataSchemaVersion,
-                _workspace.Revision,
-                _workspace.RootId,
-                _workspace.Nodes
-                    .Where(node => !string.Equals(node.State, WorkspaceNodeStates.Deleted, StringComparison.Ordinal))
-                    .Select(ToWorkspaceNodeInfo)
-                    .ToArray());
+            return ReadWorkspaceTreeLocked();
         }
+    }
+
+    private WorkspaceSnapshot? ReadWorkspaceTreeLocked()
+    {
+        EnsureWorkspaceAvailableLocked();
+        if (_workspace is null)
+        {
+            return null;
+        }
+
+        return new WorkspaceSnapshot(
+            _workspace.WorkspaceId,
+            _workspace.FormatVersion,
+            _workspace.MetadataSchemaVersion,
+            _workspace.Revision,
+            _workspace.RootId,
+            _workspace.Nodes
+                .Where(node => !string.Equals(node.State, WorkspaceNodeStates.Deleted, StringComparison.Ordinal))
+                .Select(ToWorkspaceNodeInfo)
+                .ToArray());
     }
 
     private static WorkspaceNodeInfo ToWorkspaceNodeInfo(WorkspaceNodeRecord node) =>
@@ -923,7 +1046,10 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
             node.ContentRevision,
             node.Revisions
                 .Select(revision => new WorkspaceContentRevisionInfo(revision.Revision, revision.Length, revision.Sha256))
-                .ToArray());
+                .ToArray())
+        {
+            AccessLifecycleGeneration = node.AccessLifecycleGeneration
+        };
 
     private WorkspaceMutationInfo CreateWorkspaceFolder(string parentId, string name, long expectedTreeRevision)
     {
@@ -1772,6 +1898,27 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
         public T UpdateScopeGrantState<T>(
             Func<OwnerScopeGrantState, (OwnerScopeGrantState State, T Result)> update) =>
             GetOwner().UpdateScopeGrantState(update);
+        public WorkspaceFolderGrantSnapshot ReadWorkspaceFolderGrantSnapshot() =>
+            GetOwner().ReadWorkspaceFolderGrantSnapshot();
+        public T UpdateWorkspaceFolderGrantState<T>(
+            Func<OwnerScopeGrantState, WorkspaceSnapshot?, (OwnerScopeGrantState State, T Result)> update) =>
+            GetOwner().UpdateWorkspaceFolderGrantState(update);
+        public WorkspaceFileContent ReadWorkspaceFileForGrant(
+            string grantId,
+            int scopeSemanticsVersion,
+            long scopeSemanticsGeneration,
+            string fileId,
+            long revision) =>
+            GetOwner().ReadWorkspaceFileForGrant(
+                grantId, scopeSemanticsVersion, scopeSemanticsGeneration, fileId, revision);
+        public bool IsWorkspaceFileAuthorizedForGrant(
+            string grantId,
+            int scopeSemanticsVersion,
+            long scopeSemanticsGeneration,
+            string fileId,
+            long revision) =>
+            GetOwner().IsWorkspaceFileAuthorizedForGrant(
+                grantId, scopeSemanticsVersion, scopeSemanticsGeneration, fileId, revision);
         public OwnerCatalogState LoadCatalogState() => GetOwner().LoadCatalogState();
         public T UpdateCatalogState<T>(
             Func<OwnerCatalogState, (OwnerCatalogState State, T Result)> update) =>

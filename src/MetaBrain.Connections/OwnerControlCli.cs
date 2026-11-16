@@ -2740,7 +2740,8 @@ internal static class OwnerControlCli
         var accessOperation = options.Required("--operation");
         var resourceId = options.Required("--resource-id");
         if (!ServiceSettingsLoader.IsSafeIdentifier(resourceId) ||
-            (accessOperation is not ("resource.read" or "source.read")))
+            (accessOperation is not ("resource.read" or "source.read" or
+                WorkspaceFolderGrantAuthority.WorkspaceFileReadOperation)))
         {
             return Usage();
         }
@@ -10642,7 +10643,7 @@ internal static class OwnerControlCli
         "help" => "owner help [--command <verb>] | owner <verb> --help: this help. Local text only; starts/connects/unlocks nothing.",
         "agent-search" => "owner agent-search --agent-pipe <pipe> --session-file <file> --query text [--offset N --limit N --kind K --current current|history --level L --as-of ISO --include-archived true]: scoped search inside the frozen session scope only (scope total, never vault counts).",
         "agent-brief" => "owner agent-brief --agent-pipe <pipe> --session-file <file> [--query text --budget-chars 200..8000 --context-project label --context-task label --include-archived true]: scoped brief projection under the caller's budget; never system instructions.",
-        "agent-read" => "owner agent-read --agent-pipe <pipe> --session-file <file> --operation resource.read|source.read --resource-id <id> --resource-revision <rev>: scoped read at the exact approved revision (base64-framed on stdout).",
+        "agent-read" => "owner agent-read --agent-pipe <pipe> --session-file <file> --operation resource.read|source.read|workspace.file.read --resource-id <id> --resource-revision <rev>: scoped read at the exact approved revision (base64-framed on stdout).",
         "agent-memory-read" => "owner agent-memory-read --agent-pipe <pipe> --session-file <file> --resource-id <id> --resource-revision <rev>: scoped item detail (memory.read grant only; a source-only grant denies here).",
         "agent-source-read" => "owner agent-source-read --agent-pipe <pipe> --session-file <file> --resource-id <id> --resource-revision <rev>: scoped source expansion (explicit source.read grant only).",
         "agent-source-snapshot-read" => "owner agent-source-snapshot-read --agent-pipe <pipe> --session-file <file> --snapshot-id <snap> --snapshot-revision <rev>: scoped snapshot expansion (explicit snapshot grant only).",

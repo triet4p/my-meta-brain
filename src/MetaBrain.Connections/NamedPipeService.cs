@@ -279,6 +279,10 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerCognitiveAnnotationAcceptOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerCognitiveAnnotationRejectOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspacePassageAnchorsOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceFolderGrantPreviewOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceFolderGrantIssueOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceFolderGrantListOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceFolderGrantRevokeOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceHybridSearchOperation, StringComparison.Ordinal))
                 {
                     timeout.CancelAfter(WorkspaceTimeout);
@@ -291,6 +295,10 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerScopePreviewOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerScopeIssueOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerScopeListOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceFolderGrantPreviewOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceFolderGrantIssueOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceFolderGrantListOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceFolderGrantRevokeOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerScopeCollectionSetOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerScopeCollectionListOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerCatalogPreviewOperation, StringComparison.Ordinal) ||

@@ -109,7 +109,10 @@ public sealed record ServiceRequest(
     string? WorkspaceSearchField = null,
     string? WorkspaceSearchDateFrom = null,
     string? WorkspaceSearchDateTo = null,
-    long? WorkspaceUnlockEpoch = null);
+    long? WorkspaceUnlockEpoch = null,
+    string? WorkspaceFolderId = null,
+    string[]? WorkspaceExcludedFolderIds = null,
+    string? GrantId = null);
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
     ScopeResourceRevision[] Resources,
@@ -1425,7 +1428,9 @@ public sealed record ServiceReply(
     long? UnlockEpoch = null,
     WorkspacePassageIndexStatus? WorkspacePassageIndex = null,
     WorkspacePassageAnchorPage? WorkspacePassageAnchors = null,
-    WorkspaceHybridSearchPageWire? WorkspaceHybridSearch = null);
+    WorkspaceHybridSearchPageWire? WorkspaceHybridSearch = null,
+    WorkspaceFolderGrantPreview? WorkspaceFolderGrantPreview = null,
+    WorkspaceFolderGrantSummary[]? WorkspaceFolderGrants = null);
 
 public sealed class ServiceRequestHandler
 {
@@ -1472,6 +1477,10 @@ public sealed class ServiceRequestHandler
     public const string SourceReadOperation = "source.read";
     public const string ResourceWriteOperation = "resource.write";
     public const string OwnerScopePreviewOperation = "owner.scope.preview";
+    public const string OwnerWorkspaceFolderGrantPreviewOperation = "owner.workspace.folder-grant.preview";
+    public const string OwnerWorkspaceFolderGrantIssueOperation = "owner.workspace.folder-grant.issue";
+    public const string OwnerWorkspaceFolderGrantListOperation = "owner.workspace.folder-grant.list";
+    public const string OwnerWorkspaceFolderGrantRevokeOperation = "owner.workspace.folder-grant.revoke";
     public const string OwnerJobCreateOperation = "owner.job.create";
     public const string OwnerJobStartOperation = "owner.job.start";
     public const string OwnerJobCancelOperation = "owner.job.cancel";
@@ -1627,6 +1636,7 @@ public sealed class ServiceRequestHandler
     private readonly GrantAuthority _grantAuthority;
     private readonly IVaultLifecycle _vault;
     private readonly OwnerScopeGrantAuthority _ownerScopeGrants;
+    private readonly WorkspaceFolderGrantAuthority _workspaceFolderGrants = new();
     private readonly AgentSessionAuthority _agentSessions;
     private readonly OwnerCatalogAuthority _ownerCatalog;
     private readonly ICatalogProjectionStore? _projections;
@@ -1823,6 +1833,17 @@ public sealed class ServiceRequestHandler
     /// </summary>
     private static bool WorkspaceFieldsBelongToOperation(ServiceRequest request)
     {
+        if ((request.WorkspaceFolderId is not null || request.WorkspaceExcludedFolderIds is not null) &&
+            request.Operation is not OwnerWorkspaceFolderGrantPreviewOperation)
+        {
+            return false;
+        }
+
+        if (request.GrantId is not null && request.Operation is not OwnerWorkspaceFolderGrantRevokeOperation)
+        {
+            return false;
+        }
+
         if (request.WorkspaceParentId is not null &&
             request.Operation is not (OwnerWorkspaceFolderCreateOperation or OwnerWorkspaceFileCreateOperation or
                 OwnerWorkspaceNodeMoveOperation or OwnerWorkspaceNodeCopyOperation))
@@ -1913,6 +1934,27 @@ public sealed class ServiceRequestHandler
 
         return true;
     }
+    private static bool HasWorkspaceFolderGrantExtras(
+        ServiceRequest request,
+        bool allowPreviewFields = false,
+        bool allowPreviewId = false,
+        bool allowGrantId = false)
+    {
+        var remaining = request with
+        {
+            ExpiresAtUtc = allowPreviewFields ? null : request.ExpiresAtUtc,
+            Operations = allowPreviewFields ? null : request.Operations,
+            Provider = allowPreviewFields ? null : request.Provider,
+            Model = allowPreviewFields ? null : request.Model,
+            MaximumCostUsd = allowPreviewFields ? null : request.MaximumCostUsd,
+            WorkspaceFolderId = allowPreviewFields ? null : request.WorkspaceFolderId,
+            WorkspaceExcludedFolderIds = allowPreviewFields ? null : request.WorkspaceExcludedFolderIds,
+            PreviewId = allowPreviewId ? null : request.PreviewId,
+            GrantId = allowGrantId ? null : request.GrantId
+        };
+        return remaining != new ServiceRequest(request.ProtocolVersion, request.Operation);
+    }
+
 
     /// <summary>
     /// Every operation name this service knows, read from the operation
@@ -1982,6 +2024,7 @@ public sealed class ServiceRequestHandler
         OwnerCatalogListOperation,
         OwnerCatalogPreviewOperation,
         OwnerSessionListOperation,
+        OwnerWorkspaceFolderGrantListOperation,
         OwnerPurgePreviewOperation,
         SourceListOperation,
         SourceStatusOperation,
@@ -2319,6 +2362,7 @@ public sealed class ServiceRequestHandler
             _modelJobs.AbortInFlightOnLockOrRestart();
             await _vault.LockAsync().ConfigureAwait(false);
             _ownerScopeGrants.ClearRequestPreviews();
+            _workspaceFolderGrants.ClearPreviews();
             _agentSessions.ClearSessions();
             ResetPrivateIndex();
             return new ServiceReply(CurrentProtocolVersion, "locked", "owner", null, VaultState: _vault.State);
@@ -2363,6 +2407,26 @@ public sealed class ServiceRequestHandler
         {
             return HandleScopeList(context, operation);
         }
+        if (string.Equals(request.Operation, OwnerWorkspaceFolderGrantPreviewOperation, StringComparison.Ordinal))
+        {
+            return HandleWorkspaceFolderGrantPreview(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerWorkspaceFolderGrantIssueOperation, StringComparison.Ordinal))
+        {
+            return HandleWorkspaceFolderGrantIssue(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerWorkspaceFolderGrantListOperation, StringComparison.Ordinal))
+        {
+            return HandleWorkspaceFolderGrantList(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerWorkspaceFolderGrantRevokeOperation, StringComparison.Ordinal))
+        {
+            return HandleWorkspaceFolderGrantRevoke(context, request, operation);
+        }
+
         if (string.Equals(request.Operation, OwnerScopeCollectionSetOperation, StringComparison.Ordinal))
         {
             return HandleScopeCollectionSet(context, request.CollectionId, request.ResourceIds, operation);
@@ -8274,8 +8338,17 @@ public sealed class ServiceRequestHandler
         IVaultOperation? operation)
     {
         if (context.Kind != PrincipalKind.Agent || operation is null ||
-            HasAgentResourceReadExtras(request) ||
-            request.AccessOperation is not ResourceReadOperation)
+            HasAgentResourceReadExtras(request))
+        {
+            return ResourceDenied();
+        }
+
+        if (request.AccessOperation is WorkspaceFolderGrantAuthority.WorkspaceFileReadOperation)
+        {
+            return HandleAgentWorkspaceFileRead(context, request, operation);
+        }
+
+        if (request.AccessOperation is not ResourceReadOperation)
         {
             return ResourceDenied();
         }
@@ -8284,6 +8357,7 @@ public sealed class ServiceRequestHandler
         try
         {
             var beforeRead = operation.LoadScopeGrantState();
+            _agentSessions.SynchronizeWorkspaceGrants(beforeRead.Grants);
             var decision = _agentSessions.AuthorizeSession(
                 request.SessionToken,
                 beforeRead.UnlockEpoch,
@@ -8310,6 +8384,7 @@ public sealed class ServiceRequestHandler
             }
 
             var beforeServe = operation.LoadScopeGrantState();
+            _agentSessions.SynchronizeWorkspaceGrants(beforeServe.Grants);
             var recheck = _agentSessions.AuthorizeSession(
                 request.SessionToken,
                 beforeServe.UnlockEpoch,
@@ -8340,6 +8415,98 @@ public sealed class ServiceRequestHandler
             }
         }
     }
+    private ServiceReply HandleAgentWorkspaceFileRead(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation operation)
+    {
+        if (context.Kind != PrincipalKind.Agent ||
+            HasAgentResourceReadExtras(request) ||
+            request.AccessOperation is not WorkspaceFolderGrantAuthority.WorkspaceFileReadOperation ||
+            request.ResourceId is null || request.ResourceRevision is not > 0)
+        {
+            return ResourceDenied();
+        }
+
+        WorkspaceFileContent? content = null;
+        try
+        {
+            var state = operation.LoadScopeGrantState();
+            _agentSessions.SynchronizeWorkspaceGrants(state.Grants);
+            var lookup = _agentSessions.LookupSession(
+                request.SessionToken, state.UnlockEpoch, state.PolicyGeneration);
+            if (lookup.Status != AgentSessionLookupStatus.Valid || lookup.Session is not { } session ||
+                session.WorkspaceFolderMembers is null ||
+                session.WorkspaceScopeSemanticsVersion < 1 ||
+                session.WorkspaceScopeSemanticsGeneration < 1)
+            {
+                return ResourceDenied();
+            }
+
+            var decision = _agentSessions.AuthorizeSession(
+                request.SessionToken,
+                state.UnlockEpoch,
+                state.PolicyGeneration,
+                new AgentAccessRequest(
+                    request.AccessOperation,
+                    request.ResourceId,
+                    request.ResourceRevision));
+            if (!decision.Allowed)
+            {
+                if (session.WorkspaceFolderMembers!.Any(member =>
+                        string.Equals(member.FileId, request.ResourceId, StringComparison.Ordinal) &&
+                        member.ContentRevision != request.ResourceRevision.Value))
+                {
+                    _ = operation.IsWorkspaceFileAuthorizedForGrant(
+                        session.GrantId,
+                        session.WorkspaceScopeSemanticsVersion,
+                        session.WorkspaceScopeSemanticsGeneration,
+                        request.ResourceId,
+                        request.ResourceRevision.Value);
+                }
+
+                return ResourceDenied();
+            }
+
+            content = operation.ReadWorkspaceFileForGrant(
+                session.GrantId,
+                session.WorkspaceScopeSemanticsVersion,
+                session.WorkspaceScopeSemanticsGeneration,
+                request.ResourceId,
+                request.ResourceRevision.Value);
+            var file = new WorkspaceFileWire(
+                request.ResourceId, content.Revision, content.Length, content.Sha256);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "content",
+                "agent",
+                null,
+                Decision: decision,
+                PolicyGeneration: state.PolicyGeneration,
+                ContentBase64: Convert.ToBase64String(content.Content),
+                ContentType: "application/octet-stream",
+                ResourceRevision: content.Revision,
+                WorkspaceFile: file);
+        }
+        catch (WorkspaceFolderGrantRefusalException ex)
+        {
+            return string.Equals(ex.Code, "workspace_revision_stale", StringComparison.Ordinal)
+                ? Error(ex.Code)
+                : ResourceDenied();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return ResourceDenied();
+        }
+        finally
+        {
+            if (content is { Content.Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(content.Content);
+            }
+        }
+    }
+
     /// <summary>
     /// S4-T3 scoped item detail (get-by-ID). The session authority already
     /// authorized the exact approved (memory.read, ID, revision) triple before
@@ -10854,6 +11021,212 @@ public sealed class ServiceRequestHandler
         }
     }
 
+    private ServiceReply HandleWorkspaceFolderGrantPreview(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasWorkspaceFolderGrantExtras(request, allowPreviewFields: true) ||
+            request.WorkspaceFolderId is null || request.ExpiresAtUtc is not { } expiresAtUtc)
+        {
+            return Error("invalid_grant_request");
+        }
+
+        var hasEgress = request.Provider is not null || request.Model is not null ||
+            request.MaximumCostUsd is not null;
+        var egress = hasEgress
+            ? request.Provider is not null && request.Model is not null && request.MaximumCostUsd is not null
+                ? new ScopeGrantEgress(request.Provider, request.Model, request.MaximumCostUsd.Value)
+                : null
+            : null;
+        if (hasEgress && egress is null)
+        {
+            return Error("invalid_grant_request");
+        }
+
+        try
+        {
+            var preview = _workspaceFolderGrants.Preview(
+                context,
+                request.WorkspaceFolderId,
+                request.WorkspaceExcludedFolderIds,
+                request.Operations,
+                expiresAtUtc,
+                egress,
+                operation);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "workspace_folder_grant_preview",
+                "owner",
+                null,
+                PolicyGeneration: preview.PolicyGeneration,
+                WorkspaceFolderGrantPreview: preview);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (WorkspaceFolderGrantRefusalException ex)
+        {
+            return Error(ex.Code);
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_grant_request");
+        }
+        catch (InvalidDataException)
+        {
+            return Error("scope_state_unavailable");
+        }
+        catch (IOException)
+        {
+            return Error("scope_state_unavailable");
+        }
+    }
+
+    private ServiceReply HandleWorkspaceFolderGrantIssue(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasWorkspaceFolderGrantExtras(request, allowPreviewId: true))
+        {
+            return Error("invalid_grant_request");
+        }
+
+        try
+        {
+            var issued = _workspaceFolderGrants.Issue(context, request.PreviewId, operation);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "workspace_folder_grant_issued",
+                "owner",
+                null,
+                PolicyGeneration: issued.Grant.PolicyGeneration,
+                GrantId: issued.Grant.GrantId,
+                Token: issued.Token);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (WorkspaceFolderGrantRefusalException ex)
+        {
+            return Error(ex.Code);
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_grant_request");
+        }
+        catch (InvalidDataException)
+        {
+            return Error("scope_state_unavailable");
+        }
+        catch (IOException)
+        {
+            return Error("scope_state_unavailable");
+        }
+    }
+
+    private ServiceReply HandleWorkspaceFolderGrantList(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasWorkspaceFolderGrantExtras(request))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var grants = _workspaceFolderGrants.List(context, operation);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "workspace_folder_grants",
+                "owner",
+                null,
+                PolicyGeneration: grants.Length == 0 ? 0 : grants.Max(grant => grant.PolicyGeneration),
+                WorkspaceFolderGrants: grants);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (InvalidDataException)
+        {
+            return Error("scope_state_unavailable");
+        }
+        catch (IOException)
+        {
+            return Error("scope_state_unavailable");
+        }
+    }
+
+    private ServiceReply HandleWorkspaceFolderGrantRevoke(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasWorkspaceFolderGrantExtras(request, allowGrantId: true))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var revoked = _workspaceFolderGrants.Revoke(context, request.GrantId, operation);
+            var state = operation.LoadScopeGrantState();
+            _agentSessions.SynchronizeWorkspaceGrants(state.Grants);
+            var summary = _workspaceFolderGrants.List(context, operation)
+                .First(grant => string.Equals(grant.GrantId, revoked.GrantId, StringComparison.Ordinal));
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "workspace_folder_grant_revoked",
+                "owner",
+                null,
+                PolicyGeneration: state.PolicyGeneration,
+                GrantId: revoked.GrantId,
+                WorkspaceFolderGrants: new[] { summary });
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (WorkspaceFolderGrantRefusalException ex)
+        {
+            return Error(ex.Code);
+        }
+        catch (InvalidDataException)
+        {
+            return Error("scope_state_unavailable");
+        }
+        catch (IOException)
+        {
+            return Error("scope_state_unavailable");
+        }
+    }
+
     private ServiceReply HandleScopeCollectionSet(
         AuthenticatedContext context,
         string? collectionId,
@@ -11177,6 +11550,7 @@ public sealed class ServiceRequestHandler
         try
         {
             var state = operation.LoadScopeGrantState();
+            _agentSessions.SynchronizeWorkspaceGrants(state.Grants);
             lookup = _agentSessions.LookupSession(request.SessionToken, state.UnlockEpoch, state.PolicyGeneration);
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
@@ -11219,6 +11593,7 @@ public sealed class ServiceRequestHandler
         try
         {
             var state = operation.LoadScopeGrantState();
+            _agentSessions.SynchronizeWorkspaceGrants(state.Grants);
             var decision = _agentSessions.AuthorizeSession(
                 request.SessionToken,
                 state.UnlockEpoch,
@@ -11556,6 +11931,7 @@ public sealed class ServiceRequestHandler
         try
         {
             var state = operation.LoadScopeGrantState();
+            _agentSessions.SynchronizeWorkspaceGrants(state.Grants);
             var sessions = _agentSessions.ListSessions(state.UnlockEpoch, state.PolicyGeneration);
             return new ServiceReply(
                 CurrentProtocolVersion,

@@ -28,7 +28,11 @@ public sealed record PersistedScopeGrant(
     DateTimeOffset ExpiresAtUtc,
     ScopeGrantEgress? Egress,
     long PolicyGeneration,
-    long UnlockEpoch = 0);
+    long UnlockEpoch = 0,
+    WorkspaceFolderScope? WorkspaceFolderScope = null,
+    int ScopeSemanticsVersion = 0,
+    long ScopeSemanticsGeneration = 0,
+    DateTimeOffset? RevokedAtUtc = null);
 
 public sealed record OwnerScopeCollection(string CollectionId, string[] ResourceIds);
 
@@ -39,12 +43,13 @@ public sealed record OwnerScopeGrantState(
     OwnerScopeCollection[] Collections,
     long UnlockEpoch = 0,
     string[] ConsumedTokenVerifiers = null!,
-    OwnerAccessRequest[] Requests = null!)
+    OwnerAccessRequest[] Requests = null!,
+    long WorkspaceScopeGeneration = 0)
 {
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 5;
     public static OwnerScopeGrantState Empty { get; } = new(
         CurrentSchemaVersion, 0, Array.Empty<PersistedScopeGrant>(), Array.Empty<OwnerScopeCollection>(),
-        0, Array.Empty<string>(), Array.Empty<OwnerAccessRequest>());
+        0, Array.Empty<string>(), Array.Empty<OwnerAccessRequest>(), 0);
 }
 
 public interface IScopeGrantPersistence
@@ -83,7 +88,8 @@ public sealed partial class OwnerScopeGrantAuthority
         "link.supersede",
         "link.remove",
         "link.restore",
-        "provider.egress"
+        "provider.egress",
+        WorkspaceFolderGrantAuthority.WorkspaceFileReadOperation
     };
 
     private const int MaximumPendingPreviews = 1024;
@@ -371,8 +377,14 @@ public sealed partial class OwnerScopeGrantAuthority
     {
         if (state is null || state.Grants is null || state.Grants.Length > 10_000 ||
             state.Collections is null || state.Collections.Length > 1000 ||
-            state.PolicyGeneration < 0 || state.UnlockEpoch < 0 ||
-            (state.SchemaVersion != OwnerScopeGrantState.CurrentSchemaVersion && state.SchemaVersion != 3 && state.SchemaVersion != 2))
+            state.PolicyGeneration < 0 || state.UnlockEpoch < 0 || state.WorkspaceScopeGeneration < 0 ||
+            (state.SchemaVersion != OwnerScopeGrantState.CurrentSchemaVersion &&
+                state.SchemaVersion != 4 && state.SchemaVersion != 3 && state.SchemaVersion != 2) ||
+            (state.SchemaVersion != OwnerScopeGrantState.CurrentSchemaVersion &&
+                (state.WorkspaceScopeGeneration != 0 ||
+                 state.Grants.Any(grant => grant is not null &&
+                    (grant.WorkspaceFolderScope is not null || grant.ScopeSemanticsVersion != 0 ||
+                     grant.ScopeSemanticsGeneration != 0 || grant.RevokedAtUtc is not null)))))
         {
             throw new InvalidDataException("Invalid encrypted owner scope grant state.");
         }
@@ -403,22 +415,51 @@ public sealed partial class OwnerScopeGrantAuthority
                 grant.CreatedAtUtc.Offset != TimeSpan.Zero || grant.ExpiresAtUtc.Offset != TimeSpan.Zero ||
                 grant.ExpiresAtUtc <= grant.CreatedAtUtc || grant.PolicyGeneration < 0 ||
                 grant.PolicyGeneration > state.PolicyGeneration || grant.UnlockEpoch < 0 ||
-                grant.UnlockEpoch > state.UnlockEpoch)
+                grant.UnlockEpoch > state.UnlockEpoch ||
+                (grant.RevokedAtUtc is { } revokedAt &&
+                    (revokedAt.Offset != TimeSpan.Zero || revokedAt < grant.CreatedAtUtc)))
             {
                 throw new InvalidDataException("Invalid encrypted owner scope grant record.");
             }
 
             try
             {
-                var resources = NormalizeResources(grant.Resources, allowEmpty: false);
+                var resources = grant.WorkspaceFolderScope is null
+                    ? NormalizeResources(grant.Resources, allowEmpty: false)
+                    : grant.Resources.Length == 0
+                        ? Array.Empty<ScopeResourceRevision>()
+                        : throw new ArgumentException("Workspace folder grants cannot carry zoned resources.");
                 var destinations = NormalizeResources(grant.DestinationResources, allowEmpty: true);
                 var operations = NormalizeOperations(grant.Operations);
+                var folderScope = grant.WorkspaceFolderScope is null
+                    ? null
+                    : WorkspaceFolderGrantEvaluator.NormalizeScope(grant.WorkspaceFolderScope);
+                if (folderScope is null)
+                {
+                    if (grant.ScopeSemanticsVersion != 0 || grant.ScopeSemanticsGeneration != 0 ||
+                        grant.RevokedAtUtc is not null ||
+                        operations.Contains(WorkspaceFolderGrantAuthority.WorkspaceFileReadOperation, StringComparer.Ordinal))
+                    {
+                        throw new ArgumentException("A workspace folder grant requires its dedicated scope semantics.");
+                    }
+                }
+                else if (destinations.Length != 0 ||
+                         grant.ScopeSemanticsVersion != WorkspaceFolderGrantAuthority.CurrentScopeSemanticsVersion ||
+                         grant.ScopeSemanticsGeneration < 1 ||
+                         (grant.RevokedAtUtc is not null && grant.ScopeSemanticsGeneration < 2) ||
+                         state.WorkspaceScopeGeneration < 1 ||
+                         !WorkspaceFolderGrantAuthority.IsValidFolderOperations(operations, grant.Egress))
+                {
+                    throw new ArgumentException("Invalid persisted workspace folder grant.");
+                }
+
                 ValidateOperationScope(operations, destinations, grant.Egress);
                 grants[index] = grant with
                 {
                     Resources = resources,
                     Operations = operations,
-                    DestinationResources = destinations
+                    DestinationResources = destinations,
+                    WorkspaceFolderScope = folderScope
                 };
             }
             catch (ArgumentException ex)
@@ -468,7 +509,15 @@ public sealed partial class OwnerScopeGrantAuthority
             }
         }
 
-        return new OwnerScopeGrantState(OwnerScopeGrantState.CurrentSchemaVersion, state.PolicyGeneration, grants, collections, state.UnlockEpoch, consumed, requests);
+        return new OwnerScopeGrantState(
+            OwnerScopeGrantState.CurrentSchemaVersion,
+            state.PolicyGeneration,
+            grants,
+            collections,
+            state.UnlockEpoch,
+            consumed,
+            requests,
+            state.WorkspaceScopeGeneration);
     }
 
     private static OwnerScopeCollection[] NormalizeCollections(OwnerScopeCollection[]? collections)
@@ -578,7 +627,7 @@ public sealed partial class OwnerScopeGrantAuthority
         return normalized;
     }
 
-    private static void ValidateOperationScope(
+    internal static void ValidateOperationScope(
         IReadOnlyCollection<string> operations,
         IReadOnlyCollection<ScopeResourceRevision> destinations,
         ScopeGrantEgress? egress)
@@ -604,6 +653,10 @@ public sealed partial class OwnerScopeGrantAuthority
         IReadOnlyCollection<ScopeResourceRevision> resources,
         IReadOnlyCollection<string> operations)
     {
+        if (operations.Contains(WorkspaceFolderGrantAuthority.WorkspaceFileReadOperation, StringComparer.Ordinal))
+        {
+            throw new ArgumentException("Workspace file reads require an approved folder scope.", nameof(operations));
+        }
         var snapshotRead = operations.Contains("source.snapshot.read", StringComparer.Ordinal);
         var containsSnapshots = resources.Any(resource =>
             MetaBrain.Core.Domain.SourceSnapshotIds.IsSnapshotId(resource.ResourceId));
@@ -759,6 +812,9 @@ public sealed partial class OwnerScopeGrantAuthority
         Resources = CloneResources(grant.Resources),
         Operations = (string[])grant.Operations.Clone(),
         DestinationResources = CloneResources(grant.DestinationResources),
+        WorkspaceFolderScope = grant.WorkspaceFolderScope is null
+            ? null
+            : WorkspaceFolderGrantEvaluator.CloneScope(grant.WorkspaceFolderScope),
         Egress = grant.Egress is null ? null : grant.Egress with { }
     };
 

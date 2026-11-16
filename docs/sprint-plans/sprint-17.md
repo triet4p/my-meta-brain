@@ -2,7 +2,7 @@
 
 ## Goal và trạng thái
 
-- Status: **In progress — S17-T1 contract approved (D108); normative sync written, independent review/checkpoint pending**. Release mục tiêu cuối sprint: **1.7.0**; chưa build/publish.
+- Status: **In progress — S17-T1 Complete (D108); S17-T2 implementation active; S17-T3–T6 pending/unlaunched**. Release mục tiêu cuối sprint: **1.7.0**; chưa build/publish.
 - Entry: Sprint 16 complete và 1.6.0 published.
 - Scope/trace: P2-08, P2-09, P2-12; R03, R05–R09, R11, R24, R25, R31. Các P2 là candidates, không thay baseline khi chưa có approval.
 - Root: `F:/ai-ml/my-meta-brain`; target ref `main`; exact base/worktree/ownership resolve khi execution.
@@ -16,6 +16,8 @@ Full OMP route; task tuần tự T1 → T6. Mỗi task cần worker evidence, in
 
 Owner authorized **S17-T1 only**, selecting a Gold worker on the full route: proposal → explicit owner semantics approval → independent evidence-review PASS → separate Bronze exact-snapshot documentation checkpoint on `main`. Commit only reviewed T1-owned documentation, excluding unrelated changes. No S17-T2–T6 launch, push/tag/upload/deploy/provider access. Tối đa hai active agents, một implementation task. Worker đọc implement-atomic-task và mọi regular file trực tiếp dưới ~/.agents/rules/. Artifacts tại `artifacts/sprint-17/task-1.md`, reviews/checkpoints dưới cùng sprint; không tạo trước PASS giả.
 
+Owner authorized **S17-T2 only**, selecting a Silver worker on the full route: implementation and actual changed-surface/security verification → independent evidence-review PASS → separate Bronze exact-snapshot checkpoint on `main`. Reviewed T2 scope includes Main's post-T1 status edits in `docs/PLAN.md` and this sprint plan; exclude unrelated changes. No S17-T3–T6 launch, push/tag/upload/deploy or provider access. The earlier T1-only launch restriction is historical for that authorization.
+
 Không host mutation/ACL/permissions/profile edits; synthetic data mặc định. Không downgrade baseline security, reset data hoặc lấy test suite thay runtime smoke. Decision còn mở/contract thay đổi phải owner-approved và sync docs trước implementation affected path.
 
 ## Atomic tasks
@@ -24,13 +26,13 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
 
 The owner-approved normative [folder-scope contract](../META-BRAIN.md#56-approved-workspace-folder-scope-contract--s17-t1--d108) and [requirements trace](../REQUIREMENTS.md#owner-approved-workspace-folder-scope-contract--s17-t1--d108-2026-11-16) bind T2–T5: frozen member snapshot with explicit owner refresh, pinned revisions with visible staleness, identity-subtree narrowing for move/restore/copy, absolute exclusions, a distinct zone-independent workspace scope subject, egress only when declared inside the same approval, grant-level revoke and frozen old grants. A folder scope grants no registered-source body, cognitive annotation, derived summary, relation evidence or cross-zone derived content, and does not narrow T4/T5 cognitive, hybrid or relational outcomes; browser document sessions confer no sharing authority and CLI/MCP share one policy. S17-T1 approval is not runtime implementation, and T2 remains blocked until T1 gates PASS.
 
-- [~] **S17-T1 — Chốt folder scope và output boundary.**
+- [x] **S17-T1 — Chốt folder scope và output boundary.**
     - Change: Preview snapshot vs continuous và consent cho file/revision mới, moves/copy/deletion, excluded subfolders, expiry/provider context. Review CR02 impact tới R03/R06/R11/R31; không blanket-expand grants cũ.
     - Acceptance: Owner quyết định semantics và protections/tradeoffs trước implementation; retained token/key separation và egress boundary rõ. CLI/MCP dùng một policy, không file-by-file approval bắt buộc; browser document session không mang sharing authority.
-    - Contract: [spec §5.6](../META-BRAIN.md#56-approved-workspace-folder-scope-contract--s17-t1--d108), [requirements trace](../REQUIREMENTS.md#owner-approved-workspace-folder-scope-contract--s17-t1--d108-2026-11-16), [D108](../../.agents/memory/decisions.md), [proposal/evidence](../../artifacts/sprint-17/task-1.md). Approval is documentation only; T1 stays `[~]` until independent review PASS and checkpoint.
+    - Contract: [spec §5.6](../META-BRAIN.md#56-approved-workspace-folder-scope-contract--s17-t1--d108), [requirements trace](../REQUIREMENTS.md#owner-approved-workspace-folder-scope-contract--s17-t1--d108-2026-11-16), [D108](../../.agents/memory/decisions.md), [proposal/evidence](../../artifacts/sprint-17/task-1.md). Documentation contract accepted after owner approval, independent review PASS and exact-snapshot checkpoint; runtime implementation remains T2–T5.
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
 
-- [ ] **S17-T2 — Shared folder grant evaluation.**
+- [~] **S17-T2 — Shared folder grant evaluation.**
     - Change: Implement approved folder selectors/previews/approvals theo concrete chosen semantics, operation/expiry/revoke/lock và encrypted policy generation.
     - Acceptance: One folder approval đủ cho selected scope; new file/revision/copy/move-in/restore negative theo snapshot đã duyệt, member move-out mất quyền, exclusions tuyệt đối; concurrent revoke/lock/restart không hồi sinh quyền. Old grants giữ frozen semantics.
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
@@ -65,4 +67,4 @@ The owner-approved normative [folder-scope contract](../META-BRAIN.md#56-approve
 
 ## Gate record
 
-S17-T1: owner explicitly approved the default proposal (“Duyệt”) after the timed-out form: P1–P9, A snapshot, B live-subtree narrowing, C no automatic re-share after restore, D distinct workspace scope, E absolute exclusions, F explicit egress in the same approval, G pinned revision with visible staleness. [Proposal](../../artifacts/sprint-17/task-1.md), sections 2–4 and 8. Normative sync is written in the [normative contract](../META-BRAIN.md#56-approved-workspace-folder-scope-contract--s17-t1--d108), the [requirements trace](../REQUIREMENTS.md#owner-approved-workspace-folder-scope-contract--s17-t1--d108-2026-11-16) and [D108](../../.agents/memory/decisions.md); worker evidence/attempt history is in the same artifact, and independent evidence review plus the separate Bronze exact-snapshot documentation checkpoint remain pending. Approval and documentation sync are not runtime implementation, product evidence or gate PASS. T1 remains `[~]`; no S17-T2 launch.
+S17-T1 Complete: owner approved P1–P9/default A–G (“Duyệt”); [worker evidence](../../artifacts/sprint-17/task-1.md), [independent R1 PASS](../../artifacts/sprint-17/reviews/S17-T1-C1-R1.md), zero actionable findings; [Bronze checkpoint C1](../../artifacts/sprint-17/checkpoints/S17-T1-C1.md) committed the exact reviewed seven-file documentation snapshot as `09d41f6a5cfe1227e0e5debb75b5b67460c84538`. D108 is a documentation contract, not runtime proof. No push or S17-T2 launch; Main's post-checkpoint completion status edits are uncommitted.
