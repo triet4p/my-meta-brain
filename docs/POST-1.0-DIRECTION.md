@@ -91,6 +91,8 @@ Owner sử dụng nội dung của chính mình không nên phải thực hiện
 
 Đây là lựa chọn còn mở. Không lặng lẽ đổi frozen scope 1.0.0 thành quyền động. Quan hệ, membership hoặc traversal không tự cấp quyền sang vùng khác.
 
+Cập nhật 2026-11-16: owner đã chọn **snapshot** kèm identity narrowing và explicit refresh trong [S17-T1/D108](META-BRAIN.md#56-approved-workspace-folder-scope-contract--s17-t1--d108); continuous chưa được duyệt. Đây là contract tương lai, không phải implementation hoặc runtime evidence.
+
 ## 5. Bộ nhớ phân loại: giữ chiều sâu của ý tưởng ban đầu
 
 ### Nguồn tham khảo và giới hạn

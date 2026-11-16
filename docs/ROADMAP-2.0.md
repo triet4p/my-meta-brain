@@ -21,7 +21,7 @@ Owner làm việc theo folder/file quen thuộc; Meta Brain giữ định dạng
 | [14](sprint-plans/sprint-14.md) | 1.4.0 | Sáu góc nhìn cognitive memory, owner review và lifecycle | 1.3.0 published; approved taxonomy |
 | [15](sprint-plans/sprint-15.md) | 1.5.0 | Hybrid passage search và recall theo mục đích | 1.4.0 published; approved engine/budgets |
 | [16](sprint-plans/sprint-16.md) | 1.6.0 | Quan hệ file/folder và relational retrieval giải thích được | 1.5.0 published |
-| [17](sprint-plans/sprint-17.md) | 1.7.0 | Folder sharing dễ hiểu và context có bằng chứng qua normal Codex/OMP | 1.6.0 published; approved sharing contract |
+| [17](sprint-plans/sprint-17.md) | 1.7.0 | Folder sharing dễ hiểu và context có bằng chứng qua normal Codex/OMP | 1.6.0 published; [D108](META-BRAIN.md#56-approved-workspace-folder-scope-contract--s17-t1--d108) folder-scope contract approved |
 | [18](sprint-plans/sprint-18.md) | 1.8.0 | Migration opt-in, recovery, daily-use/performance acceptance và readiness 2.0 | 1.7.0 published |
 | [G2 — final release gate](#8-g2--final-release-200-không-phải-sprint-bổ-sung) | 2.0.0 | Default cutover, clean API/storage cutover và public major release | 1.8.0 published; G2 gates PASS và owner approval |
 
@@ -63,7 +63,7 @@ S11-T1 đã hoàn tất CR02/D088 approval; S11-T2–T5 implemented và 1.1.0 pu
 - Parser/folder enrollment: CR02 approved/implemented trong Sprint 11; không mở lại như gate pending.
 - File/storage/key/metadata disclosure and installed-WPF transition: owner approved [D090](META-BRAIN.md#134-approved-workspace-contract--d090) for S12; implementation and proof remain required before affected writes/package.
 - CLI + narrow document browser đã được chọn bởi CR03; S13-T1 chốt bridge authorization, rendering/editor dependencies, encoding và budgets bằng evidence, không chọn lại desktop framework. Taxonomy và engine chốt ở đầu sprint tương ứng.
-- Folder snapshot/continuous scope: giải quyết trước S17-T2. Snapshot là phương án conservative để so sánh, không quyết định thay owner; nếu chọn continuous phải nêu file/revision mới, moves và revocation semantics.
+- Folder snapshot/continuous scope: owner approved snapshot với identity narrowing và explicit refresh (S17-T1/D108, 2026-11-16) trước S17-T2; continuous chưa được duyệt và nếu sau này được đề xuất phải nêu file/revision mới, moves và revocation semantics. Approval là contract, không phải implementation/runtime evidence.
 - Migration/default/API removals: giải quyết trước S18 migration execution và G2 cutover.
 
 Nếu approval của contract còn mở chưa có, task affected là blocked; không thực thi dưới baseline mâu thuẫn. CR03 chỉ approve planning/support change; không tạo runtime evidence, authorize worker launch hoặc thay CR01 security.
