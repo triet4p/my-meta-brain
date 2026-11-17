@@ -969,6 +969,23 @@ internal sealed class S8T4AuditFailureOperation : IVaultOperation
     public bool IsWorkspaceFileAuthorizedForGrant(
         string grantId, int scopeSemanticsVersion, long scopeSemanticsGeneration, string fileId, long revision) =>
         throw new NotSupportedException();
+    public T ReadWorkspaceContextPackGrantSnapshot<T>(
+        Func<OwnerScopeGrantState, WorkspaceSnapshot?, IManagedResourceStore, IWorkspacePersistence, T> read) =>
+        throw new NotSupportedException();
+
+    public T UpdateWorkspaceContextPackGrantState<T>(
+        Func<OwnerScopeGrantState, WorkspaceSnapshot?, IManagedResourceStore, IWorkspacePersistence,
+            (OwnerScopeGrantState State, T Result)> update) =>
+        throw new NotSupportedException();
+
+    public T ReadWorkspaceContextPackForGrant<T>(
+        string grantId,
+        int semanticsVersion,
+        long semanticsGeneration,
+        Func<OwnerScopeGrantState, WorkspaceContextPackScope, WorkspaceSnapshot,
+            IManagedResourceStore, IWorkspacePersistence, T> read) =>
+        throw new NotSupportedException();
+
     public OwnerCatalogState LoadCatalogState() => throw new NotSupportedException();
 
     public T UpdateCatalogState<T>(

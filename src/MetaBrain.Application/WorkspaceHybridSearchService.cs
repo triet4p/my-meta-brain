@@ -211,7 +211,7 @@ public sealed class WorkspaceHybridSearchService
     public const int MaximumLimit = 100;
     public const int DefaultLimit = 20;
     public const int EvidenceSnippetChars = 240;
-    private const int MaximumRelationHops = 2;
+    internal const int MaximumRelationHops = 2;
 
     // A bounded content-date scan: the filter looks for ISO-8601 dates in the
     // anchored evidence, never at an unbounded line or record.

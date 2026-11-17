@@ -703,6 +703,38 @@ internal static partial class OwnerServiceSmoke
             string grantId, int scopeSemanticsVersion, long scopeSemanticsGeneration, string fileId, long revision) =>
             _inner.IsWorkspaceFileAuthorizedForGrant(
                 grantId, scopeSemanticsVersion, scopeSemanticsGeneration, fileId, revision);
+        public T ReadWorkspaceContextPackGrantSnapshot<T>(
+            Func<OwnerScopeGrantState, WorkspaceSnapshot?, IManagedResourceStore, IWorkspacePersistence, T> read) =>
+            _inner.ReadWorkspaceContextPackGrantSnapshot(read);
+        public T UpdateWorkspaceContextPackGrantState<T>(
+            Func<OwnerScopeGrantState, WorkspaceSnapshot?, IManagedResourceStore, IWorkspacePersistence,
+                (OwnerScopeGrantState State, T Result)> update)
+        {
+            var observed = 0;
+            var result = _inner.UpdateWorkspaceContextPackGrantState((state, workspace, store, workspaceStore) =>
+            {
+                var (next, value) = update(state, workspace, store, workspaceStore);
+                if (!ReferenceEquals(next, state))
+                {
+                    observed++;
+                }
+
+                return (next, value);
+            });
+            for (var index = 0; index < observed; index++)
+            {
+                NotePersistedSave();
+            }
+
+            return result;
+        }
+        public T ReadWorkspaceContextPackForGrant<T>(
+            string grantId,
+            int semanticsVersion,
+            long semanticsGeneration,
+            Func<OwnerScopeGrantState, WorkspaceContextPackScope, WorkspaceSnapshot,
+                IManagedResourceStore, IWorkspacePersistence, T> read) =>
+            _inner.ReadWorkspaceContextPackForGrant(grantId, semanticsVersion, semanticsGeneration, read);
         public byte[] ReadContent(string resourceId, long? expectedRevision = null) => _inner.ReadContent(resourceId, expectedRevision);
         public void ValidateRegistration(string resourceId, long? expectedRevision = null) => _inner.ValidateRegistration(resourceId, expectedRevision);
         public IReadOnlyList<ScopeResourceRevision> ListResources() => _inner.ListResources();

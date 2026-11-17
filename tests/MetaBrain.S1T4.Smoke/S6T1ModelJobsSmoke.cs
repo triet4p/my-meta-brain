@@ -1599,6 +1599,20 @@ internal static partial class OwnerServiceSmoke
             string grantId, int scopeSemanticsVersion, long scopeSemanticsGeneration, string fileId, long revision) =>
             _inner.IsWorkspaceFileAuthorizedForGrant(
                 grantId, scopeSemanticsVersion, scopeSemanticsGeneration, fileId, revision);
+        public T ReadWorkspaceContextPackGrantSnapshot<T>(
+            Func<OwnerScopeGrantState, WorkspaceSnapshot?, IManagedResourceStore, IWorkspacePersistence, T> read) =>
+            _inner.ReadWorkspaceContextPackGrantSnapshot(read);
+        public T UpdateWorkspaceContextPackGrantState<T>(
+            Func<OwnerScopeGrantState, WorkspaceSnapshot?, IManagedResourceStore, IWorkspacePersistence,
+                (OwnerScopeGrantState State, T Result)> update) =>
+            _inner.UpdateWorkspaceContextPackGrantState(update);
+        public T ReadWorkspaceContextPackForGrant<T>(
+            string grantId,
+            int semanticsVersion,
+            long semanticsGeneration,
+            Func<OwnerScopeGrantState, WorkspaceContextPackScope, WorkspaceSnapshot,
+                IManagedResourceStore, IWorkspacePersistence, T> read) =>
+            _inner.ReadWorkspaceContextPackForGrant(grantId, semanticsVersion, semanticsGeneration, read);
         public OwnerCatalogState LoadCatalogState() => _inner.LoadCatalogState();
         public T UpdateCatalogState<T>(Func<OwnerCatalogState, (OwnerCatalogState State, T Result)> update) => _inner.UpdateCatalogState(update);
         public OwnerRecallPolicyState LoadRecallPolicyState() => _inner.LoadRecallPolicyState();

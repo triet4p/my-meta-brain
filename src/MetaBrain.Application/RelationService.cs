@@ -307,6 +307,52 @@ public sealed class RelationService
         results.Sort((left, right) => StringComparer.Ordinal.Compare(left.Relation!.Id, right.Relation!.Id));
         return results.ToArray();
     }
+    internal RelationReadResult[] ReadWorkspaceContextPackRelations(
+        IManagedResourceStore store,
+        IWorkspacePersistence workspace,
+        IReadOnlyCollection<string> relationIds,
+        Func<RelationEndpoint, bool> endpointAuthorizer)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(workspace);
+        ArgumentNullException.ThrowIfNull(relationIds);
+        ArgumentNullException.ThrowIfNull(endpointAuthorizer);
+        if (relationIds.Count > WorkspaceContextPackGrantAuthority.MaximumRelations ||
+            relationIds.Any(id => !DomainIdentifiers.IsRelationId(id)) ||
+            relationIds.Distinct(StringComparer.Ordinal).Count() != relationIds.Count)
+        {
+            throw new ArgumentException("The workspace context-pack relation selection is invalid.", nameof(relationIds));
+        }
+
+        if (relationIds.Count == 0)
+        {
+            return [];
+        }
+
+        var selectedIds = new HashSet<string>(relationIds, StringComparer.Ordinal);
+        var relations = LoadRelations(store);
+        var workspaceReview = PrepareWorkspaceReviewSnapshot(workspace, relations, target: null);
+        var liveRevisions = store.ListResources()
+            .Where(resource => DomainIdentifiers.IsRelationId(resource.ResourceId))
+            .ToDictionary(resource => resource.ResourceId, resource => resource.Revision, StringComparer.Ordinal);
+        var results = new List<RelationReadResult>(selectedIds.Count);
+        foreach (var stored in relations)
+        {
+            if (!selectedIds.Contains(stored.Id) ||
+                !RelationEndpointSemantics.HasWorkspaceEndpoint(stored) ||
+                !endpointAuthorizer(stored.From) || !endpointAuthorizer(stored.To) ||
+                !liveRevisions.TryGetValue(stored.Id, out var revision))
+            {
+                continue;
+            }
+
+            var review = EvaluateReview(stored, relations, store, endpointAuthorizer, workspaceReview);
+            results.Add(new RelationReadResult(ToRelation(stored, revision), review));
+        }
+
+        results.Sort((left, right) => StringComparer.Ordinal.Compare(left.Relation!.Id, right.Relation!.Id));
+        return results.ToArray();
+    }
 
     /// <summary>
     /// Resolves a caller's short reference over only its frozen memory/source

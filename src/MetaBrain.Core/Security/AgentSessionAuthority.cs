@@ -132,7 +132,9 @@ public sealed class AgentSessionAuthority
                     currentUnlockEpoch,
                     workspaceMembers,
                     grant.ScopeSemanticsVersion,
-                    grant.ScopeSemanticsGeneration);
+                    grant.ScopeSemanticsGeneration,
+                    grant.ContextPackSemanticsVersion,
+                    grant.ContextPackSemanticsGeneration);
                 _sessionsByVerifier.Add(sessionVerifier, session);
                 _sessionVerifierById.Add(sessionId, sessionVerifier);
                 return new AgentRedeemResult(
@@ -259,16 +261,27 @@ public sealed class AgentSessionAuthority
         {
             foreach (var session in _sessionsByVerifier.Values.ToArray())
             {
-                if (session.WorkspaceFolderMembers is null)
+                var folderSession = session.WorkspaceFolderMembers is not null;
+                var contextPackSession = session.Operations.Contains(
+                    WorkspaceContextPackGrantAuthority.WorkspaceContextPackOperation, StringComparer.Ordinal);
+                if (!folderSession && !contextPackSession)
                 {
                     continue;
                 }
 
                 if (!byId.TryGetValue(session.GrantId, out var grant) ||
-                    grant.WorkspaceFolderScope is null ||
                     grant.RevokedAtUtc is not null ||
-                    grant.ScopeSemanticsVersion != session.WorkspaceScopeSemanticsVersion ||
-                    grant.ScopeSemanticsGeneration != session.WorkspaceScopeSemanticsGeneration)
+                    grant.ExpiresAtUtc <= DateTimeOffset.UtcNow ||
+                    grant.PolicyGeneration != session.PolicyGeneration ||
+                    grant.UnlockEpoch != session.UnlockEpoch ||
+                    (folderSession &&
+                        (grant.WorkspaceFolderScope is null ||
+                         grant.ScopeSemanticsVersion != session.WorkspaceScopeSemanticsVersion ||
+                         grant.ScopeSemanticsGeneration != session.WorkspaceScopeSemanticsGeneration)) ||
+                    (contextPackSession &&
+                        (grant.WorkspaceContextPackScope is null ||
+                         grant.ContextPackSemanticsVersion != session.WorkspaceContextPackSemanticsVersion ||
+                         grant.ContextPackSemanticsGeneration != session.WorkspaceContextPackSemanticsGeneration)))
                 {
                     RemoveSessionLocked(session, AgentSessionLookupStatus.Revoked);
                 }
@@ -348,13 +361,17 @@ public sealed class AgentSessionAuthority
         // handler, so snapshot-ID and scope checks below do not apply to it.
         // S4-T4 scoped brief behaves the same: no resource address, the
         // selection is the frozen scope projected under the caller's budget.
-        if (string.Equals(request.Operation, "memory.search", StringComparison.Ordinal) ||
-            string.Equals(request.Operation, "memory.context", StringComparison.Ordinal))
+        if (string.Equals(request.Operation, "workspace.context.pack", StringComparison.Ordinal))
         {
-            return HasEgressFields(request) || request.DestinationResourceId is not null || request.DestinationRevision is not null
+            return request.ResourceId is not null || request.ResourceRevision is not null ||
+                request.DestinationResourceId is not null || request.DestinationRevision is not null ||
+                HasEgressFields(request)
                 ? Deny("invalid_request", policyGeneration)
                 : Allow(policyGeneration);
         }
+
+        if (string.Equals(request.Operation, "memory.search", StringComparison.Ordinal) ||
+            string.Equals(request.Operation, "memory.context", StringComparison.Ordinal))
         // S4-T4 agent feedback carries no resource address either: the seen
         // targets travel inside the feedback draft, authorized per target
         // against the frozen scope inside the handler before any byte is
@@ -555,5 +572,7 @@ public sealed class AgentSessionAuthority
         session.UnlockEpoch,
         session.WorkspaceFolderMembers?.Select(member => member with { }).ToArray(),
         session.WorkspaceScopeSemanticsVersion,
-        session.WorkspaceScopeSemanticsGeneration);
+        session.WorkspaceScopeSemanticsGeneration,
+        session.WorkspaceContextPackSemanticsVersion,
+        session.WorkspaceContextPackSemanticsGeneration);
 }

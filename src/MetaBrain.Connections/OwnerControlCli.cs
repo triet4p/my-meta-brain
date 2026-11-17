@@ -12,6 +12,7 @@ namespace MetaBrain.Connections;
 
 internal static class OwnerControlCli
 {
+    private static readonly JsonSerializerOptions InputJsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     /// <summary>
@@ -58,6 +59,7 @@ internal static class OwnerControlCli
                 "status" => await StatusAsync(options).ConfigureAwait(false),
                 "read" => await ReadAsync(options).ConfigureAwait(false),
                 "agent-read" => await AgentReadAsync(options).ConfigureAwait(false),
+                "agent-context-pack" => await AgentContextPackAsync(options).ConfigureAwait(false),
                 "agent-memory-read" => await AgentMemoryReadAsync(options).ConfigureAwait(false),
                 "agent-source-read" => await AgentSourceReadAsync(options).ConfigureAwait(false),
                 "agent-source-snapshot-read" => await AgentSourceSnapshotReadAsync(options).ConfigureAwait(false),
@@ -186,6 +188,11 @@ internal static class OwnerControlCli
                 "workspace-share-reject" => await WorkspaceShareRejectAsync(options).ConfigureAwait(false),
                 "workspace-share-grants" => await WorkspaceShareGrantsAsync(options).ConfigureAwait(false),
                 "workspace-share-revoke" => await WorkspaceShareRevokeAsync(options).ConfigureAwait(false),
+                "workspace-context-pack-preview" => await WorkspaceContextPackPreviewAsync(options).ConfigureAwait(false),
+                "workspace-context-pack-approve" => await WorkspaceContextPackApproveAsync(options).ConfigureAwait(false),
+                "workspace-context-pack-reject" => await WorkspaceContextPackRejectAsync(options).ConfigureAwait(false),
+                "workspace-context-pack-grants" => await WorkspaceContextPackGrantsAsync(options).ConfigureAwait(false),
+                "workspace-context-pack-revoke" => await WorkspaceContextPackRevokeAsync(options).ConfigureAwait(false),
                 "collection-set" => await SetCollectionAsync(options).ConfigureAwait(false),
                 "collections" => await ListCollectionsAsync(options).ConfigureAwait(false),
                 "catalog-preview" => await CatalogPreviewAsync(options).ConfigureAwait(false),
@@ -6544,6 +6551,255 @@ internal static class OwnerControlCli
         Console.WriteLine($"WORKSPACE GRANT revoked id={revokedGrantId.GetString()}");
         return 0;
     }
+    private static async Task<int> WorkspaceContextPackPreviewAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--selection-json", "--expires-at-utc");
+        var controlPipe = ControlPipe(options);
+        var selectionText = options.Required("--selection-json");
+        if (selectionText.Length is 0 or > 256 * 1024)
+        {
+            return Usage();
+        }
+
+        WorkspaceContextPackSelection? selection;
+        try
+        {
+            selection = JsonSerializer.Deserialize<WorkspaceContextPackSelection>(selectionText, InputJsonOptions);
+        }
+        catch (JsonException)
+        {
+            return Usage();
+        }
+
+        var expiryText = options.Required("--expires-at-utc");
+        if (selection is null ||
+            (!expiryText.EndsWith('Z') && !expiryText.EndsWith("+00:00", StringComparison.Ordinal)) ||
+            !DateTimeOffset.TryParse(expiryText, CultureInfo.InvariantCulture, DateTimeStyles.None, out var expiresAtUtc) ||
+            expiresAtUtc.Offset != TimeSpan.Zero)
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceContextPackGrantPreviewOperation,
+                ExpiresAtUtc: expiresAtUtc,
+                WorkspaceContextPackSelection: selection)).ConfigureAwait(false);
+        if (!result.Success || !TryGetWorkspaceContextPackPreview(result.Reply, out var preview))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine(JsonSerializer.Serialize(preview, JsonOptions));
+        return 0;
+    }
+
+    private static bool TryGetWorkspaceContextPackPreview(JsonElement reply, out JsonElement preview)
+    {
+        if (HasStatus(reply, "workspace_context_pack_grant_preview") &&
+            reply.TryGetProperty("workspaceContextPackGrantPreview", out preview) &&
+            preview.ValueKind == JsonValueKind.Object)
+        {
+            return true;
+        }
+
+        preview = default;
+        return false;
+    }
+
+    private static async Task<int> WorkspaceContextPackApproveAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--preview-id", "--handoff-file");
+        var controlPipe = ControlPipe(options);
+        var previewId = options.Required("--preview-id");
+        if (!Guid.TryParseExact(previewId, "N", out _))
+        {
+            return Usage();
+        }
+
+        var handoffPath = options.Required("--handoff-file");
+        Console.Write("Type APPROVE to issue this exact workspace context-pack scope: ");
+        if (!string.Equals(Console.ReadLine(), "APPROVE", StringComparison.Ordinal))
+        {
+            Console.WriteLine("CANCELLED; no context-pack grant issued");
+            return 3;
+        }
+
+        OwnerTokenHandoff handoff;
+        try
+        {
+            handoff = OwnerTokenHandoff.Create(handoffPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or Win32Exception)
+        {
+            Console.Error.WriteLine("ERROR handoff_destination_unavailable");
+            return 3;
+        }
+
+        using (handoff)
+        {
+            var result = await InvokeOwnerAsync(controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.OwnerWorkspaceContextPackGrantIssueOperation,
+                    PreviewId: previewId)).ConfigureAwait(false);
+            if (!result.Success ||
+                !HasStatus(result.Reply, "workspace_context_pack_grant_issued") ||
+                !result.Reply.TryGetProperty("grantId", out var grantId) ||
+                grantId.ValueKind != JsonValueKind.String ||
+                !result.Reply.TryGetProperty("token", out var token) ||
+                token.ValueKind != JsonValueKind.String)
+            {
+                WriteServiceError(result);
+                return 3;
+            }
+
+            try
+            {
+                handoff.WriteToken(token.GetString() ?? string.Empty);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or Win32Exception)
+            {
+                Console.Error.WriteLine("ERROR token_handoff_failed");
+                return 4;
+            }
+
+            Console.WriteLine(
+                $"WORKSPACE CONTEXT PACK GRANT issued id={grantId.GetString()}; owner-only token handoff={handoff.Path}; token redacted");
+            return 0;
+        }
+    }
+
+    private static async Task<int> WorkspaceContextPackRejectAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--preview-id");
+        var previewId = options.Required("--preview-id");
+        if (!Guid.TryParseExact(previewId, "N", out _))
+        {
+            return Usage();
+        }
+
+        Console.Write("Type REJECT to decline this workspace context-pack scope: ");
+        if (!string.Equals(Console.ReadLine(), "REJECT", StringComparison.Ordinal))
+        {
+            Console.WriteLine("CANCELLED; preview remains pending until expiry");
+            return 3;
+        }
+
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceContextPackGrantRejectOperation,
+                PreviewId: previewId)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "workspace_context_pack_grant_rejected"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine($"WORKSPACE CONTEXT PACK GRANT rejected preview={previewId}; no grant created");
+        return 0;
+    }
+
+    private static async Task<int> WorkspaceContextPackGrantsAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceContextPackGrantListOperation)).ConfigureAwait(false);
+        if (!result.Success ||
+            !HasStatus(result.Reply, "workspace_context_pack_grants") ||
+            !result.Reply.TryGetProperty("workspaceContextPackGrants", out var grants) ||
+            grants.ValueKind != JsonValueKind.Array)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        foreach (var grant in grants.EnumerateArray())
+        {
+            Console.WriteLine(JsonSerializer.Serialize(grant, JsonOptions));
+        }
+
+        Console.WriteLine($"WORKSPACE CONTEXT PACK GRANTS count={grants.GetArrayLength()}");
+        return 0;
+    }
+
+    private static async Task<int> WorkspaceContextPackRevokeAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--grant-id");
+        var grantId = options.Required("--grant-id");
+        if (!Guid.TryParseExact(grantId, "N", out _))
+        {
+            return Usage();
+        }
+
+        Console.Write("Type REVOKE to withdraw this workspace context-pack grant: ");
+        if (!string.Equals(Console.ReadLine(), "REVOKE", StringComparison.Ordinal))
+        {
+            Console.WriteLine("CANCELLED; grant unchanged");
+            return 3;
+        }
+
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceContextPackGrantRevokeOperation,
+                GrantId: grantId)).ConfigureAwait(false);
+        if (!result.Success ||
+            !HasStatus(result.Reply, "workspace_context_pack_grant_revoked") ||
+            !result.Reply.TryGetProperty("grantId", out var revokedGrantId))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine($"WORKSPACE CONTEXT PACK GRANT revoked id={revokedGrantId.GetString()}");
+        return 0;
+    }
+
+    private static async Task<int> AgentContextPackAsync(CommandOptions options)
+    {
+        options.RequireOnly("--agent-pipe", "--session-file", "--budget-bytes");
+        var agentPipe = PipeName(options, "--agent-pipe");
+        var sessionPath = options.Required("--session-file");
+        if (!int.TryParse(options.Required("--budget-bytes"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var budgetBytes) ||
+            budgetBytes is < 1 or > WorkspaceContextPackService.MaximumBudgetBytes)
+        {
+            return Usage();
+        }
+
+        string sessionToken;
+        try
+        {
+            sessionToken = AgentSessionFile.Read(sessionPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Console.Error.WriteLine("ERROR session_unreadable");
+            return 3;
+        }
+
+        var result = await InvokeAgentAsync(agentPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.AgentWorkspaceContextPackReadOperation,
+                SessionToken: sessionToken,
+                WorkspaceContextPackBudgetBytes: budgetBytes)).ConfigureAwait(false);
+        if (!result.Success ||
+            !result.Reply.TryGetProperty("workspaceContextPack", out var pack) ||
+            pack.ValueKind != JsonValueKind.Object)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine(JsonSerializer.Serialize(pack, JsonOptions));
+        return 0;
+    }
 
     private static bool TryGetWorkspaceFolderGrantPreview(JsonElement reply, out JsonElement preview)
     {
@@ -10898,6 +11154,8 @@ internal static class OwnerControlCli
             Console.Error.WriteLine("  review: cognitive-annotation-create|cognitive-annotation-correct|cognitive-annotation-accept|cognitive-annotation-reject|proposal-list|proposal-read|proposal-publish|proposal-reject|lifecycle-publish|lifecycle-reject|lifecycle-withdraw|lifecycle-repropose|lifecycle-question-resolve|lifecycle-question-reopen|relation-list|relation-read|relation-create|relation-accept|relation-reject|relation-unlink|relation-relink|declassify-preview|declassify-publish|declassify-proposal-publish");
             Console.Error.WriteLine("  sharing: catalog-preview|catalog-publish|catalog-list|catalog-withdraw|collections|collection-set|grants|grant|requests|request-preview|request-approve|request-reject|sessions|session|revoke-session|redeem (+ agent-mcp transport)");
             Console.Error.WriteLine("  sharing (workspace folders): workspace-share-preview|workspace-share-narrow|workspace-share-approve|workspace-share-reject|workspace-share-grants|workspace-share-revoke");
+            Console.Error.WriteLine("  sharing (workspace context packs): workspace-context-pack-preview|workspace-context-pack-approve|workspace-context-pack-reject|workspace-context-pack-grants|workspace-context-pack-revoke");
+            Console.Error.WriteLine("  agent context: agent-context-pack");
             Console.Error.WriteLine("  sources: collections|source-list|source-status|source-enroll|source-folder-enroll|source-folder-refresh-optin|source-folder-refresh-optout|source-relocate|source-revoke|source-ingest|source-pause|source-resume|source-refresh-optin|source-refresh-optout|source-raw-preservation-optin|source-raw-preservation-optout|source-preserved-record-read|source-refresh|source-mapping-submit|source-mapping-resolve|source-snapshot-list|source-snapshot-preserve|source-snapshot-read|source-snapshot-retain|source-snapshot-purge");
             Console.Error.WriteLine("  planning: lifecycle-create|lifecycle-validity-set|lifecycle-retain|lifecycle-intention-complete|lifecycle-intention-cancel|lifecycle-intention-supersede|lifecycle-intention-notify|lifecycle-intention-acknowledge|intentions|intention-trigger-set|intention-trigger-clear|intention-context-set|intention-context-disable|intention-schedule-run|recall-apply|purge-preview|purge-confirm|purge-resume");
             Console.Error.WriteLine("  models: provider-config|provider-status|job-create|job-start|job-cancel|job-status|job-list|job-ledger|schedule-set|schedule-disable|schedule-status|schedule-run");
@@ -10993,6 +11251,11 @@ internal static class OwnerControlCli
         "workspace-share-reject" => "owner workspace-share-reject --control-pipe <pipe> --preview-id <id>: after typed REJECT, discard the pending preview without creating a grant.",
         "workspace-share-grants" => "owner workspace-share-grants --control-pipe <pipe>: inspect issued workspace scopes with pinned/current revisions, stale/available status, exclusions, operations, expiry and egress.",
         "workspace-share-revoke" => "owner workspace-share-revoke --control-pipe <pipe> --grant-id <32-hex>: after typed REVOKE, withdraw the folder grant and invalidate its active workspace sessions.",
+        "workspace-context-pack-preview" => "owner workspace-context-pack-preview --control-pipe <pipe> --selection-json <WorkspaceContextPackSelection JSON> --expires-at-utc <UTC-ISO>: preview exact file revisions/digests, passage byte anchors and selected accepted/current relation metadata; preview binds policy/unlock/tree generations and discloses the complete in-scope set.",
+        "workspace-context-pack-approve" => "owner workspace-context-pack-approve --control-pipe <pipe> --preview-id <id> --handoff-file <new-file>: after typed APPROVE, issue only the frozen context-pack scope and write the opaque bearer through the protected handoff.",
+        "workspace-context-pack-reject" => "owner workspace-context-pack-reject --control-pipe <pipe> --preview-id <id>: after typed REJECT, discard the pending context-pack preview.",
+        "workspace-context-pack-grants" => "owner workspace-context-pack-grants --control-pipe <pipe>: inspect exact frozen context-pack selections and grant lifecycle metadata.",
+        "workspace-context-pack-revoke" => "owner workspace-context-pack-revoke --control-pipe <pipe> --grant-id <32-hex>: after typed REVOKE, withdraw the context-pack grant and invalidate its sessions.",
         "requests" => "owner requests --control-pipe <pipe>: pending agent access requests.",
         "request-preview" => "owner request-preview --control-pipe <pipe> --request-id <rid>: exact body/revisions/raw-source scope/provider-context the owner would approve (attached console only; redirected output is refused so bodies are never piped to disk). Narrowing happens on request-approve, which only shrinks the previewed scope.",
         "request-approve" => "owner request-approve --control-pipe <pipe> --request-id <rid> --preview-id <pid> [--resource-ids ... --operations ... --destination-resource-ids ...] --expires-at-utc <UTC-ISO> [--provider P --model M --max-cost-usd N] --handoff-file <new-file>: mint only the narrowed exact scope after typed APPROVE (narrowing only shrinks the previewed scope; anything wider fails closed). Pass the previewed operations you approve: omitting --operations narrows to resource.read, and the service refuses that as request_invalid when the request asked for other operations.",
@@ -11062,6 +11325,7 @@ internal static class OwnerControlCli
         "agent-search" => "owner agent-search --agent-pipe <pipe> --session-file <file> --query text [--offset N --limit N --kind K --current current|history --level L --as-of ISO --include-archived true]: scoped search inside the frozen session scope only (scope total, never vault counts).",
         "agent-brief" => "owner agent-brief --agent-pipe <pipe> --session-file <file> [--query text --budget-chars 200..8000 --context-project label --context-task label --include-archived true]: scoped brief projection under the caller's budget; never system instructions.",
         "agent-read" => "owner agent-read --agent-pipe <pipe> --session-file <file> --operation resource.read|source.read|workspace.file.read --resource-id <id> --resource-revision <rev>: scoped read at the exact approved revision (base64-framed on stdout).",
+        "agent-context-pack" => "owner agent-context-pack --agent-pipe <pipe> --session-file <file> --budget-bytes <1..65536>: read only the owner-approved workspace.context.pack scope; returns complete verbatim entries with citations/relations, or explicit partial/unavailable gaps. Drift requires a new owner preview; no inference/provider call.",
         "agent-memory-read" => "owner agent-memory-read --agent-pipe <pipe> --session-file <file> --resource-id <id> --resource-revision <rev>: scoped item detail (memory.read grant only; a source-only grant denies here).",
         "agent-source-read" => "owner agent-source-read --agent-pipe <pipe> --session-file <file> --resource-id <id> --resource-revision <rev>: scoped source expansion (explicit source.read grant only).",
         "agent-source-snapshot-read" => "owner agent-source-snapshot-read --agent-pipe <pipe> --session-file <file> --snapshot-id <snap> --snapshot-revision <rev>: scoped snapshot expansion (explicit snapshot grant only).",

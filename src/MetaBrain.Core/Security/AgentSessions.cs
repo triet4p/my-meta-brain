@@ -23,7 +23,9 @@ public sealed record AgentSession(
     long UnlockEpoch,
     WorkspaceFolderSessionMember[]? WorkspaceFolderMembers = null,
     int WorkspaceScopeSemanticsVersion = 0,
-    long WorkspaceScopeSemanticsGeneration = 0);
+    long WorkspaceScopeSemanticsGeneration = 0,
+    int WorkspaceContextPackSemanticsVersion = 0,
+    long WorkspaceContextPackSemanticsGeneration = 0);
 
 /// <summary>
 /// Authoritative session snapshot safe to disclose to the session holder.
@@ -44,7 +46,9 @@ public sealed record AgentSessionSnapshot(
     long UnlockEpoch,
     WorkspaceFolderSessionMember[]? WorkspaceFolderMembers = null,
     int WorkspaceScopeSemanticsVersion = 0,
-    long WorkspaceScopeSemanticsGeneration = 0);
+    long WorkspaceScopeSemanticsGeneration = 0,
+    int WorkspaceContextPackSemanticsVersion = 0,
+    long WorkspaceContextPackSemanticsGeneration = 0);
 
 public enum AgentRedeemStatus
 {

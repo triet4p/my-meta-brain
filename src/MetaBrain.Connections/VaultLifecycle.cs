@@ -455,6 +455,93 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
             return result;
         }
     }
+    private T ReadWorkspaceContextPackGrantSnapshot<T>(
+        IManagedResourceStore store,
+        IWorkspacePersistence workspaceStore,
+        Func<OwnerScopeGrantState, WorkspaceSnapshot?, IManagedResourceStore, IWorkspacePersistence, T> read)
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            if (_manifest is null || _dataKey is null)
+            {
+                throw new ManagedResourceUnavailableException();
+            }
+
+            var state = OwnerScopeGrantAuthority.ValidateAndMigrateState(
+                _store.LoadScopeGrantState(_manifest, _dataKey));
+            var workspace = _workspace is null ? null : ReadWorkspaceTreeLocked();
+            return read(state, workspace, store, workspaceStore);
+        }
+    }
+
+    private T UpdateWorkspaceContextPackGrantState<T>(
+        IManagedResourceStore store,
+        IWorkspacePersistence workspaceStore,
+        Func<OwnerScopeGrantState, WorkspaceSnapshot?, IManagedResourceStore, IWorkspacePersistence,
+            (OwnerScopeGrantState State, T Result)> update)
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            if (_manifest is null || _dataKey is null)
+            {
+                throw new ManagedResourceUnavailableException();
+            }
+
+            var state = OwnerScopeGrantAuthority.ValidateAndMigrateState(
+                _store.LoadScopeGrantState(_manifest, _dataKey));
+            var workspace = _workspace is null ? null : ReadWorkspaceTreeLocked();
+            var (nextState, result) = update(state, workspace, store, workspaceStore);
+            if (!ReferenceEquals(nextState, state))
+            {
+                nextState = OwnerScopeGrantAuthority.ValidateAndMigrateState(nextState);
+                _store.SaveScopeGrantState(_manifest, _dataKey, nextState);
+            }
+
+            return result;
+        }
+    }
+
+    private T ReadWorkspaceContextPackForGrant<T>(
+        string grantId,
+        int semanticsVersion,
+        long semanticsGeneration,
+        IManagedResourceStore store,
+        IWorkspacePersistence workspaceStore,
+        Func<OwnerScopeGrantState, WorkspaceContextPackScope, WorkspaceSnapshot,
+            IManagedResourceStore, IWorkspacePersistence, T> read)
+    {
+        lock (_contentGate)
+        {
+            EnsureWorkspaceAvailableLocked();
+            if (_manifest is null || _dataKey is null || _workspace is null)
+            {
+                throw new WorkspaceContextPackGrantRefusalException("workspace_context_pack_unavailable");
+            }
+
+            var state = OwnerScopeGrantAuthority.ValidateAndMigrateState(
+                _store.LoadScopeGrantState(_manifest, _dataKey));
+            var grant = state.Grants.FirstOrDefault(candidate =>
+                string.Equals(candidate.GrantId, grantId, StringComparison.Ordinal));
+            if (grant is null || !WorkspaceContextPackGrantAuthority.IsActiveGrant(
+                    state, grant, semanticsVersion, semanticsGeneration) ||
+                !grant.Operations.Contains(
+                    WorkspaceContextPackGrantAuthority.WorkspaceContextPackOperation, StringComparer.Ordinal) ||
+                grant.WorkspaceContextPackScope is not { } scope)
+            {
+                throw new WorkspaceContextPackGrantRefusalException("workspace_context_pack_unavailable");
+            }
+
+            var workspace = ReadWorkspaceTreeLocked();
+            if (!WorkspaceContextPackGrantAuthority.MatchesWorkspaceMetadata(scope, workspace))
+            {
+                throw new WorkspaceContextPackGrantRefusalException("request_stale");
+            }
+
+            return read(state, scope, workspace!, store, workspaceStore);
+        }
+    }
 
     private WorkspaceFileContent ReadWorkspaceFileForGrant(
         string grantId,
@@ -1903,6 +1990,21 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
         public T UpdateWorkspaceFolderGrantState<T>(
             Func<OwnerScopeGrantState, WorkspaceSnapshot?, (OwnerScopeGrantState State, T Result)> update) =>
             GetOwner().UpdateWorkspaceFolderGrantState(update);
+        public T ReadWorkspaceContextPackGrantSnapshot<T>(
+            Func<OwnerScopeGrantState, WorkspaceSnapshot?, IManagedResourceStore, IWorkspacePersistence, T> read) =>
+            GetOwner().ReadWorkspaceContextPackGrantSnapshot(this, this, read);
+        public T UpdateWorkspaceContextPackGrantState<T>(
+            Func<OwnerScopeGrantState, WorkspaceSnapshot?, IManagedResourceStore, IWorkspacePersistence,
+                (OwnerScopeGrantState State, T Result)> update) =>
+            GetOwner().UpdateWorkspaceContextPackGrantState(this, this, update);
+        public T ReadWorkspaceContextPackForGrant<T>(
+            string grantId,
+            int semanticsVersion,
+            long semanticsGeneration,
+            Func<OwnerScopeGrantState, WorkspaceContextPackScope, WorkspaceSnapshot,
+                IManagedResourceStore, IWorkspacePersistence, T> read) =>
+            GetOwner().ReadWorkspaceContextPackForGrant(
+                grantId, semanticsVersion, semanticsGeneration, this, this, read);
         public WorkspaceFileContent ReadWorkspaceFileForGrant(
             string grantId,
             int scopeSemanticsVersion,

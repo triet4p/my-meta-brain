@@ -42,13 +42,15 @@ internal static class Program
             string.Equals(args[0], "s16-t5", StringComparison.Ordinal);
         var s17T3Scenario = args.Length == 3 &&
             string.Equals(args[0], "s17-t3", StringComparison.Ordinal);
+        var s17T4Scenario = args.Length == 4 &&
+            string.Equals(args[0], "s17-t4", StringComparison.Ordinal);
         var s15T3Scenario = args.Length == 3 &&
             string.Equals(args[0], "s15-t3", StringComparison.Ordinal);
         var s15T4Scenario = args.Length == 3 &&
             string.Equals(args[0], "s15-t4", StringComparison.Ordinal);
         var s15T5Scenario = args.Length == 3 &&
             string.Equals(args[0], "s15-t5", StringComparison.Ordinal);
-        var scenario = s17T3Scenario ? "s17-t3" :
+        var scenario = s17T4Scenario ? "s17-t4" : s17T3Scenario ? "s17-t3" :
             s15T2Scenario ? "s15-t2" :
             s16T2Scenario ? "s16-t2" :
             s16T3Scenario ? "s16-t3" :
@@ -176,7 +178,9 @@ internal static class Program
         // in-process engine and handler, run in two processes by the harness.
         var isInProcessScenario = string.Equals(scenario, "s8-t5-index", StringComparison.Ordinal) ||
             string.Equals(scenario, "s8-t5-lifecycle", StringComparison.Ordinal);
-        var payloadExists = s15T2Scenario
+        var payloadExists = s17T4Scenario
+            ? executable is not null && File.Exists(executable) && File.Exists(args[2]) && File.Exists(args[3])
+            : s15T2Scenario
             ? executable is not null && File.Exists(executable) && File.Exists(args[2])
             : s16T2Scenario
             ? executable is not null && File.Exists(executable) && File.Exists(args[2]) && File.Exists(args[3])
@@ -224,6 +228,7 @@ internal static class Program
             Console.Error.WriteLine("S15-T4 invocation: MetaBrain.S1T4.Smoke.exe s15-t4 <MetaBrain.Connections.exe> <MetaBrain.Cli.exe>");
             Console.Error.WriteLine("S15-T5 invocation: MetaBrain.S1T4.Smoke.exe s15-t5 <MetaBrain.Connections.exe> <MetaBrain.Cli.exe> (needs an installed Chromium browser or CHROME_PATH)");
             Console.Error.WriteLine("S16-T5 invocation: MetaBrain.S1T4.Smoke.exe s16-t5 <MetaBrain.Connections.exe> <MetaBrain.Cli.exe>");
+            Console.Error.WriteLine("S17-T4 invocation: MetaBrain.S1T4.Smoke.exe s17-t4 <MetaBrain.Connections.exe> <MetaBrain.Cli.exe> <MetaBrain.Mcp.exe>");
             Console.Error.WriteLine("S17-T3 invocation: MetaBrain.S1T4.Smoke.exe s17-t3 <MetaBrain.Connections.exe> <MetaBrain.Cli.exe>");
             return 2;
         }
@@ -362,6 +367,10 @@ internal static class Program
                 case "s16-t5":
                     await OwnerServiceSmoke.RunS16T5OwnerRelationWorkflowAsync(
                         fullPath, Path.GetFullPath(args[2])).ConfigureAwait(false);
+                    break;
+                case "s17-t4":
+                    await OwnerServiceSmoke.RunS17T4ContextPackAsync(
+                        fullPath, Path.GetFullPath(args[2]), Path.GetFullPath(args[3])).ConfigureAwait(false);
                     break;
                 case "s17-t3":
                     await OwnerServiceSmoke.RunS17T3WorkspaceSharingCliAsync(

@@ -198,6 +198,18 @@ internal static class McpAgentBridge
                     ["required"] = new JsonArray("sessionFile", "operation", "resourceId", "resourceRevision"),
                     ["additionalProperties"] = false,
                 }),
+            Tool("metabrain_workspace_context_pack", "Read the owner-approved workspace.context.pack grant: only pinned verbatim file/passages and accepted/current scoped relation paths are returned within the requested whole-entry budget; drift requires fresh owner approval; no summary or provider call.",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["sessionFile"] = new JsonObject { ["type"] = "string" },
+                        ["budgetBytes"] = new JsonObject { ["type"] = "string", ["maxLength"] = 5 },
+                    },
+                    ["required"] = new JsonArray("sessionFile", "budgetBytes"),
+                    ["additionalProperties"] = false,
+                }),
             Tool("metabrain_authorize", "Check whether a session handoff file authorizes one scoped operation (allow/deny decision only, no content).",
                 new JsonObject
                 {
@@ -464,6 +476,12 @@ internal static class McpAgentBridge
                 "--resource-id", RequiredArg(args, "resourceId"),
                 "--resource-revision", RequiredArg(args, "resourceRevision"),
             },
+            "metabrain_workspace_context_pack" => new[]
+            {
+                "owner", "agent-context-pack", "--agent-pipe", agentPipe,
+                "--session-file", RequiredArg(args, "sessionFile"),
+                "--budget-bytes", RequiredArg(args, "budgetBytes"),
+            },
             "metabrain_authorize" => BuildAuthorizeArgs(agentPipe, args),
             "metabrain_memory_search" => BuildSearchArgs(agentPipe, args),
             "metabrain_memory_read" => new[]
@@ -528,6 +546,10 @@ internal static class McpAgentBridge
         if (string.Equals(name, "metabrain_scoped_read", StringComparison.Ordinal))
         {
             return ScopedReadEnvelope(id, await RunOwnerCommandAsync(argv).ConfigureAwait(false));
+        }
+        if (string.Equals(name, "metabrain_workspace_context_pack", StringComparison.Ordinal))
+        {
+            return ContextPackEnvelope(id, await RunOwnerCommandAsync(argv).ConfigureAwait(false));
         }
 
         if (string.Equals(name, "metabrain_source_snapshot_read", StringComparison.Ordinal))
@@ -923,6 +945,56 @@ internal static class McpAgentBridge
                 }),
             ["isError"] = false,
         });
+    }
+    private static string ContextPackEnvelope(JsonNode? id, BridgeCommandResult result)
+    {
+        if (result.ExitCode != 0)
+        {
+            return ResultEnvelope(id, new JsonObject
+            {
+                ["content"] = new JsonArray(new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = Redact(ExtractErrorText(result.Combined)),
+                }),
+                ["isError"] = true,
+            });
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(result.Combined);
+            if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                !document.RootElement.TryGetProperty("entries", out var entries) ||
+                entries.ValueKind != JsonValueKind.Array ||
+                !document.RootElement.TryGetProperty("status", out var status) ||
+                status.ValueKind != JsonValueKind.String)
+            {
+                throw new JsonException();
+            }
+
+            return ResultEnvelope(id, new JsonObject
+            {
+                ["content"] = new JsonArray(new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = document.RootElement.GetRawText(),
+                }),
+                ["isError"] = false,
+            });
+        }
+        catch (JsonException)
+        {
+            return ResultEnvelope(id, new JsonObject
+            {
+                ["content"] = new JsonArray(new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = "workspace_context_pack_unavailable",
+                }),
+                ["isError"] = true,
+            });
+        }
     }
 
     // Preserved-snapshot expansion returns the registry metadata line plus the same
