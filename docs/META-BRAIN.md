@@ -207,7 +207,14 @@ The unifying rule: **a folder is a selector and a preview boundary, never a live
 
 The shared service supports owner control-pipe operations `owner.workspace.folder-grant.preview`, `owner.workspace.folder-grant.issue`, `owner.workspace.folder-grant.list`, and `owner.workspace.folder-grant.revoke`. The existing `owner agent-read` command accepts `--operation workspace.file.read`, `--resource-id`, and `--resource-revision` to read the exact pinned revision authorized by a redeemed workspace session.
 
-The scope is zone-independent and grants no source, cognitive/derived, relation, or provider-egress rights by implication. T2 does not implement the polished T3 owner workflow or T5 MCP normal-client integration; no MCP surface or provider call was changed or exercised for this task.
+The scope is zone-independent and grants no source, cognitive/derived, relation, or provider-egress rights by implication. T2 implemented the shared grant authority and existing read route but did not include the polished owner CLI workflow or MCP normal-client integration; S17-T3 implements the owner CLI workflow, while T5 MCP integration remains pending.
+
+#### S17-T3 implementation note
+
+
+The owner CLI exposes folder-scope preview, preview-bound identity-subtree narrowing and rejection, typed approval, and grant inspection/revocation through shared owner control-pipe APIs. Preview output identifies exact member IDs, pinned revisions, byte lengths and digests; exclusions, expiry, operations, declared egress, frozen-snapshot behavior and update boundaries are visible without publishing workspace names. Approval writes the opaque bearer only through the existing owner-protected handoff. `owner workspace-share-grants` shows pinned/current revisions and staleness; `owner sessions [--session-id]` shows the live session's exact workspace member IDs/revisions and approved egress, and `owner revoke-session` revokes that session. Folder sharing remains separate from catalog publication, does not require per-file approval, and adds no browser authority, MCP normal-client path or provider call.
+
+The synthetic S17-T3 actual CLI smoke passed the preview/narrow/approve/reject/handoff/redemption, grant/session inspection and revocation, stale-preview and lock-denial, catalog non-publication, and CLI-output/safe-operational-log secret-redaction scenarios. It used only a synthetic project-local vault; no provider, MCP normal client, browser authority, ACL or host mutation was exercised. See the [worker evidence](../artifacts/sprint-17/task-3.md); independent review and the exact-snapshot checkpoint remain pending.
 
 Trace: [requirements](REQUIREMENTS.md#owner-approved-workspace-folder-scope-contract--s17-t1--d108-2026-11-16), [Sprint 17 tasks](sprint-plans/sprint-17.md#atomic-tasks), and [decision log](../.agents/memory/decisions.md).
 

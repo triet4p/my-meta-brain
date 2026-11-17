@@ -949,3 +949,10 @@ the assignment can fail before the sentinel check or any child starts.
 **Root cause:** The intended 6.5-second expiry wait used `TimeSpan.FromSeconds(6500)`, which requests 6,500 seconds.
 **Fix / workaround:** Use `TimeSpan.FromMilliseconds(6500)` so the wait extends six seconds past the six-second grant expiry.
 **Watch out for:** When an expiry test expresses milliseconds through `TimeSpan`, do not pass the raw millisecond count to `FromSeconds`.
+
+## [2026-11-17] Owner pipe lease classification must include new operations
+
+**Symptom:** The actual S17-T3 CLI workflow failed at preview narrowing even though the owner handler and operation constants were present.
+**Root cause:** `NamedPipeService` maintains explicit operation lists for workspace timeouts and vault-operation leases. The new narrow/reject operations were absent, so the dispatcher passed a null vault lease to handlers that require one.
+**Fix / workaround:** Add both operations to the workspace timeout and `needsVaultOperation` classifications in `NamedPipeService`.
+**Watch out for:** When adding an owner operation that needs `IVaultOperation`, update both explicit pipe classifications; handler dispatch and compilation alone do not prove the lease is acquired.

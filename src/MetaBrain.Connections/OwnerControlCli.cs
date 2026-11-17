@@ -180,6 +180,12 @@ internal static class OwnerControlCli
                 "rollback-with-recovery-code" => await RollbackAsync(options, useRecoveryCode: true).ConfigureAwait(false),
                 "grant" => await GrantAsync(options).ConfigureAwait(false),
                 "grants" => await ListGrantsAsync(options).ConfigureAwait(false),
+                "workspace-share-preview" => await WorkspaceSharePreviewAsync(options).ConfigureAwait(false),
+                "workspace-share-narrow" => await WorkspaceShareNarrowAsync(options).ConfigureAwait(false),
+                "workspace-share-approve" => await WorkspaceShareApproveAsync(options).ConfigureAwait(false),
+                "workspace-share-reject" => await WorkspaceShareRejectAsync(options).ConfigureAwait(false),
+                "workspace-share-grants" => await WorkspaceShareGrantsAsync(options).ConfigureAwait(false),
+                "workspace-share-revoke" => await WorkspaceShareRevokeAsync(options).ConfigureAwait(false),
                 "collection-set" => await SetCollectionAsync(options).ConfigureAwait(false),
                 "collections" => await ListCollectionsAsync(options).ConfigureAwait(false),
                 "catalog-preview" => await CatalogPreviewAsync(options).ConfigureAwait(false),
@@ -6287,6 +6293,375 @@ internal static class OwnerControlCli
         Console.WriteLine($"GRANTS count={grants.GetArrayLength()}");
         return 0;
     }
+    private static async Task<int> WorkspaceSharePreviewAsync(CommandOptions options)
+    {
+        options.RequireOnly(
+            "--control-pipe", "--folder-id", "--exclude-folder-ids", "--operations",
+            "--expires-at-utc", "--provider", "--model", "--max-cost-usd");
+        var controlPipe = ControlPipe(options);
+        var folderId = options.Required("--folder-id");
+        var excludedFolderIds = ParseIdentifiers(options.Optional("--exclude-folder-ids"));
+        var operations = ParseOperations(options.Optional("--operations")) ?? new[] { WorkspaceFolderGrantAuthority.WorkspaceFileReadOperation };
+        if (!ServiceSettingsLoader.IsSafeIdentifier(folderId) ||
+            excludedFolderIds?.Any(id => !ServiceSettingsLoader.IsSafeIdentifier(id)) == true ||
+            !operations.Contains(WorkspaceFolderGrantAuthority.WorkspaceFileReadOperation, StringComparer.Ordinal) ||
+            operations.Any(operation =>
+                !string.Equals(operation, WorkspaceFolderGrantAuthority.WorkspaceFileReadOperation, StringComparison.Ordinal) &&
+                !string.Equals(operation, "provider.egress", StringComparison.Ordinal)))
+        {
+            return Usage();
+        }
+
+        var expiryText = options.Required("--expires-at-utc");
+        if ((!expiryText.EndsWith('Z') && !expiryText.EndsWith("+00:00", StringComparison.Ordinal)) ||
+            !DateTimeOffset.TryParse(expiryText, CultureInfo.InvariantCulture, DateTimeStyles.None, out var expiresAtUtc) ||
+            expiresAtUtc.Offset != TimeSpan.Zero)
+        {
+            return Usage();
+        }
+
+        var provider = options.Optional("--provider");
+        var model = options.Optional("--model");
+        decimal? maximumCostUsd = null;
+        if (options.Optional("--max-cost-usd") is { } costText &&
+            decimal.TryParse(costText, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsedCost))
+        {
+            maximumCostUsd = parsedCost;
+        }
+        else if (options.Optional("--max-cost-usd") is not null)
+        {
+            return Usage();
+        }
+
+        var hasEgress = provider is not null || model is not null || maximumCostUsd is not null;
+        if (hasEgress != operations.Contains("provider.egress", StringComparer.Ordinal) ||
+            hasEgress && (provider is null || model is null || maximumCostUsd is null))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceFolderGrantPreviewOperation,
+                Operations: operations,
+                ExpiresAtUtc: expiresAtUtc,
+                Provider: provider,
+                Model: model,
+                MaximumCostUsd: maximumCostUsd,
+                WorkspaceFolderId: folderId,
+                WorkspaceExcludedFolderIds: excludedFolderIds)).ConfigureAwait(false);
+        if (!result.Success || !TryGetWorkspaceFolderGrantPreview(result.Reply, out var preview))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        PrintWorkspaceFolderGrantPreview(preview);
+        return 0;
+    }
+
+    private static async Task<int> WorkspaceShareNarrowAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--preview-id", "--exclude-folder-ids");
+        var controlPipe = ControlPipe(options);
+        var previewId = options.Required("--preview-id");
+        var excludedFolderIds = ParseIdentifiers(options.Required("--exclude-folder-ids"));
+        if (!Guid.TryParseExact(previewId, "N", out _) ||
+            excludedFolderIds is null ||
+            excludedFolderIds.Any(id => !ServiceSettingsLoader.IsSafeIdentifier(id)))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceFolderGrantNarrowOperation,
+                PreviewId: previewId,
+                WorkspaceExcludedFolderIds: excludedFolderIds)).ConfigureAwait(false);
+        if (!result.Success || !TryGetWorkspaceFolderGrantPreview(result.Reply, out var preview))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine($"WORKSPACE FOLDER NARROWED fromPreview={previewId} oldPreviewInvalidated=true");
+        PrintWorkspaceFolderGrantPreview(preview);
+        return 0;
+    }
+
+    private static async Task<int> WorkspaceShareApproveAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--preview-id", "--handoff-file");
+        var controlPipe = ControlPipe(options);
+        var previewId = options.Required("--preview-id");
+        if (!Guid.TryParseExact(previewId, "N", out _))
+        {
+            return Usage();
+        }
+        var handoffPath = options.Required("--handoff-file");
+
+
+        Console.Write("Type APPROVE to issue this exact workspace scope: ");
+        if (!string.Equals(Console.ReadLine(), "APPROVE", StringComparison.Ordinal))
+        {
+            Console.WriteLine("CANCELLED; no grant issued");
+            return 3;
+        }
+
+        OwnerTokenHandoff handoff;
+        try
+        {
+            handoff = OwnerTokenHandoff.Create(handoffPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or Win32Exception)
+        {
+            Console.Error.WriteLine("ERROR handoff_destination_unavailable");
+            return 3;
+        }
+
+        using (handoff)
+        {
+            var result = await InvokeOwnerAsync(controlPipe,
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.OwnerWorkspaceFolderGrantIssueOperation,
+                    PreviewId: previewId)).ConfigureAwait(false);
+            if (!result.Success ||
+                !HasStatus(result.Reply, "workspace_folder_grant_issued") ||
+                !result.Reply.TryGetProperty("grantId", out var grantId) ||
+                grantId.ValueKind != JsonValueKind.String ||
+                !result.Reply.TryGetProperty("token", out var token) ||
+                token.ValueKind != JsonValueKind.String)
+            {
+                WriteServiceError(result);
+                return 3;
+            }
+
+            try
+            {
+                handoff.WriteToken(token.GetString() ?? string.Empty);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or Win32Exception)
+            {
+                Console.Error.WriteLine("ERROR token_handoff_failed");
+                return 4;
+            }
+
+            Console.WriteLine($"WORKSPACE GRANT issued id={grantId.GetString()}; owner-only token handoff={handoff.Path}; token redacted");
+            return 0;
+        }
+    }
+
+    private static async Task<int> WorkspaceShareRejectAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--preview-id");
+        var controlPipe = ControlPipe(options);
+        var previewId = options.Required("--preview-id");
+        if (!Guid.TryParseExact(previewId, "N", out _))
+        {
+            return Usage();
+        }
+
+        Console.Write("Type REJECT to decline this workspace scope: ");
+        if (!string.Equals(Console.ReadLine(), "REJECT", StringComparison.Ordinal))
+        {
+            Console.WriteLine("CANCELLED; preview remains pending until expiry");
+            return 3;
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceFolderGrantRejectOperation,
+                PreviewId: previewId)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "workspace_folder_grant_rejected"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine($"WORKSPACE GRANT rejected preview={previewId}; no grant created");
+        return 0;
+    }
+
+    private static async Task<int> WorkspaceShareGrantsAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceFolderGrantListOperation)).ConfigureAwait(false);
+        if (!result.Success ||
+            !HasStatus(result.Reply, "workspace_folder_grants") ||
+            !result.Reply.TryGetProperty("workspaceFolderGrants", out var grants) ||
+            grants.ValueKind != JsonValueKind.Array)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        foreach (var grant in grants.EnumerateArray())
+        {
+            PrintWorkspaceFolderGrantSummary(grant);
+        }
+
+        Console.WriteLine($"WORKSPACE GRANTS count={grants.GetArrayLength()}");
+        return 0;
+    }
+
+    private static async Task<int> WorkspaceShareRevokeAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--grant-id");
+        var controlPipe = ControlPipe(options);
+        var grantId = options.Required("--grant-id");
+        if (!Guid.TryParseExact(grantId, "N", out _))
+        {
+            return Usage();
+        }
+
+        Console.Write("Type REVOKE to withdraw this workspace folder grant: ");
+        if (!string.Equals(Console.ReadLine(), "REVOKE", StringComparison.Ordinal))
+        {
+            Console.WriteLine("CANCELLED; grant unchanged");
+            return 3;
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceFolderGrantRevokeOperation,
+                GrantId: grantId)).ConfigureAwait(false);
+        if (!result.Success ||
+            !HasStatus(result.Reply, "workspace_folder_grant_revoked") ||
+            !result.Reply.TryGetProperty("grantId", out var revokedGrantId))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine($"WORKSPACE GRANT revoked id={revokedGrantId.GetString()}");
+        return 0;
+    }
+
+    private static bool TryGetWorkspaceFolderGrantPreview(JsonElement reply, out JsonElement preview)
+    {
+        if (HasStatus(reply, "workspace_folder_grant_preview") &&
+            reply.TryGetProperty("workspaceFolderGrantPreview", out preview) &&
+            preview.ValueKind == JsonValueKind.Object)
+        {
+            return true;
+        }
+
+        preview = default;
+        return false;
+    }
+
+    private static void PrintWorkspaceFolderGrantPreview(JsonElement preview)
+    {
+        Console.WriteLine(
+            $"WORKSPACE FOLDER PREVIEW id={JsonValueText(preview, "previewId")} workspace={JsonValueText(preview, "workspaceId")} " +
+            $"folder={JsonValueText(preview, "folderId")} treeRevision={JsonValueText(preview, "treeRevision")} " +
+            $"policyGeneration={JsonValueText(preview, "policyGeneration")} expiresUtc={JsonValueText(preview, "expiresAtUtc")} " +
+            $"previewExpiresUtc={JsonValueText(preview, "previewExpiresAtUtc")}");
+
+        if (preview.TryGetProperty("folderIds", out var folders) && folders.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var folder in folders.EnumerateArray())
+            {
+                Console.WriteLine($"FOLDER id={folder.GetString()}");
+            }
+        }
+
+        if (preview.TryGetProperty("members", out var members) && members.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var member in members.EnumerateArray())
+            {
+                Console.WriteLine(
+                    $"MEMBER file={JsonValueText(member, "fileId")} revision={JsonValueText(member, "contentRevision")} " +
+                    $"length={JsonValueText(member, "length")} sha256={JsonValueText(member, "sha256")}");
+            }
+        }
+
+        if (preview.TryGetProperty("excludedFolderIds", out var exclusions) && exclusions.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var exclusion in exclusions.EnumerateArray())
+            {
+                Console.WriteLine($"EXCLUDED FOLDER id={exclusion.GetString()}");
+            }
+        }
+
+        Console.WriteLine(
+            $"EXCLUDED counts folders={JsonValueText(preview, "excludedFolderCount")} files={JsonValueText(preview, "excludedFileCount")}");
+        if (preview.TryGetProperty("operations", out var operations) && operations.ValueKind == JsonValueKind.Array)
+        {
+            Console.WriteLine("operations=" + string.Join(",", operations.EnumerateArray().Select(value => value.GetString())));
+        }
+
+        if (preview.TryGetProperty("egress", out var egress) && egress.ValueKind == JsonValueKind.Object)
+        {
+            Console.WriteLine(
+                $"egress={JsonValueText(egress, "provider")}/{JsonValueText(egress, "model")} " +
+                $"maxCostUsd={JsonValueText(egress, "maximumCostUsd")}");
+        }
+        else
+        {
+            Console.WriteLine("egress=none");
+        }
+
+        Console.WriteLine("snapshot=frozen; pinned revisions are served unchanged; revision advances are marked stale");
+        Console.WriteLine("updates=members moved out or deleted lose access; new, copied, moved-in, restored, or revised content requires a fresh owner preview");
+        Console.WriteLine("boundaries=no catalog publication; no source enrollment; no provider call; no per-file approval");
+    }
+
+    private static void PrintWorkspaceFolderGrantSummary(JsonElement grant)
+    {
+        Console.WriteLine(
+            $"WORKSPACE GRANT id={JsonValueText(grant, "grantId")} folder={JsonValueText(grant, "folderId")} " +
+            $"treeRevision={JsonValueText(grant, "approvedTreeRevision")} policyGeneration={JsonValueText(grant, "policyGeneration")} " +
+            $"expiresUtc={JsonValueText(grant, "expiresAtUtc")} revokedUtc={OptionalText(grant, "revokedAtUtc")}");
+        if (grant.TryGetProperty("operations", out var operations) && operations.ValueKind == JsonValueKind.Array)
+        {
+            Console.WriteLine("operations=" + string.Join(",", operations.EnumerateArray().Select(value => value.GetString())));
+        }
+
+        if (grant.TryGetProperty("members", out var members) && members.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var member in members.EnumerateArray())
+            {
+                var currentRevision = member.TryGetProperty("currentRevision", out var current) &&
+                    current.ValueKind == JsonValueKind.Number
+                    ? current.GetInt64().ToString(CultureInfo.InvariantCulture)
+                    : "unavailable";
+                Console.WriteLine(
+                    $"MEMBER file={JsonValueText(member, "fileId")} pinnedRevision={JsonValueText(member, "pinnedRevision")} " +
+                    $"currentRevision={currentRevision} length={JsonValueText(member, "length")} " +
+                    $"sha256={JsonValueText(member, "sha256")} stale={JsonValueText(member, "stale")} " +
+                    $"available={JsonValueText(member, "available")}");
+            }
+        }
+
+        if (grant.TryGetProperty("excludedFolderIds", out var exclusions) && exclusions.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var exclusion in exclusions.EnumerateArray())
+            {
+                Console.WriteLine($"EXCLUDED FOLDER id={exclusion.GetString()}");
+            }
+        }
+
+        if (grant.TryGetProperty("egress", out var egress) && egress.ValueKind == JsonValueKind.Object)
+        {
+            Console.WriteLine(
+                $"egress={JsonValueText(egress, "provider")}/{JsonValueText(egress, "model")} " +
+                $"maxCostUsd={JsonValueText(egress, "maximumCostUsd")}");
+        }
+        else
+        {
+            Console.WriteLine("egress=none");
+        }
+    }
+
 
     private static async Task<int> SetCollectionAsync(CommandOptions options)
     {
@@ -8431,7 +8806,13 @@ internal static class OwnerControlCli
 
     private static async Task<int> ListSessionsAsync(CommandOptions options)
     {
-        options.RequireOnly("--control-pipe");
+        options.RequireOnly("--control-pipe", "--session-id");
+        var sessionId = options.Optional("--session-id");
+        if (sessionId is not null && !Guid.TryParseExact(sessionId, "N", out _))
+        {
+            return Usage();
+        }
+
         var result = await InvokeOwnerAsync(ControlPipe(options),
             new ServiceRequest(ServiceRequestHandler.CurrentProtocolVersion,
                 ServiceRequestHandler.OwnerSessionListOperation)).ConfigureAwait(false);
@@ -8442,11 +8823,25 @@ internal static class OwnerControlCli
             return 3;
         }
 
-        var generation = JsonValueText(result.Reply, "policyGeneration");
-        Console.WriteLine($"SESSIONS count={sessions.GetArrayLength()} generation={generation}");
-        foreach (var session in sessions.EnumerateArray())
+        var selected = sessionId is null
+            ? sessions.EnumerateArray().ToArray()
+            : sessions.EnumerateArray()
+                .Where(session => string.Equals(
+                    JsonValueText(session, "sessionId"),
+                    sessionId,
+                    StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+        if (sessionId is not null && selected.Length == 0)
         {
-            PrintAgentSession(session);
+            Console.Error.WriteLine("ERROR session_unknown");
+            return 3;
+        }
+
+        var generation = JsonValueText(result.Reply, "policyGeneration");
+        Console.WriteLine($"SESSIONS count={selected.Length} generation={generation}");
+        foreach (var session in selected)
+        {
+            PrintAgentSession(session, includeWorkspaceScope: true);
         }
 
         return 0;
@@ -9272,7 +9667,7 @@ internal static class OwnerControlCli
         }
     }
 
-    private static void PrintAgentSession(JsonElement session)
+    private static void PrintAgentSession(JsonElement session, bool includeWorkspaceScope = false)
     {
         Console.WriteLine($"SESSION id={JsonValueText(session, "sessionId")} grant={JsonValueText(session, "grantId")} generation={JsonValueText(session, "policyGeneration")} epoch={JsonValueText(session, "unlockEpoch")} expiresUtc={JsonValueText(session, "expiresAtUtc")}");
         if (session.TryGetProperty("resources", out var resources) && resources.ValueKind == JsonValueKind.Array)
@@ -9293,6 +9688,22 @@ internal static class OwnerControlCli
         {
             Console.WriteLine($"egress={JsonValueText(egress, "provider")}/{JsonValueText(egress, "model")} maxCostUsd={JsonValueText(egress, "maximumCostUsd")}");
         }
+        if (includeWorkspaceScope &&
+            session.TryGetProperty("workspaceFolderMembers", out var workspaceMembers) &&
+            workspaceMembers.ValueKind == JsonValueKind.Array)
+        {
+            Console.WriteLine(
+                $"WORKSPACE SCOPE members={workspaceMembers.GetArrayLength()} " +
+                $"semanticsVersion={JsonValueText(session, "workspaceScopeSemanticsVersion")} " +
+                $"generation={JsonValueText(session, "workspaceScopeSemanticsGeneration")}");
+            foreach (var member in workspaceMembers.EnumerateArray())
+            {
+                Console.WriteLine(
+                    $"WORKSPACE MEMBER file={JsonValueText(member, "fileId")} " +
+                    $"pinnedRevision={JsonValueText(member, "contentRevision")}");
+            }
+        }
+
 
     }
 
@@ -10486,6 +10897,7 @@ internal static class OwnerControlCli
             Console.Error.WriteLine("  library: library|memory-read|source-read|research-read|relation-read|lifecycle-read|lifecycle-retained-read|cognitive-annotation-list|cognitive-annotation-query|cognitive-annotation-read|recall-read|review-list|review-record|index-status|index-rebuild");
             Console.Error.WriteLine("  review: cognitive-annotation-create|cognitive-annotation-correct|cognitive-annotation-accept|cognitive-annotation-reject|proposal-list|proposal-read|proposal-publish|proposal-reject|lifecycle-publish|lifecycle-reject|lifecycle-withdraw|lifecycle-repropose|lifecycle-question-resolve|lifecycle-question-reopen|relation-list|relation-read|relation-create|relation-accept|relation-reject|relation-unlink|relation-relink|declassify-preview|declassify-publish|declassify-proposal-publish");
             Console.Error.WriteLine("  sharing: catalog-preview|catalog-publish|catalog-list|catalog-withdraw|collections|collection-set|grants|grant|requests|request-preview|request-approve|request-reject|sessions|session|revoke-session|redeem (+ agent-mcp transport)");
+            Console.Error.WriteLine("  sharing (workspace folders): workspace-share-preview|workspace-share-narrow|workspace-share-approve|workspace-share-reject|workspace-share-grants|workspace-share-revoke");
             Console.Error.WriteLine("  sources: collections|source-list|source-status|source-enroll|source-folder-enroll|source-folder-refresh-optin|source-folder-refresh-optout|source-relocate|source-revoke|source-ingest|source-pause|source-resume|source-refresh-optin|source-refresh-optout|source-raw-preservation-optin|source-raw-preservation-optout|source-preserved-record-read|source-refresh|source-mapping-submit|source-mapping-resolve|source-snapshot-list|source-snapshot-preserve|source-snapshot-read|source-snapshot-retain|source-snapshot-purge");
             Console.Error.WriteLine("  planning: lifecycle-create|lifecycle-validity-set|lifecycle-retain|lifecycle-intention-complete|lifecycle-intention-cancel|lifecycle-intention-supersede|lifecycle-intention-notify|lifecycle-intention-acknowledge|intentions|intention-trigger-set|intention-trigger-clear|intention-context-set|intention-context-disable|intention-schedule-run|recall-apply|purge-preview|purge-confirm|purge-resume");
             Console.Error.WriteLine("  models: provider-config|provider-status|job-create|job-start|job-cancel|job-status|job-list|job-ledger|schedule-set|schedule-disable|schedule-status|schedule-run");
@@ -10575,11 +10987,17 @@ internal static class OwnerControlCli
         "collection-set" => "owner collection-set --control-pipe <pipe> --collection-id <cid> --resource-ids <id,...>: save exact membership after typed SET.",
         "grants" => "owner grants --control-pipe <pipe>: issued scope grants (frozen IDs/revisions/operations/expiry).",
         "grant" => "owner grant --control-pipe <pipe> (--zone-id Z | --collection-id C | --resource-ids id,...) [--operations ...] [--destination-resource-ids ...] --expires-at-utc <UTC-ISO> [--provider P --model M --max-cost-usd N] --handoff-file <new-file>: frozen scope preview, then typed ISSUE mints the one-time token into the encrypted handoff.",
+        "workspace-share-preview" => "owner workspace-share-preview --control-pipe <pipe> --folder-id <live-folder-id> --expires-at-utc <UTC-ISO> [--exclude-folder-ids <folder-id,...>] [--operations workspace.file.read[,provider.egress] --provider P --model M --max-cost-usd N]: preview every exact file id/revision/length/digest and folder/exclusion identity; provider egress is included only when explicitly requested in this same approval. Names are not published; preview does not mint authority.",
+        "workspace-share-narrow" => "owner workspace-share-narrow --control-pipe <pipe> --preview-id <id> --exclude-folder-ids <folder-id,...>: add identity-based descendant exclusions only; the prior preview is consumed and a new exact snapshot is returned. Tree/policy drift refuses stale.",
+        "workspace-share-approve" => "owner workspace-share-approve --control-pipe <pipe> --preview-id <id> --handoff-file <new-file>: after typed APPROVE, issue the exact frozen scope and write the opaque bearer only through the existing owner-protected handoff; output redacts the bearer.",
+        "workspace-share-reject" => "owner workspace-share-reject --control-pipe <pipe> --preview-id <id>: after typed REJECT, discard the pending preview without creating a grant.",
+        "workspace-share-grants" => "owner workspace-share-grants --control-pipe <pipe>: inspect issued workspace scopes with pinned/current revisions, stale/available status, exclusions, operations, expiry and egress.",
+        "workspace-share-revoke" => "owner workspace-share-revoke --control-pipe <pipe> --grant-id <32-hex>: after typed REVOKE, withdraw the folder grant and invalidate its active workspace sessions.",
         "requests" => "owner requests --control-pipe <pipe>: pending agent access requests.",
         "request-preview" => "owner request-preview --control-pipe <pipe> --request-id <rid>: exact body/revisions/raw-source scope/provider-context the owner would approve (attached console only; redirected output is refused so bodies are never piped to disk). Narrowing happens on request-approve, which only shrinks the previewed scope.",
         "request-approve" => "owner request-approve --control-pipe <pipe> --request-id <rid> --preview-id <pid> [--resource-ids ... --operations ... --destination-resource-ids ...] --expires-at-utc <UTC-ISO> [--provider P --model M --max-cost-usd N] --handoff-file <new-file>: mint only the narrowed exact scope after typed APPROVE (narrowing only shrinks the previewed scope; anything wider fails closed). Pass the previewed operations you approve: omitting --operations narrows to resource.read, and the service refuses that as request_invalid when the request asked for other operations.",
         "request-reject" => "owner request-reject --control-pipe <pipe> --request-id <rid>: decline after typed REJECT; the request stays pending until then.",
-        "sessions" => "owner sessions --control-pipe <pipe>: live agent sessions (ID/grant/generation/epoch/expiry).",
+        "sessions" => "owner sessions --control-pipe <pipe> [--session-id <32-hex>]: inspect live session IDs, grants, operations, egress and exact pinned workspace member IDs/revisions; pass --session-id to show one session, then use revoke-session to revoke it.",
         "session" => "owner session --agent-pipe <pipe> --session-file <file>: inspect one redeemed session (allow/deny decision helper is `authorize`).",
         "revoke-session" => "owner revoke-session --control-pipe <pipe> --session-id <32-hex>: revoke one live session; further calls fail closed (cached plaintext is not recalled).",
         "redeem" => "owner redeem --agent-pipe <pipe> --handoff-file <file> --session-file <new-file>: redeem the one-time handoff into a short session (atomic; replayed/expired/revoked/locked fails closed).",

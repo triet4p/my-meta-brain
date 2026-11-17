@@ -1478,6 +1478,9 @@ public sealed class ServiceRequestHandler
     public const string ResourceWriteOperation = "resource.write";
     public const string OwnerScopePreviewOperation = "owner.scope.preview";
     public const string OwnerWorkspaceFolderGrantPreviewOperation = "owner.workspace.folder-grant.preview";
+    public const string OwnerWorkspaceFolderGrantNarrowOperation = "owner.workspace.folder-grant.narrow";
+    public const string OwnerWorkspaceFolderGrantRejectOperation = "owner.workspace.folder-grant.reject";
+
     public const string OwnerWorkspaceFolderGrantIssueOperation = "owner.workspace.folder-grant.issue";
     public const string OwnerWorkspaceFolderGrantListOperation = "owner.workspace.folder-grant.list";
     public const string OwnerWorkspaceFolderGrantRevokeOperation = "owner.workspace.folder-grant.revoke";
@@ -1833,8 +1836,14 @@ public sealed class ServiceRequestHandler
     /// </summary>
     private static bool WorkspaceFieldsBelongToOperation(ServiceRequest request)
     {
-        if ((request.WorkspaceFolderId is not null || request.WorkspaceExcludedFolderIds is not null) &&
+        if (request.WorkspaceFolderId is not null &&
             request.Operation is not OwnerWorkspaceFolderGrantPreviewOperation)
+        {
+            return false;
+        }
+
+        if (request.WorkspaceExcludedFolderIds is not null &&
+            request.Operation is not (OwnerWorkspaceFolderGrantPreviewOperation or OwnerWorkspaceFolderGrantNarrowOperation))
         {
             return false;
         }
@@ -1938,7 +1947,8 @@ public sealed class ServiceRequestHandler
         ServiceRequest request,
         bool allowPreviewFields = false,
         bool allowPreviewId = false,
-        bool allowGrantId = false)
+        bool allowGrantId = false,
+        bool allowNarrowFields = false)
     {
         var remaining = request with
         {
@@ -1948,7 +1958,7 @@ public sealed class ServiceRequestHandler
             Model = allowPreviewFields ? null : request.Model,
             MaximumCostUsd = allowPreviewFields ? null : request.MaximumCostUsd,
             WorkspaceFolderId = allowPreviewFields ? null : request.WorkspaceFolderId,
-            WorkspaceExcludedFolderIds = allowPreviewFields ? null : request.WorkspaceExcludedFolderIds,
+            WorkspaceExcludedFolderIds = allowPreviewFields || allowNarrowFields ? null : request.WorkspaceExcludedFolderIds,
             PreviewId = allowPreviewId ? null : request.PreviewId,
             GrantId = allowGrantId ? null : request.GrantId
         };
@@ -2411,6 +2421,17 @@ public sealed class ServiceRequestHandler
         {
             return HandleWorkspaceFolderGrantPreview(context, request, operation);
         }
+
+        if (string.Equals(request.Operation, OwnerWorkspaceFolderGrantNarrowOperation, StringComparison.Ordinal))
+        {
+            return HandleWorkspaceFolderGrantNarrow(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerWorkspaceFolderGrantRejectOperation, StringComparison.Ordinal))
+        {
+            return HandleWorkspaceFolderGrantReject(context, request, operation);
+        }
+
 
         if (string.Equals(request.Operation, OwnerWorkspaceFolderGrantIssueOperation, StringComparison.Ordinal))
         {
@@ -11088,6 +11109,97 @@ public sealed class ServiceRequestHandler
             return Error("scope_state_unavailable");
         }
     }
+    private ServiceReply HandleWorkspaceFolderGrantNarrow(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasWorkspaceFolderGrantExtras(
+                request,
+                allowPreviewId: true,
+                allowNarrowFields: true) ||
+            request.PreviewId is null || request.WorkspaceExcludedFolderIds is null)
+        {
+            return Error("invalid_grant_request");
+        }
+
+        try
+        {
+            var preview = _workspaceFolderGrants.Narrow(
+                context,
+                request.PreviewId,
+                request.WorkspaceExcludedFolderIds,
+                operation);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "workspace_folder_grant_preview",
+                "owner",
+                null,
+                PolicyGeneration: preview.PolicyGeneration,
+                WorkspaceFolderGrantPreview: preview);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (WorkspaceFolderGrantRefusalException ex)
+        {
+            return Error(ex.Code);
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_grant_request");
+        }
+        catch (InvalidDataException)
+        {
+            return Error("scope_state_unavailable");
+        }
+        catch (IOException)
+        {
+            return Error("scope_state_unavailable");
+        }
+    }
+
+    private ServiceReply HandleWorkspaceFolderGrantReject(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (HasWorkspaceFolderGrantExtras(request, allowPreviewId: true) ||
+            request.PreviewId is null)
+        {
+            return Error("invalid_grant_request");
+        }
+
+        try
+        {
+            _workspaceFolderGrants.Reject(context, request.PreviewId);
+            return new ServiceReply(
+                CurrentProtocolVersion,
+                "workspace_folder_grant_rejected",
+                "owner",
+                null);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (WorkspaceFolderGrantRefusalException ex)
+        {
+            return Error(ex.Code);
+        }
+    }
+
 
     private ServiceReply HandleWorkspaceFolderGrantIssue(
         AuthenticatedContext context,

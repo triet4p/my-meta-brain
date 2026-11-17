@@ -378,6 +378,89 @@ public sealed class WorkspaceFolderGrantAuthority
             return StorePreviewLocked(state, selection, operationSnapshot, expiresAtUtc, egress);
         }
     }
+    public WorkspaceFolderGrantPreview Narrow(
+        AuthenticatedContext actor,
+        string? previewId,
+        IReadOnlyList<string>? additionalExcludedFolderIds,
+        IWorkspaceFolderGrantPersistence persistence)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(persistence);
+        EnsureOwner(actor);
+        if (!Guid.TryParseExact(previewId, "N", out _))
+        {
+            throw new WorkspaceFolderGrantRefusalException("scope_preview_unavailable");
+        }
+
+        var observed = persistence.ReadWorkspaceFolderGrantSnapshot();
+        var state = OwnerScopeGrantAuthority.ValidateAndMigrateState(observed.State);
+        lock (_gate)
+        {
+            if (!_previews.TryGetValue(previewId!, out var pending) ||
+                pending.ExpiresAtUtc <= DateTimeOffset.UtcNow)
+            {
+                _previews.Remove(previewId!);
+                throw new WorkspaceFolderGrantRefusalException("scope_preview_unavailable");
+            }
+
+            var preview = pending.Value;
+            if (state.PolicyGeneration != preview.PolicyGeneration ||
+                state.WorkspaceScopeGeneration != preview.WorkspaceScopeGeneration ||
+                state.UnlockEpoch != preview.UnlockEpoch ||
+                observed.Workspace is not { } workspace ||
+                workspace.Revision != preview.TreeRevision ||
+                !string.Equals(workspace.WorkspaceId, preview.WorkspaceId, StringComparison.Ordinal))
+            {
+                _previews.Remove(previewId!);
+                throw new WorkspaceFolderGrantRefusalException("request_stale");
+            }
+
+            var additions = additionalExcludedFolderIds ?? Array.Empty<string>();
+            if (additions.Count == 0 ||
+                additions.Any(id => preview.ExcludedFolderIds.Contains(id, StringComparer.Ordinal)))
+            {
+                throw new WorkspaceFolderGrantRefusalException("invalid_scope_narrowing");
+            }
+
+            var excludedFolderIds = preview.ExcludedFolderIds.Concat(additions).ToArray();
+            var narrowed = ResolveSelection(workspace, preview.FolderId, excludedFolderIds);
+            if (!IsStrictlyNarrower(preview, narrowed))
+            {
+                throw new WorkspaceFolderGrantRefusalException("invalid_scope_narrowing");
+            }
+
+            _previews.Remove(previewId!);
+            return StorePreviewLocked(
+                state,
+                narrowed,
+                preview.Operations,
+                preview.ExpiresAtUtc,
+                preview.Egress);
+        }
+    }
+
+    public void Reject(AuthenticatedContext actor, string? previewId)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        EnsureOwner(actor);
+        if (!Guid.TryParseExact(previewId, "N", out _))
+        {
+            throw new WorkspaceFolderGrantRefusalException("scope_preview_unavailable");
+        }
+
+        lock (_gate)
+        {
+            if (!_previews.TryGetValue(previewId!, out var pending) ||
+                pending.ExpiresAtUtc <= DateTimeOffset.UtcNow)
+            {
+                _previews.Remove(previewId!);
+                throw new WorkspaceFolderGrantRefusalException("scope_preview_unavailable");
+            }
+
+            _previews.Remove(previewId!);
+        }
+    }
+
 
     public OwnerScopeGrantIssue Issue(
         AuthenticatedContext actor,
@@ -758,6 +841,64 @@ public sealed class WorkspaceFolderGrantAuthority
         preview.Members.SequenceEqual(selection.Members) &&
         preview.ExcludedFolderCount == selection.ExcludedFolderCount &&
         preview.ExcludedFileCount == selection.ExcludedFileCount;
+
+    private static bool IsStrictlyNarrower(WorkspaceFolderGrantPreview original, Selection narrowed) =>
+        string.Equals(original.WorkspaceId, narrowed.WorkspaceId, StringComparison.Ordinal) &&
+        string.Equals(original.FolderId, narrowed.FolderId, StringComparison.Ordinal) &&
+        original.TreeRevision == narrowed.TreeRevision &&
+        narrowed.FolderIds.Length <= original.FolderIds.Length &&
+        IsSortedSubset(original.FolderIds, narrowed.FolderIds) &&
+        narrowed.Members.Length <= original.Members.Length &&
+        IsMemberSubset(original.Members, narrowed.Members) &&
+        narrowed.ExcludedFolderIds.Length > original.ExcludedFolderIds.Length &&
+        IsSortedSubset(narrowed.ExcludedFolderIds, original.ExcludedFolderIds);
+
+    private static bool IsSortedSubset(string[] superset, string[] subset)
+    {
+        var supersetIndex = 0;
+        foreach (var value in subset)
+        {
+            while (supersetIndex < superset.Length &&
+                   string.CompareOrdinal(superset[supersetIndex], value) < 0)
+            {
+                supersetIndex++;
+            }
+
+            if (supersetIndex == superset.Length ||
+                !string.Equals(superset[supersetIndex], value, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            supersetIndex++;
+        }
+
+        return true;
+    }
+
+    private static bool IsMemberSubset(
+        WorkspaceFolderScopeMember[] superset,
+        WorkspaceFolderScopeMember[] subset)
+    {
+        var supersetIndex = 0;
+        foreach (var member in subset)
+        {
+            while (supersetIndex < superset.Length &&
+                   string.CompareOrdinal(superset[supersetIndex].FileId, member.FileId) < 0)
+            {
+                supersetIndex++;
+            }
+
+            if (supersetIndex == superset.Length || superset[supersetIndex] != member)
+            {
+                return false;
+            }
+
+            supersetIndex++;
+        }
+
+        return true;
+    }
 
     private static WorkspaceFolderGrantSummary Summarize(
         PersistedScopeGrant grant,
