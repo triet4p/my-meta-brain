@@ -89,7 +89,8 @@ internal sealed class RecordMigrationService
                 var existingEntry = entries.First(entry =>
                     string.Equals(entry.LegacyId, candidate.LegacyId, StringComparison.Ordinal));
                 var prior = operation.ReadWorkspaceFile(existingEntry.NodeId, existingEntry.ContentRevision);
-                if (prior.Length != candidate.Length || !string.Equals(prior.Sha256, candidate.Sha256, StringComparison.Ordinal))
+                if (prior.Length != candidate.Length ||
+                    !string.Equals(prior.Sha256, candidate.Sha256, StringComparison.Ordinal))
                 {
                     throw new MigrationRefusalException(MigrationCodes.InconsistentState,
                         "A previously migrated original no longer matches its encrypted map; nothing was transferred.");
@@ -98,76 +99,9 @@ internal sealed class RecordMigrationService
                 continue;
             }
 
-            byte[]? envelope = null;
-            SourceSnapshot? snapshot = null;
-            try
-            {
-                envelope = operation.ReadContent(candidate.LegacyId, candidate.Revision);
-                snapshot = SourceSnapshotCodec.DecodeStored(envelope, candidate.Revision);
-                var contentDigest = Convert.ToHexString(SHA256.HashData(snapshot.Content)).ToLowerInvariant();
-                if (snapshot.Stored.Purged ||
-                    snapshot.Content.LongLength != candidate.Length ||
-                    !string.Equals(contentDigest, candidate.Sha256, StringComparison.Ordinal) ||
-                    !string.Equals(snapshot.Stored.ZoneId, MigrationCodes.ZoneIndependent, StringComparison.Ordinal))
-                {
-                    throw new MigrationRefusalException(MigrationCodes.InconsistentState,
-                        "A source snapshot changed after the preview; nothing was transferred.");
-                }
-
-                if (snapshot.Content.LongLength > MigrationState.MaximumContentBytes)
-                {
-                    throw new MigrationRefusalException(MigrationCodes.OversizedSnapshot,
-                        "A source snapshot exceeds the per-act cap; nothing was transferred.");
-                }
-
-                var folderId = EnsureMigratedFolder(operation, tree);
-                tree = operation.ReadWorkspaceTree();
-                WorkspaceMutationInfo mutation;
-                var existingNode = FindMigratedNode(tree, candidate.LegacyId);
-                if (existingNode is not null)
-                {
-                    // A crash between node creation and map write left a node
-                    // at the deterministic destination. Adopt it only when its
-                    // bytes match exactly; never create a duplicate or a
-                    // second truth.
-                    var adopted = operation.ReadWorkspaceFile(existingNode.Id, existingNode.ContentRevision);
-                    if (adopted.Length != candidate.Length ||
-                        !string.Equals(adopted.Sha256, candidate.Sha256, StringComparison.Ordinal))
-                    {
-                        throw new MigrationRefusalException(MigrationCodes.DestinationConflict,
-                            "The destination already holds different bytes; nothing was transferred.");
-                    }
-
-                    mutation = new WorkspaceMutationInfo(
-                        existingNode.Id, tree?.Revision ?? 0, existingNode.Revision, existingNode.ContentRevision,
-                        adopted.Length, adopted.Sha256);
-                }
-                else
-                {
-                    mutation = operation.CreateWorkspaceFile(
-                        folderId, candidate.LegacyId, snapshot.Content, tree?.Revision ?? 0);
-                }
-
-                var entry = new MigrationMapEntry(
-                    candidate.Family, candidate.LegacyId, candidate.Revision,
-                    mutation.NodeId, mutation.ContentRevision, candidate.Length, candidate.Sha256,
-                    candidate.ZoneId, candidate.SourceId ?? string.Empty, candidate.LegacyId);
-                entries.Add(entry);
-                migrated.Add(entry);
-                tree = operation.ReadWorkspaceTree();
-            }
-            finally
-            {
-                if (snapshot?.Content is { Length: > 0 } snapshotContent)
-                {
-                    CryptographicOperations.ZeroMemory(snapshotContent);
-                }
-
-                if (envelope is { Length: > 0 } envelopeContent)
-                {
-                    CryptographicOperations.ZeroMemory(envelopeContent);
-                }
-            }
+            var (entry, _) = TransferCandidate(operation, candidate, ref tree);
+            entries.Add(entry);
+            migrated.Add(entry);
         }
 
         var updatedMap = new MigrationMapRecord(MigrationMapRecord.CurrentSchemaVersion, vaultId, entries.ToArray());
@@ -219,6 +153,206 @@ internal sealed class RecordMigrationService
         }
     }
 
+    /// <summary>
+    /// S18-T3 crash-safe resume. The preview-bound state is re-derived first;
+    /// then every persisted transition is reconciled. A node written before an
+    /// interruption is adopted into the encrypted reverse map only after its
+    /// exact bytes match the legacy original, an occupied destination holding
+    /// different bytes is refused and left untouched, and a mapped original
+    /// whose node or retained bytes changed is refused rather than repaired.
+    /// The pass is idempotent: a completed migration only re-verifies and
+    /// writes nothing. No grant, catalog entry, token or session is touched.
+    /// </summary>
+    public MigrationResumeInfo Resume(
+        IVaultOperation operation,
+        string vaultId,
+        long manifestRevision,
+        string token)
+    {
+        var resources = operation.ListResources();
+        var tree = operation.ReadWorkspaceTree();
+        var treeRevision = tree?.Revision ?? 0;
+        var (map, mapRevision) = LoadMap(operation, resources, vaultId);
+        var migratedIds = map.Entries.Select(entry => entry.LegacyId).ToHashSet(StringComparer.Ordinal);
+        var candidates = BuildCandidates(operation, tree, migratedIds);
+        var currentToken = MigrationState.ComputeToken(vaultId, manifestRevision, treeRevision, resources, candidates);
+        if (!CryptographicOperations.FixedTimeEquals(
+                Convert.FromHexString(currentToken), Convert.FromHexString(NormalizeToken(token))))
+        {
+            throw new MigrationRefusalException(MigrationCodes.StalePreview,
+                "The vault or workspace changed since the preview; nothing was resumed.");
+        }
+
+        if (candidates.Any(candidate =>
+                string.Equals(candidate.Reason, MigrationCodes.DestinationConflict, StringComparison.Ordinal) &&
+                !migratedIds.Contains(candidate.LegacyId)))
+        {
+            throw new MigrationRefusalException(MigrationCodes.DestinationConflict,
+                "A migration destination is occupied by different bytes; it was not adopted or overwritten.");
+        }
+
+        var entries = new List<MigrationMapEntry>(map.Entries);
+        var verified = new List<MigrationMapEntry>();
+        var adopted = new List<MigrationMapEntry>();
+        var created = new List<MigrationMapEntry>();
+
+        foreach (var entry in map.Entries.OrderBy(entry => entry.LegacyId, StringComparer.Ordinal))
+        {
+            // Identity lookup, not name lookup: an owner rename or move after
+            // migration keeps the stable node id and must not break the map.
+            var node = tree?.Nodes.FirstOrDefault(candidate =>
+                string.Equals(candidate.Id, entry.NodeId, StringComparison.Ordinal));
+            if (node is null || node.Kind != WorkspaceNodeKind.File ||
+                node.ContentRevision != entry.ContentRevision)
+            {
+                throw new MigrationRefusalException(MigrationCodes.InconsistentState,
+                    "A mapped original no longer has its recorded workspace node; nothing was resumed.");
+            }
+
+            var retained = operation.ReadWorkspaceFile(node.Id, entry.ContentRevision);
+            if (retained.Length != entry.Length ||
+                !string.Equals(retained.Sha256, entry.Sha256, StringComparison.Ordinal))
+            {
+                throw new MigrationRefusalException(MigrationCodes.InconsistentState,
+                    "A mapped original no longer matches its exact retained bytes; nothing was resumed.");
+            }
+
+            verified.Add(entry);
+        }
+
+        foreach (var candidate in candidates
+                     .Where(candidate =>
+                         string.Equals(candidate.Reason, MigrationCodes.Resumable, StringComparison.Ordinal) ||
+                         string.Equals(candidate.Reason, MigrationCodes.Eligible, StringComparison.Ordinal))
+                     .OrderBy(candidate => candidate.LegacyId, StringComparer.Ordinal))
+        {
+            var (entry, adoptedNode) = TransferCandidate(operation, candidate, ref tree);
+            entries.Add(entry);
+            (adoptedNode ? adopted : created).Add(entry);
+        }
+
+        var unmigrated = candidates
+            .Where(candidate => !string.Equals(candidate.Reason, MigrationCodes.Eligible, StringComparison.Ordinal) &&
+                                !string.Equals(candidate.Reason, MigrationCodes.Resumable, StringComparison.Ordinal) &&
+                                !string.Equals(candidate.Reason, MigrationCodes.AlreadyMigrated, StringComparison.Ordinal))
+            .ToArray();
+
+        var newMapRevision = mapRevision;
+        if (adopted.Count > 0 || created.Count > 0)
+        {
+            var updatedMap = new MigrationMapRecord(MigrationMapRecord.CurrentSchemaVersion, vaultId, entries.ToArray());
+            var mapContent = updatedMap.Encode();
+            try
+            {
+                newMapRevision = operation.WriteContent(
+                    MigrationState.MapResourceId, MigrationCodes.ZoneIndependent, mapContent, mapRevision);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(mapContent);
+            }
+        }
+
+        return new MigrationResumeInfo(
+            vaultId, tree?.Revision ?? 0, currentToken, adopted.ToArray(), created.ToArray(),
+            verified.ToArray(), unmigrated, MigrationState.MapResourceId, newMapRevision);
+    }
+
+    /// <summary>
+    /// One durable transfer. Exact legacy bytes are decoded and checked in the
+    /// unlocked process; the deterministic destination is created or adopted
+    /// only when its bytes match exactly. An unrelated occupied destination is
+    /// refused, never adopted or overwritten, so it cannot become a writable
+    /// second truth. Buffers are zeroized on every path.
+    /// </summary>
+    private static (MigrationMapEntry Entry, bool Adopted) TransferCandidate(
+        IVaultOperation operation,
+        MigrationCandidate candidate,
+        ref WorkspaceSnapshot? tree)
+    {
+        byte[]? envelope = null;
+        SourceSnapshot? snapshot = null;
+        WorkspaceFileContent? adoptedContent = null;
+        try
+        {
+            envelope = operation.ReadContent(candidate.LegacyId, candidate.Revision);
+            snapshot = SourceSnapshotCodec.DecodeStored(envelope, candidate.Revision);
+            var contentDigest = Convert.ToHexString(SHA256.HashData(snapshot.Content)).ToLowerInvariant();
+            if (snapshot.Stored.Purged ||
+                snapshot.Content.LongLength != candidate.Length ||
+                !string.Equals(contentDigest, candidate.Sha256, StringComparison.Ordinal) ||
+                !string.Equals(snapshot.Stored.ZoneId, MigrationCodes.ZoneIndependent, StringComparison.Ordinal))
+            {
+                throw new MigrationRefusalException(MigrationCodes.InconsistentState,
+                    "A source snapshot changed after the preview; nothing was transferred.");
+            }
+
+            if (snapshot.Content.LongLength > MigrationState.MaximumContentBytes)
+            {
+                throw new MigrationRefusalException(MigrationCodes.OversizedSnapshot,
+                    "A source snapshot exceeds the per-act cap; nothing was transferred.");
+            }
+
+            var folderId = EnsureMigratedFolder(operation, tree);
+            tree = operation.ReadWorkspaceTree();
+            WorkspaceMutationInfo mutation;
+            var existingNode = FindMigratedNode(tree, candidate.LegacyId);
+            if (existingNode is not null)
+            {
+                if (existingNode.Kind != WorkspaceNodeKind.File)
+                {
+                    throw new MigrationRefusalException(MigrationCodes.DestinationConflict,
+                        "The migration destination is occupied by a different kind of node; nothing was transferred.");
+                }
+
+                // A crash between node creation and map write left a node at
+                // the deterministic destination. Bind it only when its bytes
+                // match the legacy original exactly; never create a duplicate
+                // or adopt an unrelated occupied destination.
+                adoptedContent = operation.ReadWorkspaceFile(existingNode.Id, existingNode.ContentRevision);
+                if (adoptedContent.Length != candidate.Length ||
+                    !string.Equals(adoptedContent.Sha256, candidate.Sha256, StringComparison.Ordinal))
+                {
+                    throw new MigrationRefusalException(MigrationCodes.DestinationConflict,
+                        "The destination already holds different bytes; nothing was transferred.");
+                }
+
+                mutation = new WorkspaceMutationInfo(
+                    existingNode.Id, tree?.Revision ?? 0, existingNode.Revision, existingNode.ContentRevision,
+                    adoptedContent.Length, adoptedContent.Sha256);
+            }
+            else
+            {
+                mutation = operation.CreateWorkspaceFile(
+                    folderId, candidate.LegacyId, snapshot.Content, tree?.Revision ?? 0);
+            }
+
+            var entry = new MigrationMapEntry(
+                candidate.Family, candidate.LegacyId, candidate.Revision,
+                mutation.NodeId, mutation.ContentRevision, candidate.Length, candidate.Sha256,
+                candidate.ZoneId, candidate.SourceId ?? string.Empty, candidate.LegacyId);
+            tree = operation.ReadWorkspaceTree();
+            return (entry, existingNode is not null);
+        }
+        finally
+        {
+            if (adoptedContent?.Content is { Length: > 0 } adoptedBytes)
+            {
+                CryptographicOperations.ZeroMemory(adoptedBytes);
+            }
+
+            if (snapshot?.Content is { Length: > 0 } snapshotBytes)
+            {
+                CryptographicOperations.ZeroMemory(snapshotBytes);
+            }
+
+            if (envelope is { Length: > 0 } envelopeBytes)
+            {
+                CryptographicOperations.ZeroMemory(envelopeBytes);
+            }
+        }
+    }
+
     private static MigrationCandidate[] BuildCandidates(
         IVaultOperation operation,
         WorkspaceSnapshot? tree,
@@ -249,6 +383,7 @@ internal sealed class RecordMigrationService
                 snapshot = SourceSnapshotCodec.DecodeStored(envelope, resource.Revision);
                 var stored = snapshot.Stored;
                 var destination = DestinationPathOf(resource.ResourceId);
+                var contentDigest = Convert.ToHexString(SHA256.HashData(snapshot.Content)).ToLowerInvariant();
                 string reason;
                 if (stored.Purged)
                 {
@@ -263,9 +398,8 @@ internal sealed class RecordMigrationService
                 {
                     reason = migratedIds.Contains(resource.ResourceId)
                         ? MigrationCodes.AlreadyMigrated
-                        : FindMigratedNode(tree, resource.ResourceId) is not null
-                            ? MigrationCodes.DestinationConflict
-                            : MigrationCodes.Eligible;
+                        : DestinationState(operation, tree, resource.ResourceId,
+                            snapshot.Content.LongLength, contentDigest);
                 }
                 else if (string.IsNullOrEmpty(stored.ZoneId) ||
                          string.Equals(stored.ZoneId, "unknown", StringComparison.Ordinal))
@@ -280,8 +414,6 @@ internal sealed class RecordMigrationService
                     // declassification is offered, bundled or inferred here.
                     reason = MigrationCodes.ZoneProtectionNotEnforced;
                 }
-
-                var contentDigest = Convert.ToHexString(SHA256.HashData(snapshot.Content)).ToLowerInvariant();
                 candidates.Add(new MigrationCandidate(
                     "source-snapshot", resource.ResourceId, resource.Revision, snapshot.Content.LongLength,
                     contentDigest, stored.ZoneId, destination,
@@ -310,6 +442,55 @@ internal sealed class RecordMigrationService
         }
 
         return candidates.ToArray();
+    }
+
+    /// <summary>
+    /// Distinguishes an untouched destination from a node left by an
+    /// interrupted transfer and from an unrelated occupied destination. Only
+    /// an exact byte match with the legacy original is resumable; different
+    /// bytes or a non-file node are reported as a conflict and are never
+    /// adopted, overwritten or silently dropped.
+    /// </summary>
+    private static string DestinationState(
+        IVaultOperation operation,
+        WorkspaceSnapshot? tree,
+        string legacyId,
+        long length,
+        string sha256)
+    {
+        var node = FindMigratedNode(tree, legacyId);
+        if (node is null)
+        {
+            return MigrationCodes.Eligible;
+        }
+
+        if (node.Kind != WorkspaceNodeKind.File)
+        {
+            return MigrationCodes.DestinationConflict;
+        }
+
+        byte[]? bytes = null;
+        try
+        {
+            bytes = operation.ReadWorkspaceFile(node.Id, node.ContentRevision).Content;
+            return bytes.LongLength == length &&
+                   string.Equals(
+                       Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
+                       sha256, StringComparison.Ordinal)
+                ? MigrationCodes.Resumable
+                : MigrationCodes.DestinationConflict;
+        }
+        catch (WorkspaceRefusalException)
+        {
+            return MigrationCodes.DestinationConflict;
+        }
+        finally
+        {
+            if (bytes is { Length: > 0 })
+            {
+                CryptographicOperations.ZeroMemory(bytes);
+            }
+        }
     }
 
     private static string EnsureMigratedFolder(IVaultOperation operation, WorkspaceSnapshot? tree)

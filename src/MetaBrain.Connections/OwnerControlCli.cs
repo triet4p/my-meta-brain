@@ -174,6 +174,7 @@ internal static class OwnerControlCli
                 "migration-preview" => await MigrationPreviewAsync(options).ConfigureAwait(false),
                 "migration-execute" => await MigrationExecuteAsync(options).ConfigureAwait(false),
                 "migration-report" => await MigrationReportAsync(options).ConfigureAwait(false),
+                "migration-resume" => await MigrationResumeAsync(options).ConfigureAwait(false),
                 "backup" => await BackupAsync(options).ConfigureAwait(false),
                 "restore" => await RestoreAsync(options, useRecoveryCode: false).ConfigureAwait(false),
                 "restore-with-recovery-code" => await RestoreAsync(options, useRecoveryCode: true).ConfigureAwait(false),
@@ -2669,6 +2670,51 @@ internal static class OwnerControlCli
 
         Console.WriteLine(
             $"MIGRATION REPORT vault={DisplayText(report, "vaultId")} mapRevision={DisplayText(report, "mapRevision")}");
+        return 0;
+    }
+
+    /// <summary>
+    /// S18-T3 owner-only crash-safe resume. A fresh preview token and the
+    /// typed RESUME confirmation are required; the service reconciles every
+    /// persisted transfer boundary, adopts only exact-byte destinations and
+    /// refuses an unrelated occupied destination without writing.
+    /// </summary>
+    private static async Task<int> MigrationResumeAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--preview", "--confirm");
+        var controlPipe = ControlPipe(options);
+        var previewToken = options.Required("--preview");
+        var confirmation = options.Required("--confirm");
+        if (!string.Equals(confirmation, "RESUME", StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine(
+                "ERROR migration_confirmation_required: resume needs the fresh preview token and the typed RESUME confirmation; nothing was resumed.");
+            return 4;
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerMigrationResumeOperation,
+                MigrationToken: previewToken,
+                MigrationConfirmation: confirmation)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "migration_resumed") ||
+            !TryWorkspaceObject(result.Reply, "migrationResume", out var resumed))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        Console.WriteLine(
+            $"MIGRATION RESUMED vault={DisplayText(resumed, "vaultId")} token={DisplayText(resumed, "token")} " +
+            $"adopted={resumed.GetProperty("adopted").GetArrayLength().ToString(CultureInfo.InvariantCulture)} " +
+            $"created={resumed.GetProperty("created").GetArrayLength().ToString(CultureInfo.InvariantCulture)} " +
+            $"verified={resumed.GetProperty("verified").GetArrayLength().ToString(CultureInfo.InvariantCulture)} " +
+            $"unmigrated={resumed.GetProperty("unmigrated").GetArrayLength().ToString(CultureInfo.InvariantCulture)} " +
+            $"map={JsonSerializer.Serialize(DisplayText(resumed, "mapResourceId"))} " +
+            $"mapRevision={DisplayText(resumed, "mapRevision")}");
+        Console.WriteLine(
+            "MIGRATION RESUME DISCLOSURE an exact-byte destination left by an interrupted transfer is bound to the encrypted reverse map; a destination with different bytes is refused and left untouched. A complete migration is only re-verified and writes nothing. No grant, catalog entry, token or session is transferred. Rollback is the separate whole-vault restore of a verified encrypted backup to a new directory; post-backup writes and exports are excluded, there is no per-record undo or in-place downgrade, and older binaries are not promised to read a post-1.8 vault.");
         return 0;
     }
     /// <summary>
@@ -6168,6 +6214,8 @@ internal static class OwnerControlCli
                 "RESTORE PURGE LEDGER re-applied: identities this installation already purged were withheld from the " +
                 "restored records, workspace and catalog; the restored vault keeps the merged encrypted purge ledger.");
         }
+        Console.WriteLine(
+            "RESTORE DISCLOSURE rollback is a whole-vault restore of one verified encrypted backup to a separate new directory, not a per-record undo or an in-place downgrade. Writes, exports and revisions made after that backup are not in it and are excluded; confirm them separately before switching the data root. No live grant, session or redeemable token is restored, purged identities stay purged, and older 1.0/1.1 binaries are not promised to read a post-1.8 vault.");
 
         return 0;
     }
@@ -11887,6 +11935,7 @@ internal static class OwnerControlCli
         "migration-preview" => "owner migration-preview --control-pipe <pipe>: write-free owner preview of every legacy record with exact digest/length/zone, family, destination, eligibility and reason; discloses zone-independent destination semantics, ineligible records and the required verified encrypted pre-migration backup, and returns a binding token. Offers no declassification and mints no grant.",
         "migration-execute" => "owner migration-execute --control-pipe <pipe> --preview <token> --backup-file <verified-encrypted-backup> --confirm MIGRATE: transfer exactly the freshly previewed eligible originals into the encrypted workspace with an encrypted legacy-id reverse map. Requires the fresh token, typed MIGRATE and a consistent verified pre-migration backup; stale state, missing confirmation/backup, ineligible records, wrong key/tamper or over-cap bytes refuse with nothing written. Touches no grant, catalog, session or token.",
         "migration-report" => "owner migration-report --control-pipe <pipe>: read-only owner view of the encrypted legacy-id to workspace-id reverse map (node id, content revision, length and digest of each migrated original).",
+        "migration-resume" => "owner migration-resume --control-pipe <pipe> --preview <token> --confirm RESUME: crash-safe resume after an interrupted migration. Re-derives the previewed state, binds an exact-byte destination that was already written into the encrypted reverse map, creates any remaining eligible originals and re-verifies completed entries without a write. An occupied destination with different bytes, a stale preview or a wrong confirmation refuses with nothing adopted or overwritten. No grant, token or session is touched; rollback remains the separate whole-vault restore.",
         "upgrade" => "owner upgrade --control-pipe <pipe>: raise old content schemas while locked (secure passphrase prompt; keeps an encrypted rollback point; leaves the vault locked).",
         "upgrade-with-recovery-code" => "owner upgrade-with-recovery-code --control-pipe <pipe>: same upgrade with the recovery key.",
         "rollback" => "owner rollback --control-pipe <pipe> [--discard true]: restore (or discard) the encrypted rollback point while locked.",

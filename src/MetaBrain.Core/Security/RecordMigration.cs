@@ -23,6 +23,7 @@ public static class MigrationCodes
     public const string UnknownOrCorrupt = "unknown_or_corrupt";
     public const string DestinationConflict = "destination_conflict";
     public const string AlreadyMigrated = "already_migrated";
+    public const string Resumable = "resumable";
     public const string NoEligibleRecords = "no_eligible_records";
     public const string Confirmation = "confirmation_required";
     public const string BackupRequired = "backup_required";
@@ -130,6 +131,24 @@ public sealed record MigrationExecutionInfo(
     long TreeRevision,
     string Token,
     MigrationMapEntry[] Migrated,
+    MigrationCandidate[] Unmigrated,
+    string MapResourceId,
+    long MapRevision);
+
+/// <summary>
+/// The auditable result of one crash-safe resume. Adopted entries were already
+/// written to the destination before the interruption and are only bound into
+/// the encrypted reverse map; created entries were written in this pass;
+/// verified entries were already complete and were re-checked without a write.
+/// Nothing here mints authority or changes a legacy original.
+/// </summary>
+public sealed record MigrationResumeInfo(
+    string VaultId,
+    long TreeRevision,
+    string Token,
+    MigrationMapEntry[] Adopted,
+    MigrationMapEntry[] Created,
+    MigrationMapEntry[] Verified,
     MigrationCandidate[] Unmigrated,
     string MapResourceId,
     long MapRevision);

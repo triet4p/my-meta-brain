@@ -1452,8 +1452,8 @@ public sealed record ServiceReply(
     WorkspaceAgentRecallReadResult? WorkspaceAgentRecall = null,
     MigrationPreviewInfo? MigrationPreview = null,
     MigrationExecutionInfo? MigrationExecution = null,
-    MigrationReportInfo? MigrationReport = null);
-
+    MigrationReportInfo? MigrationReport = null,
+    MigrationResumeInfo? MigrationResume = null);
 public sealed class ServiceRequestHandler
 {
     public const int CurrentProtocolVersion = 2;
@@ -1492,6 +1492,7 @@ public sealed class ServiceRequestHandler
     public const string OwnerMigrationPreviewOperation = "owner.migration.preview";
     public const string OwnerMigrationExecuteOperation = "owner.migration.execute";
     public const string OwnerMigrationReportOperation = "owner.migration.report";
+    public const string OwnerMigrationResumeOperation = "owner.migration.resume";
     public const string OwnerCognitiveAnnotationCreateOperation = "owner.cognitive.annotation.create";
     public const string OwnerCognitiveAnnotationListOperation = "owner.cognitive.annotation.list";
     public const string OwnerCognitiveAnnotationReadOperation = "owner.cognitive.annotation.read";
@@ -3086,6 +3087,11 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, OwnerMigrationExecuteOperation, StringComparison.Ordinal))
         {
             return HandleMigrationExecute(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerMigrationResumeOperation, StringComparison.Ordinal))
+        {
+            return HandleMigrationResume(context, request, operation);
         }
 
         if (string.Equals(request.Operation, OwnerMigrationReportOperation, StringComparison.Ordinal))
@@ -15105,6 +15111,67 @@ public sealed class ServiceRequestHandler
         catch (MigrationRefusalException refusal)
         {
             return Refusal(refusal.Code, refusal.Message);
+        }
+        catch (ManagedResourceUnavailableException)
+        {
+            return Error("vault_locked");
+        }
+    }
+
+    /// <summary>
+    /// S18-T3 owner-only crash-safe resume. The typed RESUME confirmation and
+    /// a still-fresh preview token are required; the service re-derives the
+    /// interrupted state, adopts only exact-byte destinations, refuses an
+    /// unrelated occupied destination and writes nothing when already complete.
+    /// A backup is not required here: rollback is the separate whole-vault
+    /// restore, which deliberately excludes post-backup writes.
+    /// </summary>
+    private ServiceReply HandleMigrationResume(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (string.IsNullOrEmpty(request.MigrationToken))
+        {
+            return Error("invalid_request");
+        }
+
+        if (!string.Equals(request.MigrationConfirmation, "RESUME", StringComparison.Ordinal))
+        {
+            return Refusal(MigrationCodes.Confirmation,
+                "Resume needs the typed RESUME confirmation and the fresh preview token; nothing was resumed.");
+        }
+
+        try
+        {
+            var vaultId = _vault.CurrentVaultId;
+            var manifestRevision = _vault.CurrentManifestRevision;
+            var resumed = _migrations.Resume(operation, vaultId, manifestRevision, request.MigrationToken);
+            return new ServiceReply(
+                CurrentProtocolVersion, "migration_resumed", "owner", null, MigrationResume: resumed);
+        }
+        catch (MigrationRefusalException refusal)
+        {
+            return Refusal(refusal.Code, refusal.Message);
+        }
+        catch (FormatException)
+        {
+            return Refusal(MigrationCodes.StalePreview,
+                "The preview token is not valid for the current state; nothing was resumed.");
+        }
+        catch (WorkspaceRefusalException refusal)
+        {
+            return Refusal(refusal.Code, "The migration destination refused the act; nothing further was resumed.");
         }
         catch (ManagedResourceUnavailableException)
         {
