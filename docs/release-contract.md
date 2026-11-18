@@ -1,16 +1,13 @@
 # Meta Brain — release and compatibility contract
 
-## Product and support matrix for 1.7.0 (S17-T6 candidate)
+## Product and support matrix for 1.7.0 (published `v1.7.0`)
 
-**Candidate state:** the exact 1.7.0 packages are assembled and verified locally under candidate
-`20af9d477aba`, but there is no public 1.7.0 download, Release, tag, site deployment, review PASS
-or checkpoint. 1.6.0 remains the latest published release; do not infer 1.7.0 availability from
-this contract. See `docs/release-1.7.0.md` for the exact identities and hashes.
+**Published state:** the exact reviewed 1.7.0 packages under candidate `20af9d477aba` were checkpointed at `fd8ad2f7d150f3f0cfd893ec51ad76158b0f860e` and published on 2026-11-18 as [GitHub Release `v1.7.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.7.0) (id `449509004`, not draft/prerelease, Latest) with five byte-exact assets; the [public site](https://triet4p.github.io/my-meta-brain/) is deployed at `gh-pages ebf5f9f…`. 1.7.0 is the latest published CLI + MCP release. Public release-boundary re-review is pending after `S17-PUBLIC-C1` R1 FAIL; a corrected site-only status-text delta is prepared but not yet deployed, so Sprint 17 Complete is not claimed. See `docs/release-1.7.0.md` and `artifacts/sprint-17/publication/S17-PUBLISH-P1.md` for exact identities, hashes and links.
 
-| Product | Planned version / asset | Entry and lifecycle |
+| Product | Published version / asset | Entry and lifecycle |
 | --- | --- | --- |
-| CLI | `1.7.0`; candidate `MetaBrain-CLI-1.7.0-win-x64-55d35ec31a8c-treec47629d2bcde-20af9d477aba.exe`; eventual public name `MetaBrain-CLI-1.7.0.exe` | Dedicated Windows x64 setup EXE for `cli/MetaBrain.Cli.exe` and the shared runtime. It registers only the CLI component. Candidate identity, size and SHA-256 are verified; not published. |
-| MCP Server | `1.7.0`; candidate `MetaBrain-MCP-1.7.0-win-x64-55d35ec31a8c-treec47629d2bcde-20af9d477aba.zip`; eventual public name `MetaBrain-MCP-1.7.0.zip` | Standalone self-contained ZIP with `mcp/MetaBrain.Mcp.exe`, shared `service/`, package manifest, project license, release notes, third-party notices and dependency license texts. Stdio/JSON-RPC; exactly one of `--data-root <owner data root>` or `--config <service-settings.json>`. Candidate identity, size and SHA-256 are verified; not published. |
+| CLI | `1.7.0`; public download [MetaBrain-CLI-1.7.0.exe](https://github.com/triet4p/my-meta-brain/releases/download/v1.7.0/MetaBrain-CLI-1.7.0.exe); candidate filename stays provenance-bound in the manifest | Dedicated Windows x64 setup EXE for `cli/MetaBrain.Cli.exe` and the shared runtime. It registers only the CLI component. Candidate identity, size and SHA-256 are verified; published byte-for-byte as `v1.7.0` on 2026-11-18. |
+| MCP Server | `1.7.0`; public download [MetaBrain-MCP-1.7.0.zip](https://github.com/triet4p/my-meta-brain/releases/download/v1.7.0/MetaBrain-MCP-1.7.0.zip); candidate filename stays provenance-bound in the manifest | Standalone self-contained ZIP with `mcp/MetaBrain.Mcp.exe`, shared `service/`, package manifest, project license, release notes, third-party notices and dependency license texts. Stdio/JSON-RPC; exactly one of `--data-root <owner data root>` or `--config <service-settings.json>`. Candidate identity, size and SHA-256 are verified; published byte-for-byte as `v1.7.0` on 2026-11-18. |
 | Document surface | no separate product asset | The existing optional document preview/edit bridge remains in the CLI/shared runtime; no new browser product, owner web console, WPF build or installer is planned. |
 | Owner UI | none in 1.7 | The WPF 1.1.0 product remains frozen and unchanged; no compatibility with the 1.7 runtime/data is claimed. |
 

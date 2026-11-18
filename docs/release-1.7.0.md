@@ -1,6 +1,24 @@
 # Meta Brain 1.7.0 — exact local candidate record
 
-**Status: exact local candidate assembled and verified; NOT independently reviewed, checkpointed, published or deployed.** No review PASS, frozen-snapshot manifest, Bronze checkpoint, public download, Release, tag, external smoke or publication authorization exists for 1.7.0. 1.6.0 remains the latest published release. This is a prepublication record of the verified candidate bytes, not release approval.
+**Status: published release `v1.7.0` (not a prepublication candidate).** The exact reviewed candidate `20af9d477aba` passed independent evidence review `S17-T6-C1` R1, was checkpointed at `fd8ad2f7d150f3f0cfd893ec51ad76158b0f860e`, and was published on 2026-11-18 as [GitHub Release `v1.7.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.7.0) (id `449509004`) with five byte-exact assets and a Pages site. 1.7.0 is the latest published CLI + MCP release. The public `S17-PUBLIC-C1` round 2 review and Sprint 17 Complete remain pending; a corrected site-only status-text delta is prepared but not yet deployed. See [Publication observed](#publication-observed-s17-publish-p1) and `artifacts/sprint-17/publication/S17-PUBLISH-P1.md`.
+
+## Publication observed (S17-PUBLISH-P1)
+
+The reviewed checkpoint was published; the frozen candidate identities and verification below are unchanged.
+
+| Item | Exact public identity / link |
+|---|---|
+| Reviewed source / tag target | `fd8ad2f7d150f3f0cfd893ec51ad76158b0f860e` |
+| Annotated tag | `v1.7.0` → tag object `3ca562288825cc120bc84769008f46ac90faa6a6` → commit `fd8ad2f…`; [tag page](https://github.com/triet4p/my-meta-brain/releases/tag/v1.7.0) |
+| GitHub Release | `v1.7.0`, id `449509004`, published `2026-11-18T04:03:20Z`, not draft/prerelease, Latest; [release API](https://api.github.com/repos/triet4p/my-meta-brain/releases/tags/v1.7.0) |
+| CLI asset | [MetaBrain-CLI-1.7.0.exe](https://github.com/triet4p/my-meta-brain/releases/download/v1.7.0/MetaBrain-CLI-1.7.0.exe) — 234,400,474 bytes, SHA-256 `b3a2c8b8b7d672b9a9638843b1967beea28a2751fcc50b6a8a3a3aff7bf15546` |
+| MCP asset | [MetaBrain-MCP-1.7.0.zip](https://github.com/triet4p/my-meta-brain/releases/download/v1.7.0/MetaBrain-MCP-1.7.0.zip) — 90,115,562 bytes, SHA-256 `853d6364630963f218d4c65ab0b408c083bd7328d4254a925811d5531e2e364d` |
+| Manifest | [candidate-manifest.json](https://github.com/triet4p/my-meta-brain/releases/download/v1.7.0/candidate-manifest.json) — 439,253 bytes, SHA-256 `fbabdad6d950b0f15521708bf6498f2d133b3b01cdeea1a8673a5ec6c55b7e5e` |
+| Checksums | [SHA256SUMS.txt](https://github.com/triet4p/my-meta-brain/releases/download/v1.7.0/SHA256SUMS.txt) — 180 bytes, SHA-256 `ab4d0e539287a6fd15548fd6d1ecc699a582c8f07c6451647232b31a3eadd346` |
+| License | [LICENSE](https://github.com/triet4p/my-meta-brain/releases/download/v1.7.0/LICENSE) — 1,064 bytes, SHA-256 `b623a3c47894f85a2a48029b580e6ee0fec70830401fcb39a2e1567b21322ec9` |
+| Public site | [https://triet4p.github.io/my-meta-brain/](https://triet4p.github.io/my-meta-brain/) — `gh-pages ebf5f9f9de188fbe526ca71b537de4ca7c506d99`, Pages build `built`; corrected status-text delta prepared but not yet deployed |
+
+**Closure pending (not a gate PASS):** `S17-PUBLIC-C1` R1 was FAIL (`advance: false`) for stale prepublication text on the live site; R2 is unconsumed. A site-only correction is prepared at `artifacts/sprint-17/handoffs/S17-PUBLIC-FIX-20261117-A1.md` for separate review and deployment before Complete. No public PASS, future commit or further publication is asserted here. Evidence: `artifacts/sprint-17/publication/S17-PUBLISH-P1.md`; `artifacts/sprint-17/reviews/S17-PUBLIC-C1-R1.md`.
 
 ## Exact candidate identity
 
@@ -51,6 +69,7 @@ The candidate manifest's `compatibility.mcp.testedOhMyPiVersion` is `18.12.6`, w
 
 ## Remaining gates and limits
 
-- Independent evidence review `S17-T6-C1` R1 and the exact-snapshot Bronze checkpoint are pending and Main/reviewer-owned.
+- Observed complete (inherited, not re-run here): evidence review `S17-T6-C1` R1 PASS, exact-snapshot Bronze checkpoint at `fd8ad2f…`, final differential PASS, tag `v1.7.0`, GitHub Release `449509004` and Pages deployment of `ebf5f9f…`.
+- Public release-boundary verification `S17-PUBLIC-C1` R1 = **FAIL** (`advance: false`) for stale prepublication text on the live site; round 2 is unconsumed. Sprint 17 Complete is not claimed. The site-only correction at `artifacts/sprint-17/handoffs/S17-PUBLIC-FIX-20261117-A1.md` is prepared for separate review and deployment.
 - Candidate-level **normal Codex/OMP client proof is absent**. T5 R2 normal-client evidence applies only to unchanged T5 source behavior, not to the 1.7.0 bytes. Fresh T6-scoped owner consent (client scopes, provider execution, turn/cost caps) is required before any model-backed client session. A bounded proposal is in `artifacts/sprint-17/task-6.md`.
-- No provider/model workflow, semantic query, index rebuild, local inference, browser render or public network call was run for T6; no T5 consent was reused. All behavior evidence is synthetic and fixture-specific. No publication, tag, upload, deployment or public smoke was performed.
+- No provider/model workflow, semantic query, index rebuild, local inference, browser render or public network call was run for T6; no T5 consent was reused. All behavior evidence is synthetic and fixture-specific. Publication, tag, asset upload, site deployment and public smoke were performed and observed by `S17-PUBLISH-P1` (recorded above); no gate PASS, future commit or further publication is asserted here.
