@@ -140,6 +140,19 @@ public interface IManagedResourceStore : IManagedResourceReader
 /// </summary>
 public interface IVaultLifecycle
 {
+    /// <summary>
+    /// The stable identity of the unlocked vault. S18-T2 binds a preview and
+    /// its pre-migration backup to this exact vault.
+    /// </summary>
+    string CurrentVaultId { get; }
+
+    /// <summary>
+    /// The current manifest revision of the unlocked vault. S18-T2 binds a
+    /// preview to this exact state and verifies a pre-migration backup against
+    /// it; a changed revision makes the preview stale.
+    /// </summary>
+    long CurrentManifestRevision { get; }
+
     string State { get; }
     /// <summary>
     /// Persistent unlock generation. It changes on each successful unlock,

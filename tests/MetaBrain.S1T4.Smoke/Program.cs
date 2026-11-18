@@ -133,8 +133,8 @@ internal static class Program
                 string.Equals(args[0], "s14-t3", StringComparison.Ordinal) ||
                 string.Equals(args[0], "s14-t4", StringComparison.Ordinal) ||
                 string.Equals(args[0], "s14-t5", StringComparison.Ordinal) ||
-                string.Equals(args[0], "s13-t5", StringComparison.Ordinal) ||
-                string.Equals(args[0], "s15-t1-v2", StringComparison.Ordinal))
+                string.Equals(args[0], "s15-t1-v2", StringComparison.Ordinal) ||
+                string.Equals(args[0], "s18-t2", StringComparison.Ordinal))
             ? args[0]
                 : args.Length == 5 &&
                   string.Equals(args[0], "s8-t5", StringComparison.Ordinal)
@@ -348,6 +348,9 @@ internal static class Program
                     break;
                 case "s14-t5":
                     await OwnerServiceSmoke.RunS14T5CognitiveQueriesAsync(fullPath).ConfigureAwait(false);
+                    break;
+                case "s18-t2":
+                    await OwnerServiceSmoke.RunS18T2MigrationAsync(fullPath).ConfigureAwait(false);
                     break;
                 case "s15-t2":
                     await OwnerServiceSmoke.RunS15T2WorkspacePassageIndexAsync(fullPath, Path.GetFullPath(args[2])).ConfigureAwait(false);

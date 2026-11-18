@@ -244,12 +244,24 @@ public sealed class VaultBackupCorruptedException : Exception
     {
     }
 }
+/// <summary>
+/// S18-T2 the read-only result of verifying a pre-migration backup against the
+/// live vault. It proves the container opens with the live key/format, is not
+/// tampered and captures the exact manifest revision the preview bound. It
+/// carries no record, key, credential or content.
+/// </summary>
+public sealed record VaultBackupVerification(
+    string BackupId,
+    string VaultId,
+    long ManifestRevision,
+    DateTimeOffset CreatedAtUtc,
+    int FormatVersion);
 
 /// <summary>
-/// S8-T2 the owner-facing backup and restore authority. The application layer
-/// calls this through the owner channel; the adapter that implements it owns
-/// the encrypted file format, the key handling and the clean target
-/// directory. There is exactly one implementation, so the owner CLI, the
+/// S18-T2 the owner-facing backup and restore authority over the live vault.
+/// The application layer calls this through the owner channel; the adapter that
+/// implements it owns the encrypted file format, the key handling and the clean
+/// target directory. There is exactly one implementation, so the owner CLI, the
 /// owner console and any later surface all reach the same snapshot rules.
 /// </summary>
 public interface IVaultBackupService
@@ -260,8 +272,8 @@ public interface IVaultBackupService
     /// every record is captured at the exact revision the live manifest held
     /// when it was read, and a record that moved during the capture is read
     /// again at its new revision. Nothing about the live vault is changed by
-    /// a backup, and the backup never carries the data key, a credential, a
-    /// session or a token.
+    /// a backup, and the backup never carries the data key, a credential,
+    /// a session or a token.
     /// </summary>
     VaultBackupSummary CreateBackup(IVaultOperation operation, string destinationPath);
 
@@ -274,4 +286,13 @@ public interface IVaultBackupService
     /// authority: no grant, no session and no redeemable token.
     /// </summary>
     VaultRestoreSummary Restore(string backupPath, string targetDirectory, string credential, bool useRecoveryCode);
+
+    /// <summary>
+    /// Verifies, without writing anything, that a backup container opens with
+    /// the live data key and supported format, is internally consistent and
+    /// captures the exact vault and manifest revision a migration preview
+    /// bound. Wrong key, tamper, truncation, format mismatch or a revision
+    /// mismatch fails closed before any migration write.
+    /// </summary>
+    VaultBackupVerification VerifyPreMigrationBackup(string backupPath, string expectedVaultId, long expectedManifestRevision);
 }

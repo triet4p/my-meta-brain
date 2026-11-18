@@ -345,6 +345,96 @@ internal sealed class VaultBackupService : IVaultBackupService
         }
     }
 
+
+    /// <summary>
+    /// S18-T2 read-only verification of a pre-migration backup. The live data
+    /// key is borrowed only inside this call; the container is decrypted in
+    /// memory, checked for format/key/tamper and compared to the exact vault
+    /// and manifest revision the preview bound. Nothing is written and no key
+    /// leaves the unlocked process.
+    /// </summary>
+    public VaultBackupVerification VerifyPreMigrationBackup(
+        string backupPath,
+        string expectedVaultId,
+        long expectedManifestRevision)
+    {
+        if (string.IsNullOrWhiteSpace(backupPath) || string.IsNullOrWhiteSpace(expectedVaultId) ||
+            expectedManifestRevision <= 0)
+        {
+            throw new VaultBackupDeniedException("A verified pre-migration backup target is required.");
+        }
+
+        if (!_vault.TryExportBackupKey(out var dataKey))
+        {
+            throw new VaultBackupDeniedException("The pre-migration backup cannot be checked while the vault is locked.");
+        }
+
+        var containerBytes = PrivateFile.ReadBytes(Path.GetFullPath(backupPath), VaultBackupFormat.MaximumContainerBytes);
+        try
+        {
+            VaultBackupContainer? container;
+            try
+            {
+                container = JsonSerializer.Deserialize<VaultBackupContainer>(containerBytes, JsonOptions);
+            }
+            catch (JsonException ex)
+            {
+                throw new VaultBackupCorruptedException("The encrypted backup container is invalid.", ex);
+            }
+
+            if (container is null ||
+                !VaultBackupFormat.IsSupportedVersion(container.FormatVersion) ||
+                string.IsNullOrEmpty(container.BackupId) ||
+                string.IsNullOrEmpty(container.VaultId) ||
+                container.KeyEnvelope.ValueKind != JsonValueKind.Object)
+            {
+                throw new VaultBackupCorruptedException("The encrypted backup container is invalid.");
+            }
+
+            try
+            {
+                var payloadBytes = DecryptPayload(container, dataKey);
+                try
+                {
+                    var payload = JsonSerializer.Deserialize<VaultBackupPayload>(payloadBytes, JsonOptions)
+                        ?? throw new VaultBackupCorruptedException("The encrypted backup payload is invalid.");
+                    if (payload.FormatVersion != container.FormatVersion ||
+                        !VaultBackupFormat.IsSupportedVersion(payload.FormatVersion) ||
+                        !string.Equals(payload.VaultId, container.VaultId, StringComparison.Ordinal) ||
+                        !string.Equals(payload.BackupId, container.BackupId, StringComparison.Ordinal) ||
+                        payload.Records is null || payload.States is null ||
+                        (payload.FormatVersion == 1 && payload.Workspace is not null) ||
+                        (payload.FormatVersion >= 2 && payload.Workspace?.Blobs is null))
+                    {
+                        throw new VaultBackupCorruptedException("The encrypted backup payload is invalid.");
+                    }
+
+                    if (!string.Equals(payload.VaultId, expectedVaultId, StringComparison.Ordinal) ||
+                        payload.ManifestRevision != expectedManifestRevision)
+                    {
+                        throw new VaultBackupDeniedException(
+                            "The backup does not match the exact pre-migration vault state the preview bound.");
+                    }
+
+                    return new VaultBackupVerification(
+                        container.BackupId, payload.VaultId, payload.ManifestRevision,
+                        payload.CreatedAtUtc, payload.FormatVersion);
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(payloadBytes);
+                }
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(dataKey);
+            }
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(containerBytes);
+        }
+    }
     /// <summary>
     /// The payload a restore actually materializes after re-applying the
     /// durable deletion record. The backup's ledger is unioned with the live

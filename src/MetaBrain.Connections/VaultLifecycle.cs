@@ -254,7 +254,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
     /// encrypted envelopes are bound to, so a restored vault keeps the
     /// binding of every record it carries.
     /// </summary>
-    internal string CurrentVaultId
+    public string CurrentVaultId
     {
         get
         {
@@ -269,7 +269,7 @@ internal sealed class VaultLifecycle : IVaultLifecycle, IDisposable, IPrivateInd
     /// S8-T2 the live manifest revision. It is the revision of the manifest
     /// that names the records a snapshot captured.
     /// </summary>
-    internal long CurrentManifestRevision
+    public long CurrentManifestRevision
     {
         get
         {

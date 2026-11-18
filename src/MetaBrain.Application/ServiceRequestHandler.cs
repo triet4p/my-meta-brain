@@ -120,7 +120,10 @@ public sealed record ServiceRequest(
     string? WorkspaceAgentRecallQuery = null,
     int? WorkspaceAgentRecallOffset = null,
     int? WorkspaceAgentRecallLimit = null,
-    string? WorkspaceAgentRecallOperation = null);
+    string? WorkspaceAgentRecallOperation = null,
+    string? MigrationBackupPath = null,
+    string? MigrationToken = null,
+    string? MigrationConfirmation = null);
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
     ScopeResourceRevision[] Resources,
@@ -1446,7 +1449,10 @@ public sealed record ServiceReply(
     WorkspaceFolderAccessRequest[]? WorkspaceFolderRequests = null,
     WorkspaceAgentRecallGrantPreview? WorkspaceAgentRecallGrantPreview = null,
     WorkspaceAgentRecallGrantSummary[]? WorkspaceAgentRecallGrants = null,
-    WorkspaceAgentRecallReadResult? WorkspaceAgentRecall = null);
+    WorkspaceAgentRecallReadResult? WorkspaceAgentRecall = null,
+    MigrationPreviewInfo? MigrationPreview = null,
+    MigrationExecutionInfo? MigrationExecution = null,
+    MigrationReportInfo? MigrationReport = null);
 
 public sealed class ServiceRequestHandler
 {
@@ -1483,6 +1489,9 @@ public sealed class ServiceRequestHandler
     public const string OwnerWorkspaceNodePurgeOperation = "owner.workspace.node.purge";
     public const string OwnerWorkspaceExportPreviewOperation = "owner.workspace.export.preview";
     public const string OwnerWorkspaceExportOperation = "owner.workspace.export";
+    public const string OwnerMigrationPreviewOperation = "owner.migration.preview";
+    public const string OwnerMigrationExecuteOperation = "owner.migration.execute";
+    public const string OwnerMigrationReportOperation = "owner.migration.report";
     public const string OwnerCognitiveAnnotationCreateOperation = "owner.cognitive.annotation.create";
     public const string OwnerCognitiveAnnotationListOperation = "owner.cognitive.annotation.list";
     public const string OwnerCognitiveAnnotationReadOperation = "owner.cognitive.annotation.read";
@@ -1697,6 +1706,7 @@ public sealed class ServiceRequestHandler
     private readonly IVaultMaintenanceService? _vaultMaintenance;
     private readonly CognitiveAnnotationService _cognitiveAnnotations;
     private readonly OwnerExportService _exports = new();
+    private readonly RecordMigrationService _migrations = new();
     private readonly OperationsService _operations;
     private readonly OperationsAuditRecorder _auditRecorder;
     private readonly IOperationalLog? _operationalLog;
@@ -2142,6 +2152,8 @@ public sealed class ServiceRequestHandler
         OwnerCognitiveAnnotationListOperation,
         OwnerCognitiveAnnotationReadOperation,
         OwnerWorkspaceExportPreviewOperation,
+        OwnerMigrationPreviewOperation,
+        OwnerMigrationReportOperation,
         OwnerWorkspaceNodePurgePreviewOperation,
         OwnerLibrarySearchOperation,
         OwnerWorkspaceHybridSearchOperation,
@@ -3064,6 +3076,21 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, OwnerScheduleRunOperation, StringComparison.Ordinal))
         {
             return await HandleOwnerScheduleRunAsync(context, operation, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (string.Equals(request.Operation, OwnerMigrationPreviewOperation, StringComparison.Ordinal))
+        {
+            return HandleMigrationPreview(context, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerMigrationExecuteOperation, StringComparison.Ordinal))
+        {
+            return HandleMigrationExecute(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerMigrationReportOperation, StringComparison.Ordinal))
+        {
+            return HandleMigrationReport(context, operation);
         }
 
         if (string.Equals(request.Operation, OwnerWorkspaceStatusOperation, StringComparison.Ordinal))
@@ -14931,5 +14958,157 @@ public sealed class ServiceRequestHandler
     {
         ArgumentNullException.ThrowIfNull(operation);
         return RecallPolicyIndex.From(operation.LoadRecallPolicyState());
+    }
+
+    /// <summary>
+    /// S18-T2 owner-only, write-free preview. It discloses every candidate,
+    /// its exact digest/length/zone and eligibility, the zone-independent
+    /// destination semantics and the verified backup requirement. It mints no
+    /// grant and offers no declassification.
+    /// </summary>
+    private ServiceReply HandleMigrationPreview(AuthenticatedContext context, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        try
+        {
+            var preview = _migrations.Preview(operation, _vault.CurrentVaultId, _vault.CurrentManifestRevision);
+            return new ServiceReply(
+                CurrentProtocolVersion, "migration_preview", "owner", null, MigrationPreview: preview);
+        }
+        catch (MigrationRefusalException refusal)
+        {
+            return Refusal(refusal.Code, refusal.Message);
+        }
+        catch (ManagedResourceUnavailableException)
+        {
+            return Error("vault_locked");
+        }
+    }
+
+    /// <summary>
+    /// S18-T2 guarded execute: typed confirmation, a still-fresh preview
+    /// token and a verified consistent encrypted pre-migration backup are all
+    /// required before the first write. The service re-derives the preview and
+    /// refuses a stale state with nothing transferred.
+    /// </summary>
+    private ServiceReply HandleMigrationExecute(
+        AuthenticatedContext context,
+        ServiceRequest request,
+        IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (string.IsNullOrEmpty(request.MigrationToken))
+        {
+            return Error("invalid_request");
+        }
+
+        if (!string.Equals(request.MigrationConfirmation, "MIGRATE", StringComparison.Ordinal))
+        {
+            return Refusal(MigrationCodes.Confirmation,
+                "Migration needs the typed MIGRATE confirmation and the fresh preview token; nothing was transferred.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.MigrationBackupPath))
+        {
+            return Refusal(MigrationCodes.BackupRequired,
+                "A verified consistent encrypted pre-migration backup is required; nothing was transferred.");
+        }
+
+        if (_vaultBackup is null)
+        {
+            return Refusal(MigrationCodes.BackupRequired,
+                "Backup verification is unavailable; nothing was transferred.");
+        }
+
+        try
+        {
+            var vaultId = _vault.CurrentVaultId;
+            var manifestRevision = _vault.CurrentManifestRevision;
+            var backup = _vaultBackup.VerifyPreMigrationBackup(
+                request.MigrationBackupPath, vaultId, manifestRevision);
+            var execution = _migrations.Execute(
+                operation, vaultId, manifestRevision, request.MigrationToken, backup);
+            return new ServiceReply(
+                CurrentProtocolVersion, "migration_executed", "owner", null, MigrationExecution: execution);
+        }
+        catch (MigrationRefusalException refusal)
+        {
+            return Refusal(refusal.Code, refusal.Message);
+        }
+        catch (VaultBackupDeniedException)
+        {
+            return Refusal(MigrationCodes.BackupMismatch,
+                "The pre-migration backup did not verify against this vault state; nothing was transferred.");
+        }
+        catch (VaultBackupCorruptedException)
+        {
+            return Refusal(MigrationCodes.BackupMismatch,
+                "The pre-migration backup is unreadable or tampered with; nothing was transferred.");
+        }
+        catch (FormatException)
+        {
+            return Refusal(MigrationCodes.StalePreview,
+                "The preview token is not valid for the current state; nothing was transferred.");
+        }
+        catch (WorkspaceRefusalException refusal)
+        {
+            return Refusal(refusal.Code, "The migration destination refused the act; nothing further was transferred.");
+        }
+        catch (ManagedResourceUnavailableException)
+        {
+            return Error("vault_locked");
+        }
+        catch (IOException)
+        {
+            return Refusal(MigrationCodes.BackupMismatch,
+                "The pre-migration backup could not be read; nothing was transferred.");
+        }
+    }
+
+    /// <summary>Read-only owner view of the encrypted legacy-id reverse map.</summary>
+    private ServiceReply HandleMigrationReport(AuthenticatedContext context, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        try
+        {
+            var report = _migrations.Report(operation, _vault.CurrentVaultId);
+            return new ServiceReply(
+                CurrentProtocolVersion, "migration_report", "owner", null, MigrationReport: report);
+        }
+        catch (MigrationRefusalException refusal)
+        {
+            return Refusal(refusal.Code, refusal.Message);
+        }
+        catch (ManagedResourceUnavailableException)
+        {
+            return Error("vault_locked");
+        }
     }
 }

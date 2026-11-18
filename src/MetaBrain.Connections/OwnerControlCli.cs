@@ -171,6 +171,9 @@ internal static class OwnerControlCli
                 "workspace-purge" => await WorkspacePurgeAsync(options).ConfigureAwait(false),
                 "workspace-export-preview" => await WorkspaceExportPreviewAsync(options).ConfigureAwait(false),
                 "workspace-export" => await WorkspaceExportAsync(options).ConfigureAwait(false),
+                "migration-preview" => await MigrationPreviewAsync(options).ConfigureAwait(false),
+                "migration-execute" => await MigrationExecuteAsync(options).ConfigureAwait(false),
+                "migration-report" => await MigrationReportAsync(options).ConfigureAwait(false),
                 "backup" => await BackupAsync(options).ConfigureAwait(false),
                 "restore" => await RestoreAsync(options, useRecoveryCode: false).ConfigureAwait(false),
                 "restore-with-recovery-code" => await RestoreAsync(options, useRecoveryCode: true).ConfigureAwait(false),
@@ -2546,6 +2549,128 @@ internal static class OwnerControlCli
         return 0;
     }
 
+    /// <summary>
+    /// S18-T2 owner-only, write-free migration preview. It lists every legacy
+    /// candidate with its exact digest/length/zone and eligibility, discloses
+    /// zone-independent destination semantics and the required verified
+    /// pre-migration backup, and returns the token an execute binds to.
+    /// </summary>
+    private static async Task<int> MigrationPreviewAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerMigrationPreviewOperation)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "migration_preview") ||
+            !TryWorkspaceObject(result.Reply, "migrationPreview", out var preview))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        if (preview.TryGetProperty("candidates", out var candidates) && candidates.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var candidate in candidates.EnumerateArray())
+            {
+                Console.WriteLine(
+                    $"MIGRATION CANDIDATE legacy={DisplayText(candidate, "legacyId")} family={DisplayText(candidate, "family")} " +
+                    $"revision={DisplayText(candidate, "revision")} bytes={DisplayText(candidate, "length")} " +
+                    $"sha256={DisplayText(candidate, "sha256")} zone={JsonSerializer.Serialize(DisplayText(candidate, "zoneId"))} " +
+                    $"destination={JsonSerializer.Serialize(DisplayText(candidate, "destinationPath"))} " +
+                    $"eligible={DisplayText(candidate, "eligible")} reason={DisplayText(candidate, "reason")}");
+            }
+        }
+
+        Console.WriteLine(
+            $"MIGRATION PREVIEW vault={DisplayText(preview, "vaultId")} " +
+            $"manifestRevision={DisplayText(preview, "manifestRevision")} treeRevision={DisplayText(preview, "treeRevision")} " +
+            $"eligible={JsonNumberText(preview, "eligibleCount")} ineligible={JsonNumberText(preview, "ineligibleCount")} " +
+            $"token={DisplayText(preview, "token")}");
+        Console.WriteLine(
+            "MIGRATION DISCLOSURE zone is provenance on the destination, not enforcement: workspace reads/shares authorize by " +
+            "file id and revision only. Zoned, oversized and structured-only records stay legacy and are listed above; " +
+            "declassification is never offered, bundled or inferred here. No catalog entry, grant, collection, token or session " +
+            "is transferred or widened, and the encrypted legacy-id reverse map is the traceability source. This preview " +
+            "wrote nothing; repeat with --preview <token> --backup-file <verified-encrypted-backup> --confirm MIGRATE to transfer exactly this eligible set.");
+        return 0;
+    }
+
+    /// <summary>
+    /// S18-T2 guarded ownership transfer. The typed MIGRATE confirmation, the
+    /// fresh preview token and a verified consistent encrypted pre-migration
+    /// backup are all required before the first write; the service re-derives
+    /// the preview and refuses any stale state.
+    /// </summary>
+    private static async Task<int> MigrationExecuteAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--preview", "--backup-file", "--confirm");
+        var controlPipe = ControlPipe(options);
+        var previewToken = options.Required("--preview");
+        var backupFile = options.Required("--backup-file");
+        var confirmation = options.Required("--confirm");
+        if (!string.Equals(confirmation, "MIGRATE", StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine(
+                "ERROR migration_confirmation_required: transfer needs the fresh preview token, a verified encrypted " +
+                "pre-migration backup and the typed MIGRATE confirmation; nothing was transferred.");
+            return 4;
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerMigrationExecuteOperation,
+                MigrationToken: previewToken,
+                MigrationBackupPath: backupFile,
+                MigrationConfirmation: confirmation)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "migration_executed") ||
+            !TryWorkspaceObject(result.Reply, "migrationExecution", out var execution))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        Console.WriteLine(
+            $"MIGRATION EXECUTED vault={DisplayText(execution, "vaultId")} token={DisplayText(execution, "token")} " +
+            $"migrated={execution.GetProperty("migrated").GetArrayLength().ToString(CultureInfo.InvariantCulture)} " +
+            $"unmigrated={execution.GetProperty("unmigrated").GetArrayLength().ToString(CultureInfo.InvariantCulture)} " +
+            $"map={JsonSerializer.Serialize(DisplayText(execution, "mapResourceId"))} " +
+            $"mapRevision={DisplayText(execution, "mapRevision")}");
+        return 0;
+    }
+
+    /// <summary>Read-only owner view of the encrypted legacy-id reverse map.</summary>
+    private static async Task<int> MigrationReportAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerMigrationReportOperation)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "migration_report") ||
+            !TryWorkspaceObject(result.Reply, "migrationReport", out var report))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        if (report.TryGetProperty("entries", out var entries) && entries.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var entry in entries.EnumerateArray())
+            {
+                Console.WriteLine(
+                    $"MIGRATED legacy={DisplayText(entry, "legacyId")} family={DisplayText(entry, "family")} " +
+                    $"legacyRevision={DisplayText(entry, "legacyRevision")} node={DisplayText(entry, "nodeId")} " +
+                    $"contentRevision={DisplayText(entry, "contentRevision")} bytes={DisplayText(entry, "length")} " +
+                    $"sha256={DisplayText(entry, "sha256")} zone={JsonSerializer.Serialize(DisplayText(entry, "zoneId"))}");
+            }
+        }
+
+        Console.WriteLine(
+            $"MIGRATION REPORT vault={DisplayText(report, "vaultId")} mapRevision={DisplayText(report, "mapRevision")}");
+        return 0;
+    }
     /// <summary>
     /// S12-T5 previews one irreversible purge of an encrypted tombstone's
     /// deletion group. The disclosure names the tombstone group, its retained
@@ -11759,6 +11884,9 @@ internal static class OwnerControlCli
         "workspace-purge" => "owner workspace-purge --control-pipe <pipe> --node-id <id> --expected-tree-revision <n> --preview <token> --confirm PURGE --reason <text>: permanently remove the previewed tombstone group from this vault, record the owner's reason and every purged id in the vault's encrypted purge ledger that later backups carry, and refuse a stale preview. Backups/exports from before the purge are disclosed, not recalled.",
         "workspace-export-preview" => "owner workspace-export-preview --control-pipe <pipe> --node-id <id> [--content-revision N] --destination <new-absolute-path>: exactly what a plaintext export would write outside the vault — every file at the retained revision it would pin, every folder, the in-scope anchors, the new destination directory, the versioned metadata document and the binding token. Files outside the selected scope, citations of them and the selected node's parent identity are not included. Changes nothing.",
         "workspace-export" => "owner workspace-export --control-pipe <pipe> --node-id <id> [--content-revision N] --destination <new-absolute-path> --preview <token> --confirm EXPORT: write exactly the previewed scope as plaintext original bytes plus a versioned metadata document, into one new destination directory. Create-only: an existing entry or unrelated file is never overwritten, and a stale preview, changed destination, tombstone, lock or unsupported logical name refuses with nothing written. The copy lives outside the vault and cannot be revoked by a later lock, delete or purge.",
+        "migration-preview" => "owner migration-preview --control-pipe <pipe>: write-free owner preview of every legacy record with exact digest/length/zone, family, destination, eligibility and reason; discloses zone-independent destination semantics, ineligible records and the required verified encrypted pre-migration backup, and returns a binding token. Offers no declassification and mints no grant.",
+        "migration-execute" => "owner migration-execute --control-pipe <pipe> --preview <token> --backup-file <verified-encrypted-backup> --confirm MIGRATE: transfer exactly the freshly previewed eligible originals into the encrypted workspace with an encrypted legacy-id reverse map. Requires the fresh token, typed MIGRATE and a consistent verified pre-migration backup; stale state, missing confirmation/backup, ineligible records, wrong key/tamper or over-cap bytes refuse with nothing written. Touches no grant, catalog, session or token.",
+        "migration-report" => "owner migration-report --control-pipe <pipe>: read-only owner view of the encrypted legacy-id to workspace-id reverse map (node id, content revision, length and digest of each migrated original).",
         "upgrade" => "owner upgrade --control-pipe <pipe>: raise old content schemas while locked (secure passphrase prompt; keeps an encrypted rollback point; leaves the vault locked).",
         "upgrade-with-recovery-code" => "owner upgrade-with-recovery-code --control-pipe <pipe>: same upgrade with the recovery key.",
         "rollback" => "owner rollback --control-pipe <pipe> [--discard true]: restore (or discard) the encrypted rollback point while locked.",
