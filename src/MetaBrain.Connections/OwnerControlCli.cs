@@ -60,6 +60,9 @@ internal static class OwnerControlCli
                 "read" => await ReadAsync(options).ConfigureAwait(false),
                 "agent-read" => await AgentReadAsync(options).ConfigureAwait(false),
                 "agent-context-pack" => await AgentContextPackAsync(options).ConfigureAwait(false),
+                "agent-workspace-recall" => await AgentWorkspaceRecallAsync(options).ConfigureAwait(false),
+                "workspace-folder-request" => await WorkspaceFolderRequestAsync(options).ConfigureAwait(false),
+                "workspace-request-status" => await WorkspaceRequestStatusAsync(options).ConfigureAwait(false),
                 "agent-memory-read" => await AgentMemoryReadAsync(options).ConfigureAwait(false),
                 "agent-source-read" => await AgentSourceReadAsync(options).ConfigureAwait(false),
                 "agent-source-snapshot-read" => await AgentSourceSnapshotReadAsync(options).ConfigureAwait(false),
@@ -193,6 +196,11 @@ internal static class OwnerControlCli
                 "workspace-context-pack-reject" => await WorkspaceContextPackRejectAsync(options).ConfigureAwait(false),
                 "workspace-context-pack-grants" => await WorkspaceContextPackGrantsAsync(options).ConfigureAwait(false),
                 "workspace-context-pack-revoke" => await WorkspaceContextPackRevokeAsync(options).ConfigureAwait(false),
+                "workspace-agent-recall-preview" => await WorkspaceAgentRecallPreviewAsync(options).ConfigureAwait(false),
+                "workspace-agent-recall-approve" => await WorkspaceAgentRecallApproveAsync(options).ConfigureAwait(false),
+                "workspace-agent-recall-reject" => await WorkspaceAgentRecallRejectAsync(options).ConfigureAwait(false),
+                "workspace-agent-recall-grants" => await WorkspaceAgentRecallGrantsAsync(options).ConfigureAwait(false),
+                "workspace-agent-recall-revoke" => await WorkspaceAgentRecallRevokeAsync(options).ConfigureAwait(false),
                 "collection-set" => await SetCollectionAsync(options).ConfigureAwait(false),
                 "collections" => await ListCollectionsAsync(options).ConfigureAwait(false),
                 "catalog-preview" => await CatalogPreviewAsync(options).ConfigureAwait(false),
@@ -206,6 +214,8 @@ internal static class OwnerControlCli
                 "request" => await SubmitAccessRequestAsync(options).ConfigureAwait(false),
                 "request-status" => await AccessRequestStatusAsync(options).ConfigureAwait(false),
                 "requests" => await ListAccessRequestsAsync(options).ConfigureAwait(false),
+                "workspace-requests" => await WorkspaceFolderRequestsAsync(options).ConfigureAwait(false),
+                "workspace-request-resolve" => await WorkspaceFolderRequestResolveAsync(options).ConfigureAwait(false),
                 "request-preview" => await PreviewAccessRequestAsync(options).ConfigureAwait(false),
                 "request-approve" => await ApproveAccessRequestAsync(options).ConfigureAwait(false),
                 "request-reject" => await RejectAccessRequestAsync(options).ConfigureAwait(false),
@@ -6761,6 +6771,430 @@ internal static class OwnerControlCli
         return 0;
     }
 
+    private static async Task<int> WorkspaceFolderRequestAsync(CommandOptions options)
+    {
+        options.RequireOnly("--agent-pipe", "--folder-id", "--purpose");
+        var agentPipe = PipeName(options, "--agent-pipe");
+        var folderId = options.Required("--folder-id");
+        var purpose = options.Required("--purpose");
+        if (!ServiceSettingsLoader.IsSafeIdentifier(folderId))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeAgentAsync(agentPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.AgentWorkspaceFolderRequestSubmitOperation,
+                WorkspaceFolderId: folderId,
+                WorkspaceFolderRequestPurpose: purpose)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "workspace_folder_request_submitted") ||
+            !result.Reply.TryGetProperty("requestId", out var requestId) ||
+            requestId.ValueKind != JsonValueKind.String ||
+            !result.Reply.TryGetProperty("workspaceFolderRequestStatus", out var status) ||
+            status.GetString() != WorkspaceFolderAccessRequestAuthority.PendingStatus)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine($"WORKSPACE REQUEST submitted id={requestId.GetString()} status=pending; receipt only, no access granted");
+        return 0;
+    }
+
+    private static async Task<int> WorkspaceRequestStatusAsync(CommandOptions options)
+    {
+        options.RequireOnly("--agent-pipe", "--request-id");
+        var agentPipe = PipeName(options, "--agent-pipe");
+        var requestId = options.Required("--request-id");
+        if (!Guid.TryParseExact(requestId, "N", out _))
+        {
+            return Usage();
+        }
+
+        var result = await InvokeAgentAsync(agentPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.AgentWorkspaceFolderRequestStatusOperation,
+                RequestId: requestId)).ConfigureAwait(false);
+        if (!result.Success ||
+            !result.Reply.TryGetProperty("workspaceFolderRequestStatus", out var status) ||
+            status.ValueKind != JsonValueKind.String ||
+            status.GetString() is not (WorkspaceFolderAccessRequestAuthority.PendingStatus or
+                WorkspaceFolderAccessRequestAuthority.ResolvedStatus))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine($"WORKSPACE REQUEST id={requestId} status={status.GetString()}");
+        return 0;
+    }
+
+    private static async Task<int> WorkspaceFolderRequestsAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceFolderRequestListOperation)).ConfigureAwait(false);
+        if (!result.Success ||
+            !HasStatus(result.Reply, "workspace_folder_requests") ||
+            !result.Reply.TryGetProperty("workspaceFolderRequests", out var requests) ||
+            requests.ValueKind != JsonValueKind.Array)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        foreach (var request in requests.EnumerateArray())
+        {
+            Console.WriteLine(
+                $"WORKSPACE REQUEST id={JsonValueText(request, "requestId")} folder={JsonValueText(request, "workspaceFolderId")} " +
+                $"status={JsonValueText(request, "status")} submittedUtc={JsonValueText(request, "createdAtUtc")} purpose={JsonValueText(request, "purpose")}");
+        }
+
+        Console.WriteLine($"WORKSPACE REQUESTS count={requests.GetArrayLength()}");
+        return 0;
+    }
+
+    private static async Task<int> WorkspaceFolderRequestResolveAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--request-id");
+        var requestId = options.Required("--request-id");
+        if (!Guid.TryParseExact(requestId, "N", out _))
+        {
+            return Usage();
+        }
+
+        Console.Write("Type RESOLVE to record owner review only; no workspace grant will be issued: ");
+        if (!string.Equals(Console.ReadLine(), "RESOLVE", StringComparison.Ordinal))
+        {
+            Console.WriteLine("CANCELLED; request unchanged");
+            return 3;
+        }
+
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceFolderRequestResolveOperation,
+                RequestId: requestId)).ConfigureAwait(false);
+        if (!result.Success ||
+            !HasStatus(result.Reply, "workspace_folder_request_resolved") ||
+            !result.Reply.TryGetProperty("workspaceFolderRequestStatus", out var status) ||
+            status.GetString() != WorkspaceFolderAccessRequestAuthority.ResolvedStatus)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine($"WORKSPACE REQUEST reviewed id={requestId}; no grant created");
+        return 0;
+    }
+
+    private static async Task<int> WorkspaceAgentRecallPreviewAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--selection-json", "--expires-at-utc");
+        var selectionText = options.Required("--selection-json");
+        if (selectionText.Length is 0 or > 256 * 1024)
+        {
+            return Usage();
+        }
+
+        WorkspaceAgentRecallSelection? selection;
+        try
+        {
+            selection = JsonSerializer.Deserialize<WorkspaceAgentRecallSelection>(selectionText, InputJsonOptions);
+        }
+        catch (JsonException)
+        {
+            return Usage();
+        }
+
+        var expiryText = options.Required("--expires-at-utc");
+        if (selection is null ||
+            (!expiryText.EndsWith('Z') && !expiryText.EndsWith("+00:00", StringComparison.Ordinal)) ||
+            !DateTimeOffset.TryParse(expiryText, CultureInfo.InvariantCulture, DateTimeStyles.None, out var expiresAtUtc) ||
+            expiresAtUtc.Offset != TimeSpan.Zero)
+        {
+            return Usage();
+        }
+
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceAgentRecallGrantPreviewOperation,
+                ExpiresAtUtc: expiresAtUtc,
+                WorkspaceAgentRecallSelection: selection)).ConfigureAwait(false);
+        if (!result.Success ||
+            !HasStatus(result.Reply, "workspace_agent_recall_grant_preview") ||
+            !result.Reply.TryGetProperty("workspaceAgentRecallGrantPreview", out var preview) ||
+            preview.ValueKind != JsonValueKind.Object)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine(JsonSerializer.Serialize(preview, JsonOptions));
+        return 0;
+    }
+
+    private static async Task<int> WorkspaceAgentRecallApproveAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--preview-id", "--handoff-file");
+        var previewId = options.Required("--preview-id");
+        if (!Guid.TryParseExact(previewId, "N", out _))
+        {
+            return Usage();
+        }
+
+        Console.Write("Type APPROVE to issue this exact workspace.agent.recall scope: ");
+        if (!string.Equals(Console.ReadLine(), "APPROVE", StringComparison.Ordinal))
+        {
+            Console.WriteLine("CANCELLED; no workspace agent-recall grant issued");
+            return 3;
+        }
+
+        OwnerTokenHandoff handoff;
+        try
+        {
+            handoff = OwnerTokenHandoff.Create(options.Required("--handoff-file"));
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or Win32Exception)
+        {
+            Console.Error.WriteLine("ERROR handoff_destination_unavailable");
+            return 3;
+        }
+
+        using (handoff)
+        {
+            var result = await InvokeOwnerAsync(ControlPipe(options),
+                new ServiceRequest(
+                    ServiceRequestHandler.CurrentProtocolVersion,
+                    ServiceRequestHandler.OwnerWorkspaceAgentRecallGrantIssueOperation,
+                    PreviewId: previewId)).ConfigureAwait(false);
+            if (!result.Success ||
+                !HasStatus(result.Reply, "workspace_agent_recall_grant_issued") ||
+                !result.Reply.TryGetProperty("grantId", out var grantId) ||
+                grantId.ValueKind != JsonValueKind.String ||
+                !result.Reply.TryGetProperty("token", out var token) ||
+                token.ValueKind != JsonValueKind.String)
+            {
+                WriteServiceError(result);
+                return 3;
+            }
+
+            try
+            {
+                handoff.WriteToken(token.GetString() ?? string.Empty);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or Win32Exception)
+            {
+                Console.Error.WriteLine("ERROR token_handoff_failed");
+                return 4;
+            }
+
+            Console.WriteLine(
+                $"WORKSPACE AGENT RECALL GRANT issued id={grantId.GetString()}; owner-only token handoff={handoff.Path}; token redacted");
+            return 0;
+        }
+    }
+
+    private static async Task<int> WorkspaceAgentRecallRejectAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--preview-id");
+        var previewId = options.Required("--preview-id");
+        if (!Guid.TryParseExact(previewId, "N", out _))
+        {
+            return Usage();
+        }
+
+        Console.Write("Type REJECT to decline this workspace.agent.recall scope: ");
+        if (!string.Equals(Console.ReadLine(), "REJECT", StringComparison.Ordinal))
+        {
+            Console.WriteLine("CANCELLED; preview remains pending until expiry");
+            return 3;
+        }
+
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceAgentRecallGrantRejectOperation,
+                PreviewId: previewId)).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "workspace_agent_recall_grant_rejected"))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine($"WORKSPACE AGENT RECALL GRANT rejected preview={previewId}; no grant created");
+        return 0;
+    }
+
+    private static async Task<int> WorkspaceAgentRecallGrantsAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe");
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceAgentRecallGrantListOperation)).ConfigureAwait(false);
+        if (!result.Success ||
+            !HasStatus(result.Reply, "workspace_agent_recall_grants") ||
+            !result.Reply.TryGetProperty("workspaceAgentRecallGrants", out var grants) ||
+            grants.ValueKind != JsonValueKind.Array)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        foreach (var grant in grants.EnumerateArray())
+        {
+            Console.WriteLine(JsonSerializer.Serialize(grant, JsonOptions));
+        }
+
+        Console.WriteLine($"WORKSPACE AGENT RECALL GRANTS count={grants.GetArrayLength()}");
+        return 0;
+    }
+
+    private static async Task<int> WorkspaceAgentRecallRevokeAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--grant-id");
+        var grantId = options.Required("--grant-id");
+        if (!Guid.TryParseExact(grantId, "N", out _))
+        {
+            return Usage();
+        }
+
+        Console.Write("Type REVOKE to withdraw this workspace.agent.recall grant: ");
+        if (!string.Equals(Console.ReadLine(), "REVOKE", StringComparison.Ordinal))
+        {
+            Console.WriteLine("CANCELLED; grant unchanged");
+            return 3;
+        }
+
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerWorkspaceAgentRecallGrantRevokeOperation,
+                GrantId: grantId)).ConfigureAwait(false);
+        if (!result.Success ||
+            !HasStatus(result.Reply, "workspace_agent_recall_grant_revoked") ||
+            !result.Reply.TryGetProperty("grantId", out var revokedGrantId))
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine($"WORKSPACE AGENT RECALL GRANT revoked id={revokedGrantId.GetString()}");
+        return 0;
+    }
+
+    private static async Task<int> AgentWorkspaceRecallAsync(CommandOptions options)
+    {
+        options.RequireOnly("--agent-pipe", "--session-file", "--operation", "--query", "--offset", "--limit");
+        var agentPipe = PipeName(options, "--agent-pipe");
+        var sessionPath = options.Required("--session-file");
+        var operation = options.Required("--operation");
+        var query = options.Optional("--query");
+        var offsetText = options.Optional("--offset");
+        var limitText = options.Optional("--limit");
+        var isHybrid = string.Equals(operation, WorkspaceAgentRecallGrantAuthority.HybridSearchOperation, StringComparison.Ordinal);
+        if (operation is not (WorkspaceAgentRecallGrantAuthority.CognitiveAnnotationReadOperation or
+                WorkspaceAgentRecallGrantAuthority.HybridSearchOperation or
+                WorkspaceAgentRecallGrantAuthority.RelationRecallOperation) ||
+            (isHybrid != (query is not null)) ||
+            (query is { } searchText &&
+                (string.IsNullOrWhiteSpace(searchText) ||
+                 searchText.Length > WorkspaceAgentRecallService.MaximumHybridQueryChars ||
+                 searchText.Any(char.IsControl))))
+        {
+            return RefuseAgentRecallRequest();
+        }
+
+        int? offset = null;
+        if (offsetText is not null)
+        {
+            if (!int.TryParse(offsetText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedOffset) ||
+                parsedOffset is < 0 or > 10_000)
+            {
+                return RefuseAgentRecallRequest();
+            }
+
+            offset = parsedOffset;
+        }
+
+        int? limit = null;
+        if (limitText is not null)
+        {
+            if (!int.TryParse(limitText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedLimit) ||
+                parsedLimit is < 1 or > WorkspaceAgentRecallService.MaximumHybridLimit)
+            {
+                return RefuseAgentRecallRequest();
+            }
+
+            limit = parsedLimit;
+        }
+
+        if (!isHybrid && (offset is not null || limit is not null))
+        {
+            return RefuseAgentRecallRequest();
+        }
+
+        string sessionToken;
+        try
+        {
+            sessionToken = AgentSessionFile.Read(sessionPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Console.Error.WriteLine("ERROR session_unreadable");
+            return 3;
+        }
+
+        var result = await InvokeAgentAsync(agentPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.AgentWorkspaceAgentRecallReadOperation,
+                SessionToken: sessionToken,
+                WorkspaceAgentRecallOperation: operation,
+                WorkspaceAgentRecallQuery: query,
+                WorkspaceAgentRecallOffset: offset,
+                WorkspaceAgentRecallLimit: limit)).ConfigureAwait(false);
+        if (!result.Success ||
+            !result.Reply.TryGetProperty("workspaceAgentRecall", out var recall) ||
+            recall.ValueKind != JsonValueKind.Object)
+        {
+            WriteServiceError(result);
+            return 3;
+        }
+
+        Console.WriteLine(JsonSerializer.Serialize(recall, JsonOptions));
+        return 0;
+    }
+
+    /// <summary>
+    /// One refusal of an agent-supplied workspace recall request.
+    /// <para>
+    /// The operation selector, its query and its page are request values the
+    /// D111 grant evaluates, not owner CLI usage: a client that sends an
+    /// operation outside the fixed three-operation recall subset, or a page
+    /// shape the service refuses, must read the service's own denial code and
+    /// never the owner help text. The service answers every refused recall read
+    /// with this same opaque code, so the refusal reveals no valid operation
+    /// name, grant or record and serves nothing.
+    /// </para>
+    /// </summary>
+    private static int RefuseAgentRecallRequest()
+    {
+        Console.Error.WriteLine("ERROR resource_unavailable");
+        if (OwnerGuidance.TryGetForCode("resource_unavailable", out var guidance))
+        {
+            Console.Error.WriteLine("HINT " + guidance);
+        }
+
+        return 3;
+    }
+
     private static async Task<int> AgentContextPackAsync(CommandOptions options)
     {
         options.RequireOnly("--agent-pipe", "--session-file", "--budget-bytes");
@@ -11155,7 +11589,9 @@ internal static class OwnerControlCli
             Console.Error.WriteLine("  sharing: catalog-preview|catalog-publish|catalog-list|catalog-withdraw|collections|collection-set|grants|grant|requests|request-preview|request-approve|request-reject|sessions|session|revoke-session|redeem (+ agent-mcp transport)");
             Console.Error.WriteLine("  sharing (workspace folders): workspace-share-preview|workspace-share-narrow|workspace-share-approve|workspace-share-reject|workspace-share-grants|workspace-share-revoke");
             Console.Error.WriteLine("  sharing (workspace context packs): workspace-context-pack-preview|workspace-context-pack-approve|workspace-context-pack-reject|workspace-context-pack-grants|workspace-context-pack-revoke");
-            Console.Error.WriteLine("  agent context: agent-context-pack");
+            Console.Error.WriteLine("  sharing (workspace folder requests): workspace-requests|workspace-request-resolve");
+            Console.Error.WriteLine("  sharing (workspace agent recall): workspace-agent-recall-preview|workspace-agent-recall-approve|workspace-agent-recall-reject|workspace-agent-recall-grants|workspace-agent-recall-revoke");
+            Console.Error.WriteLine("  agent context: agent-context-pack|agent-workspace-recall|workspace-folder-request|workspace-request-status");
             Console.Error.WriteLine("  sources: collections|source-list|source-status|source-enroll|source-folder-enroll|source-folder-refresh-optin|source-folder-refresh-optout|source-relocate|source-revoke|source-ingest|source-pause|source-resume|source-refresh-optin|source-refresh-optout|source-raw-preservation-optin|source-raw-preservation-optout|source-preserved-record-read|source-refresh|source-mapping-submit|source-mapping-resolve|source-snapshot-list|source-snapshot-preserve|source-snapshot-read|source-snapshot-retain|source-snapshot-purge");
             Console.Error.WriteLine("  planning: lifecycle-create|lifecycle-validity-set|lifecycle-retain|lifecycle-intention-complete|lifecycle-intention-cancel|lifecycle-intention-supersede|lifecycle-intention-notify|lifecycle-intention-acknowledge|intentions|intention-trigger-set|intention-trigger-clear|intention-context-set|intention-context-disable|intention-schedule-run|recall-apply|purge-preview|purge-confirm|purge-resume");
             Console.Error.WriteLine("  models: provider-config|provider-status|job-create|job-start|job-cancel|job-status|job-list|job-ledger|schedule-set|schedule-disable|schedule-status|schedule-run");
@@ -11256,6 +11692,13 @@ internal static class OwnerControlCli
         "workspace-context-pack-reject" => "owner workspace-context-pack-reject --control-pipe <pipe> --preview-id <id>: after typed REJECT, discard the pending context-pack preview.",
         "workspace-context-pack-grants" => "owner workspace-context-pack-grants --control-pipe <pipe>: inspect exact frozen context-pack selections and grant lifecycle metadata.",
         "workspace-context-pack-revoke" => "owner workspace-context-pack-revoke --control-pipe <pipe> --grant-id <32-hex>: after typed REVOKE, withdraw the context-pack grant and invalidate its sessions.",
+        "workspace-requests" => "owner workspace-requests --control-pipe <pipe>: list the non-authoritative workspace folder request ID, stable folder ID, purpose, submission time and state.",
+        "workspace-request-resolve" => "owner workspace-request-resolve --control-pipe <pipe> --request-id <id>: after typed RESOLVE, record owner review only; this does not issue a workspace.file.read grant.",
+        "workspace-agent-recall-preview" => "owner workspace-agent-recall-preview --control-pipe <pipe> --selection-json <WorkspaceAgentRecallSelection JSON> --expires-at-utc <UTC-ISO>: preview the exact cognitive, hybrid and/or relation operation subset and every selected annotation/file/index/relation endpoint pin.",
+        "workspace-agent-recall-approve" => "owner workspace-agent-recall-approve --control-pipe <pipe> --preview-id <id> --handoff-file <new-file>: after typed APPROVE, issue the exact frozen workspace.agent.recall selection through the protected token handoff.",
+        "workspace-agent-recall-reject" => "owner workspace-agent-recall-reject --control-pipe <pipe> --preview-id <id>: after typed REJECT, discard the pending workspace.agent.recall preview.",
+        "workspace-agent-recall-grants" => "owner workspace-agent-recall-grants --control-pipe <pipe>: inspect exact workspace.agent.recall operation subsets, pins and grant lifecycle metadata.",
+        "workspace-agent-recall-revoke" => "owner workspace-agent-recall-revoke --control-pipe <pipe> --grant-id <32-hex>: after typed REVOKE, withdraw the recall grant and invalidate its active sessions.",
         "requests" => "owner requests --control-pipe <pipe>: pending agent access requests.",
         "request-preview" => "owner request-preview --control-pipe <pipe> --request-id <rid>: exact body/revisions/raw-source scope/provider-context the owner would approve (attached console only; redirected output is refused so bodies are never piped to disk). Narrowing happens on request-approve, which only shrinks the previewed scope.",
         "request-approve" => "owner request-approve --control-pipe <pipe> --request-id <rid> --preview-id <pid> [--resource-ids ... --operations ... --destination-resource-ids ...] --expires-at-utc <UTC-ISO> [--provider P --model M --max-cost-usd N] --handoff-file <new-file>: mint only the narrowed exact scope after typed APPROVE (narrowing only shrinks the previewed scope; anything wider fails closed). Pass the previewed operations you approve: omitting --operations narrows to resource.read, and the service refuses that as request_invalid when the request asked for other operations.",
@@ -11326,6 +11769,9 @@ internal static class OwnerControlCli
         "agent-brief" => "owner agent-brief --agent-pipe <pipe> --session-file <file> [--query text --budget-chars 200..8000 --context-project label --context-task label --include-archived true]: scoped brief projection under the caller's budget; never system instructions.",
         "agent-read" => "owner agent-read --agent-pipe <pipe> --session-file <file> --operation resource.read|source.read|workspace.file.read --resource-id <id> --resource-revision <rev>: scoped read at the exact approved revision (base64-framed on stdout).",
         "agent-context-pack" => "owner agent-context-pack --agent-pipe <pipe> --session-file <file> --budget-bytes <1..65536>: read only the owner-approved workspace.context.pack scope; returns complete verbatim entries with citations/relations, or explicit partial/unavailable gaps. Drift requires a new owner preview; no inference/provider call.",
+        "workspace-folder-request" => "owner workspace-folder-request --agent-pipe <pipe> --folder-id <stable-folder-id> --purpose <text>: submit a fixed workspace.file.read request; returns only an opaque pending receipt and never creates access.",
+        "workspace-request-status" => "owner workspace-request-status --agent-pipe <pipe> --request-id <id>: return only the pending/resolved status of a workspace folder request receipt.",
+        "agent-workspace-recall" => "owner agent-workspace-recall --agent-pipe <pipe> --session-file <file> --operation workspace.cognitive.annotation.read|workspace.hybrid.search|workspace.relation.recall [--query text --offset N --limit N]: read only the exact selected operation subset; pins/currentness are rechecked and complete entries fit within the bounded response.",
         "agent-memory-read" => "owner agent-memory-read --agent-pipe <pipe> --session-file <file> --resource-id <id> --resource-revision <rev>: scoped item detail (memory.read grant only; a source-only grant denies here).",
         "agent-source-read" => "owner agent-source-read --agent-pipe <pipe> --session-file <file> --resource-id <id> --resource-revision <rev>: scoped source expansion (explicit source.read grant only).",
         "agent-source-snapshot-read" => "owner agent-source-snapshot-read --agent-pipe <pipe> --session-file <file> --snapshot-id <snap> --snapshot-revision <rev>: scoped snapshot expansion (explicit snapshot grant only).",

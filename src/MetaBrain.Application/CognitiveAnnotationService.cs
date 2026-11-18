@@ -168,6 +168,25 @@ public sealed class CognitiveAnnotationService
         return ToReadModel(stored, revision, store);
     }
 
+    internal CognitiveAnnotation ReadForWorkspaceRecall(
+        AuthenticatedContext context,
+        string annotationId,
+        long expectedRevision,
+        IManagedResourceStore store,
+        IWorkspacePersistence workspace)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(workspace);
+        if (context.Kind is not (PrincipalKind.Owner or PrincipalKind.Agent))
+        {
+            throw new UnauthorizedAccessException("An authenticated workspace-recall context is required.");
+        }
+
+        var stored = ReadStoredAtRevision(store, annotationId, expectedRevision);
+        return ToReadModel(stored, expectedRevision, workspace);
+    }
+
     public CognitiveAnnotation Correct(
         AuthenticatedContext context,
         string annotationId,
@@ -270,7 +289,7 @@ public sealed class CognitiveAnnotationService
     }
 
     private static StoredCognitiveAnnotation ReadStoredAtRevision(
-        IVaultOperation store,
+        IManagedResourceStore store,
         string annotationId,
         long expectedRevision)
     {
@@ -326,9 +345,9 @@ public sealed class CognitiveAnnotationService
     private static CognitiveAnnotation ToReadModel(
         StoredCognitiveAnnotation stored,
         long revision,
-        IVaultOperation store)
+        IWorkspacePersistence workspace)
     {
-        var (anchor, availability) = ResolveAnchorState(stored.Anchor, store);
+        var (anchor, availability) = ResolveAnchorState(stored.Anchor, workspace);
         return new CognitiveAnnotation(
             stored.Id,
             stored.ZoneId,
@@ -351,12 +370,12 @@ public sealed class CognitiveAnnotationService
 
     private static (WorkspaceAnchorInfo Anchor, SourceAvailability Availability) ResolveAnchorState(
         WorkspaceAnchorInfo pinned,
-        IVaultOperation store)
+        IWorkspacePersistence workspace)
     {
         WorkspaceAnchorInfo? current;
         try
         {
-            current = store.ReadWorkspaceAnchors(pinned.FileId)
+            current = workspace.ReadWorkspaceAnchors(pinned.FileId)
                 .FirstOrDefault(anchor => string.Equals(anchor.AnchorId, pinned.AnchorId, StringComparison.Ordinal));
         }
         catch (WorkspaceRefusalException ex) when (
@@ -379,7 +398,9 @@ public sealed class CognitiveAnnotationService
             throw new InvalidDataException("The workspace anchor identity changed after annotation creation.");
         }
 
-        return (current, SourceAvailability.Available);
+        return (current, current.State == WorkspaceAnchorStates.Live
+            ? SourceAvailability.Available
+            : SourceAvailability.Unavailable);
     }
 
     private static WorkspaceAnchorInfo RequireLiveAnchor(IVaultOperation store, string fileId, string anchorId)
@@ -442,7 +463,7 @@ public sealed class CognitiveAnnotationService
         return revision + 1;
     }
 
-    private static ScopeResourceRevision? FindDescriptor(IVaultOperation store, string resourceId) =>
+    private static ScopeResourceRevision? FindDescriptor(IManagedResourceStore store, string resourceId) =>
         store.ListResources().FirstOrDefault(resource =>
             string.Equals(resource.ResourceId, resourceId, StringComparison.Ordinal));
 

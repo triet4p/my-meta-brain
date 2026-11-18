@@ -229,14 +229,36 @@ public sealed class WorkspaceHybridSearchService
         AuthenticatedContext context,
         IVaultOperation operation,
         WorkspaceHybridSearchRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        SearchCore(context, operation, request, agentRecallScope: null, agentRecall: false, cancellationToken);
+
+    internal WorkspaceHybridSearchOutcome SearchForAgent(
+        AuthenticatedContext context,
+        IVaultOperation operation,
+        WorkspaceHybridSearchRequest request,
+        WorkspaceAgentRecallScope scope,
+        CancellationToken cancellationToken = default) =>
+        SearchCore(context, operation, request, scope, agentRecall: true, cancellationToken);
+
+    private WorkspaceHybridSearchOutcome SearchCore(
+        AuthenticatedContext context,
+        IVaultOperation operation,
+        WorkspaceHybridSearchRequest request,
+        WorkspaceAgentRecallScope? agentRecallScope,
+        bool agentRecall,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(operation);
         ArgumentNullException.ThrowIfNull(request);
-        if (context.Kind != PrincipalKind.Owner)
+        if (agentRecall
+            ? context.Kind != PrincipalKind.Agent || agentRecallScope is null ||
+                !agentRecallScope.Operations.Contains(WorkspaceAgentRecallGrantAuthority.HybridSearchOperation, StringComparer.Ordinal) ||
+                request.FolderId is not null || request.Purpose is not null ||
+                request.Current != WorkspaceHybridSearchCurrent.All
+            : context.Kind != PrincipalKind.Owner)
         {
-            throw new UnauthorizedAccessException("Workspace hybrid search is owner-only.");
+            throw new UnauthorizedAccessException("Workspace hybrid search is not authorized for this caller.");
         }
 
         IWorkspacePersistence workspace = operation;
@@ -249,6 +271,10 @@ public sealed class WorkspaceHybridSearchService
         var snapshot = workspace.ReadWorkspaceTree();
         if (snapshot is null)
         {
+            if (agentRecall)
+            {
+                throw new WorkspacePassageIndexException("workspace_agent_recall_scope_stale");
+            }
             if (request.FolderId is not null)
             {
                 throw new ServiceRefusalException(
@@ -277,7 +303,12 @@ public sealed class WorkspaceHybridSearchService
 
         var folderPath = ResolveFolder(snapshot, paths, request.FolderId);
         var currentMode = request.Current ?? WorkspaceHybridSearchCurrent.CurrentOnly;
-        var scopeRevisions = BuildScope(snapshot, paths, folderPath, currentMode);
+        var pinnedFiles = agentRecallScope?.Files.ToDictionary(file => file.FileId, StringComparer.Ordinal);
+        var scopeRevisions = BuildScope(snapshot, paths, folderPath, currentMode, pinnedFiles);
+        if (pinnedFiles is not null && scopeRevisions.Count != pinnedFiles.Count)
+        {
+            throw new WorkspacePassageIndexException("workspace_agent_recall_scope_stale");
+        }
         var recallSnapshot = route is null
             ? null
             : ReadRecallSnapshot(context, operation, scopeRevisions, cancellationToken);
@@ -285,6 +316,18 @@ public sealed class WorkspaceHybridSearchService
             .Where(item => item.IsCurrent)
             .Select(item => new WorkspacePassageScope(item.Node.Id, item.Revision.Revision))
             .ToArray();
+        if (agentRecall)
+        {
+            var indexStatus = _index.ReadStatus(workspace, cancellationToken);
+            if (indexStatus.Stale ||
+                indexStatus.State is not ("ready" or "partial") ||
+                indexStatus.SchemaVersion != agentRecallScope!.IndexSchemaVersion ||
+                indexStatus.WorkspaceRevision != agentRecallScope.TreeRevision ||
+                !string.Equals(indexStatus.WorkspaceDigest, agentRecallScope.IndexGeneration, StringComparison.Ordinal))
+            {
+                throw new WorkspacePassageIndexException("workspace_agent_recall_scope_stale");
+            }
+        }
 
         string semanticStatus;
         string? modelRevision = null;
@@ -312,13 +355,14 @@ public sealed class WorkspaceHybridSearchService
         }
         else
         {
-            if (string.IsNullOrWhiteSpace(request.ModelDirectory))
+            if (!agentRecall && string.IsNullOrWhiteSpace(request.ModelDirectory))
             {
                 throw new WorkspacePassageIndexException("workspace_index_model_missing");
             }
 
-            var semantic = _index.SearchSemantic(
-                workspace, request.ModelDirectory, request.Query, currentScope, cancellationToken);
+            var semantic = agentRecall
+                ? _index.SearchSemanticWithActiveModel(workspace, request.Query, currentScope, cancellationToken)
+                : _index.SearchSemantic(workspace, request.ModelDirectory!, request.Query, currentScope, cancellationToken);
             modelRevision = semantic.ModelRevision;
             vectorDimensions = semantic.VectorDimensions;
             foreach (var match in semantic.Matches)
@@ -335,6 +379,11 @@ public sealed class WorkspaceHybridSearchService
             semanticStatus = string.Equals(currentMode, WorkspaceHybridSearchCurrent.All, StringComparison.Ordinal)
                 ? WorkspaceHybridSemanticStatus.AppliedCurrentOnly
                 : WorkspaceHybridSemanticStatus.Applied;
+        }
+        if (agentRecall && !WorkspaceHybridSearchPolicy.IsExactLiteralQuery(request.Query) &&
+            semanticStatus != WorkspaceHybridSemanticStatus.AppliedCurrentOnly)
+        {
+            throw new WorkspacePassageIndexException("workspace_agent_recall_semantic_unavailable");
         }
 
         var candidates = new List<WorkspaceHybridCandidate>();
@@ -410,8 +459,10 @@ public sealed class WorkspaceHybridSearchService
         }
 
         var nodes = snapshot.Nodes.ToDictionary(node => node.Id, StringComparer.Ordinal);
-        var relationExpansion = ExpandRelationCandidates(
-            context, operation, paths, folderPath, scopeRevisions, nodes, pageCandidates, request.Limit, cancellationToken);
+        var relationExpansion = agentRecall
+            ? new RelationExpansion([], false)
+            : ExpandRelationCandidates(
+                context, operation, paths, folderPath, scopeRevisions, nodes, pageCandidates, request.Limit, cancellationToken);
         var rankedEvidence = BuildRankedEvidence(
             pageCandidates,
             pageStart + 1,
@@ -1336,14 +1387,22 @@ public sealed class WorkspaceHybridSearchService
         WorkspaceSnapshot snapshot,
         IReadOnlyDictionary<string, string> paths,
         string? folderPath,
-        string currentMode)
+        string currentMode,
+        IReadOnlyDictionary<string, WorkspaceAgentRecallFilePin>? pinnedFiles)
     {
         var scope = new List<ScopeRevision>();
         foreach (var node in snapshot.Nodes)
         {
-            if (node.Kind != WorkspaceNodeKind.File || !paths.TryGetValue(node.Id, out var path))
+            if (node.Kind != WorkspaceNodeKind.File || !paths.TryGetValue(node.Id, out var path) ||
+                (pinnedFiles is not null && !pinnedFiles.ContainsKey(node.Id)))
             {
                 continue;
+            }
+
+            var pin = pinnedFiles is null ? null : pinnedFiles[node.Id];
+            if (pin is not null && node.AccessLifecycleGeneration != pin.AccessLifecycleGeneration)
+            {
+                throw new WorkspacePassageIndexException("workspace_agent_recall_scope_stale");
             }
 
             if (folderPath is not null && folderPath.Length > 0 &&
@@ -1355,10 +1414,26 @@ public sealed class WorkspaceHybridSearchService
             }
 
             var currentFound = false;
+            var pinnedRevisionFound = false;
             foreach (var revision in node.Revisions)
             {
                 var isCurrent = revision.Revision == node.ContentRevision;
                 currentFound |= isCurrent;
+                if (pin is not null)
+                {
+                    if (revision.Revision != pin.ContentRevision)
+                    {
+                        continue;
+                    }
+
+                    if (revision.Length != pin.Length || revision.Sha256 != pin.Sha256)
+                    {
+                        throw new WorkspacePassageIndexException("workspace_agent_recall_scope_stale");
+                    }
+
+                    pinnedRevisionFound = true;
+                }
+
                 if (isCurrent && string.Equals(currentMode, WorkspaceHybridSearchCurrent.HistoryOnly, StringComparison.Ordinal))
                 {
                     continue;
@@ -1375,6 +1450,11 @@ public sealed class WorkspaceHybridSearchService
             if (!currentFound)
             {
                 throw new WorkspacePassageIndexException("workspace_index_source_revision_invalid");
+            }
+
+            if (pin is not null && !pinnedRevisionFound)
+            {
+                throw new WorkspacePassageIndexException("workspace_agent_recall_scope_stale");
             }
         }
 

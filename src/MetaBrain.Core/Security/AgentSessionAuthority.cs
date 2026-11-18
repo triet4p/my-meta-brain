@@ -134,7 +134,9 @@ public sealed class AgentSessionAuthority
                     grant.ScopeSemanticsVersion,
                     grant.ScopeSemanticsGeneration,
                     grant.ContextPackSemanticsVersion,
-                    grant.ContextPackSemanticsGeneration);
+                    grant.ContextPackSemanticsGeneration,
+                    grant.AgentRecallSemanticsVersion,
+                    grant.AgentRecallSemanticsGeneration);
                 _sessionsByVerifier.Add(sessionVerifier, session);
                 _sessionVerifierById.Add(sessionId, sessionVerifier);
                 return new AgentRedeemResult(
@@ -264,7 +266,11 @@ public sealed class AgentSessionAuthority
                 var folderSession = session.WorkspaceFolderMembers is not null;
                 var contextPackSession = session.Operations.Contains(
                     WorkspaceContextPackGrantAuthority.WorkspaceContextPackOperation, StringComparer.Ordinal);
-                if (!folderSession && !contextPackSession)
+                var agentRecallSession = session.Operations.Contains(
+                    WorkspaceAgentRecallGrantAuthority.CognitiveAnnotationReadOperation, StringComparer.Ordinal) ||
+                    session.Operations.Contains(WorkspaceAgentRecallGrantAuthority.HybridSearchOperation, StringComparer.Ordinal) ||
+                    session.Operations.Contains(WorkspaceAgentRecallGrantAuthority.RelationRecallOperation, StringComparer.Ordinal);
+                if (!folderSession && !contextPackSession && !agentRecallSession)
                 {
                     continue;
                 }
@@ -281,7 +287,11 @@ public sealed class AgentSessionAuthority
                     (contextPackSession &&
                         (grant.WorkspaceContextPackScope is null ||
                          grant.ContextPackSemanticsVersion != session.WorkspaceContextPackSemanticsVersion ||
-                         grant.ContextPackSemanticsGeneration != session.WorkspaceContextPackSemanticsGeneration)))
+                         grant.ContextPackSemanticsGeneration != session.WorkspaceContextPackSemanticsGeneration)) ||
+                    (agentRecallSession &&
+                        (grant.WorkspaceAgentRecallScope is null ||
+                         grant.AgentRecallSemanticsVersion != session.WorkspaceAgentRecallSemanticsVersion ||
+                         grant.AgentRecallSemanticsGeneration != session.WorkspaceAgentRecallSemanticsGeneration)))
                 {
                     RemoveSessionLocked(session, AgentSessionLookupStatus.Revoked);
                 }
@@ -362,6 +372,16 @@ public sealed class AgentSessionAuthority
         // S4-T4 scoped brief behaves the same: no resource address, the
         // selection is the frozen scope projected under the caller's budget.
         if (string.Equals(request.Operation, "workspace.context.pack", StringComparison.Ordinal))
+        {
+            return request.ResourceId is not null || request.ResourceRevision is not null ||
+                request.DestinationResourceId is not null || request.DestinationRevision is not null ||
+                HasEgressFields(request)
+                ? Deny("invalid_request", policyGeneration)
+                : Allow(policyGeneration);
+        }
+        if (request.Operation is WorkspaceAgentRecallGrantAuthority.CognitiveAnnotationReadOperation or
+            WorkspaceAgentRecallGrantAuthority.HybridSearchOperation or
+            WorkspaceAgentRecallGrantAuthority.RelationRecallOperation)
         {
             return request.ResourceId is not null || request.ResourceRevision is not null ||
                 request.DestinationResourceId is not null || request.DestinationRevision is not null ||
@@ -574,5 +594,7 @@ public sealed class AgentSessionAuthority
         session.WorkspaceScopeSemanticsVersion,
         session.WorkspaceScopeSemanticsGeneration,
         session.WorkspaceContextPackSemanticsVersion,
-        session.WorkspaceContextPackSemanticsGeneration);
+        session.WorkspaceContextPackSemanticsGeneration,
+        session.WorkspaceAgentRecallSemanticsVersion,
+        session.WorkspaceAgentRecallSemanticsGeneration);
 }

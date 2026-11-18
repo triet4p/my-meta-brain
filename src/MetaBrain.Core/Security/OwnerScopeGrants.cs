@@ -35,7 +35,10 @@ public sealed record PersistedScopeGrant(
     DateTimeOffset? RevokedAtUtc = null,
     WorkspaceContextPackScope? WorkspaceContextPackScope = null,
     int ContextPackSemanticsVersion = 0,
-    long ContextPackSemanticsGeneration = 0);
+    long ContextPackSemanticsGeneration = 0,
+    WorkspaceAgentRecallScope? WorkspaceAgentRecallScope = null,
+    int AgentRecallSemanticsVersion = 0,
+    long AgentRecallSemanticsGeneration = 0);
 
 public sealed record OwnerScopeCollection(string CollectionId, string[] ResourceIds);
 
@@ -47,12 +50,13 @@ public sealed record OwnerScopeGrantState(
     long UnlockEpoch = 0,
     string[] ConsumedTokenVerifiers = null!,
     OwnerAccessRequest[] Requests = null!,
-    long WorkspaceScopeGeneration = 0)
+    long WorkspaceScopeGeneration = 0,
+    WorkspaceFolderAccessRequest[] WorkspaceFolderRequests = null!)
 {
-    public const int CurrentSchemaVersion = 5;
+    public const int CurrentSchemaVersion = 6;
     public static OwnerScopeGrantState Empty { get; } = new(
         CurrentSchemaVersion, 0, Array.Empty<PersistedScopeGrant>(), Array.Empty<OwnerScopeCollection>(),
-        0, Array.Empty<string>(), Array.Empty<OwnerAccessRequest>(), 0);
+        0, Array.Empty<string>(), Array.Empty<OwnerAccessRequest>(), 0, Array.Empty<WorkspaceFolderAccessRequest>());
 }
 
 public interface IScopeGrantPersistence
@@ -93,7 +97,10 @@ public sealed partial class OwnerScopeGrantAuthority
         "link.restore",
         "provider.egress",
         WorkspaceFolderGrantAuthority.WorkspaceFileReadOperation,
-        WorkspaceContextPackGrantAuthority.WorkspaceContextPackOperation
+        WorkspaceContextPackGrantAuthority.WorkspaceContextPackOperation,
+        WorkspaceAgentRecallGrantAuthority.CognitiveAnnotationReadOperation,
+        WorkspaceAgentRecallGrantAuthority.HybridSearchOperation,
+        WorkspaceAgentRecallGrantAuthority.RelationRecallOperation
     };
 
     private const int MaximumPendingPreviews = 1024;
@@ -383,14 +390,17 @@ public sealed partial class OwnerScopeGrantAuthority
             state.Collections is null || state.Collections.Length > 1000 ||
             state.PolicyGeneration < 0 || state.UnlockEpoch < 0 || state.WorkspaceScopeGeneration < 0 ||
             (state.SchemaVersion != OwnerScopeGrantState.CurrentSchemaVersion &&
-                state.SchemaVersion != 4 && state.SchemaVersion != 3 && state.SchemaVersion != 2) ||
+                state.SchemaVersion != 5 && state.SchemaVersion != 4 && state.SchemaVersion != 3 && state.SchemaVersion != 2) ||
             (state.SchemaVersion != OwnerScopeGrantState.CurrentSchemaVersion &&
                 (state.WorkspaceScopeGeneration != 0 ||
+                 state.WorkspaceFolderRequests is { Length: > 0 } ||
                  state.Grants.Any(grant => grant is not null &&
                     (grant.WorkspaceFolderScope is not null || grant.ScopeSemanticsVersion != 0 ||
                      grant.ScopeSemanticsGeneration != 0 || grant.RevokedAtUtc is not null ||
                      grant.WorkspaceContextPackScope is not null || grant.ContextPackSemanticsVersion != 0 ||
-                     grant.ContextPackSemanticsGeneration != 0)))))
+                     grant.ContextPackSemanticsGeneration != 0 ||
+                     grant.WorkspaceAgentRecallScope is not null || grant.AgentRecallSemanticsVersion != 0 ||
+                     grant.AgentRecallSemanticsGeneration != 0)))))
         {
             throw new InvalidDataException("Invalid encrypted owner scope grant state.");
         }
@@ -430,13 +440,16 @@ public sealed partial class OwnerScopeGrantAuthority
 
             try
             {
-                if (grant.WorkspaceFolderScope is not null && grant.WorkspaceContextPackScope is not null)
+                if ((grant.WorkspaceFolderScope is not null ? 1 : 0) +
+                    (grant.WorkspaceContextPackScope is not null ? 1 : 0) +
+                    (grant.WorkspaceAgentRecallScope is not null ? 1 : 0) > 1)
                 {
-                    throw new ArgumentException("A grant cannot combine workspace folder and context-pack scopes.");
+                    throw new ArgumentException("A grant cannot combine workspace-specific scopes.");
                 }
 
                 var hasWorkspaceScope = grant.WorkspaceFolderScope is not null ||
-                    grant.WorkspaceContextPackScope is not null;
+                    grant.WorkspaceContextPackScope is not null ||
+                    grant.WorkspaceAgentRecallScope is not null;
                 var resources = hasWorkspaceScope
                     ? grant.Resources.Length == 0
                         ? Array.Empty<ScopeResourceRevision>()
@@ -450,13 +463,20 @@ public sealed partial class OwnerScopeGrantAuthority
                 var contextPackScope = grant.WorkspaceContextPackScope is null
                     ? null
                     : WorkspaceContextPackGrantAuthority.NormalizeScope(grant.WorkspaceContextPackScope);
-                if (folderScope is null && contextPackScope is null)
+                var agentRecallScope = grant.WorkspaceAgentRecallScope is null
+                    ? null
+                    : WorkspaceAgentRecallGrantAuthority.NormalizeScope(grant.WorkspaceAgentRecallScope);
+                if (folderScope is null && contextPackScope is null && agentRecallScope is null)
                 {
                     if (grant.ScopeSemanticsVersion != 0 || grant.ScopeSemanticsGeneration != 0 ||
                         grant.ContextPackSemanticsVersion != 0 || grant.ContextPackSemanticsGeneration != 0 ||
+                        grant.AgentRecallSemanticsVersion != 0 || grant.AgentRecallSemanticsGeneration != 0 ||
                         grant.RevokedAtUtc is not null ||
                         operations.Contains(WorkspaceFolderGrantAuthority.WorkspaceFileReadOperation, StringComparer.Ordinal) ||
-                        operations.Contains(WorkspaceContextPackGrantAuthority.WorkspaceContextPackOperation, StringComparer.Ordinal))
+                        operations.Contains(WorkspaceContextPackGrantAuthority.WorkspaceContextPackOperation, StringComparer.Ordinal) ||
+                        operations.Contains(WorkspaceAgentRecallGrantAuthority.CognitiveAnnotationReadOperation, StringComparer.Ordinal) ||
+                        operations.Contains(WorkspaceAgentRecallGrantAuthority.HybridSearchOperation, StringComparer.Ordinal) ||
+                        operations.Contains(WorkspaceAgentRecallGrantAuthority.RelationRecallOperation, StringComparer.Ordinal))
                     {
                         throw new ArgumentException("Workspace operations require their dedicated persisted scope.");
                     }
@@ -464,6 +484,7 @@ public sealed partial class OwnerScopeGrantAuthority
                 else if (folderScope is not null)
                 {
                     if (grant.ContextPackSemanticsVersion != 0 || grant.ContextPackSemanticsGeneration != 0 ||
+                        grant.AgentRecallSemanticsVersion != 0 || grant.AgentRecallSemanticsGeneration != 0 ||
                         destinations.Length != 0 ||
                         grant.ScopeSemanticsVersion != WorkspaceFolderGrantAuthority.CurrentScopeSemanticsVersion ||
                         grant.ScopeSemanticsGeneration < 1 ||
@@ -474,16 +495,31 @@ public sealed partial class OwnerScopeGrantAuthority
                         throw new ArgumentException("Invalid persisted workspace folder grant.");
                     }
                 }
-                else if (grant.ScopeSemanticsVersion != 0 || grant.ScopeSemanticsGeneration != 0 ||
-                         destinations.Length != 0 || grant.Egress is not null ||
-                         grant.ContextPackSemanticsVersion != WorkspaceContextPackGrantAuthority.CurrentScopeSemanticsVersion ||
-                         grant.ContextPackSemanticsGeneration < 1 ||
-                         (grant.RevokedAtUtc is not null && grant.ContextPackSemanticsGeneration < 2) ||
-                         state.WorkspaceScopeGeneration < 1 ||
-                         operations.Length != 1 ||
-                         operations[0] != WorkspaceContextPackGrantAuthority.WorkspaceContextPackOperation)
+                else if (contextPackScope is not null)
                 {
-                    throw new ArgumentException("Invalid persisted workspace context-pack grant.");
+                    if (grant.ScopeSemanticsVersion != 0 || grant.ScopeSemanticsGeneration != 0 ||
+                        grant.AgentRecallSemanticsVersion != 0 || grant.AgentRecallSemanticsGeneration != 0 ||
+                        destinations.Length != 0 || grant.Egress is not null ||
+                        grant.ContextPackSemanticsVersion != WorkspaceContextPackGrantAuthority.CurrentScopeSemanticsVersion ||
+                        grant.ContextPackSemanticsGeneration < 1 ||
+                        (grant.RevokedAtUtc is not null && grant.ContextPackSemanticsGeneration < 2) ||
+                        state.WorkspaceScopeGeneration < 1 ||
+                        operations.Length != 1 ||
+                        operations[0] != WorkspaceContextPackGrantAuthority.WorkspaceContextPackOperation)
+                    {
+                        throw new ArgumentException("Invalid persisted workspace context-pack grant.");
+                    }
+                }
+                else if (grant.ScopeSemanticsVersion != 0 || grant.ScopeSemanticsGeneration != 0 ||
+                         grant.ContextPackSemanticsVersion != 0 || grant.ContextPackSemanticsGeneration != 0 ||
+                         destinations.Length != 0 || grant.Egress is not null ||
+                         grant.AgentRecallSemanticsVersion != WorkspaceAgentRecallGrantAuthority.CurrentScopeSemanticsVersion ||
+                         grant.AgentRecallSemanticsGeneration < 1 ||
+                         (grant.RevokedAtUtc is not null && grant.AgentRecallSemanticsGeneration < 2) ||
+                         state.WorkspaceScopeGeneration < 1 ||
+                         !agentRecallScope!.Operations.SequenceEqual(operations, StringComparer.Ordinal))
+                {
+                    throw new ArgumentException("Invalid persisted workspace agent-recall grant.");
                 }
 
                 ValidateOperationScope(operations, destinations, grant.Egress);
@@ -493,7 +529,8 @@ public sealed partial class OwnerScopeGrantAuthority
                     Operations = operations,
                     DestinationResources = destinations,
                     WorkspaceFolderScope = folderScope,
-                    WorkspaceContextPackScope = contextPackScope
+                    WorkspaceContextPackScope = contextPackScope,
+                    WorkspaceAgentRecallScope = agentRecallScope
                 };
             }
             catch (ArgumentException ex)
@@ -527,6 +564,22 @@ public sealed partial class OwnerScopeGrantAuthority
         {
             throw new InvalidDataException("Invalid encrypted access request state.", ex);
         }
+        WorkspaceFolderAccessRequest[] workspaceFolderRequests;
+        try
+        {
+            workspaceFolderRequests = state.WorkspaceFolderRequests switch
+            {
+                null when state.SchemaVersion is 2 or 3 or 4 or 5 =>
+                    Array.Empty<WorkspaceFolderAccessRequest>(),
+                null => throw new ArgumentException("The encrypted workspace folder request state is missing."),
+                _ => WorkspaceFolderAccessRequestAuthority.NormalizeRequests(state.WorkspaceFolderRequests)
+            };
+        }
+        catch (ArgumentException ex)
+        {
+            throw new InvalidDataException("Invalid encrypted workspace folder request state.", ex);
+        }
+
 
         var approved = new HashSet<string>(grants.Select(grant => grant.GrantId), StringComparer.Ordinal);
         foreach (var request in requests)
@@ -551,7 +604,8 @@ public sealed partial class OwnerScopeGrantAuthority
             state.UnlockEpoch,
             consumed,
             requests,
-            state.WorkspaceScopeGeneration);
+            state.WorkspaceScopeGeneration,
+            workspaceFolderRequests);
     }
 
     private static OwnerScopeCollection[] NormalizeCollections(OwnerScopeCollection[]? collections)
@@ -695,6 +749,12 @@ public sealed partial class OwnerScopeGrantAuthority
         if (operations.Contains(WorkspaceContextPackGrantAuthority.WorkspaceContextPackOperation, StringComparer.Ordinal))
         {
             throw new ArgumentException("Workspace context packs require a distinct approved context-pack scope.", nameof(operations));
+        }
+        if (operations.Contains(WorkspaceAgentRecallGrantAuthority.CognitiveAnnotationReadOperation, StringComparer.Ordinal) ||
+            operations.Contains(WorkspaceAgentRecallGrantAuthority.HybridSearchOperation, StringComparer.Ordinal) ||
+            operations.Contains(WorkspaceAgentRecallGrantAuthority.RelationRecallOperation, StringComparer.Ordinal))
+        {
+            throw new ArgumentException("Workspace agent recall requires its dedicated pinned grant scope.", nameof(operations));
         }
         var snapshotRead = operations.Contains("source.snapshot.read", StringComparer.Ordinal);
         var containsSnapshots = resources.Any(resource =>

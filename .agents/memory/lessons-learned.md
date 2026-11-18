@@ -956,3 +956,17 @@ the assignment can fail before the sentinel check or any child starts.
 **Root cause:** `NamedPipeService` maintains explicit operation lists for workspace timeouts and vault-operation leases. The new narrow/reject operations were absent, so the dispatcher passed a null vault lease to handlers that require one.
 **Fix / workaround:** Add both operations to the workspace timeout and `needsVaultOperation` classifications in `NamedPipeService`.
 **Watch out for:** When adding an owner operation that needs `IVaultOperation`, update both explicit pipe classifications; handler dispatch and compilation alone do not prove the lease is acquired.
+
+## [2026-11-17] An agent-scoped read answered a client request value with owner usage text
+
+**Symptom:** The actual Codex workflow's unapproved `agent-workspace-recall --operation workspace.file.read` probe returned the owner CLI help text, so the MCP client read a usage message instead of a refusal code (no data served).
+**Root cause:** `OwnerControlCli.AgentWorkspaceRecallAsync` validated the operation subset and the query/offset/limit shape with `return Usage()`. Those values are supplied by the remote client, not typed by the owner, and the service answers the same request with the opaque `resource_unavailable` denial.
+**Fix / workaround:** Route every request-value rejection in that command through one `RefuseAgentRecallRequest()` helper that prints `ERROR resource_unavailable` plus the product guidance and returns 3, leaving missing/unknown flags as usage errors. Gate it with an s17-t3 CLI assertion (exit 3, refusal code, no help text).
+**Watch out for:** A CLI verb that an MCP bridge invokes with client-controlled values must not fall through to `Usage()` for bad values; usage text is not a refusal. Owner-only argv typos and client request values need different answers.
+
+## [2026-11-17] A completed `omp -p --mode json` run left no capturable output
+
+**Symptom:** Two real OMP workflow runs (~50 s and ~88 s, exit 0) produced empty stdout and stderr even though the Meta Brain service logged the client's folder request and redemptions and OMP's own log recorded a normal session dispose.
+**Root cause:** Not fully determined. OMP's log shows a normal `agent_end` with text and `Session exit recorded … kind normal`, so the client completed; the missing part is the capture side, including a foreground tool call that outlives its harness's backgrounding threshold. `--no-session` also removes the session file that could have served as a fallback record.
+**Fix / workaround:** Prepare the bounded run as `omp --mode json --no-session --cwd <fixture> "<one-line prompt>" > run.jsonl 2> run.err < NUL` and read the files after exit. `--mode json` is single-shot on its own, writes a session-header line plus one JSON event per line (tool results appear in `message_end`/`turn_end`/`agent_end`), keeps diagnostics on stderr, and a non-TTY stdin is read as prompt text unless it is empty or redirected from NUL.
+**Watch out for:** Do not conclude that the client failed or that the tools were not called from empty captured output of a long run. Never re-run a model workflow just to test capture; verify real output before spending another invocation.

@@ -210,6 +210,51 @@ internal static class McpAgentBridge
                     ["required"] = new JsonArray("sessionFile", "budgetBytes"),
                     ["additionalProperties"] = false,
                 }),
+            Tool("metabrain_workspace_folder_request", "Request owner review of one stable workspace folder ID. This creates only a non-authoritative receipt; it does not grant file access.",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["workspaceFolderId"] = new JsonObject { ["type"] = "string" },
+                        ["purpose"] = new JsonObject { ["type"] = "string", ["maxLength"] = 512 },
+                    },
+                    ["required"] = new JsonArray("workspaceFolderId", "purpose"),
+                    ["additionalProperties"] = false,
+                }),
+            Tool("metabrain_workspace_request_status", "Check only the pending/resolved status of an opaque workspace-folder request receipt.",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["requestId"] = new JsonObject { ["type"] = "string" },
+                    },
+                    ["required"] = new JsonArray("requestId"),
+                    ["additionalProperties"] = false,
+                }),
+            Tool("metabrain_workspace_agent_recall", "Read only the separately owner-approved workspace.agent.recall operation subset. Annotation, hybrid and relation operations remain independently selected; pins, currentness and the whole-entry output budget are rechecked on every call.",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["sessionFile"] = new JsonObject { ["type"] = "string" },
+                        ["operation"] = new JsonObject
+                        {
+                            ["type"] = "string",
+                            ["enum"] = new JsonArray(
+                                "workspace.cognitive.annotation.read",
+                                "workspace.hybrid.search",
+                                "workspace.relation.recall"),
+                        },
+                        ["query"] = new JsonObject { ["type"] = "string", ["maxLength"] = 256 },
+                        ["offset"] = new JsonObject { ["type"] = "string", ["maxLength"] = 5 },
+                        ["limit"] = new JsonObject { ["type"] = "string", ["maxLength"] = 3 },
+                    },
+                    ["required"] = new JsonArray("sessionFile", "operation"),
+                    ["additionalProperties"] = false,
+                }),
             Tool("metabrain_authorize", "Check whether a session handoff file authorizes one scoped operation (allow/deny decision only, no content).",
                 new JsonObject
                 {
@@ -453,6 +498,12 @@ internal static class McpAgentBridge
             return ErrorEnvelope(id, -32602, "bridge_invalid_params");
         }
 
+        if ((name is "metabrain_workspace_folder_request" or "metabrain_workspace_request_status" or
+             "metabrain_workspace_agent_recall") &&
+            !IsValidWorkspaceToolArguments(name, args))
+        {
+            return ErrorEnvelope(id, -32602, "bridge_invalid_params");
+        }
         if (name is "metabrain_relation_create" or "metabrain_relation_supersede" or
             "metabrain_relation_unlink" or "metabrain_relation_restore")
         {
@@ -482,6 +533,18 @@ internal static class McpAgentBridge
                 "--session-file", RequiredArg(args, "sessionFile"),
                 "--budget-bytes", RequiredArg(args, "budgetBytes"),
             },
+            "metabrain_workspace_folder_request" => new[]
+            {
+                "owner", "workspace-folder-request", "--agent-pipe", agentPipe,
+                "--folder-id", RequiredArg(args, "workspaceFolderId"),
+                "--purpose", RequiredArg(args, "purpose"),
+            },
+            "metabrain_workspace_request_status" => new[]
+            {
+                "owner", "workspace-request-status", "--agent-pipe", agentPipe,
+                "--request-id", RequiredArg(args, "requestId"),
+            },
+            "metabrain_workspace_agent_recall" => BuildWorkspaceAgentRecallArgs(agentPipe, args),
             "metabrain_authorize" => BuildAuthorizeArgs(agentPipe, args),
             "metabrain_memory_search" => BuildSearchArgs(agentPipe, args),
             "metabrain_memory_read" => new[]
@@ -551,6 +614,12 @@ internal static class McpAgentBridge
         {
             return ContextPackEnvelope(id, await RunOwnerCommandAsync(argv).ConfigureAwait(false));
         }
+        if (string.Equals(name, "metabrain_workspace_agent_recall", StringComparison.Ordinal))
+        {
+            return WorkspaceAgentRecallEnvelope(id, await RunOwnerCommandAsync(argv).ConfigureAwait(false));
+        }
+
+
 
         if (string.Equals(name, "metabrain_source_snapshot_read", StringComparison.Ordinal))
         {
@@ -567,6 +636,109 @@ internal static class McpAgentBridge
             }),
             ["isError"] = result.ExitCode != 0,
         });
+    }
+    private static bool IsValidWorkspaceToolArguments(string name, JsonObject args)
+    {
+        return name switch
+        {
+            "metabrain_workspace_folder_request" =>
+                args.Count == 2 && args.ContainsKey("workspaceFolderId") && args.ContainsKey("purpose"),
+            "metabrain_workspace_request_status" =>
+                args.Count == 1 && args.ContainsKey("requestId"),
+            "metabrain_workspace_agent_recall" =>
+                args.Count is >= 2 and <= 5 &&
+                args.ContainsKey("sessionFile") && args.ContainsKey("operation") &&
+                args.All(pair => pair.Key is "sessionFile" or "operation" or "query" or "offset" or "limit"),
+            _ => true,
+        };
+    }
+
+    private static string[] BuildWorkspaceAgentRecallArgs(string agentPipe, JsonObject args)
+    {
+        var includeQuery = args.ContainsKey("query");
+        var includeOffset = args.ContainsKey("offset");
+        var includeLimit = args.ContainsKey("limit");
+        var argv = new string[8 + (includeQuery ? 2 : 0) + (includeOffset ? 2 : 0) + (includeLimit ? 2 : 0)];
+        var index = 0;
+        argv[index++] = "owner";
+        argv[index++] = "agent-workspace-recall";
+        argv[index++] = "--agent-pipe";
+        argv[index++] = agentPipe;
+        argv[index++] = "--session-file";
+        argv[index++] = RequiredArg(args, "sessionFile");
+        argv[index++] = "--operation";
+        argv[index++] = RequiredArg(args, "operation");
+        if (includeQuery)
+        {
+            argv[index++] = "--query";
+            argv[index++] = RequiredArg(args, "query");
+        }
+        if (includeOffset)
+        {
+            argv[index++] = "--offset";
+            argv[index++] = RequiredArg(args, "offset");
+        }
+        if (includeLimit)
+        {
+            argv[index++] = "--limit";
+            argv[index++] = RequiredArg(args, "limit");
+        }
+
+        return argv;
+        }
+
+    private static string WorkspaceAgentRecallEnvelope(JsonNode? id, BridgeCommandResult result)
+    {
+        if (result.ExitCode != 0)
+        {
+            return ResultEnvelope(id, new JsonObject
+            {
+                ["content"] = new JsonArray(new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = Redact(ExtractErrorText(result.Combined)),
+                }),
+                ["isError"] = true,
+            });
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(result.Combined);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("operation", out var operation) || operation.ValueKind != JsonValueKind.String ||
+                !root.TryGetProperty("status", out var status) || status.ValueKind != JsonValueKind.String ||
+                !root.TryGetProperty("budgetBytes", out var budget) || budget.ValueKind != JsonValueKind.Number ||
+                !budget.TryGetInt32(out var budgetBytes) || budgetBytes is < 1 or > 64 * 1024 ||
+                !root.TryGetProperty("usedBytes", out var used) || used.ValueKind != JsonValueKind.Number ||
+                !used.TryGetInt32(out var usedBytes) || usedBytes < 0 || usedBytes > budgetBytes)
+            {
+                throw new JsonException();
+            }
+
+            return ResultEnvelope(id, new JsonObject
+            {
+                ["content"] = new JsonArray(new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = root.GetRawText(),
+                }),
+                ["isError"] = false,
+            });
+        }
+        catch (JsonException)
+        {
+            return ResultEnvelope(id, new JsonObject
+            {
+                ["content"] = new JsonArray(new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = "workspace_agent_recall_unavailable",
+                }),
+                ["isError"] = true,
+            });
+        }
     }
 
     private static async Task<string> CallRelationDraftToolAsync(

@@ -25,7 +25,9 @@ public sealed record AgentSession(
     int WorkspaceScopeSemanticsVersion = 0,
     long WorkspaceScopeSemanticsGeneration = 0,
     int WorkspaceContextPackSemanticsVersion = 0,
-    long WorkspaceContextPackSemanticsGeneration = 0);
+    long WorkspaceContextPackSemanticsGeneration = 0,
+    int WorkspaceAgentRecallSemanticsVersion = 0,
+    long WorkspaceAgentRecallSemanticsGeneration = 0);
 
 /// <summary>
 /// Authoritative session snapshot safe to disclose to the session holder.
@@ -48,7 +50,9 @@ public sealed record AgentSessionSnapshot(
     int WorkspaceScopeSemanticsVersion = 0,
     long WorkspaceScopeSemanticsGeneration = 0,
     int WorkspaceContextPackSemanticsVersion = 0,
-    long WorkspaceContextPackSemanticsGeneration = 0);
+    long WorkspaceContextPackSemanticsGeneration = 0,
+    int WorkspaceAgentRecallSemanticsVersion = 0,
+    long WorkspaceAgentRecallSemanticsGeneration = 0);
 
 public enum AgentRedeemStatus
 {

@@ -835,6 +835,13 @@ internal static partial class OwnerServiceSmoke
 
             return inner.SearchSemantic(workspace, modelDirectory, query, scope, cancellationToken);
         }
+        public WorkspacePassageSemanticResult SearchSemanticWithActiveModel(
+            IWorkspacePersistence workspace,
+            string query,
+            IReadOnlyCollection<WorkspacePassageScope> scope,
+            CancellationToken cancellationToken = default) =>
+            inner.SearchSemanticWithActiveModel(workspace, query, scope, cancellationToken);
+
 
         public void Reset() => inner.Reset();
 

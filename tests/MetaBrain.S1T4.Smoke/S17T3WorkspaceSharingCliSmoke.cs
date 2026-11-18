@@ -38,6 +38,84 @@ internal static partial class OwnerServiceSmoke
             var selectedFolderId = WorkspaceToken(selectedFolder.StandardOutput, "id");
             treeRevision = WorkspaceNumber(selectedFolder.StandardOutput, "revision");
 
+            // D111 folder request and read operations must be reachable only on the agent channel.
+            var folderRequest = await InvokeAgentRequestAsync(fixture.AgentPipe, new
+            {
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
+                operation = MetaBrain.Application.ServiceRequestHandler.AgentWorkspaceFolderRequestSubmitOperation,
+                workspaceFolderId = selectedFolderId,
+                workspaceFolderRequestPurpose = "synthetic non-authoritative workspace review"
+            }).ConfigureAwait(false);
+            Require(ReplyCode(folderRequest) == "workspace_folder_request_submitted" &&
+                    folderRequest.GetProperty("workspaceFolderRequestStatus").GetString() == "pending" &&
+                    folderRequest.TryGetProperty("requestId", out var requestIdElement) &&
+                    requestIdElement.ValueKind == System.Text.Json.JsonValueKind.String,
+                "The agent channel did not accept the non-authoritative workspace folder request.");
+            var folderRequestId = folderRequest.GetProperty("requestId").GetString()
+                ?? throw new InvalidOperationException("The workspace folder request omitted its receipt ID.");
+            var requestStatus = await InvokeAgentRequestAsync(fixture.AgentPipe, new
+            {
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
+                operation = MetaBrain.Application.ServiceRequestHandler.AgentWorkspaceFolderRequestStatusOperation,
+                requestId = folderRequestId
+            }).ConfigureAwait(false);
+            Require(ReplyCode(requestStatus) == "workspace_folder_request_status" &&
+                    requestStatus.GetProperty("workspaceFolderRequestStatus").GetString() == "pending",
+                "The agent channel did not return only the folder request status.");
+            var ownerRequestAttempt = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
+            {
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
+                operation = MetaBrain.Application.ServiceRequestHandler.AgentWorkspaceFolderRequestSubmitOperation,
+                workspaceFolderId = selectedFolderId,
+                workspaceFolderRequestPurpose = "synthetic owner-channel boundary probe"
+            }).ConfigureAwait(false);
+            var ownerStatusAttempt = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
+            {
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
+                operation = MetaBrain.Application.ServiceRequestHandler.AgentWorkspaceFolderRequestStatusOperation,
+                requestId = folderRequestId
+            }).ConfigureAwait(false);
+            Require(ReplyCode(ownerRequestAttempt) == "forbidden" &&
+                    ReplyCode(ownerStatusAttempt) == "forbidden",
+                "The owner channel accepted an agent-only workspace folder request operation.");
+            var unscopedRecall = await InvokeAgentRequestAsync(fixture.AgentPipe, new
+            {
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
+                operation = MetaBrain.Application.ServiceRequestHandler.AgentWorkspaceAgentRecallReadOperation,
+                workspaceAgentRecallOperation = "workspace.cognitive.annotation.read"
+            }).ConfigureAwait(false);
+            var ownerRecallAttempt = await InvokeOwnerRequestAsync(fixture.ControlPipe, new
+            {
+                protocolVersion = MetaBrain.Application.ServiceRequestHandler.CurrentProtocolVersion,
+                operation = MetaBrain.Application.ServiceRequestHandler.AgentWorkspaceAgentRecallReadOperation,
+                workspaceAgentRecallOperation = "workspace.cognitive.annotation.read"
+            }).ConfigureAwait(false);
+            Require(ReplyCode(unscopedRecall) == "denied" &&
+                    (!unscopedRecall.TryGetProperty("workspaceAgentRecall", out var recalledPayload) ||
+                     recalledPayload.ValueKind == System.Text.Json.JsonValueKind.Null) &&
+                    ReplyCode(ownerRecallAttempt) == "forbidden",
+                "The workspace recall operation did not stay on the agent channel and fail closed without an approved session.");
+            var noRequestGrant = await S12T5OwnerAsync(cliExecutable, fixture.ControlPipe,
+                "workspace-share-grants").ConfigureAwait(false);
+            Require(noRequestGrant.ExitCode == 0 &&
+                    noRequestGrant.StandardOutput.Contains("WORKSPACE GRANTS count=0", StringComparison.Ordinal),
+                "Submitting or checking a workspace folder request minted a read grant.");
+            var ownerRequestList = await S12T5OwnerAsync(cliExecutable, fixture.ControlPipe,
+                "workspace-requests").ConfigureAwait(false);
+            Require(ownerRequestList.ExitCode == 0 &&
+                    ownerRequestList.StandardOutput.Contains("WORKSPACE REQUEST id=" + folderRequestId, StringComparison.Ordinal) &&
+                    ownerRequestList.StandardOutput.Contains("status=pending", StringComparison.Ordinal) &&
+                    ownerRequestList.StandardOutput.Contains("WORKSPACE REQUESTS count=1", StringComparison.Ordinal),
+                "The actual owner CLI could not list the non-authoritative workspace folder request receipt.");
+            var ownerRecallGrantList = await S12T5OwnerAsync(cliExecutable, fixture.ControlPipe,
+                "workspace-agent-recall-grants").ConfigureAwait(false);
+            Require(ownerRecallGrantList.ExitCode == 0 &&
+                    ownerRecallGrantList.StandardOutput.Contains("WORKSPACE AGENT RECALL GRANTS count=0", StringComparison.Ordinal),
+                "The actual owner CLI could not inspect the initially empty workspace.agent.recall grants.");
+
+            Console.WriteLine("PASS S17-T5 agent-only folder request and separately scoped workspace recall transport boundary");
+
+
             var excludedFolder = await S12T5OwnerAsync(cliExecutable, fixture.ControlPipe,
                 "workspace-mkdir", "--parent-id", selectedFolderId, "--name", "s17t3-excluded",
                 "--expected-tree-revision", treeRevision).ConfigureAwait(false);
@@ -241,6 +319,18 @@ internal static partial class OwnerServiceSmoke
             Require(lockedPreviewReuse.ExitCode != 0 &&
                     lockedPreviewReuse.StandardError.Contains("scope_preview_unavailable", StringComparison.Ordinal),
                 "A pending folder preview survived vault lock/unlock.");
+
+            // An operation outside the fixed D111 recall subset is a request value the grant
+            // evaluates, not owner CLI usage: the client must read the refusal code, never help text.
+            var unapprovedRecall = await RunOwnerCommandAsync(cliExecutable,
+                "owner", "agent-workspace-recall", "--agent-pipe", fixture.AgentPipe,
+                "--session-file", Path.Combine(fixture.OutputDirectory, "s17t3-absent-session.handoff"),
+                "--operation", "workspace.file.read").ConfigureAwait(false);
+            Require(unapprovedRecall.ExitCode == 3 &&
+                    unapprovedRecall.StandardError.Contains("ERROR resource_unavailable", StringComparison.Ordinal) &&
+                    !unapprovedRecall.StandardOutput.Contains("workflow group", StringComparison.Ordinal) &&
+                    !unapprovedRecall.StandardError.Contains("workflow group", StringComparison.Ordinal),
+                $"An unapproved workspace recall operation did not answer with a structured refusal (exit={unapprovedRecall.ExitCode}; stdout={unapprovedRecall.StandardOutput}; stderr={unapprovedRecall.StandardError}).");
             var remainingGrants = await S12T5OwnerAsync(cliExecutable, fixture.ControlPipe,
                 "workspace-share-grants").ConfigureAwait(false);
             Require(remainingGrants.ExitCode == 0 && remainingGrants.StandardOutput.Contains("WORKSPACE GRANTS count=1", StringComparison.Ordinal),
@@ -256,7 +346,7 @@ internal static partial class OwnerServiceSmoke
                 provision, catalogBefore, broadPreview, narrowed, approval, grantList, revise, redeemed,
                 sessionInspection, sessionRevoke, revokedSessionInspection, grantRevoke,
                 rejectPreview, rejected, rejectedReuse, stalePreview, staleApproval, lockPreview,
-                locked, lockedApproval, unlocked, lockedPreviewReuse, remainingGrants, catalogAfter
+                locked, lockedApproval, unlocked, lockedPreviewReuse, unapprovedRecall, remainingGrants, catalogAfter
             };
             Require(outputs.All(output =>
                     !output.StandardOutput.Contains(passphrase, StringComparison.Ordinal) &&

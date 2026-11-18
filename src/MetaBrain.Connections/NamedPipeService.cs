@@ -291,6 +291,16 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceContextPackGrantRejectOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceContextPackGrantListOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceContextPackGrantRevokeOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceFolderRequestListOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceFolderRequestResolveOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceAgentRecallGrantPreviewOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceAgentRecallGrantIssueOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceAgentRecallGrantRejectOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceAgentRecallGrantListOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceAgentRecallGrantRevokeOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.AgentWorkspaceFolderRequestSubmitOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.AgentWorkspaceFolderRequestStatusOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.AgentWorkspaceAgentRecallReadOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.AgentWorkspaceContextPackReadOperation, StringComparison.Ordinal))
                 {
                     timeout.CancelAfter(WorkspaceTimeout);
@@ -314,6 +324,13 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceContextPackGrantRejectOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceContextPackGrantListOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceContextPackGrantRevokeOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceFolderRequestListOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceFolderRequestResolveOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceAgentRecallGrantPreviewOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceAgentRecallGrantIssueOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceAgentRecallGrantRejectOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceAgentRecallGrantListOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceAgentRecallGrantRevokeOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerScopeCollectionSetOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerScopeCollectionListOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.OwnerCatalogPreviewOperation, StringComparison.Ordinal) ||
@@ -328,6 +345,9 @@ internal sealed class NamedPipeService
                     string.Equals(request.Operation, ServiceRequestHandler.AgentMemoryBriefOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.AgentCollectionViewOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.AgentWorkspaceContextPackReadOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.AgentWorkspaceFolderRequestSubmitOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.AgentWorkspaceFolderRequestStatusOperation, StringComparison.Ordinal) ||
+                    string.Equals(request.Operation, ServiceRequestHandler.AgentWorkspaceAgentRecallReadOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.AgentResourceReadOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.AgentFeedbackOperation, StringComparison.Ordinal) ||
                     string.Equals(request.Operation, ServiceRequestHandler.AgentFeedbackReadOperation, StringComparison.Ordinal) ||
@@ -485,7 +505,11 @@ internal sealed class NamedPipeService
                     !string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspacePassageIndexStatusOperation, StringComparison.Ordinal) &&
                     !string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspacePassageIndexRebuildOperation, StringComparison.Ordinal) &&
                     !string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspacePassageAnchorsOperation, StringComparison.Ordinal) &&
-                    !string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceHybridSearchOperation, StringComparison.Ordinal);
+                    !string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceHybridSearchOperation, StringComparison.Ordinal) &&
+                    !string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceAgentRecallGrantPreviewOperation, StringComparison.Ordinal) &&
+                    !string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceAgentRecallGrantIssueOperation, StringComparison.Ordinal) &&
+                    !string.Equals(request.Operation, ServiceRequestHandler.OwnerWorkspaceAgentRecallGrantListOperation, StringComparison.Ordinal) &&
+                    !string.Equals(request.Operation, ServiceRequestHandler.AgentWorkspaceAgentRecallReadOperation, StringComparison.Ordinal);
                 if (serializeWithBackgroundRefresh)
                 {
                     // Cancellation updates the job, spend ledger, and audit state.
@@ -610,6 +634,9 @@ internal sealed class NamedPipeService
                 !string.Equals(operation, ServiceRequestHandler.AgentResourceReadOperation, StringComparison.Ordinal) &&
                 !string.Equals(operation, ServiceRequestHandler.AgentMemoryReadOperation, StringComparison.Ordinal) &&
                 !string.Equals(operation, ServiceRequestHandler.AgentWorkspaceContextPackReadOperation, StringComparison.Ordinal) &&
+                !string.Equals(operation, ServiceRequestHandler.AgentWorkspaceFolderRequestSubmitOperation, StringComparison.Ordinal) &&
+                !string.Equals(operation, ServiceRequestHandler.AgentWorkspaceFolderRequestStatusOperation, StringComparison.Ordinal) &&
+                !string.Equals(operation, ServiceRequestHandler.AgentWorkspaceAgentRecallReadOperation, StringComparison.Ordinal) &&
                 !string.Equals(operation, ServiceRequestHandler.AgentMemorySearchOperation, StringComparison.Ordinal) &&
                 !string.Equals(operation, ServiceRequestHandler.AgentMemoryBriefOperation, StringComparison.Ordinal) &&
                 !string.Equals(operation, ServiceRequestHandler.AgentFeedbackOperation, StringComparison.Ordinal) &&
@@ -634,6 +661,9 @@ internal sealed class NamedPipeService
             string.Equals(operation, ServiceRequestHandler.AgentResourceReadOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentMemoryReadOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentWorkspaceContextPackReadOperation, StringComparison.Ordinal) ||
+            string.Equals(operation, ServiceRequestHandler.AgentWorkspaceFolderRequestSubmitOperation, StringComparison.Ordinal) ||
+            string.Equals(operation, ServiceRequestHandler.AgentWorkspaceFolderRequestStatusOperation, StringComparison.Ordinal) ||
+            string.Equals(operation, ServiceRequestHandler.AgentWorkspaceAgentRecallReadOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentMemorySearchOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentMemoryBriefOperation, StringComparison.Ordinal) ||
             string.Equals(operation, ServiceRequestHandler.AgentFeedbackOperation, StringComparison.Ordinal) ||

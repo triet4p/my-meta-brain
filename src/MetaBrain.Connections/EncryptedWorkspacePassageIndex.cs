@@ -813,6 +813,26 @@ internal sealed class EncryptedWorkspacePassageIndex : IWorkspacePassageIndexEng
         }
     }
 
+    public WorkspacePassageSemanticResult SearchSemanticWithActiveModel(
+        IWorkspacePersistence workspace,
+        string query,
+        IReadOnlyCollection<WorkspacePassageScope> scope,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var modelDirectory = _modelDirectory;
+            if (string.IsNullOrWhiteSpace(modelDirectory))
+            {
+                throw new WorkspacePassageIndexException("workspace_index_model_missing");
+            }
+
+            return SearchSemantic(workspace, modelDirectory, query, scope, cancellationToken);
+        }
+    }
+
     private static WorkspaceFooter ReadHeaderAndFooter(FileStream stream, AesGcm aes)
     {
         if (stream.Length < HeaderBytes)

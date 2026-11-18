@@ -149,6 +149,17 @@ public interface IWorkspacePassageIndexEngine : IDisposable
         string query,
         IReadOnlyCollection<WorkspacePassageScope> scope,
         CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Ranks an agent query using only the model already selected by the
+    /// owner for the current passage-index generation. It cannot select or
+    /// load a different model.
+    /// </summary>
+    WorkspacePassageSemanticResult SearchSemanticWithActiveModel(
+        IWorkspacePersistence workspace,
+        string query,
+        IReadOnlyCollection<WorkspacePassageScope> scope,
+        CancellationToken cancellationToken = default);
 
     void Reset();
+
 }
