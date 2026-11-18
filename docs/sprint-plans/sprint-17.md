@@ -2,7 +2,7 @@
 
 ## Goal và trạng thái
 
-- Status: **In progress — S17-T1–T5 Complete; S17-T6 blocked on offline restore**. 1.7.0 chưa phát hành.
+- Status: **Complete — S17-T1–T6 Complete; 1.7.0 published 2026-11-18; public R2 PASS**.
 - Entry: Sprint 16 complete và 1.6.0 published.
 - Scope/trace: P2-08, P2-09, P2-12; R03, R05–R09, R11, R24, R25, R31. Các P2 là candidates, không thay baseline khi chưa có approval.
 - Root: `F:/ai-ml/my-meta-brain`; target ref `main`; exact base/worktree/ownership resolve khi execution.
@@ -65,12 +65,13 @@ The owner-approved normative [folder-scope contract](../META-BRAIN.md#56-approve
     - Evidence gate: [R1 FAIL](../../artifacts/sprint-17/reviews/S17-T5-C1-R1.md) and A9's then-unauthorized turn overage remain on record. Owner accepted the technical evidence without rerun; [R2 PASS](../../artifacts/sprint-17/reviews/S17-T5-C1-R2.md) verified both normal clients with no actionable findings. [Bronze checkpoint](../../artifacts/sprint-17/checkpoints/S17-T5-C1.md) committed the exact reviewed snapshot as `55d35ec31a8c4e9c8df41bb98b4b96d68776d47a`; no push.
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
 
-- [~] **S17-T6 — Release 1.7.0.**
+- [x] **S17-T6 — Release 1.7.0.**
     - Change: Publish simplified sharing/context workflows và SDK/protocol compatibility docs.
     - Acceptance: Exact package và normal-client changed paths có evidence; provider inference riêng chỉ khi consent/budget, không suy từ retrieval; release contract chung đạt.
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
     - Workflow: full route; locally verified candidate → independent evidence review → exact-snapshot Bronze checkpoint → final Sprint 17 differential review. Owner approval required separately for external publication and any new provider/model execution. Public smoke and closure follow only after authorized publication.
-    - Candidate status: owner verified signatures on all three .NET `10.0.15` `win-x64` runtime packs and copied them into the repo-local NuGet cache, but owner-run assembly still failed with `NU1102`; the copied archives are not installed cache entries. Restore using the separate signed-package staging directory as an offline source before resuming assembly. See [A1 handoff](../../artifacts/sprint-17/handoffs/S17-T6-IMPL-20261117-A1.md). No candidate or review yet.
+    - Local gates: candidate `20af9d477aba` passed packaged CLI/MCP, both normal clients, isolated upgrade/recovery, and local site preview checks. [Independent R1 PASS](../../artifacts/sprint-17/reviews/S17-T6-C1-R1.md); [exact checkpoint](../../artifacts/sprint-17/checkpoints/S17-T6-C1.md) `fd8ad2f7`; [final differential D1 PASS](../../artifacts/sprint-17/reviews/S17-DEEP-D1.md).
+    - Publication: [GitHub Release 1.7.0](https://github.com/triet4p/my-meta-brain/releases/tag/v1.7.0) at `fd8ad2f7`; [publication record](../../artifacts/sprint-17/publication/S17-PUBLISH-P1.md). [Public R1 FAIL](../../artifacts/sprint-17/reviews/S17-PUBLIC-C1-R1.md) retained for stale website wording; [site correction](../../artifacts/sprint-17/publication/S17-PUBLIC-FIX-DEPLOY-C1.md) deployed to [Pages](https://triet4p.github.io/my-meta-brain/) at `05c4b0cf` without changing tag or assets. [Public R2 PASS](../../artifacts/sprint-17/reviews/S17-PUBLIC-C1-R2.md), no actionable findings.
 
 ## Exit và release boundary
 
