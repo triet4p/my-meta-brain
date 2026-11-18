@@ -447,8 +447,8 @@ The project follows the authoritative milestone roadmap in [`docs/PLAN.md`](docs
 Milestones 1–9 and Sprint 9's three-product delivery are complete; the public 1.0.0 release,
 asset-name cutover, updated Pages deployment and public smoke are complete. Sprints 11–16 published
 1.1.0–1.6.0; Sprint 16's 1.6.0 was published on 2026-11-12 after the review PASS, exact-snapshot
-checkpoint, final differential and owner authorization. See
-[`docs/PLAN.md`](docs/PLAN.md) for the authoritative status.
+checkpoint, final differential and owner authorization. Sprint 17 T1–T5 are complete; 1.7.0 has an exact local candidate (`20af9d477aba`) assembled and verified for the CLI setup, MCP ZIP, protocol, packaged workflows and an isolated 1.6.0 → 1.7.0 data-preserving upgrade, but it is not reviewed, checkpointed or published, so
+1.6.0 remains the latest public release. See [`docs/release-1.7.0.md`](docs/release-1.7.0.md) for exact identities and hashes, and [`docs/PLAN.md`](docs/PLAN.md) for authoritative status.
 
 - [x] **Milestone 1 (M1) — Encrypted Vault & Scoped Sharing (Sprint 1):** User-controlled key lifecycle, authenticated ciphertext, owner-approved catalog publication, single-use token issuance/redemption, and in-memory scoped reads verified with official Codex and OMP clients.
 - [x] **Milestone 2 (M2) — Durable Encrypted Core (Sprint 2):** Canonical encrypted item/source/zone/revision models, relations, and rebuildable protected index.

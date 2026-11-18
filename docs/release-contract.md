@@ -1,6 +1,57 @@
-# Meta Brain 1.0.0 — release contract
+# Meta Brain — release and compatibility contract
 
-This is the release/install/site contract for Sprint 10. It does not change product behavior or re-run Sprint 9 acceptance. **Requirements** below are binding; proposed implementation choices are identified explicitly; unverified prerequisites remain unverified. Product versions, signing claims, release assets, publication, and support status must never be inferred from a plan or from the existing S9 bundle.
+## Product and support matrix for 1.7.0 (S17-T6 candidate)
+
+**Candidate state:** the exact 1.7.0 packages are assembled and verified locally under candidate
+`20af9d477aba`, but there is no public 1.7.0 download, Release, tag, site deployment, review PASS
+or checkpoint. 1.6.0 remains the latest published release; do not infer 1.7.0 availability from
+this contract. See `docs/release-1.7.0.md` for the exact identities and hashes.
+
+| Product | Planned version / asset | Entry and lifecycle |
+| --- | --- | --- |
+| CLI | `1.7.0`; candidate `MetaBrain-CLI-1.7.0-win-x64-55d35ec31a8c-treec47629d2bcde-20af9d477aba.exe`; eventual public name `MetaBrain-CLI-1.7.0.exe` | Dedicated Windows x64 setup EXE for `cli/MetaBrain.Cli.exe` and the shared runtime. It registers only the CLI component. Candidate identity, size and SHA-256 are verified; not published. |
+| MCP Server | `1.7.0`; candidate `MetaBrain-MCP-1.7.0-win-x64-55d35ec31a8c-treec47629d2bcde-20af9d477aba.zip`; eventual public name `MetaBrain-MCP-1.7.0.zip` | Standalone self-contained ZIP with `mcp/MetaBrain.Mcp.exe`, shared `service/`, package manifest, project license, release notes, third-party notices and dependency license texts. Stdio/JSON-RPC; exactly one of `--data-root <owner data root>` or `--config <service-settings.json>`. Candidate identity, size and SHA-256 are verified; not published. |
+| Document surface | no separate product asset | The existing optional document preview/edit bridge remains in the CLI/shared runtime; no new browser product, owner web console, WPF build or installer is planned. |
+| Owner UI | none in 1.7 | The WPF 1.1.0 product remains frozen and unchanged; no compatibility with the 1.7 runtime/data is claimed. |
+
+**Workspace sharing and context contract:** the T5 MCP additions are versioned agent tools, not
+owner authority. A folder request and its status expose only a non-authoritative receipt; owner
+review of that request does not grant access. The owner separately approves an exact D108 folder
+snapshot for file reads. D111 cognitive, hybrid and relation recall requires its own grant and
+independent operation selection. D110 context packs return the selected, pinned, budget-fitting
+verbatim entries and scoped accepted/current relation paths; source reads and pending proposals
+still require their own grants. None of these operations exposes the vault key, grants owner
+authority or implies provider egress. This is the contract scope; the changed sharing/context
+paths were also exercised on the exact 1.7.0 package with synthetic fixtures, but not through a
+normal model-backed client.
+
+**MCP protocol and client compatibility:** the package is a stdio JSON-RPC server. It negotiates
+an offered MCP protocol revision when one of `2025-11-25`, `2025-06-18`, `2025-03-26` or
+`2024-11-05` is offered; an unknown or absent offer falls back to `2025-11-25`. Sprint 17 T5
+reviewed normal-client evidence observed Codex CLI `0.164.0` and OMP `18.20.0`. These are
+evidence points for the reviewed T5 source only, not a minimum/maximum client range, a separate
+SDK certification or exact-package normal-client proof. The exact 1.7.0 package negotiated `2025-11-25` and `2025-06-18` with `serverInfo 1.7.0`; T5 client observations remain source-only evidence. There is no bundled client SDK.
+
+**Compatibility and recovery boundary:** the existing installer transition logic supports the
+CLI/MCP component model from 1.2.0 onward and refuses pre-1.2, unknown/mixed or conflicting
+shared-runtime installations before changing files. Intended 1.7.0 upgrade from 1.2.0–1.6.0 is
+in-place over the existing install root with the same owner data root, settings and endpoints;
+the exact packaged 1.6.0 → 1.7.0 upgrade, refusal and recovery path was exercised in an isolated
+synthetic fixture: only the ownership marker changed, settings/endpoints were byte-identical, the
+host restarted locked, and passphrase plus recovery-key access preserved the vault bytes.
+Before any downgrade, stop and lock the service and make and verify an encrypted owner backup;
+older releases cannot be assumed to understand newer grant records. Never reset, migrate or
+overwrite a vault as a rollback shortcut.
+
+The intended product boundary is self-contained Windows x64 on operating systems supported by
+.NET 10 at publication time; SKU-by-SKU testing is not implied. The owner-installed Microsoft
+Visual C++ v14 x64 Redistributable `14.43.34808` or later remains a separate prerequisite and is
+not downloaded, bundled or installed by Meta Brain. The assets are unsigned: SHA-256 checks
+integrity, not publisher identity. The project license remains MIT, `Copyright (c) 2026 triet4p`;
+the exact candidate manifest carries the dependency/license/provenance inventory and both asset
+hashes, recorded in `docs/release-1.7.0.md`.
+
+**Historical Sprint 10 baseline:** The original 1.0.0 release/install/site contract does not change product behavior or re-run Sprint 9 acceptance. The release matrices above and below state their own version boundaries. Requirements remain binding; proposed implementation choices are identified explicitly and unverified prerequisites remain unverified. Product versions, signing claims, release assets, publication and support status must never be inferred from a plan or from the old S9 bundle.
 
 **Version boundary (CR03, 2026-11-01):** This remains the historical 1.0.0/Sprint 10 contract; its three-product/WPF rules do not mandate future UI installers. From Sprint 12/1.2.0 onward, the owner-approved [CR03](REQUIREMENTS.md#approved-change-record--cr03-2026-11-01) and [roadmap release contract](ROADMAP-2.0.md#7-definition-of-release-mỗi-sprint) require a CLI installer + MCP ZIP, with document-browser assets bundled from Sprint 13. Preserve old downloads, bytes, acceptance and component/data ownership; prove safe legacy-UI transition or explicit refusal/remediation before upgrading the shared runtime. No implementation or publication is authorized here.
 

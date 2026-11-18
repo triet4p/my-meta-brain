@@ -6,6 +6,8 @@ All notable changes to Meta Brain are documented here.
 
 ### Added
 
+- Added the exact local 1.7.0 release candidate (S17-T6): a dedicated CLI setup and a standalone MCP ZIP under candidate `20af9d477aba`, with verified asset hashes, embedded/packaged payload inventories, MCP protocol negotiation for `2025-11-25` and `2025-06-18` (26 tools), and documented license, provenance and unsigned status. The packaged CLI/service/MCP sharing and context workflows and an isolated data-preserving 1.6.0 → 1.7.0 upgrade/recovery were verified on synthetic fixtures. This candidate is not published, reviewed or checkpointed, and no client SDK is bundled.
+
 - Added versioned MCP workspace-folder request and recall tools: agents can request consideration of a stable folder ID for the fixed `workspace.file.read` operation, while owners review requests separately from D108 approval. Owners can issue distinct D111 recall grants for explicitly pinned cognitive annotations, hybrid search and accepted/current relations; recall does not grant source, proposal or owner authority.
 
 

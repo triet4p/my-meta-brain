@@ -574,14 +574,15 @@ $runtimeNote
          $packageManifest['help']='mcp/MetaBrain.Mcp.exe --help'
          $packageManifest['version']='mcp/MetaBrain.Mcp.exe --version'
          $packageManifest['compatibility']=[ordered]@{
-             codexCli=[ordered]@{configuration='process-scoped -c overrides';observedVersion='0.164.0';evidence='Sprint 9 T7 accepted package compatibility observation'}
-             ohMyPi=[ordered]@{configuration='project-local .omp/mcp.json';observedVersion='18.12.6';evidence='Sprint 9 T7 accepted package compatibility observation'}
+             codexCli=[ordered]@{configuration='process-scoped -c overrides';observedVersion='0.164.0';evidence='Sprint 17 T5 C1 R2 PASS normal-client observation; not an exact 1.7.0 package smoke or a compatibility range'}
+             ohMyPi=[ordered]@{configuration='project-local .omp/mcp.json';observedVersion='18.20.0';evidence='Sprint 17 T5 C1 R2 PASS normal-client observation; not an exact 1.7.0 package smoke or a compatibility range'}
          }
          $packageManifest['knownLimits']=@(
              'Windows x64 only, on a Windows release supported by .NET 10; the exact supported Windows SKU matrix was not separately established for this MCP asset.',
              'Linux, macOS and ARM are unsupported.',
              'The MCP server exposes agent-scoped tools only; owner authority and key/bearer credentials are not passed through client configuration.',
              'Client configuration is owner-authored and scoped to the process (Codex) or project (OMP); the package does not edit profiles or configuration.',
+             'Codex CLI 0.164.0 and OMP 18.20.0 are Sprint 17 T5 normal-client evidence points, not declared client-version or SDK compatibility ranges; T6 exact-package proof must be recorded separately.',
              'Unsigned; SHA-256 verifies integrity but does not authenticate publisher identity.'
          )
      } else {
