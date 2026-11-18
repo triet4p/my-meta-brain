@@ -16,6 +16,8 @@ Full OMP route; task tuần tự T1 → T6. Mỗi task cần worker evidence, in
 
 Chưa authorize launch/routing/commit/push/tag/upload/deploy/provider access. Worker role hoặc scoped routing authority phải xác định khi execution; tối đa hai active agents, một implementation task. Worker đọc implement-atomic-task và mọi regular file trực tiếp dưới ~/.agents/rules/. Artifacts tại `artifacts/sprint-18/task-<M>.md`, reviews/checkpoints dưới cùng sprint; không tạo trước PASS giả.
 
+- Contract S18-T1 đã owner-approve 2026-11-18: [D112](../../.agents/memory/decisions.md), [spec §13.6](../META-BRAIN.md#136-approved-migrationcutover-contract--s18-t1--d112), [requirements](../REQUIREMENTS.md#owner-approved-migrationcutover-contract--s18-t1--d112-2026-11-18). Đoạn trên ghi trạng thái trước approval; approval này chỉ chốt contract + S18 envelope, không authorize T2–T6, migration execution, release hay G2 removals.
+
 Không host mutation/ACL/permissions/profile edits; synthetic data mặc định. Không downgrade baseline security, reset data hoặc lấy test suite thay runtime smoke. Decision còn mở/contract thay đổi phải owner-approved và sync docs trước implementation affected path.
 
 ## Atomic tasks
@@ -24,17 +26,17 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
 
 - [ ] **S18-T1 — Freeze migration và final acceptance contract.**
     - Change: Inventory mappings legacy items/sources/revisions/zones/relations/lifecycle/jobs/catalog/grants; bảng CLI feature parity, requirement/evidence và budgets từ các sprint trước. Review default/API removal riêng cho G2; giữ support-transition evidence installed WPF/shared runtime từ S12.
-    - Acceptance: Owner approve migration/cutover impact, rollback limits và acceptance corpus; no fabricated original file cho item chỉ có structured body. Final thresholds frozen trước tuning, không mở lại Sprint 9 wholesale.
+    - Acceptance: Owner đã approve 2026-11-18 ([D112](../../.agents/memory/decisions.md), [spec §13.6](../META-BRAIN.md#136-approved-migrationcutover-contract--s18-t1--d112), [requirements](../REQUIREMENTS.md#owner-approved-migrationcutover-contract--s18-t1--d112-2026-11-18)): guarded migration/cutover, rollback restore-only và corpus C1/C2/C3 theo artifact task-1 §8; no fabricated original file cho item chỉ có structured body, oversized/zoned-không-enforce giữ legacy + report, declassification là quyết định riêng không bundle vào preview/confirm. Final thresholds frozen trước tuning theo S18 envelope §14 (1k ≤250 ms, 10k ≤500 ms, 100k ≤110% từng gated metric, 256 MiB, 1 MiB/act), không mở lại Sprint 9 wholesale.
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
 
 - [ ] **S18-T2 — Migration preview và ownership transfer.**
     - Change: Dry-run encrypted legacy-to-workspace mapping, conflicts/unknowns, key/format compatibility; execute chỉ sau explicit owner confirm và consistent encrypted backup.
-    - Acceptance: Original bytes có nguồn giữ nguyên; generated representation được ghi đúng nhãn; IDs/revisions/attribution/citations/relations/lifecycle giữ mapping truy ngược. Không dual-write/two truth copies hoặc tự broaden permissions.
+    - Acceptance: Original bytes có nguồn giữ nguyên; generated representation được ghi đúng nhãn; IDs/revisions/attribution/citations/relations/lifecycle giữ mapping truy ngược. Không dual-write/two truth copies hoặc tự broaden permissions. Eligibility theo D112/spec §13.6: chỉ chuyển khi destination enforce đủ protection; structured-only, >1 MiB và zoned-không-enforce giữ legacy + report trong unmigrated report; demonstrate authorization trước transfer.
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
 
 - [ ] **S18-T3 — Interrupted migration và restore.**
     - Change: Implement restart/resume/fail-safe của approved migration, restore backup bằng key, no session/token resurrection và truthful downgrade path.
-    - Acceptance: Crash tại write/transfer boundaries không mất saved data hoặc double-import; wrong key/tamper/schema mismatch fail closed. Binary downgrade bằng restore compatible backup, không hứa new format đọc bởi 1.0.
+    - Acceptance: Crash tại write/transfer boundaries không mất saved data hoặc double-import; wrong key/tamper/schema mismatch fail closed. Binary downgrade bằng restore compatible backup, không hứa new format đọc bởi 1.0. Rollback theo D112 P8: chỉ restore whole-vault backup đã verify; no per-record undo; post-backup edits excluded/disclosed.
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
 
 - [ ] **S18-T4 — Retention/purge và portability completeness.**
@@ -44,12 +46,12 @@ Mỗi task sau phụ thuộc toàn bộ task trước; release task theo [releas
 
 - [ ] **S18-T5 — Daily-use và resource acceptance.**
     - Change: Owner walkthrough hoàn toàn qua CLI: file/folder → capture → search → cognitive filters/review → relations → synthesis/jobs → intentions → context sharing; thêm optional browser document preview/edit. Targeted quality/performance/security measurements trên approved representative corpus.
-    - Acceptance: Owner ghi nhận useful/wrong/stale/missing; no unresolved serious finding; budgets/held-out relevance đạt hoặc owner-approved requirement change, không đổi số đo để PASS. CLI-only parity và browser keyboard/preview/edit/conflict/lock/exit verified trên actual surfaces; không đòi WPF replay.
+    - Acceptance: Owner ghi nhận useful/wrong/stale/missing; no unresolved serious finding; budgets/held-out relevance đạt hoặc owner-approved requirement change, không đổi số đo để PASS. CLI-only parity và browser keyboard/preview/edit/conflict/lock/exit verified trên actual surfaces; không đòi WPF replay. S18 budgets theo spec §14 (D112): 1k ≤250 ms, 10k ≤500 ms, 100k A18-2 ≤110% từng gated metric (handler p95, rebuild wall, unlocked/locked idle WS), 256 MiB, 1 MiB/act; p50/max/CPU/private/managed/disk/staging/throughput report-only; R37 real files chỉ với per-run consent riêng.
     - Check: Packaged CLI/service + normal MCP clients theo changed scope; browser thật cho document lifecycle, không dùng test suite thay runtime proof.
 
 - [ ] **S18-T6 — Release 1.8.0 và G2 handoff.**
     - Change: Freeze cumulative 1.8 candidate, migration/compatibility docs, future major removals, complete evidence/known-limit map và publish theo contract chung.
-    - Acceptance: Usable 1.8.0 published trước G2; opt-in migration chạy thật, không migration stub; readiness không phải 2.0 PASS. G2 chỉ được mở khi mọi sprint task/checkpoint/deep/publication complete.
+    - Acceptance: Usable 1.8.0 published trước G2; opt-in migration chạy thật, không migration stub; readiness không phải 2.0 PASS. G2 chỉ được mở khi mọi sprint task/checkpoint/deep/publication complete. G2 removals cần owner approval riêng (không removal ở 1.x); giữ S12 transition evidence.
     - Check: Exercise changed CLI/service/MCP paths; actual browser chỉ khi document preview/edit bị ảnh hưởng, không WPF gate. Ghi scenarios/observations/limits, không claim surface chưa chạy.
 
 ## Exit và release boundary

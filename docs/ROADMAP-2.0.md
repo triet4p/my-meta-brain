@@ -53,7 +53,7 @@ Các mã P2 dưới đây là acceptance candidates cho roadmap, **không tự t
 | P2-08 | Folder scope preview, revoke/lock/expiry, không mở quyền qua link hoặc membership ngầm | 4 | 17 | R03, R05–R08, R11, R31 |
 | P2-09 | Context pack có nguồn, budget, contradictions/gaps; normal Codex/OMP dùng thật | 7 | 17 | R07, R09, R24, R25 |
 | P2-10 | Lazy/streaming/bounded cache, responsive CLI/document browser, measured retrieval quality | 9, 12 | 13, 15, 18 | R23, R30, R37, R38; CR03 |
-| P2-11 | Lossless migration/recovery/backup/export/purge và clean cutover | 11 | 12, 18, G2 | R29, R33–R36, R39 |
+| P2-11 | Lossless migration/recovery/backup/export/purge và clean cutover | 11 | 12, 18, G2 | R29, R33–R36, R39; D112 |
 | P2-12 | Usable release mỗi sprint: S11 ba products; S12+ CLI installer/MCP ZIP, docs/integrity/owner publication | 10 | 11–18, G2 | R24, R32, R35, R40; CR03 |
 
 ### Change-control gates
@@ -64,7 +64,7 @@ S11-T1 đã hoàn tất CR02/D088 approval; S11-T2–T5 implemented và 1.1.0 pu
 - File/storage/key/metadata disclosure and installed-WPF transition: owner approved [D090](META-BRAIN.md#134-approved-workspace-contract--d090) for S12; implementation and proof remain required before affected writes/package.
 - CLI + narrow document browser đã được chọn bởi CR03; S13-T1 chốt bridge authorization, rendering/editor dependencies, encoding và budgets bằng evidence, không chọn lại desktop framework. Taxonomy và engine chốt ở đầu sprint tương ứng.
 - Folder snapshot/continuous scope: owner approved snapshot với identity narrowing và explicit refresh (S17-T1/D108, 2026-11-16) trước S17-T2; continuous chưa được duyệt và nếu sau này được đề xuất phải nêu file/revision mới, moves và revocation semantics. Approval là contract, không phải implementation/runtime evidence.
-- Migration/default/API removals: giải quyết trước S18 migration execution và G2 cutover.
+- Migration/default/API removals: migration/cutover contract đã owner-approve 2026-11-18 ([D112](META-BRAIN.md#136-approved-migrationcutover-contract--s18-t1--d112), [requirements](REQUIREMENTS.md#owner-approved-migrationcutover-contract--s18-t1--d112-2026-11-18)); G2 removal contract vẫn cần owner approval riêng trước G2-T1, không removal nào ở 1.x.
 
 Nếu approval của contract còn mở chưa có, task affected là blocked; không thực thi dưới baseline mâu thuẫn. CR03 chỉ approve planning/support change; không tạo runtime evidence, authorize worker launch hoặc thay CR01 security.
 
@@ -117,7 +117,7 @@ Release task cuối mỗi sprint chịu cùng contract:
 
 G2 là major-release milestone sau tám sprint, **không thay release 1.8.0 cuối Sprint 18**. Nhờ vậy mỗi sprint đều kết thúc bằng 1.x.0 như owner yêu cầu. G2 gồm ba task riêng tuần tự, trạng thái ban đầu `[ ]`:
 
-- [ ] **G2-T1 — Default/API clean cutover.** Entry: Sprint 18 complete, owner chấp thuận migration/removal contract. Chuyển workspace thành trải nghiệm mặc định, migrate mọi supported CLI/MCP/document-bridge/settings caller, bỏ obsolete active legacy write paths/shims và WPF product/packaging callers theo approved mapping. Không cập nhật/revive WPF 1.1; giữ historical assets/source/evidence và owner data. Kiểm tra old-data opening/migration/refusal, protocol mismatch, no two writers và interrupted cutover; không đụng backups nguyên bản. Outcome: một authoritative implementation, retained owner workflows đầy đủ qua CLI, không alias hoặc mất tính năng im lặng.
+- [ ] **G2-T1 — Default/API clean cutover.** Entry: Sprint 18 complete, migration contract D112 đã accepted/implemented, và owner chấp thuận riêng G2 removal contract. Chuyển workspace thành trải nghiệm mặc định, migrate mọi supported CLI/MCP/document-bridge/settings caller, bỏ obsolete active legacy write paths/shims và WPF product/packaging callers theo approved mapping. Không cập nhật/revive WPF 1.1; giữ historical assets/source/evidence và owner data. Kiểm tra old-data opening/migration/refusal, protocol mismatch, no two writers và interrupted cutover; không đụng backups nguyên bản. Outcome: một authoritative implementation, retained owner workflows đầy đủ qua CLI, không alias hoặc mất tính năng im lặng.
 - [ ] **G2-T2 — Exact 2.0 candidate và release delta acceptance.** Entry: T1 review/checkpoint PASS. Build version 2.0.0, không retag binary 1.8.0; exercise changed defaults/removals, install/upgrade từ 1.0 và intermediate release, recovery và normal client protocol trên candidate thật. So sánh 1.8 acceptance chỉ cho unchanged surfaces; append changed-path evidence. Cập nhật complete feature/requirement mapping, operations/migration/docs/assets/licenses; owner final acceptance và task gates trước differential major-release review.
 - [ ] **G2-T3 — Public 2.0.0.** Entry: T2 checkpoint + major differential PASS, no blocker, owner publication authorization. Publish immutable source tag/assets/site, verify exact hashes/links/version và public docs; không provider/functional replay không liên quan. Sau public smoke, Main ghi M18 complete. Nếu bytes thay đổi, review/refreeze delta và rerun affected checks trước phát hành, không sửa asset bất biến.
 
