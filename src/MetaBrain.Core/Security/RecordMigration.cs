@@ -31,6 +31,10 @@ public static class MigrationCodes
     public const string BackupMismatch = "backup_mismatch";
     public const string InconsistentState = "inconsistent_migration_state";
     public const string Refused = "migration_refused";
+    public const string NotMigrated = "not_migrated";
+    public const string AlreadyPurged = "already_purged";
+    public const string PurgeTargetMoved = "purge_target_moved";
+    public const string ExportScope = "export_scope_required";
 }
 
 /// <summary>
@@ -157,6 +161,72 @@ public sealed record MigrationResumeInfo(
 public sealed record MigrationReportInfo(string VaultId, MigrationMapEntry[] Entries, long MapRevision);
 
 /// <summary>
+/// One named member of the closed impact a migration-purge preview reports.
+/// <c>Category</c> separates owner-controlled canonical/workspace deletion
+/// from rebuildable derivatives; <c>Detail</c> is a short factual note and
+/// never carries record content, a key or a locator.
+/// </summary>
+public sealed record MigrationPurgeImpact(
+    string Category,
+    string ResourceId,
+    long Revision,
+    string Detail);
+
+/// <summary>
+/// The owner-only, write-free cross-representation purge preview for one
+/// migrated original. <c>OwnerControlled</c> is the closed set this act
+/// deletes inside the vault; <c>RetainedBackups</c> and <c>OutsideControl</c>
+/// are explicit disclosures of what the act neither rewrites nor recalls.
+/// The token binds the exact state that was read so a confirm cannot reuse a
+/// stale preview.
+/// </summary>
+public sealed record MigrationPurgePreview(
+    string Token,
+    string LegacyId,
+    long LegacyRevision,
+    string NodeId,
+    long NodeRevision,
+    long ContentRevision,
+    long TreeRevision,
+    long ManifestRevision,
+    long MapRevision,
+    MigrationPurgeImpact[] OwnerControlled,
+    string[] RetainedBackups,
+    string[] OutsideControl,
+    string Disclosure);
+
+/// <summary>The auditable outcome of one confirmed (or resumed) migration purge.</summary>
+public sealed record MigrationPurgeResult(
+    string PurgeId,
+    string LegacyId,
+    string NodeId,
+    string CanonicalPurgeId,
+    string[] DeletedCanonicalIds,
+    bool WorkspaceNodeRemoved,
+    bool MapEntryRemoved,
+    long FinalGeneration,
+    bool DecisionApplied);
+
+/// <summary>One file an original-plus-metadata export wrote.</summary>
+public sealed record MigrationExportFile(string Path, long Length, string Sha256);
+
+/// <summary>
+/// The exact-byte original export with its provenance metadata document, and
+/// the explicit statement of which artifacts are generated representations
+/// rather than originals.
+/// </summary>
+public sealed record MigrationExportInfo(
+    string LegacyId,
+    string NodeId,
+    long ContentRevision,
+    long Length,
+    string Sha256,
+    string OutputDirectory,
+    MigrationExportFile[] Files,
+    string[] GeneratedLabels,
+    string Disclosure);
+
+/// <summary>
 /// A migration act was refused. The code is an owner-facing reason; the
 /// message never contains record content, a key, a token or a credential.
 /// </summary>
@@ -207,6 +277,42 @@ public static class MigrationState
                 .Append(candidate.ZoneId).Append(':')
                 .Append(candidate.Eligible ? '1' : '0').Append(':')
                 .Append(candidate.Reason).Append('\n');
+        }
+
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString()))).ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Deterministic binding of the exact cross-representation state a purge
+    /// preview observed: vault/manifest, workspace tree and map revisions,
+    /// target identities and the closed canonical impact. Not a capability;
+    /// confirm still needs the owner channel and typed confirmation.
+    /// </summary>
+    public static string ComputePurgeToken(
+        string vaultId,
+        long manifestRevision,
+        long treeRevision,
+        long mapRevision,
+        string legacyId,
+        long legacyRevision,
+        string nodeId,
+        long contentRevision,
+        IReadOnlyList<MigrationPurgeImpact> ownerControlled)
+    {
+        var builder = new StringBuilder();
+        builder.Append(vaultId).Append('\n')
+            .Append(manifestRevision.ToString(CultureInfo.InvariantCulture)).Append('\n')
+            .Append(treeRevision.ToString(CultureInfo.InvariantCulture)).Append('\n')
+            .Append(mapRevision.ToString(CultureInfo.InvariantCulture)).Append('\n')
+            .Append(legacyId).Append(':').Append(legacyRevision.ToString(CultureInfo.InvariantCulture)).Append('\n')
+            .Append(nodeId).Append(':').Append(contentRevision.ToString(CultureInfo.InvariantCulture)).Append('\n');
+        foreach (var item in ownerControlled
+                     .OrderBy(item => item.Category, StringComparer.Ordinal)
+                     .ThenBy(item => item.ResourceId, StringComparer.Ordinal))
+        {
+            builder.Append(item.Category).Append(':')
+                .Append(item.ResourceId).Append(':')
+                .Append(item.Revision.ToString(CultureInfo.InvariantCulture)).Append('\n');
         }
 
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString()))).ToLowerInvariant();

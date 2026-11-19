@@ -175,6 +175,10 @@ internal static class OwnerControlCli
                 "migration-execute" => await MigrationExecuteAsync(options).ConfigureAwait(false),
                 "migration-report" => await MigrationReportAsync(options).ConfigureAwait(false),
                 "migration-resume" => await MigrationResumeAsync(options).ConfigureAwait(false),
+                "migration-purge-preview" => await MigrationPurgePreviewAsync(options).ConfigureAwait(false),
+                "migration-purge" => await MigrationPurgeAsync(options).ConfigureAwait(false),
+                "migration-purge-resume" => await MigrationPurgeResumeAsync(options).ConfigureAwait(false),
+                "migration-export" => await MigrationExportAsync(options).ConfigureAwait(false),
                 "backup" => await BackupAsync(options).ConfigureAwait(false),
                 "restore" => await RestoreAsync(options, useRecoveryCode: false).ConfigureAwait(false),
                 "restore-with-recovery-code" => await RestoreAsync(options, useRecoveryCode: true).ConfigureAwait(false),
@@ -2715,6 +2719,204 @@ internal static class OwnerControlCli
             $"mapRevision={DisplayText(resumed, "mapRevision")}");
         Console.WriteLine(
             "MIGRATION RESUME DISCLOSURE an exact-byte destination left by an interrupted transfer is bound to the encrypted reverse map; a destination with different bytes is refused and left untouched. A complete migration is only re-verified and writes nothing. No grant, catalog entry, token or session is transferred. Rollback is the separate whole-vault restore of a verified encrypted backup to a new directory; post-backup writes and exports are excluded, there is no per-record undo or in-place downgrade, and older binaries are not promised to read a post-1.8 vault.");
+        return 0;
+    }
+
+    /// <summary>
+    /// S18-T4 write-free cross-representation purge preview. Names the closed
+    /// owner-controlled set and discloses retention/backups and copies outside
+    /// control; mints no authority and writes nothing.
+    /// </summary>
+    private static async Task<int> MigrationPurgePreviewAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--legacy-id");
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerMigrationPurgePreviewOperation,
+                MigrationLegacyId: options.Required("--legacy-id"))).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "migration_purge_preview") ||
+            !TryWorkspaceObject(result.Reply, "migrationPurgePreview", out var preview))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        if (preview.TryGetProperty("ownerControlled", out var impacts) &&
+            impacts.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in impacts.EnumerateArray())
+            {
+                Console.WriteLine(
+                    $"PURGE IMPACT category={DisplayText(item, "category")} " +
+                    $"id={JsonSerializer.Serialize(DisplayText(item, "resourceId"))} " +
+                    $"revision={DisplayText(item, "revision")} detail={JsonSerializer.Serialize(DisplayText(item, "detail"))}");
+            }
+        }
+
+        foreach (var property in new[] { "retainedBackups", "outsideControl" })
+        {
+            if (preview.TryGetProperty(property, out var notes) && notes.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var note in notes.EnumerateArray())
+                {
+                    Console.WriteLine($"PURGE DISCLOSURE {property}={note.GetString()}");
+                }
+            }
+        }
+
+        Console.WriteLine(
+            $"MIGRATION PURGE PREVIEW legacy={DisplayText(preview, "legacyId")} " +
+            $"legacyRevision={DisplayText(preview, "legacyRevision")} " +
+            $"node={DisplayText(preview, "nodeId")} contentRevision={DisplayText(preview, "contentRevision")} " +
+            $"treeRevision={DisplayText(preview, "treeRevision")} mapRevision={DisplayText(preview, "mapRevision")} " +
+            $"impact={preview.GetProperty("ownerControlled").GetArrayLength().ToString(CultureInfo.InvariantCulture)} " +
+            $"token={DisplayText(preview, "token")}");
+        return 0;
+    }
+
+    /// <summary>
+    /// S18-T4 confirms one fresh cross-representation purge. The typed PURGE
+    /// confirmation, the exact previewed impact and the owner reason are all
+    /// required; the canonical ledger, workspace node and reverse map are
+    /// reconciled in one owner act.
+    /// </summary>
+    private static async Task<int> MigrationPurgeAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--legacy-id", "--confirm", "--reason");
+        var confirmation = options.Required("--confirm");
+        if (!string.Equals(confirmation, "PURGE", StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine(
+                "ERROR purge_confirmation_required: a migration purge needs the typed PURGE confirmation and the owner's reason; nothing was purged.");
+            return 4;
+        }
+
+        var controlPipe = ControlPipe(options);
+        var legacyId = options.Required("--legacy-id");
+        var previewResult = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerMigrationPurgePreviewOperation,
+                MigrationLegacyId: legacyId)).ConfigureAwait(false);
+        if (!previewResult.Success ||
+            !TryWorkspaceObject(previewResult.Reply, "migrationPurgePreview", out var previewElement))
+        {
+            WriteServiceError(previewResult);
+            return 4;
+        }
+
+        var result = await InvokeOwnerAsync(controlPipe,
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerMigrationPurgeOperation,
+                MigrationLegacyId: legacyId,
+                MigrationConfirmation: confirmation,
+                MigrationReason: options.Required("--reason"),
+                MigrationPurgePreview: previewElement.Clone())).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "migration_purged") ||
+            !TryWorkspaceObject(result.Reply, "migrationPurgeResult", out var purged))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        Console.WriteLine(
+            $"MIGRATION PURGED purge={DisplayText(purged, "purgeId")} " +
+            $"legacy={DisplayText(purged, "legacyId")} node={DisplayText(purged, "nodeId")} " +
+            $"canonicalPurge={DisplayText(purged, "canonicalPurgeId")} " +
+            $"deleted={purged.GetProperty("deletedCanonicalIds").GetArrayLength().ToString(CultureInfo.InvariantCulture)} " +
+            $"workspaceRemoved={DisplayText(purged, "workspaceNodeRemoved").ToLowerInvariant()} " +
+            $"mapRemoved={DisplayText(purged, "mapEntryRemoved").ToLowerInvariant()} " +
+            $"generation={DisplayText(purged, "finalGeneration")} " +
+            $"decisionApplied={DisplayText(purged, "decisionApplied").ToLowerInvariant()}");
+        Console.WriteLine(
+            "MIGRATION PURGE DISCLOSURE owner-controlled canonical records, the workspace node, retained revisions and the reverse-map entry were erased from this vault and reserved in the durable purge ledger. Retained encrypted backups keep ciphertext until their own retention expires; a restore re-applies the ledger so no purged id returns. Generated passage index and embeddings are invalidated rebuildable derivatives, never a second truth. Original session files, earlier plaintext exports and agent-local copies stay outside Meta Brain's control and were not opened, changed or recalled.");
+        return 0;
+    }
+
+    /// <summary>
+    /// S18-T4 resumes an interrupted cross-representation purge from its
+    /// durable canonical and workspace reservations; every step is idempotent.
+    /// </summary>
+    private static async Task<int> MigrationPurgeResumeAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--legacy-id", "--node-id", "--confirm", "--reason", "--canonical-purge");
+        if (!string.Equals(options.Required("--confirm"), "RESUME", StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine(
+                "ERROR resume_confirmation_required: a purge resume needs the typed RESUME confirmation; nothing was resumed.");
+            return 4;
+        }
+
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerMigrationPurgeResumeOperation,
+                MigrationLegacyId: options.Required("--legacy-id"),
+                MigrationCanonicalPurgeId: options.Optional("--canonical-purge"),
+                MigrationNodeId: options.Required("--node-id"),
+                MigrationConfirmation: "RESUME",
+                MigrationReason: options.Required("--reason"))).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "migration_purge_resumed") ||
+            !TryWorkspaceObject(result.Reply, "migrationPurgeResult", out var purged))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        Console.WriteLine(
+            $"MIGRATION PURGE RESUMED legacy={DisplayText(purged, "legacyId")} " +
+            $"node={DisplayText(purged, "nodeId")} canonicalPurge={DisplayText(purged, "canonicalPurgeId")} " +
+            $"workspaceRemoved={DisplayText(purged, "workspaceNodeRemoved").ToLowerInvariant()} " +
+            $"mapRemoved={DisplayText(purged, "mapEntryRemoved").ToLowerInvariant()} " +
+            $"decisionApplied={DisplayText(purged, "decisionApplied").ToLowerInvariant()}");
+        return 0;
+    }
+
+    /// <summary>
+    /// S18-T4 exact-byte original export with a provenance sidecar that labels
+    /// generated representations; the destination must not already exist.
+    /// </summary>
+    private static async Task<int> MigrationExportAsync(CommandOptions options)
+    {
+        options.RequireOnly("--control-pipe", "--legacy-id", "--output-dir", "--confirm");
+        if (!string.Equals(options.Required("--confirm"), "EXPORT", StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine(
+                "ERROR export_confirmation_required: an original export needs the typed EXPORT confirmation; nothing was written.");
+            return 4;
+        }
+
+        var result = await InvokeOwnerAsync(ControlPipe(options),
+            new ServiceRequest(
+                ServiceRequestHandler.CurrentProtocolVersion,
+                ServiceRequestHandler.OwnerMigrationExportOperation,
+                MigrationLegacyId: options.Required("--legacy-id"),
+                MigrationOutputDirectory: options.Required("--output-dir"),
+                MigrationConfirmation: "EXPORT")).ConfigureAwait(false);
+        if (!result.Success || !HasStatus(result.Reply, "migration_exported") ||
+            !TryWorkspaceObject(result.Reply, "migrationExportInfo", out var export))
+        {
+            WriteServiceError(result);
+            return 4;
+        }
+
+        if (export.TryGetProperty("generatedLabels", out var labels) &&
+            labels.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var label in labels.EnumerateArray())
+            {
+                Console.WriteLine($"EXPORT GENERATED {label.GetString()}");
+            }
+        }
+
+        Console.WriteLine(
+            $"MIGRATION EXPORTED legacy={DisplayText(export, "legacyId")} " +
+            $"node={DisplayText(export, "nodeId")} contentRevision={DisplayText(export, "contentRevision")} " +
+            $"bytes={DisplayText(export, "length")} sha256={DisplayText(export, "sha256")} " +
+            $"destination={JsonSerializer.Serialize(DisplayText(export, "outputDirectory"))}");
+        Console.WriteLine($"EXPORT DISCLOSURE {DisplayText(export, "disclosure")}");
         return 0;
     }
     /// <summary>
@@ -11936,6 +12138,10 @@ internal static class OwnerControlCli
         "migration-execute" => "owner migration-execute --control-pipe <pipe> --preview <token> --backup-file <verified-encrypted-backup> --confirm MIGRATE: transfer exactly the freshly previewed eligible originals into the encrypted workspace with an encrypted legacy-id reverse map. Requires the fresh token, typed MIGRATE and a consistent verified pre-migration backup; stale state, missing confirmation/backup, ineligible records, wrong key/tamper or over-cap bytes refuse with nothing written. Touches no grant, catalog, session or token.",
         "migration-report" => "owner migration-report --control-pipe <pipe>: read-only owner view of the encrypted legacy-id to workspace-id reverse map (node id, content revision, length and digest of each migrated original).",
         "migration-resume" => "owner migration-resume --control-pipe <pipe> --preview <token> --confirm RESUME: crash-safe resume after an interrupted migration. Re-derives the previewed state, binds an exact-byte destination that was already written into the encrypted reverse map, creates any remaining eligible originals and re-verifies completed entries without a write. An occupied destination with different bytes, a stale preview or a wrong confirmation refuses with nothing adopted or overwritten. No grant, token or session is touched; rollback remains the separate whole-vault restore.",
+        "migration-purge-preview" => "owner migration-purge-preview --control-pipe <pipe> --legacy-id <id>: write-free owner preview of the closed cross-representation purge impact for one migrated original (workspace node/revisions, legacy snapshot, map entry, canonical derivatives, annotations, relations, rebuildable index/embeddings) with explicit retention/backup and out-of-control disclosures. Writes nothing, mints no authority.",
+        "migration-purge" => "owner migration-purge --control-pipe <pipe> --legacy-id <id> --confirm PURGE --reason <text>: erase the freshly previewed migrated original from both representations and the reverse map under the one durable purge ledger. Requires typed PURGE and the owner's reason; stale state, wrong confirmation or a missing map entry refuse with nothing purged.",
+        "migration-purge-resume" => "owner migration-purge-resume --control-pipe <pipe> --legacy-id <id> --node-id <id> [--canonical-purge <id>] --confirm RESUME --reason <text>: resume an interrupted cross-representation purge from its durable reservations, idempotently; no purged identity is recreated. Omit --canonical-purge when the legacy side was already purged through its own owner surface.",
+        "migration-export" => "owner migration-export --control-pipe <pipe> --legacy-id <id> --output-dir <path> --confirm EXPORT: export the exact retained original bytes and a provenance metadata sidecar that labels generated representations; the destination must not already exist and the vault is unchanged.",
         "upgrade" => "owner upgrade --control-pipe <pipe>: raise old content schemas while locked (secure passphrase prompt; keeps an encrypted rollback point; leaves the vault locked).",
         "upgrade-with-recovery-code" => "owner upgrade-with-recovery-code --control-pipe <pipe>: same upgrade with the recovery key.",
         "rollback" => "owner rollback --control-pipe <pipe> [--discard true]: restore (or discard) the encrypted rollback point while locked.",

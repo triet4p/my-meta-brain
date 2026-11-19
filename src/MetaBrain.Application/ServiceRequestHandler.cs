@@ -123,7 +123,13 @@ public sealed record ServiceRequest(
     string? WorkspaceAgentRecallOperation = null,
     string? MigrationBackupPath = null,
     string? MigrationToken = null,
-    string? MigrationConfirmation = null);
+    string? MigrationConfirmation = null,
+    string? MigrationLegacyId = null,
+    string? MigrationNodeId = null,
+    string? MigrationCanonicalPurgeId = null,
+    string? MigrationReason = null,
+    string? MigrationOutputDirectory = null,
+    JsonElement? MigrationPurgePreview = null);
 public sealed record OwnerScopeGrantSummary(
     string GrantId,
     ScopeResourceRevision[] Resources,
@@ -1453,7 +1459,10 @@ public sealed record ServiceReply(
     MigrationPreviewInfo? MigrationPreview = null,
     MigrationExecutionInfo? MigrationExecution = null,
     MigrationReportInfo? MigrationReport = null,
-    MigrationResumeInfo? MigrationResume = null);
+    MigrationResumeInfo? MigrationResume = null,
+    MigrationPurgePreview? MigrationPurgePreview = null,
+    MigrationPurgeResult? MigrationPurgeResult = null,
+    MigrationExportInfo? MigrationExportInfo = null);
 public sealed class ServiceRequestHandler
 {
     public const int CurrentProtocolVersion = 2;
@@ -1493,6 +1502,10 @@ public sealed class ServiceRequestHandler
     public const string OwnerMigrationExecuteOperation = "owner.migration.execute";
     public const string OwnerMigrationReportOperation = "owner.migration.report";
     public const string OwnerMigrationResumeOperation = "owner.migration.resume";
+    public const string OwnerMigrationPurgePreviewOperation = "owner.migration.purge.preview";
+    public const string OwnerMigrationPurgeOperation = "owner.migration.purge";
+    public const string OwnerMigrationPurgeResumeOperation = "owner.migration.purge.resume";
+    public const string OwnerMigrationExportOperation = "owner.migration.export";
     public const string OwnerCognitiveAnnotationCreateOperation = "owner.cognitive.annotation.create";
     public const string OwnerCognitiveAnnotationListOperation = "owner.cognitive.annotation.list";
     public const string OwnerCognitiveAnnotationReadOperation = "owner.cognitive.annotation.read";
@@ -1708,6 +1721,7 @@ public sealed class ServiceRequestHandler
     private readonly CognitiveAnnotationService _cognitiveAnnotations;
     private readonly OwnerExportService _exports = new();
     private readonly RecordMigrationService _migrations = new();
+    private readonly MigrationPurgeService _migrationPurges = new(new RecordMigrationService(), new PurgeService());
     private readonly OperationsService _operations;
     private readonly OperationsAuditRecorder _auditRecorder;
     private readonly IOperationalLog? _operationalLog;
@@ -2155,6 +2169,7 @@ public sealed class ServiceRequestHandler
         OwnerWorkspaceExportPreviewOperation,
         OwnerMigrationPreviewOperation,
         OwnerMigrationReportOperation,
+        OwnerMigrationPurgePreviewOperation,
         OwnerWorkspaceNodePurgePreviewOperation,
         OwnerLibrarySearchOperation,
         OwnerWorkspaceHybridSearchOperation,
@@ -3097,6 +3112,26 @@ public sealed class ServiceRequestHandler
         if (string.Equals(request.Operation, OwnerMigrationReportOperation, StringComparison.Ordinal))
         {
             return HandleMigrationReport(context, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerMigrationPurgePreviewOperation, StringComparison.Ordinal))
+        {
+            return HandleMigrationPurgePreviewOperation(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerMigrationPurgeOperation, StringComparison.Ordinal))
+        {
+            return HandleMigrationPurgeOperation(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerMigrationPurgeResumeOperation, StringComparison.Ordinal))
+        {
+            return HandleMigrationPurgeResumeOperation(context, request, operation);
+        }
+
+        if (string.Equals(request.Operation, OwnerMigrationExportOperation, StringComparison.Ordinal))
+        {
+            return HandleMigrationExportOperation(context, request, operation);
         }
 
         if (string.Equals(request.Operation, OwnerWorkspaceStatusOperation, StringComparison.Ordinal))
@@ -15176,6 +15211,211 @@ public sealed class ServiceRequestHandler
         catch (ManagedResourceUnavailableException)
         {
             return Error("vault_locked");
+        }
+    }
+
+    private ServiceReply HandleMigrationPurgePreviewOperation(
+        AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (string.IsNullOrEmpty(request.MigrationLegacyId))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var preview = _migrationPurges.Preview(
+                context, operation, _vault.CurrentVaultId, _vault.CurrentManifestRevision,
+                request.MigrationLegacyId);
+            return new ServiceReply(
+                CurrentProtocolVersion, "migration_purge_preview", "owner", null,
+                MigrationPurgePreview: preview);
+        }
+        catch (MigrationRefusalException refusal)
+        {
+            return Refusal(refusal.Code, refusal.Message);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (ManagedResourceUnavailableException)
+        {
+            return Error("vault_locked");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+    }
+
+    private ServiceReply HandleMigrationPurgeOperation(
+        AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (request.MigrationPurgePreview is null ||
+            string.IsNullOrEmpty(request.MigrationConfirmation) ||
+            string.IsNullOrWhiteSpace(request.MigrationReason))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var preview = request.MigrationPurgePreview!.Value.Deserialize<MigrationPurgePreview>(
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (preview is null)
+            {
+                return Error("invalid_request");
+            }
+
+            var result = _migrationPurges.Confirm(
+                context, operation, _vault.CurrentVaultId, _vault.CurrentManifestRevision,
+                preview, request.MigrationConfirmation, request.MigrationReason,
+                ResetPrivateIndex);
+            RefreshProjection(operation);
+            return new ServiceReply(
+                CurrentProtocolVersion, "migration_purged", "owner", null,
+                MigrationPurgeResult: result);
+        }
+        catch (MigrationRefusalException refusal)
+        {
+            return Refusal(refusal.Code, refusal.Message);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (WorkspaceRefusalException refusal)
+        {
+            return Refusal(refusal.Code, "The workspace refused the purge; the durable ledger still reserves its ids.");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+    }
+
+    private ServiceReply HandleMigrationPurgeResumeOperation(
+        AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (string.IsNullOrEmpty(request.MigrationLegacyId) ||
+            string.IsNullOrEmpty(request.MigrationNodeId) ||
+            !string.Equals(request.MigrationConfirmation, "RESUME", StringComparison.Ordinal))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var result = _migrationPurges.Resume(
+                context, operation, _vault.CurrentVaultId, request.MigrationLegacyId,
+                request.MigrationCanonicalPurgeId ?? string.Empty, request.MigrationNodeId,
+                request.MigrationReason ?? "migration-purge-resume", ResetPrivateIndex);
+            RefreshProjection(operation);
+            return new ServiceReply(
+                CurrentProtocolVersion, "migration_purge_resumed", "owner", null,
+                MigrationPurgeResult: result);
+        }
+        catch (MigrationRefusalException refusal)
+        {
+            return Refusal(refusal.Code, refusal.Message);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (WorkspaceRefusalException refusal)
+        {
+            return Refusal(refusal.Code, "The workspace refused the resumed purge; the ledger still reserves its ids.");
+        }
+        catch (ManagedResourceUnavailableException)
+        {
+            return Error("vault_locked");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+    }
+
+    private ServiceReply HandleMigrationExportOperation(
+        AuthenticatedContext context, ServiceRequest request, IVaultOperation? operation)
+    {
+        if (context.Kind != PrincipalKind.Owner)
+        {
+            return Error("forbidden");
+        }
+
+        if (operation is null)
+        {
+            return Error("vault_locked");
+        }
+
+        if (string.IsNullOrEmpty(request.MigrationLegacyId) ||
+            string.IsNullOrWhiteSpace(request.MigrationOutputDirectory) ||
+            !string.Equals(request.MigrationConfirmation, "EXPORT", StringComparison.Ordinal))
+        {
+            return Error("invalid_request");
+        }
+
+        try
+        {
+            var export = _migrationPurges.Export(
+                context, operation, _vault.CurrentVaultId, request.MigrationLegacyId,
+                request.MigrationOutputDirectory, request.MigrationConfirmation!, CancellationToken.None);
+            return new ServiceReply(
+                CurrentProtocolVersion, "migration_exported", "owner", null,
+                MigrationExportInfo: export);
+        }
+        catch (MigrationRefusalException refusal)
+        {
+            return Refusal(refusal.Code, refusal.Message);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Error("forbidden");
+        }
+        catch (ManagedResourceUnavailableException)
+        {
+            return Error("vault_locked");
+        }
+        catch (ArgumentException)
+        {
+            return Error("invalid_request");
+        }
+        catch (IOException)
+        {
+            return Error("export_unavailable");
         }
     }
 }
