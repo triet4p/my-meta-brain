@@ -194,6 +194,11 @@ All notable changes to Meta Brain are documented here.
 - Added cross-representation retention, purge and portability for migrated originals (`owner migration-purge-preview`, `owner migration-purge`, `owner migration-purge-resume`, `owner migration-export`). The write-free preview names the closed owner-controlled set across the workspace node and retained revisions, the legacy snapshot, the reverse map and canonical derivatives, and explicitly discloses retained encrypted backups and copies outside control. A typed purge commits under the one durable purge ledger, resumes idempotently after interruption without resurrecting a purged identity, never touches original sessions or files outside the vault, and exports exact original bytes with metadata that labels generated representations.
 
 ### Removed
+### Fixed
+
+- Fixed scoped workspace agent recall (`memory.search`/`memory.context`) being denied with `resource_unavailable` for legitimately granted sessions: an authorization condition left without an Allow branch after the S16 context-pack change made approved recall fail closed. The Allow branch is restored with its egress and destination-field guards intact; per-hit integrity, exact-revision pinning, scope binding and the generic fail-closed denial are unchanged.
+- Fixed owner `job-status` reporting `vault_locked` for an unknown job ID while the vault was unlocked. A missing or unreadable job now returns the generic `resource_unavailable` denial used for other managed resources, so the answer discloses nothing about whether the ID exists. A genuinely locked vault still reports `vault_locked` without performing the lookup.
+
 
 - Removed the Owner UI setup asset, the `owner-ui` install component and the WPF application from the 1.2 release path (S12-T6). The 1.1.0 Owner UI application, its published downloads, its source and its record remain unchanged historical artifacts and are not upgraded, replaced or migrated by 1.2.
 - Removed the scripted owner-review launcher `scripts/owner/start-owner-review.ps1` (S9-T6) after the packaged owner console replaced it (accepted S9-T4): opening `owner-ui\MetaBrain.OwnerUi.exe`, selecting a data root and starting/connecting the shared host is the launcher, so opening the console no longer needs a PowerShell script.

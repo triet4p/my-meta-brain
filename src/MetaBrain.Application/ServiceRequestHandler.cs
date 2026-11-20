@@ -4698,7 +4698,10 @@ public sealed class ServiceRequestHandler
         }
         catch (ManagedResourceUnavailableException)
         {
-            return Error("vault_locked");
+            // The null-operation guard above already answers a genuinely locked vault.
+            // This catch covers a missing or unreadable job record, which is the same
+            // generic resource denial used for every other managed resource.
+            return ResourceDenied();
         }
     }
 

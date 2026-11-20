@@ -392,6 +392,11 @@ public sealed class AgentSessionAuthority
 
         if (string.Equals(request.Operation, "memory.search", StringComparison.Ordinal) ||
             string.Equals(request.Operation, "memory.context", StringComparison.Ordinal))
+        {
+            return HasEgressFields(request) || request.DestinationResourceId is not null || request.DestinationRevision is not null
+                ? Deny("invalid_request", policyGeneration)
+                : Allow(policyGeneration);
+        }
         // S4-T4 agent feedback carries no resource address either: the seen
         // targets travel inside the feedback draft, authorized per target
         // against the frozen scope inside the handler before any byte is

@@ -91,6 +91,14 @@ internal static partial class OwnerServiceSmoke
             Require(provision.ExitCode == 0, "The T3 synthetic vault did not provision.");
             await S14T2UnlockAsync(executable, fixture.ControlPipe, passphrase).ConfigureAwait(false);
 
+            // An unknown job ID on an unlocked vault must not be mislabeled as a lock.
+            var missingJobStatus = await S14T2OwnerAsync(executable, fixture.ControlPipe,
+                "job-status", "--job-id", "s14-t3-nonexistent-job").ConfigureAwait(false);
+            Require(missingJobStatus.ExitCode == 4 &&
+                    missingJobStatus.StandardError.Contains("resource_unavailable", StringComparison.Ordinal) &&
+                    !missingJobStatus.StandardError.Contains("vault_locked", StringComparison.Ordinal),
+                "A missing job on an unlocked vault was not answered with the generic resource denial.");
+
             var now = DateTimeOffset.UtcNow;
             var inboxPath = Path.Combine(fixture.OutputDirectory, "s14-t3-inbox.json");
             await File.WriteAllTextAsync(inboxPath, JsonSerializer.Serialize(new

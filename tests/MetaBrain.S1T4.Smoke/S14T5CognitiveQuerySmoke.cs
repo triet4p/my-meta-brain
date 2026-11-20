@@ -297,12 +297,22 @@ internal static partial class OwnerServiceSmoke
                 "--input-file", revisedSourcePath).ConfigureAwait(false);
             Require(revisedSource.ExitCode == 0 && revisedSource.StandardOutput.Contains("contentRevision=2", StringComparison.Ordinal),
                 "The synthetic source could not be advanced to test stale-anchor reporting.");
-            var staleQuery = await S14T5OwnerAsync(executable, fixture.ControlPipe,
+            // S18-T5-A2: S17-T5 made a stale anchor's source Unavailable
+            // (CognitiveAnnotationService.ResolveAnchorState). The Available
+            // filter must exclude the stale anchor (no disclosure); the
+            // Unavailable filter must still show its original pinned revision.
+            var availableAfterRevision = await S14T5OwnerAsync(executable, fixture.ControlPipe,
                 "cognitive-annotation-query", "--facet", "opinion", "--source-availability", "available").ConfigureAwait(false);
+            Require(availableAfterRevision.ExitCode == 0 &&
+                    !availableAfterRevision.StandardOutput.Contains("id=" + pendingExperienceId, StringComparison.Ordinal) &&
+                    availableAfterRevision.StandardOutput.Contains("ANNOTATION QUERY no_match", StringComparison.Ordinal),
+                "A stale source anchor was still offered under the Available filter after the source revision.");
+            var staleQuery = await S14T5OwnerAsync(executable, fixture.ControlPipe,
+                "cognitive-annotation-query", "--facet", "opinion", "--source-availability", "unavailable").ConfigureAwait(false);
             Require(staleQuery.ExitCode == 0 && staleQuery.StandardOutput.Contains("id=" + pendingExperienceId, StringComparison.Ordinal) &&
                     staleQuery.StandardOutput.Contains("contentRevision=1", StringComparison.Ordinal) &&
-                    staleQuery.StandardOutput.Contains("state=stale availability=Available", StringComparison.Ordinal),
-                "A revised source was rebound instead of reporting the original stale anchor and available file.");
+                    staleQuery.StandardOutput.Contains("state=stale availability=Unavailable", StringComparison.Ordinal),
+                "A revised source was rebound instead of remaining observable as its original stale anchor under the Unavailable filter.");
 
             var statusAfterRevision = await S14T5OwnerAsync(executable, fixture.ControlPipe, "workspace-status").ConfigureAwait(false);
             var missingSourcePath = Path.Combine(fixture.OutputDirectory, "s14-t5-source-to-delete.txt");
@@ -381,10 +391,10 @@ internal static partial class OwnerServiceSmoke
             var afterRestart = await S14T5OwnerAsync(executable, fixture.ControlPipe,
                 "cognitive-annotation-query", "--facet", "opinion", "--kind", "decision",
                 "--review-status", "accepted", "--origin", "ai-suggestion",
-                "--source-availability", "available").ConfigureAwait(false);
+                "--source-availability", "unavailable").ConfigureAwait(false);
             Require(afterRestart.ExitCode == 0 && afterRestart.StandardOutput.Contains("id=" + pendingExperienceId, StringComparison.Ordinal) &&
                     afterRestart.StandardOutput.Contains("revision=3", StringComparison.Ordinal) &&
-                    afterRestart.StandardOutput.Contains("state=stale availability=Available", StringComparison.Ordinal),
+                    afterRestart.StandardOutput.Contains("state=stale availability=Unavailable", StringComparison.Ordinal),
                 "The owner correction, acceptance and exact stale source anchor did not survive restart/rebuild.");
             sourceRead = await S14T5OwnerAsync(executable, fixture.ControlPipe,
                 "workspace-read", "--file-id", fileId, "--revision", "1").ConfigureAwait(false);
