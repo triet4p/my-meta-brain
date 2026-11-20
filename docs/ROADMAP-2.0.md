@@ -65,6 +65,7 @@ S11-T1 đã hoàn tất CR02/D088 approval; S11-T2–T5 implemented và 1.1.0 pu
 - CLI + narrow document browser đã được chọn bởi CR03; S13-T1 chốt bridge authorization, rendering/editor dependencies, encoding và budgets bằng evidence, không chọn lại desktop framework. Taxonomy và engine chốt ở đầu sprint tương ứng.
 - Folder snapshot/continuous scope: owner approved snapshot với identity narrowing và explicit refresh (S17-T1/D108, 2026-11-16) trước S17-T2; continuous chưa được duyệt và nếu sau này được đề xuất phải nêu file/revision mới, moves và revocation semantics. Approval là contract, không phải implementation/runtime evidence.
 - Migration/default/API removals: migration/cutover contract đã owner-approve 2026-11-18 ([D112](META-BRAIN.md#136-approved-migrationcutover-contract--s18-t1--d112), [requirements](REQUIREMENTS.md#owner-approved-migrationcutover-contract--s18-t1--d112-2026-11-18)); G2 removal contract vẫn cần owner approval riêng trước G2-T1, không removal nào ở 1.x.
+- [D113](META-BRAIN.md#180-only-resource-exception--d113): D112 worker-host performance comparisons are report-only for 1.8.0; hard resource ceilings, T5/T6 acceptance and G2 entry requirements are unchanged.
 
 Nếu approval của contract còn mở chưa có, task affected là blocked; không thực thi dưới baseline mâu thuẫn. CR03 chỉ approve planning/support change; không tạo runtime evidence, authorize worker launch hoặc thay CR01 security.
 

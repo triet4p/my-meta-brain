@@ -342,3 +342,9 @@ This record is a clarification plus the S18-scoped quantitative envelope under [
 **Gates reopened.** S18-T5 and the final acceptance must measure and report this envelope and the migration contract; S18-T2/T3 must demonstrate authorization, resume, restore and fail-closed behavior. No gate PASS is created here: S18-T1 remains `[~]` until worker evidence review PASS and the separate exact-snapshot documentation checkpoint, and T2–T6 stay unauthorized.
 
 **Explicit non-rights.** This approval does not authorize T2–T6 implementation, migration execution, provider/network access, R37 real-file access, R37 scope changes, release/push/tag or external actions. G2 removals remain a separate inventory decision under a separate owner approval; no legacy path is removed in 1.x, and the S12 installed-transition evidence is retained as history.
+
+## Owner-approved 1.8.0 resource exception — S18-T5 / D113 (2026-11-20)
+
+For 1.8.0 only, [D113](../.agents/memory/decisions.md#2026-11-20-d113--treat-worker-host-performance-comparisons-as-report-only-for-180) supersedes the blocking status of D112's R38 1k/10k handler p95 targets and its four 100k A18-2-relative targets (handler p95, rebuild wall time, locked and unlocked idle working set). Report exact available observations, methodology and comparability gaps under R40. A missing or incomparable value stays a gap in the measurement record; the owner accepts it for this release, not as a passing measurement. See the [normative exception](META-BRAIN.md#180-only-resource-exception--d113).
+
+The 256 MiB service-idle RAM ceiling, 1 MiB per-act content cap and all non-comparison requirements, including security, data handling, migration/rollback, held-out relevance and R37, remain unchanged. This decision neither passes T5/T6 nor authorizes a provider, publication or G2.
