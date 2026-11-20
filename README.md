@@ -134,19 +134,23 @@ the owner approves or narrows requests in the CLI or the Owner console, never in
 | `metabrain_relation_supersede` | Creates a proposed `supersedes` relation only (`link.supersede` plus endpoint read rights). |
 | `metabrain_relation_unlink` | Retracts a relation with explicit `link.remove` and endpoint read rights; undo uses restore. |
 | `metabrain_relation_restore` | Restores a prior unlink to `proposed`, never accepted (`link.restore` plus endpoint read rights). |
+| `metabrain_workspace_folder_request` | Submits one stable workspace folder ID and purpose for a non-authoritative consideration receipt; grants no file access and is not owner approval. |
+| `metabrain_workspace_request_status` | Reports only the status of a folder request receipt; grants no access. |
+| `metabrain_workspace_agent_recall` | Reads pinned cognitive annotations, hybrid-search evidence and/or accepted/current workspace relations under a separate D111 recall grant; no source-read or owner authority. |
+| `metabrain_workspace_context_pack` | Returns owner-selected, pinned, budget-fitting verbatim workspace entries and in-scope relation paths under a separate D110 grant; no summarization, provider call or egress. |
 
 ---
 
 ## Prerequisites
 
 - **Operating System:** 64-bit Windows releases that Microsoft lists as supported for .NET 10 at
-  release time. The 1.4 CLI and MCP server need no desktop/WPF capability. The product is not
+  release time. The 1.7.0 CLI and MCP server need no desktop/WPF capability. The product is not
   verified on every supported Windows SKU; Linux, macOS, ARM, Server Core and Nano Server are out
   of scope for this release (uses Windows Named Pipes and DPAPI). The optional `open` document
   session needs an installed Chromium-based browser (Chrome or Edge); the rest of the CLI does not.
-- **Running the 1.4 candidate:** use the dedicated CLI setup executable and/or the standalone MCP
+- **Running the 1.7.0 release:** use the dedicated CLI setup executable and/or the standalone MCP
   ZIP. They are self-contained `win-x64` distributions, so no .NET SDK, installed .NET runtime,
-  source checkout or PowerShell is required. The 1.4 candidate has no Owner UI installer; 1.1.0
+  source checkout or PowerShell is required. The 1.7.0 release has no Owner UI installer; 1.1.0
   keeps its own unchanged WPF downloads. The repository payload bundle described below is
   developer tooling, not the end-user installation path.
 - **Building from source:** [.NET 10 SDK](https://dotnet.microsoft.com/) (`net10.0` /
@@ -242,6 +246,22 @@ at 22 tools; agent relation calls remain proposals and cannot accept or share ow
 relations. The release identity and hashes are in the [1.6.0 release record](docs/release-1.6.0.md);
 the [release contract](docs/release-contract.md#product-and-support-matrix-for-160-s16-t6) and
 [release notes](docs/release-notes-1.6.0.md) state the exact scope and limits.
+
+**1.7.0 is published** as [`v1.7.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.7.0)
+on 2026-11-18: [`MetaBrain-CLI-1.7.0.exe`](https://github.com/triet4p/my-meta-brain/releases/download/v1.7.0/MetaBrain-CLI-1.7.0.exe)
+and [`MetaBrain-MCP-1.7.0.zip`](https://github.com/triet4p/my-meta-brain/releases/download/v1.7.0/MetaBrain-MCP-1.7.0.zip),
+byte copies of the frozen candidate, with the hashes in the
+[1.7.0 release record](docs/release-1.7.0.md). It keeps the same two products — the CLI setup and
+the standalone MCP ZIP — and adds grant-separated workspace sharing and context tools: a D108
+owner-approved file-read folder snapshot, a separate D111 recall grant for cognitive-annotation,
+hybrid-search and relation recall, and a separate D110 context-pack grant that returns only
+owner-selected, pinned, budget-fitting verbatim entries and in-scope accepted/current relation
+paths. Folder requests are non-authoritative receipts; revoke, expiry and lock deny later calls,
+and content already received cannot be recalled. The MCP agent surface is 26 tools and negotiates
+`2025-11-25` and `2025-06-18`; the WPF Owner UI 1.1.0 remains frozen and is not packaged. The
+[release notes](docs/release-notes-1.7.0.md) state the exact scope and limits.
+
+**1.8.0 is a local candidate, not published.** 1.7.0 remains the latest public release. Sprint 18 adds a guarded, opt-in legacy-to-workspace migration (exact-byte, within the 1 MiB per-act cap and zone-independent only), crash-safe resume, cross-representation purge/export and CLI daily-use acceptance, with no WPF replay and no 1.x removal. The exact CLI setup and MCP ZIP are assembled and verified locally (source `e149a34a30c5-tree2ce06fb85f6a`, candidate `2bc84743d74c`); no asset is published and no installed-host upgrade was performed. See the [1.8.0 release record](docs/release-1.8.0.md), [release notes](docs/release-notes-1.8.0.md) and [migration/compatibility guide](docs/migration-1.8.0.md).
 
 ### Developer bundle: build the payload from a checkout
 
@@ -445,10 +465,15 @@ the restore stays available, and the real renders of the view.
 
 The project follows the authoritative milestone roadmap in [`docs/PLAN.md`](docs/PLAN.md).
 Milestones 1–9 and Sprint 9's three-product delivery are complete; the public 1.0.0 release,
-asset-name cutover, updated Pages deployment and public smoke are complete. Sprints 11–16 published
-1.1.0–1.6.0; Sprint 16's 1.6.0 was published on 2026-11-12 after the review PASS, exact-snapshot
-checkpoint, final differential and owner authorization. Sprint 17 T1–T5 are complete; 1.7.0 has an exact local candidate (`20af9d477aba`) assembled and verified for the CLI setup, MCP ZIP, protocol, packaged workflows and an isolated 1.6.0 → 1.7.0 data-preserving upgrade, but it is not reviewed, checkpointed or published, so
-1.6.0 remains the latest public release. See [`docs/release-1.7.0.md`](docs/release-1.7.0.md) for exact identities and hashes, and [`docs/PLAN.md`](docs/PLAN.md) for authoritative status.
+asset-name cutover, updated Pages deployment and public smoke are complete. Sprints 11–17 published
+1.1.0–1.7.0; Sprint 16's 1.6.0 was published on 2026-11-12 and Sprint 17's 1.7.0 was published on
+2026-11-18 after the review PASS, exact-snapshot checkpoint, final differential and owner
+authorization. Sprint 17 T1–T6 are complete, including the public release-boundary review R2 PASS;
+1.7.0 is the latest public release. See [`docs/release-1.7.0.md`](docs/release-1.7.0.md) for exact
+identities and hashes, [`docs/release-notes-1.7.0.md`](docs/release-notes-1.7.0.md) for the release
+notes, and [`docs/PLAN.md`](docs/PLAN.md) for authoritative status.
+
+Sprint 18 is in progress: T1–T5 are complete and 1.8.0 is a versioned local candidate awaiting exact assembly, independent review, checkpoint and owner-authorized publication; 1.7.0 stays the latest public release until then.
 
 - [x] **Milestone 1 (M1) — Encrypted Vault & Scoped Sharing (Sprint 1):** User-controlled key lifecycle, authenticated ciphertext, owner-approved catalog publication, single-use token issuance/redemption, and in-memory scoped reads verified with official Codex and OMP clients.
 - [x] **Milestone 2 (M2) — Durable Encrypted Core (Sprint 2):** Canonical encrypted item/source/zone/revision models, relations, and rebuildable protected index.

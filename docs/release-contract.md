@@ -1,5 +1,9 @@
 # Meta Brain — release and compatibility contract
 
+## Candidate matrix for 1.8.0 (not published)
+
+The Sprint 18 candidate versions the same two CR03 products — a dedicated CLI setup and a standalone MCP ZIP — at `1.8.0`, with no WPF/UI installer or separate document product. Its exact identity and asset hashes are recorded in the [1.8.0 release record](release-1.8.0.md) and [`artifacts/sprint-18/task-6.md`](../artifacts/sprint-18/task-6.md) (candidate `2bc84743d74c`, source `e149a34a30c5-tree2ce06fb85f6a`). 1.7.0 remains the latest published release. Install/upgrade never migrates or resets the vault; the opt-in migration contract, compatibility, D113 limits, deferred G2 removals and evidence map are in the [1.8.0 migration guide](migration-1.8.0.md). No feature is removed in 1.x, and no installed-host upgrade was performed for this candidate.
+
 ## Product and support matrix for 1.7.0 (published `v1.7.0`)
 
 **Published state:** the exact reviewed 1.7.0 packages under candidate `20af9d477aba` were checkpointed at `fd8ad2f7d150f3f0cfd893ec51ad76158b0f860e` and published on 2026-11-18 as [GitHub Release `v1.7.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.7.0) (id `449509004`, not draft/prerelease, Latest) with five byte-exact assets; the [public site](https://triet4p.github.io/my-meta-brain/) was originally published at `gh-pages ebf5f9f…` and now serves the corrected status text deployed at `gh-pages 05c4b0cff402d5a0c6709d13f2e37f53d75d8d77`. 1.7.0 is the latest published CLI + MCP release. `S17-PUBLIC-C1` R1 was FAIL on stale live text (historical); R2 returned **PASS** with no actionable findings. Sprint 17 Complete is Main-owned and not claimed here. See `docs/release-1.7.0.md`, `artifacts/sprint-17/publication/S17-PUBLISH-P1.md`, `artifacts/sprint-17/reviews/S17-PUBLIC-C1-R2.md` and `artifacts/sprint-17/publication/S17-PUBLIC-FIX-DEPLOY-C1.md` for exact identities, hashes and links.

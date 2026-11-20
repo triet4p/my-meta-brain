@@ -574,8 +574,8 @@ $runtimeNote
          $packageManifest['help']='mcp/MetaBrain.Mcp.exe --help'
          $packageManifest['version']='mcp/MetaBrain.Mcp.exe --version'
          $packageManifest['compatibility']=[ordered]@{
-             codexCli=[ordered]@{configuration='process-scoped -c overrides';observedVersion='0.164.0';evidence='Sprint 17 T5 C1 R2 PASS normal-client observation; not an exact 1.7.0 package smoke or a compatibility range'}
-             ohMyPi=[ordered]@{configuration='project-local .omp/mcp.json';observedVersion='18.20.0';evidence='Sprint 17 T5 C1 R2 PASS normal-client observation; not an exact 1.7.0 package smoke or a compatibility range'}
+             codexCli=[ordered]@{configuration='process-scoped -c overrides';observedVersion='0.164.0';evidence='historical Sprint 17 T5 normal-client observation; not an exact 1.8.0 package smoke or a compatibility range'}
+             ohMyPi=[ordered]@{configuration='project-local .omp/mcp.json';observedVersion='18.20.0';evidence='historical Sprint 17 T5 normal-client observation; not an exact 1.8.0 package smoke or a compatibility range'}
          }
          $packageManifest['knownLimits']=@(
              'Windows x64 only, on a Windows release supported by .NET 10; the exact supported Windows SKU matrix was not separately established for this MCP asset.',
