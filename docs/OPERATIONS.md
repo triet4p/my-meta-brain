@@ -57,7 +57,7 @@ recovery key was shown by the interrupted run and is not shown again.
 ## 2. Install
 
 ```text
-MetaBrain.Installer.exe install --payload <published-payload-dir> --install-root <dir> --data-root <dir> [--component cli|mcp|all] [--start]
+MetaBrain.Installer.exe install --payload <published-payload-dir> --install-root <dir> --data-root <dir> [--component cli|mcp|all] [--start] [--add-to-path]
 ```
 
 - `--payload` — the published application: `cli/MetaBrain.Cli.exe`,
@@ -73,6 +73,25 @@ MetaBrain.Installer.exe install --payload <published-payload-dir> --install-root
   generates random ones. Fixing them lets the owner point a client at a known endpoint; an upgrade
   keeps the endpoints an existing installation already uses.
 - `--start` — start the service right away.
+- `--add-to-path` — opt in to command discovery for the CLI component. The installer appends the
+  installation's `cli` directory once to the owner's **own user PATH** (the supported Windows
+  environment value), preserving every existing entry and its order, and broadcasts the change so a
+  new shell inherits it. It never edits a PowerShell profile, the system PATH, another registry value
+  or a shared command directory. The install state records whether this installation added the entry;
+  an entry the owner already had is left unclaimed, and uninstall removes only the entry this
+  installation added. Without the option no environment value is touched.
+
+The CLI component also installs the native **`metabrain`** command beside the CLI:
+`<install root>\cli\metabrain.exe` is a byte-verified copy of the CLI apphost, so both entrypoints
+are the same binary and it is selected by its file name. `metabrain` is the workspace-first product
+command: workspace commands keep their exact names, `metabrain read` is `workspace-read`,
+`metabrain search` is `workspace-search`, `metabrain open` is the workspace document surface, and
+every owner command is accepted with or without the `owner` prefix. The historical
+`cli\MetaBrain.Cli.exe owner ...` commands, structured export, memory/source/relation workflows and
+the separate plaintext-settings `owner migrate` are unchanged; opening the workspace-first command
+migrates, reclassifies and rewrites nothing. With `--add-to-path`, a **new PowerShell session**
+started after Windows receives the change runs `metabrain --help` from any folder; a session opened
+before the change keeps its inherited environment.
 
 A first install with sibling roots, exactly as the runbook intends it:
 

@@ -90,7 +90,18 @@ internal static class CliSetup
         Console.Write("Data root [" + defaultData + "]: ");
         var dataRoot = Console.ReadLine();
         dataRoot = string.IsNullOrWhiteSpace(dataRoot) ? defaultData : dataRoot;
-        return new[] { "install", "--install-root", installRoot, "--data-root", dataRoot };
+        Console.Write("Add " + Path.Combine(installRoot, "cli") +
+            " to your user PATH so `metabrain` works in a NEW PowerShell session from any folder? No profile is edited and the system PATH is not changed. [y/N] ");
+        var addToPath = Console.ReadLine()?.Trim();
+        var arguments = new List<string> { "install", "--install-root", installRoot, "--data-root", dataRoot };
+        if (addToPath is not null &&
+            (addToPath.Equals("y", StringComparison.OrdinalIgnoreCase) ||
+             addToPath.Equals("yes", StringComparison.OrdinalIgnoreCase)))
+        {
+            arguments.Add("--add-to-path");
+        }
+
+        return arguments.ToArray();
     }
      private static Task VerifyEmbeddedPayloadAsync()
      {
@@ -136,7 +147,7 @@ internal static class CliSetup
             return 1;
         }
 
-        var options = InstallerOptions.Parse(args, new[] { "--install-root", "--data-root" });
+        var options = InstallerOptions.Parse(args, new[] { "--install-root", "--data-root" }, "--add-to-path");
         var installRoot = Path.GetFullPath(options.Required("--install-root"));
         var existing = InstallState.Read(Path.Combine(installRoot, InstallLayout.StateFileName));
         var dataRoot = options.Optional("--data-root") ?? existing?.DataRoot ??
@@ -162,14 +173,20 @@ internal static class CliSetup
 
             var installer = Path.Combine(temporaryRoot, InstallLayout.InstallerDirectoryName, "MetaBrain.Installer.exe");
             var start = new ProcessStartInfo(installer) { UseShellExecute = false, WorkingDirectory = temporaryRoot };
-            foreach (var argument in new[]
-                     {
-                         "install", "--payload", temporaryRoot,
-                         "--install-root", installRoot,
-                         "--data-root", fullDataRoot,
-                         "--component", "cli",
-                         "--candidate-id", CandidateIdentity ?? throw new InvalidOperationException("The setup candidate identity is missing.")
-                     })
+            var installerArguments = new List<string>
+            {
+                "install", "--payload", temporaryRoot,
+                "--install-root", installRoot,
+                "--data-root", fullDataRoot,
+                "--component", "cli",
+                "--candidate-id", CandidateIdentity ?? throw new InvalidOperationException("The setup candidate identity is missing.")
+            };
+            if (options.HasFlag("--add-to-path"))
+            {
+                installerArguments.Add("--add-to-path");
+            }
+
+            foreach (var argument in installerArguments)
             {
                 start.ArgumentList.Add(argument);
             }
@@ -184,7 +201,16 @@ internal static class CliSetup
             }
 
             Console.WriteLine("CLI installed at " + Path.Combine(installRoot, InstallLayout.CliDirectoryName, "MetaBrain.Cli.exe"));
-            Console.WriteLine("Use the installed executable path directly; setup does not modify PATH or profiles.");
+            Console.WriteLine("metabrain command: " + Path.Combine(installRoot, InstallLayout.CliDirectoryName, "metabrain.exe"));
+            if (options.HasFlag("--add-to-path"))
+            {
+                Console.WriteLine("The CLI directory was added to your user PATH. Open a NEW PowerShell session and run `metabrain --help`; a session opened before the change keeps its old environment. No PowerShell profile was edited and the system PATH was not changed.");
+            }
+            else
+            {
+                Console.WriteLine("PATH was not changed. Re-run setup with --add-to-path (or add " + Path.Combine(installRoot, InstallLayout.CliDirectoryName) + " to your user PATH yourself) to run `metabrain` from any folder in a new PowerShell session.");
+            }
+
             return 0;
         }
         finally
@@ -290,11 +316,14 @@ internal static class CliSetup
     private static void WriteHelp()
     {
         Console.WriteLine("Meta Brain CLI Setup " + ProductInfo.Version);
-        Console.WriteLine("Install interactively, or use: setup.exe install --install-root <dir> [--data-root <dir>]");
+        Console.WriteLine("Install interactively, or use: setup.exe install --install-root <dir> [--data-root <dir>] [--add-to-path]");
         Console.WriteLine("At the confirmation prompt, enter n or q to cancel without changing the installation.");
         Console.WriteLine("Remove only the CLI component: setup.exe uninstall --install-root <dir>");
         Console.WriteLine("The shared runtime and data root are preserved when another component uses the installation.");
-        Console.WriteLine("The installed CLI is cli\\MetaBrain.Cli.exe. No PATH/profile, autostart, service, registry or permission changes are made.");
+        Console.WriteLine("The installed CLI is cli\\MetaBrain.Cli.exe; the same binary is also installed as cli\\metabrain.exe, the workspace-first command.");
+        Console.WriteLine("--add-to-path appends that cli directory to your own user PATH once; no PowerShell profile is edited and the system PATH is not changed. Uninstall removes only an entry this installation added.");
+        Console.WriteLine("Without --add-to-path no environment value is changed and `metabrain` is used by its installed path.");
+        Console.WriteLine("Setup makes no autostart, service, registry or permission changes beyond that explicit user PATH choice.");
         Console.WriteLine("Setup is unsigned; SHA-256 does not authenticate the publisher.");
         Console.WriteLine("The self-contained .NET host may extract runtime support files under the current user's %TEMP%\\.net bundle cache; setup does not change environment settings.");
     }

@@ -70,8 +70,10 @@ internal static class Program
     private static void WriteUsage()
     {
         Console.Error.WriteLine("Meta Brain installer " + ProductInfo.Version + " — per-user CLI/MCP install/upgrade/uninstall; always keeps the data root");
-        Console.Error.WriteLine("Commands: install --payload <dir> --install-root <dir> --data-root <dir> [--component cli|mcp|all] [--start] | start | stop | restart | status | health | uninstall [--component cli|mcp|all]");
+        Console.Error.WriteLine("Commands: install --payload <dir> --install-root <dir> --data-root <dir> [--component cli|mcp|all] [--start] [--add-to-path] | start | stop | restart | status | health | uninstall [--component cli|mcp|all]");
         Console.Error.WriteLine("Release payload layout: cli/MetaBrain.Cli.exe, mcp/MetaBrain.Mcp.exe, service/MetaBrain.Connections.exe, installer/MetaBrain.Installer.exe.");
+        Console.Error.WriteLine("The CLI component also installs the native cli/metabrain.exe command (the same binary; the workspace-first front door).");
+        Console.Error.WriteLine("--add-to-path appends that cli directory to the owner's user PATH once so a NEW PowerShell session finds `metabrain` from any folder; no profile or system PATH is changed, and uninstall removes only an entry this installation added.");
         Console.Error.WriteLine("Installed layout: <install root>/{cli,mcp,service,installer} plus install-state.json; the data root holds service-settings.json, vault/, runtime/, source snapshots, backups and recovery material.");
         Console.Error.WriteLine("A 1.1.0 WPF installation is the frozen legacy product; this installer refuses to change it and installs beside it only with a separate install root, data root and endpoints.");
         Console.Error.WriteLine("Every service command (start, stop, restart, status, health) accepts --install-root <dir> to address an installation other than the one this installer belongs to.");

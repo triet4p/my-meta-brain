@@ -15,7 +15,8 @@ internal static class InstallCommand
     internal static Task<int> RunAsync(string[] args) =>
         RunAsync(args, VisualCppRuntimePrerequisite.ReadInstalledX64Version);
 
-    internal static async Task<int> RunAsync(string[] args, Func<Version?> readInstalledRuntimeVersion)
+    internal static async Task<int> RunAsync(string[] args, Func<Version?> readInstalledRuntimeVersion,
+        IUserPathStore? userPathStore = null)
     {
         var installedRuntimeVersion = readInstalledRuntimeVersion();
         if (VisualCppRuntimePrerequisite.TryReportRefusal(
@@ -26,11 +27,15 @@ internal static class InstallCommand
         }
         var options = InstallerOptions.Parse(args,
             new[] { "--payload", "--install-root", "--data-root", "--control-pipe", "--agent-pipe", "--component", "--candidate-id" },
-            "--start");
+            "--start", "--add-to-path");
         var payload = Path.GetFullPath(options.Required("--payload"));
         var installRoot = Path.GetFullPath(options.Required("--install-root")).TrimEnd(Path.DirectorySeparatorChar);
         var dataRoot = Path.GetFullPath(options.Required("--data-root")).TrimEnd(Path.DirectorySeparatorChar);
         var component = NormalizeComponent(options.Optional("--component") ?? "all");
+        if (options.HasFlag("--add-to-path") && component == "mcp")
+        {
+            throw new ArgumentException("--add-to-path registers the `metabrain` CLI command and requires the cli component.");
+        }
         var requestedControlPipe = options.Optional("--control-pipe");
         var requestedAgentPipe = options.Optional("--agent-pipe");
         ValidatePipeName(requestedControlPipe);
@@ -165,15 +170,70 @@ internal static class InstallCommand
             components.Add(installedComponent);
         }
 
+        var layout = InstallLayout.Create(installRoot, dataRoot);
         var state = new InstallState(
             InstallState.CurrentSchemaVersion,
             existing?.InstalledAtUtc ?? DateTime.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
             dataRoot,
             ProductInfo.Version,
             components.ToArray(),
-            candidateIdentity);
+            candidateIdentity,
+            existing?.CommandPath,
+            existing?.CommandPathOwned == true);
         state.Write(statePath);
-        var layout = InstallLayout.Create(installRoot, dataRoot);
+
+        var installedCli = ComponentsFor(component).Contains("cli", StringComparer.Ordinal);
+        if (installedCli)
+        {
+            InstallMetabrainEntry(layout);
+        }
+
+        var pathStore = userPathStore ?? WindowsUserPathStore.Instance;
+        if (options.HasFlag("--add-to-path"))
+        {
+            // The owner's own user PATH is the supported discovery mechanism:
+            // append one directory, keep every existing entry and its order,
+            // and record whether this installation is the one that added it.
+            var entry = layout.CliDirectory;
+            var current = pathStore.Read();
+            var present = UserPathText.Contains(current, entry);
+            var owned = present ? state.CommandPathOwned : true;
+            state = state with { CommandPath = entry, CommandPathOwned = owned };
+            state.Write(statePath);
+            if (present)
+            {
+                Console.WriteLine(owned
+                    ? "path=kept (" + entry + "); this installation already added it and uninstall removes only that entry"
+                    : "path=already present (" + entry + "); this installation did not add it and will not remove it");
+            }
+            else
+            {
+                try
+                {
+                    pathStore.Write(UserPathText.Append(current, entry));
+                }
+                catch
+                {
+                    // Never leave a claimed entry we did not add: the install is
+                    // reported as failed and a retry with --add-to-path starts
+                    // from an unclaimed state.
+                    state = state with { CommandPath = null, CommandPathOwned = false };
+                    state.Write(statePath);
+                    throw;
+                }
+
+                Console.WriteLine("path=added the CLI directory to the owner's user PATH (" + entry + ")");
+                Console.WriteLine("path effect=a NEW PowerShell session started after Windows receives the change finds `metabrain`; a session already open keeps its old environment. No profile, system PATH, other registry value or shared command directory is changed, and uninstall removes only this installation's entry.");
+            }
+        }
+        else if (installedCli && state.CommandPath is null)
+        {
+            Console.WriteLine("path=not registered (pass --add-to-path once to make the native `metabrain` command resolvable from any folder in a new PowerShell session)");
+        }
+        else if (installedCli)
+        {
+            Console.WriteLine("path=kept (" + state.CommandPath + "); uninstall removes only an entry this installation added");
+        }
 
         if (options.HasFlag("--start"))
         {
@@ -192,6 +252,10 @@ internal static class InstallCommand
         Console.WriteLine("control pipe=" + settings.ControlPipe);
         Console.WriteLine("agent pipe=" + settings.AgentPipe);
         Console.WriteLine("cli=" + layout.CliExecutable);
+        if (installedCli)
+        {
+            Console.WriteLine("metabrain=" + Path.Combine(layout.CliDirectory, "metabrain.exe"));
+        }
         Console.WriteLine("mcp=" + layout.McpExecutable);
         Console.WriteLine("shared host=" + layout.ServiceExecutable);
         Console.WriteLine("installed components=" + string.Join(",", components.Order(StringComparer.Ordinal)));
@@ -199,7 +263,10 @@ internal static class InstallCommand
         return 0;
     }
 
-    internal static async Task<int> UninstallAsync(string[] args)
+    internal static Task<int> UninstallAsync(string[] args) =>
+        UninstallAsync(args, installRoot: null, userPathStore: null);
+
+    internal static async Task<int> UninstallAsync(string[] args, string? installRoot, IUserPathStore? userPathStore = null)
     {
         var options = InstallerOptions.Parse(args, new[] { "--component" }, "--defer-root-removal");
         var component = NormalizeComponent(options.Optional("--component") ?? "all");
@@ -208,8 +275,15 @@ internal static class InstallCommand
         {
             throw new ArgumentException("--defer-root-removal is valid only for a single component uninstall.");
         }
-        var layout = InstallLayout.Locate();
+        var layout = InstallLayout.Locate(installRoot);
         var state = InstallState.Read(layout.StatePath);
+        if (ComponentsFor(component).Contains("cli", StringComparer.Ordinal))
+        {
+            // The frontend files are still present here, so a refusal of the
+            // environment write leaves the installation intact and retryable.
+            RemoveOwnedCommandPath(state, userPathStore ?? WindowsUserPathStore.Instance);
+        }
+
         var components = state?.Components?.ToHashSet(StringComparer.Ordinal) ?? new HashSet<string>(StringComparer.Ordinal);
         foreach (var removedComponent in ComponentsFor(component))
         {
@@ -529,6 +603,56 @@ internal static class InstallCommand
                 Directory.Delete(transactionRoot, recursive: true);
             }
         }
+    }
+
+    /// <summary>
+    /// The native <c>metabrain</c> command: an exact copy of the CLI apphost
+    /// beside the CLI it launches. Both entrypoints are the same binary; the
+    /// running file name selects the workspace-first front door, argument
+    /// forwarding stays native (no .cmd layer), and the file lives inside the
+    /// cli component so upgrade replaces it and uninstall removes it. The copy
+    /// is verified byte-for-byte so the command can never drift from the CLI.
+    /// </summary>
+    private static string InstallMetabrainEntry(InstallLayout layout)
+    {
+        if (!File.Exists(layout.CliExecutable))
+        {
+            throw new FileNotFoundException(
+                "The installed CLI entrypoint is missing; the `metabrain` command was not created.", layout.CliExecutable);
+        }
+
+        var target = Path.Combine(layout.CliDirectory, "metabrain.exe");
+        var apphost = File.ReadAllBytes(layout.CliExecutable);
+        File.WriteAllBytes(target, apphost);
+        if (!File.ReadAllBytes(target).AsSpan().SequenceEqual(apphost))
+        {
+            throw new IOException("The installed `metabrain` command does not match the CLI apphost at " + layout.CliExecutable + ".");
+        }
+
+        return target;
+    }
+
+    /// <summary>
+    /// Removes exactly the user-PATH entry this installation added. An entry
+    /// the owner already had is never claimed, so it is never removed here;
+    /// every other entry and its order stays untouched.
+    /// </summary>
+    private static void RemoveOwnedCommandPath(InstallState? state, IUserPathStore store)
+    {
+        if (state?.CommandPathOwned != true || string.IsNullOrWhiteSpace(state.CommandPath))
+        {
+            return;
+        }
+
+        var (updated, removed) = UserPathText.Remove(store.Read(), state.CommandPath);
+        if (!removed)
+        {
+            Console.WriteLine("path=the entry this installation added is already absent (" + state.CommandPath + ")");
+            return;
+        }
+
+        store.Write(updated);
+        Console.WriteLine("path=removed the user PATH entry this installation added (" + state.CommandPath + ")");
     }
 
     private static string NormalizeComponent(string component) => component switch

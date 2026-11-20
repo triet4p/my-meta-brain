@@ -112,6 +112,15 @@ public static class McpAgentProduct
 /// </summary>
 public static class OwnerCliProduct
 {
+    /// <summary>
+    /// The workspace-first product command installed beside the CLI. The
+    /// executable is a byte-identical copy of the CLI apphost in the same
+    /// directory, and the running file name selects this front door, so no
+    /// second dispatch table or hidden argument exists. The historical
+    /// <c>MetaBrain.Cli.exe</c> entrypoint keeps its exact commands.
+    /// </summary>
+    private const string FrontDoorEntrypointName = "metabrain";
+
     public static async Task<int> RunAsync(string[] args)
     {
         if (!OperatingSystem.IsWindows())
@@ -119,6 +128,9 @@ public static class OwnerCliProduct
             Console.Error.WriteLine("Meta Brain CLI is Windows-only.");
             return 2;
         }
+
+        var frontDoor = string.Equals(ProductInfo.EntrypointName, FrontDoorEntrypointName,
+            StringComparison.OrdinalIgnoreCase);
 
         if (args.Length == 1 && args[0] is "--version" or "-v")
         {
@@ -128,14 +140,47 @@ public static class OwnerCliProduct
 
         if (args.Length == 1 && args[0] is "--help" or "-h")
         {
-            Help();
+            if (frontDoor)
+            {
+                FrontDoorHelp();
+            }
+            else
+            {
+                Help();
+            }
+
             return 0;
         }
 
         if (args.Length == 0)
         {
-            Help();
+            if (frontDoor)
+            {
+                FrontDoorHelp();
+            }
+            else
+            {
+                Help();
+            }
+
             return 2;
+        }
+
+        if (frontDoor)
+        {
+            // The product command keeps one dispatch: every verb is the
+            // existing owner operation, and only the two content defaults are
+            // resolved to their workspace operations. No policy, authority or
+            // operation is duplicated here.
+            return args[0] switch
+            {
+                "lifecycle" => await InstanceLifecycleCli.RunAsync(args[1..]).ConfigureAwait(false),
+                "owner" => await OwnerControlCli.RunAsync(args[1..]).ConfigureAwait(false),
+                "open" => await OwnerControlCli.RunOpenAsync(args[1..]).ConfigureAwait(false),
+                "read" => await OwnerControlCli.RunAsync(Prepend("workspace-read", args)).ConfigureAwait(false),
+                "search" => await OwnerControlCli.RunAsync(Prepend("workspace-search", args)).ConfigureAwait(false),
+                _ => await OwnerControlCli.RunAsync(args).ConfigureAwait(false)
+            };
         }
 
         return args[0] switch
@@ -145,6 +190,31 @@ public static class OwnerCliProduct
             "open" => await OwnerControlCli.RunOpenAsync(args[1..]).ConfigureAwait(false),
             _ => UnknownCommand(args[0])
         };
+    }
+
+    private static string[] Prepend(string verb, string[] args)
+    {
+        var forwarded = new string[args.Length];
+        forwarded[0] = verb;
+        Array.Copy(args, 1, forwarded, 1, args.Length - 1);
+        return forwarded;
+    }
+
+    private static void FrontDoorHelp()
+    {
+        Console.Error.WriteLine("metabrain " + ProductInfo.Version + " — workspace-first owner terminal for the shared Meta Brain instance");
+        Console.Error.WriteLine("usage:");
+        Console.Error.WriteLine("  metabrain <workspace command> --control-pipe <pipe> [options]   the default content surface is the workspace");
+        Console.Error.WriteLine("  metabrain read --control-pipe <pipe> --file-id <id> [--revision <n>]        same as workspace-read");
+        Console.Error.WriteLine("  metabrain search --control-pipe <pipe> --query <text> [options]             same as workspace-search");
+        Console.Error.WriteLine("  metabrain open <file-id> --control-pipe <pipe> [options]                    workspace document preview/edit");
+        Console.Error.WriteLine("  metabrain lifecycle {start|stop|restart|status|connect} --data-root <dir> | --config <service-settings.json>");
+        Console.Error.WriteLine("  metabrain owner <command> --control-pipe <pipe> [options]                   every retained workflow, same names");
+        Console.Error.WriteLine("  metabrain help | metabrain owner --help                                     the complete command list");
+        Console.Error.WriteLine("The default content surface is the workspace: workspace-status|workspace-tree|workspace-search|workspace-mkdir|workspace-import|workspace-revise|workspace-read|workspace-rename|workspace-move|workspace-copy|workspace-delete-preview|workspace-delete|workspace-restore|workspace-tombstones|workspace-anchor-create|workspace-anchor-list|workspace-index-status|workspace-index-rebuild|workspace-index-anchors|workspace-purge-preview|workspace-purge|workspace-export-preview|workspace-export keep their exact names; `read` and `search` are the short default forms of workspace-read and workspace-search.");
+        Console.Error.WriteLine("Every retained owner command is accepted with or without the `owner` prefix (for example `metabrain owner memory-read` and `metabrain memory-read` are the same command). Records that stay legacy remain reachable; nothing is migrated, reclassified or rewritten by opening this build or by the default surface.");
+        Console.Error.WriteLine("Every owner command needs --control-pipe <pipe>; agent-scoped reads use --agent-pipe plus --session-file instead. Credentials are interactive prompts only, never options. Destructive or authority-minting acts print a frozen preview and require a typed confirmation.");
+        Console.Error.WriteLine("exit codes: 0 done, 2 usage (nothing changed), 3 refused/locked/unavailable/denied, 4 invalid input or unwritable output, 5 a job that ended without completing, 1 transport or unexpected failure.");
     }
 
     private static int UnknownCommand(string command)
@@ -165,6 +235,7 @@ public static class OwnerCliProduct
         Console.Error.WriteLine("  MetaBrain.Cli.exe owner <verb> --help     the exact inputs of one command");
         Console.Error.WriteLine("release layout (one shared instance, one locked host, one vault):");
         Console.Error.WriteLine("  cli\\MetaBrain.Cli.exe               this owner CLI: every owner workflow");
+        Console.Error.WriteLine("  cli\\metabrain.exe                   the workspace-first product command; the same binary, selected by its file name");
         Console.Error.WriteLine("  mcp\\MetaBrain.Mcp.exe               agent MCP server over stdio: same instance, agent-scoped tools only");
         Console.Error.WriteLine("  service\\MetaBrain.Connections.exe   shared runtime host: started by lifecycle, never a product entrypoint");
         Console.Error.WriteLine("  installer\\MetaBrain.Installer.exe   per-user install/upgrade/uninstall; always keeps the data root");

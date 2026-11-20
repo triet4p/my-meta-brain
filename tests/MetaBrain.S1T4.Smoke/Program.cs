@@ -136,6 +136,7 @@ internal static class Program
                 string.Equals(args[0], "s15-t1-v2", StringComparison.Ordinal) ||
                 string.Equals(args[0], "s18-t2", StringComparison.Ordinal) ||
                 string.Equals(args[0], "s18-t3", StringComparison.Ordinal) ||
+                string.Equals(args[0], "g2-t1-install-path", StringComparison.Ordinal) ||
                 string.Equals(args[0], "s18-t4", StringComparison.Ordinal))
             ? args[0]
                 : args.Length == 5 &&
@@ -232,6 +233,7 @@ internal static class Program
             Console.Error.WriteLine("S16-T5 invocation: MetaBrain.S1T4.Smoke.exe s16-t5 <MetaBrain.Connections.exe> <MetaBrain.Cli.exe>");
             Console.Error.WriteLine("S17-T4 invocation: MetaBrain.S1T4.Smoke.exe s17-t4 <MetaBrain.Connections.exe> <MetaBrain.Cli.exe> <MetaBrain.Mcp.exe>");
             Console.Error.WriteLine("S17-T3 invocation: MetaBrain.S1T4.Smoke.exe s17-t3 <MetaBrain.Connections.exe> <MetaBrain.Cli.exe>");
+            Console.Error.WriteLine("G2-T1 invocation: MetaBrain.S1T4.Smoke.exe g2-t1-install-path <MetaBrain.Installer.exe>");
             return 2;
         }
 
@@ -356,6 +358,9 @@ internal static class Program
                     break;
                 case "s18-t3":
                     await OwnerServiceSmoke.RunS18T3MigrationResumeAsync(fullPath).ConfigureAwait(false);
+                    break;
+                case "g2-t1-install-path":
+                    await G2T1InstallPathSmoke.RunAsync(fullPath).ConfigureAwait(false);
                     break;
                 case "s18-t4":
                     await OwnerServiceSmoke.RunS18T4PurgePortabilityAsync(fullPath).ConfigureAwait(false);

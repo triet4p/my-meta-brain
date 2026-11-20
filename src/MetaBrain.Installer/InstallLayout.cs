@@ -134,7 +134,13 @@ internal sealed record InstallState(
     string DataRoot,
     string ProductVersion,
     string[]? Components = null,
-    string? CandidateIdentity = null)
+    string? CandidateIdentity = null,
+    // The CLI command directory the owner opted into adding to the per-user
+    // PATH, and whether this installation added it (so uninstall removes only
+    // its own entry and never one the owner already had). Null means the owner
+    // never opted in.
+    string? CommandPath = null,
+    bool CommandPathOwned = false)
 {
     internal const int CurrentSchemaVersion = 2;
 
