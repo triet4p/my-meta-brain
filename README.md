@@ -247,7 +247,7 @@ relations. The release identity and hashes are in the [1.6.0 release record](doc
 the [release contract](docs/release-contract.md#product-and-support-matrix-for-160-s16-t6) and
 [release notes](docs/release-notes-1.6.0.md) state the exact scope and limits.
 
-**1.7.0 is published** as [`v1.7.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.7.0)
+**1.7.0 is published (previous release)** as [`v1.7.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.7.0)
 on 2026-11-18: [`MetaBrain-CLI-1.7.0.exe`](https://github.com/triet4p/my-meta-brain/releases/download/v1.7.0/MetaBrain-CLI-1.7.0.exe)
 and [`MetaBrain-MCP-1.7.0.zip`](https://github.com/triet4p/my-meta-brain/releases/download/v1.7.0/MetaBrain-MCP-1.7.0.zip),
 byte copies of the frozen candidate, with the hashes in the
@@ -261,7 +261,7 @@ and content already received cannot be recalled. The MCP agent surface is 26 too
 `2025-11-25` and `2025-06-18`; the WPF Owner UI 1.1.0 remains frozen and is not packaged. The
 [release notes](docs/release-notes-1.7.0.md) state the exact scope and limits.
 
-**1.8.0 is a local candidate, not published.** 1.7.0 remains the latest public release. Sprint 18 adds a guarded, opt-in legacy-to-workspace migration (exact-byte, within the 1 MiB per-act cap and zone-independent only), crash-safe resume, cross-representation purge/export and CLI daily-use acceptance, with no WPF replay and no 1.x removal. The exact CLI setup and MCP ZIP are assembled and verified locally (source `e149a34a30c5-tree2ce06fb85f6a`, candidate `2bc84743d74c`); no asset is published and no installed-host upgrade was performed. See the [1.8.0 release record](docs/release-1.8.0.md), [release notes](docs/release-notes-1.8.0.md) and [migration/compatibility guide](docs/migration-1.8.0.md).
+**1.8.0 is published** as [`v1.8.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.8.0) on 2026-11-20 (release id `452370096`) with byte-exact CLI/MCP assets; it adds the guarded, opt-in legacy-to-workspace migration (exact-byte, within the 1 MiB per-act cap and zone-independent only), crash-safe resume, cross-representation purge/export and CLI daily-use acceptance, with no WPF replay and no 1.x removal. **2.0.0 is a local G2 candidate, not published.** 1.8.0 remains the latest public release. 2.0.0 makes the encrypted workspace the default surface of the packaged `metabrain` command and offers an explicit `--add-to-path` user-PATH opt-in; the exact CLI setup and MCP ZIP were assembled and verified locally (source `a5e13717a31e-tree7eb452354d39`, candidate `bc8ebc909aa8`), with no tag, upload or site deployment. See the [1.8.0 release record](docs/release-1.8.0.md), the [2.0.0 candidate record](docs/release-2.0.0.md), [2.0.0 release notes](docs/release-notes-2.0.0.md) and [migration/compatibility guide](docs/migration-2.0.0.md).
 
 ### Developer bundle: build the payload from a checkout
 
@@ -465,15 +465,17 @@ the restore stays available, and the real renders of the view.
 
 The project follows the authoritative milestone roadmap in [`docs/PLAN.md`](docs/PLAN.md).
 Milestones 1–9 and Sprint 9's three-product delivery are complete; the public 1.0.0 release,
-asset-name cutover, updated Pages deployment and public smoke are complete. Sprints 11–17 published
-1.1.0–1.7.0; Sprint 16's 1.6.0 was published on 2026-11-12 and Sprint 17's 1.7.0 was published on
-2026-11-18 after the review PASS, exact-snapshot checkpoint, final differential and owner
-authorization. Sprint 17 T1–T6 are complete, including the public release-boundary review R2 PASS;
-1.7.0 is the latest public release. See [`docs/release-1.7.0.md`](docs/release-1.7.0.md) for exact
-identities and hashes, [`docs/release-notes-1.7.0.md`](docs/release-notes-1.7.0.md) for the release
+asset-name cutover, updated Pages deployment and public smoke are complete. Sprints 11–18 published
+1.1.0–1.8.0; Sprint 17's 1.7.0 was published on 2026-11-18 and Sprint 18's 1.8.0 was published on
+2026-11-20 after the review PASS, exact-snapshot checkpoint, final differential and owner
+authorization. 1.8.0 is the latest public release. See [`docs/release-1.8.0.md`](docs/release-1.8.0.md) for exact
+identities and hashes, [`docs/release-notes-1.8.0.md`](docs/release-notes-1.8.0.md) for the release
 notes, and [`docs/PLAN.md`](docs/PLAN.md) for authoritative status.
 
-Sprint 18 is in progress: T1–T5 are complete and 1.8.0 is a versioned local candidate awaiting exact assembly, independent review, checkpoint and owner-authorized publication; 1.7.0 stays the latest public release until then.
+G2 is in progress: T1 is reviewed and checkpointed at `a5e13717`; T2 has assembled and verified the
+exact local 2.0.0 candidate (candidate `bc8ebc909aa8`, source `a5e13717a31e-tree7eb452354d39`) but
+has **not published** it. Owner final acceptance, independent review, a separate checkpoint and the
+major differential precede any G2-T3 publication; 1.8.0 remains the latest public release until then.
 
 - [x] **Milestone 1 (M1) — Encrypted Vault & Scoped Sharing (Sprint 1):** User-controlled key lifecycle, authenticated ciphertext, owner-approved catalog publication, single-use token issuance/redemption, and in-memory scoped reads verified with official Codex and OMP clients.
 - [x] **Milestone 2 (M2) — Durable Encrypted Core (Sprint 2):** Canonical encrypted item/source/zone/revision models, relations, and rebuildable protected index.

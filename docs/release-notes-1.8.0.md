@@ -1,5 +1,7 @@
 # Meta Brain 1.8.0 — release notes
 
+> **Post-publication note (2026-11-21):** these notes were frozen while the exact 1.8.0 assets were a local candidate. Those assets were published unchanged as [`v1.8.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.8.0) on 2026-11-20 (release id `452370096`). The candidate-time "not published" statements below are preserved history; 1.8.0 is the latest published release.
+
 **Status: Sprint 18 local candidate documentation — not published.** 1.7.0 remains the latest published release (`v1.7.0`, 2026-11-18). 1.8.0 is versioned in source (`Directory.Build.props`) and documented here; the exact CLI setup and MCP ZIP candidate was assembled from `e149a34a30c5-tree2ce06fb85f6a` (candidate `2bc84743d74c`), with exact digests and verification in the [1.8.0 release record](release-1.8.0.md) and `artifacts/sprint-18/task-6.md`. No asset is published and no installed-host upgrade was performed.
 
 ## Release scope

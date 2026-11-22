@@ -1,0 +1,42 @@
+# Meta Brain 2.0.0 — release notes
+
+**Status: local release candidate, not published.** The latest published release is **1.8.0** (`v1.8.0`, 2026-11-20). The exact 2.0.0 CLI setup and MCP ZIP were assembled and verified locally from source `a5e13717a31e-tree7eb452354d39` (candidate `bc8ebc909aa8`); identities and observed checks are in the [2.0.0 candidate record](release-2.0.0.md). No tag, upload, site deployment or worker-run installed-host change has been made. The owner accepted candidate `bc8ebc909aa8` for independent review only, not for publication; this is not a task/gate PASS. Publication requires the separate G2-T3 owner authorization after review, checkpoint and the major differential.
+
+## Release scope
+
+Two products, as in every release since 1.2.0 under [CR03](REQUIREMENTS.md#approved-change-record--cr03-2026-11-01): the dedicated **CLI setup** and the standalone **MCP ZIP**. The frozen 1.1.0 WPF Owner UI is not revived, rebuilt, bundled or installed; no `owner-ui` component or UI installer exists in 2.0.0.
+
+2.0.0 is the approved **default/API clean cutover** under [D114](REQUIREMENTS.md#owner-approved-g2-removal-scope--d114-2026-11-20), not a data migration:
+
+- The installed `cli\metabrain.exe` command makes the **encrypted workspace the default content surface**. `metabrain read` is `workspace-read`, `metabrain search` is `workspace-search`, `metabrain open` is the existing workspace document preview/edit session, and every retained owner command is accepted with or without the `owner` prefix. `metabrain` and `MetaBrain.Cli.exe` are the same byte-identical binary selected by file name.
+- The legacy `MetaBrain.Cli.exe owner …` surface, structured export, memory/source/relation workflows and the separate plaintext-settings `owner migrate` remain reachable. Nothing is migrated, reclassified, rewritten or deleted by using the new default. D114 authorized removing only redundant active WPF packaging callers; none were present, so none were removed, and WPF detection/refusal/remediation is retained.
+- The CLI setup offers an explicit **`--add-to-path`** opt-in ([D115](REQUIREMENTS.md#owner-approved-cli-user-path-opt-in--d115-2026-11-20)). It appends only the installation’s `cli` directory to the **current user’s** PATH, once, preserving existing entries and order; it never edits a PowerShell profile, the system PATH or WindowsApps. An upgrade keeps the owned entry, an entry the owner already had is not claimed, and uninstall removes only the entry this installation added. A **new shell** is required; a shell opened before the change keeps its inherited environment. Without the option no environment value is touched.
+
+No vault/workspace/crypto/key/envelope format changed. Membership, zones, grants, tokens, sessions and legacy records keep their existing meaning.
+
+## Installation, upgrade and recovery
+
+- Fresh install: the CLI setup creates sibling install/data roots and records the candidate identity; the first start is locked and uninitialized, and no vault is created until the owner provisions one explicitly.
+- In-place upgrade: a 1.2.0+ CLI/MCP installation is upgraded by draining/stopping the shared host, replacing application files and keeping the data root, settings, endpoints, vault, workspace, sources, backups and recovery material byte-unchanged. The verified 1.8.0 → 2.0.0 candidate upgrade restarted locked and preserved the exact workspace bytes.
+- A 1.0/1.1 or unknown/mixed installation is refused **before** the host is stopped or any file/data is changed, with the supported transition: install 2.0.0 beside it with a separate install root, data root and distinct endpoints. Sharing one live data root between installations is refused.
+- Uninstall removes application files for the selected component and always preserves the data root. A PATH entry added by this installation is removed on CLI uninstall; an entry the owner already had is left alone.
+- Rollback is a whole-vault restore from a verified encrypted backup into a separate directory, with the key. There is no per-record undo and no in-place binary downgrade; 1.0/1.1 binaries are not promised to read a vault written by a later release. Post-backup edits/exports are excluded and disclosed; restore resurrects no live grant, session or token and re-applies the durable purge ledger.
+
+The exact refusal, upgrade, recovery and uninstall observations are recorded in the [candidate record](release-2.0.0.md#verification-actually-observed); the owner-run PATH walkthrough is separate.
+
+## MCP protocol and client compatibility
+
+The packaged MCP server is stdio/JSON-RPC and negotiates `2025-11-25`, `2025-06-18`, `2025-03-26` or `2024-11-05`; an unknown or absent offer falls back to `2025-11-25`. The exact 2.0.0 package negotiated `2025-11-25` with `serverInfo {name: "metabrain-agent", version: "2.0.0"}` and returned the unchanged 26 tools. 2.0.0 adds no MCP tool and does not expose owner workspace search.
+
+Codex CLI `0.164.0` and OMP `18.20.0` remain **historical T5 evidence points**, not a minimum/maximum supported version range. For this candidate, direct MCP stdio proof and the `s4-t1` bridge were performed, plus bounded actual-client runs under explicit owner authorization: OMP `19.0.0` executed the read-only `metabrain_catalog_list` tool against the extracted candidate (`CATALOG no_match`), and the owner-operated interactive Codex session showed `metabrain: connected (1 tool)` and `Called metabrain.metabrain_catalog_list` with the same result. Two authorized non-interactive `codex exec` runs initialized the packaged server but executed no tool; [D117](REQUIREMENTS.md#owner-approved-codex-mcp-evidence-adjustment--d117-2026-11-22) accepts that combined evidence in place of a successful Codex tool call. This is not a full Codex compatibility claim, a `codex exec` PASS or a supported client range.
+
+## Known limits
+
+- 2.0.0 inherits baseline requirements R01–R40 and the accepted 1.x behavior for unchanged surfaces. **D113’s 1.8.0-only report-only exception does not carry into 2.0.0, and G2-T2 does not invent or re-adopt a quantitative performance gate.** No new benchmark, throughput or equivalence claim is made; the approved baseline measurement obligation remains open to the owner’s measurement program.
+- Assets are **unsigned**: SHA-256 checks integrity, not publisher identity. Do not disable SmartScreen, Defender or security policy to install.
+- The owner-installed Microsoft Visual C++ v14 x64 Redistributable `14.43.34808` or later remains a separate prerequisite; Meta Brain does not bundle, download or install it.
+- Migration remains opt-in and narrow per [D112](REQUIREMENTS.md#owner-approved-migrationcutover-contract--s18-t1--d112): only exact-byte originals within the unchanged 1 MiB per-act cap whose destination preserves every applicable protection are eligible; structured-only, oversized and non-enforceable zoned records stay legacy and are reported. Declassification is never bundled.
+- Local model assets, semantic queries, index rebuilds and browser rendering are not part of this release candidate’s verification, and no provider/model run beyond the bounded read-only catalog calls recorded above was made. Real owner files (R37), any compatibility claim beyond those bounded calls, and publication remain separate owner decisions; the owner-run PATH lifecycle is accepted only under [D116](REQUIREMENTS.md#owner-approved-cli-user-path-opt-in--d115-2026-11-20), which records that a distinct fresh-shell observation after clean install was not made.
+- The packaged manifest retains two stale documentation strings (`supportTransition` 1.2-era wording and `testedOhMyPiVersion 18.12.6`); behavior is unaffected and the installed 2.0.0 refusal was verified. Fixing the strings requires a new candidate identity, so they are disclosed instead of silently edited.
+
+See [the migration/compatibility guide](migration-2.0.0.md) for eligibility, transition details, D114 retention, D115 PATH semantics, downgrade/restore guidance and the evidence map.

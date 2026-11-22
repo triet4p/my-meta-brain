@@ -1,7 +1,7 @@
 # Operations — installing and running Meta Brain every day
-**Release status:** 1.7.0 is **published** as [`v1.7.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.7.0) on 2026-11-18 with byte-exact [CLI](https://github.com/triet4p/my-meta-brain/releases/download/v1.7.0/MetaBrain-CLI-1.7.0.exe) and [MCP](https://github.com/triet4p/my-meta-brain/releases/download/v1.7.0/MetaBrain-MCP-1.7.0.zip) assets; it is the latest public release. The exact candidate `20af9d477aba` passed independent review `S17-T6-C1` R1, was checkpointed at `fd8ad2f7` and published after owner authorization; the public release-boundary re-review `S17-PUBLIC-C1` R2 returned **PASS** (the R1 FAIL on stale live-site text is historical; the corrected site was deployed at `05c4b0cf`). Its locally verified asset hashes, setup version/payload, packaged CLI/service/MCP workflows, MCP protocol negotiation and isolated 1.6.0 → 1.7.0 data-preserving upgrade/recovery are recorded in the [1.7.0 record](release-1.7.0.md) and [release notes](release-notes-1.7.0.md). Sprint 17 T5 sharing/context MCP behavior and limits are recorded in the [T5 evidence](../artifacts/sprint-17/task-5.md); candidate-level normal-client proof still requires separate owner consent.
+**Release status:** 1.8.0 is **published** as [`v1.8.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.8.0) on 2026-11-20 (release id `452370096`, Latest) with byte-exact [CLI](https://github.com/triet4p/my-meta-brain/releases/download/v1.8.0/MetaBrain-CLI-1.8.0-win-x64-e149a34a30c5-tree2ce06fb85f6a-2bc84743d74c.exe) and [MCP](https://github.com/triet4p/my-meta-brain/releases/download/v1.8.0/MetaBrain-MCP-1.8.0-win-x64-e149a34a30c5-tree2ce06fb85f6a-2bc84743d74c.zip) assets; it is the latest public release. 1.7.0 was published as [`v1.7.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v1.7.0) on 2026-11-18. The exact candidate `20af9d477aba` passed independent review `S17-T6-C1` R1, was checkpointed at `fd8ad2f7` and published after owner authorization; the public release-boundary re-review `S17-PUBLIC-C1` R2 returned **PASS** (the R1 FAIL on stale live-site text is historical; the corrected site was deployed at `05c4b0cf`). Its locally verified asset hashes, setup version/payload, packaged CLI/service/MCP workflows, MCP protocol negotiation and isolated 1.6.0 → 1.7.0 data-preserving upgrade/recovery are recorded in the [1.7.0 record](release-1.7.0.md) and [release notes](release-notes-1.7.0.md). Sprint 17 T5 sharing/context MCP behavior and limits are recorded in the [T5 evidence](../artifacts/sprint-17/task-5.md); candidate-level normal-client proof still requires separate owner consent.
 
-**1.8.0 candidate (not published):** 1.7.0 remains the latest public release. Sprint 18 adds the guarded opt-in legacy-to-workspace migration and its resume/purge/export lifecycle; the exact CLI setup + MCP ZIP candidate has been assembled and verified locally (candidate `2bc84743d74c`; see the [1.8.0 release record](release-1.8.0.md) and [`artifacts/sprint-18/task-6.md`](../artifacts/sprint-18/task-6.md)). Installing or upgrading never migrates, resets or overwrites the vault; migration is a separate owner act documented in the [1.8.0 migration guide](migration-1.8.0.md). Rollback is whole-vault restore from a verified backup only. No installed-host upgrade was performed for this candidate.
+**2.0.0 candidate (not published):** 1.8.0 remains the latest public release. The 2.0.0 G2 candidate makes the workspace the default CLI surface and adds an optional user-PATH registration; its exact identity, evidence and owner walkthrough are in the [2.0.0 candidate record](release-2.0.0.md) and [`artifacts/g2/owner-walkthrough-2.0.0.md`](../artifacts/g2/owner-walkthrough-2.0.0.md). Sprint 18 added the guarded opt-in legacy-to-workspace migration and its resume/purge/export lifecycle; the 1.8.0 CLI setup + MCP ZIP were published on 2026-11-20 (candidate `2bc84743d74c`; see the [1.8.0 release record](release-1.8.0.md) and [`artifacts/sprint-18/task-6.md`](../artifacts/sprint-18/task-6.md)); the 2.0.0 candidate was assembled and verified locally but is not published. Installing or upgrading never migrates, resets or overwrites the vault; migration is a separate owner act documented in the [1.8.0 migration guide](migration-1.8.0.md). Rollback is whole-vault restore from a verified backup only. No installed-host upgrade was performed for this candidate.
 
 Meta Brain is installed for **one owner account** on Windows. The owner installs it, starts it,
 unlocks it, and uses it; the agents connect to it as scoped clients. Nothing in this runbook needs
@@ -167,28 +167,31 @@ The installed entrypoint is `cli\MetaBrain.Cli.exe`; use its full path with
 removes only the CLI component, keeping the shared runtime while the MCP component is
 registered (MCP itself is extracted from its ZIP, not installed by this setup) and always
 preserving the selected data root.
-It does not change PATH, profiles, autostart, services, registry, permissions or environment
-settings. The self-contained single-file .NET host may extract runtime support under
+It does not change profiles, autostart, services, registry, permissions or the system PATH. Without
+`--add-to-path` it touches no environment value; with `--add-to-path` it appends only the
+installation's `cli` directory to the owner's own user PATH once, exactly as described in §2 (a new
+PowerShell session is required, and uninstall removes only the entry this installation added).
+The self-contained single-file .NET host may extract runtime support under
 `%TEMP%\.net\<bundle>\<hash>` on launch; this is runtime temp data, not an install or profile
-registration. There is no 1.4 UI setup asset to download or run.
+registration. There is no 2.0 UI setup asset to download or run.
 
-### 2.3 Support transition from the 1.1.0 WPF product (S12-T6, carried by 1.4.0)
+### 2.3 Support transition from the 1.1.0 WPF product (S12-T6, carried by 2.0.0)
 
-1.4.0 ships the CLI and the MCP server only. It publishes no `MetaBrain-UI-<version>.exe`, has no
+2.0.0 ships the CLI and the MCP server only. It publishes no `MetaBrain-UI-<version>.exe`, has no
 `owner-ui` component, and builds no WPF installer. The installer refuses to change an installed
 pre-1.2 (1.1.0 WPF) or unknown/mixed installation in place, before it stops that host or writes
 into either root, and names the supported transition: install the current release into a **separate
 install root** with its own **data root** and distinct `--control-pipe`/`--agent-pipe` endpoints.
 The 1.1 application, its data, its endpoints and any running 1.1 host are left untouched, and
 nothing is uninstalled, replaced or migrated automatically. Sharing one live data root or running
-two writers is refused. An installed 1.2 or 1.3 CLI/MCP layout is upgraded in place by the 1.4
-setup with its data root, settings and endpoints preserved (§2).
+two writers is refused. An installed 1.2.0 or later CLI/MCP layout is upgraded in place by the
+current setup with its data root, settings and endpoints preserved (§2).
 
 An installed 1.1 layout is detected from its recorded `install-state.json` product version, its
 `owner-ui/` directory or its root-level `MetaBrain.OwnerUi.exe`/`MetaBrain.OwnerUi.Setup.exe`
 markers. A 1.2+ installation has neither that directory nor that component; naming
 `--component owner-ui` fails with the same support-transition message. The 1.1.0 Owner UI remains
-downloadable from its own unchanged release; it is not updated by 1.2, 1.3 or 1.4 and makes no current
+downloadable from its own unchanged release; it is not updated by any 1.2+ or 2.0 release and makes no current
 runtime/data compatibility claim.
 
 **A separately confirmed manual transition** is the owner's own act, not an installer feature:
@@ -1169,7 +1172,10 @@ The installed shared installer removes the full shared installation by default; 
 `--component cli|mcp` removes only that registration. An individual component removal
 keeps the shared runtime while another component remains registered. When the final component is
 removed, application/runtime files are removed but the data root is always kept: the vault,
-source snapshots, backups and recovery material are never deleted by the installer. A 1.1.0
+source snapshots, backups and recovery material are never deleted by the installer. If this CLI
+installation added its `cli` directory to the owner's user PATH (`--add-to-path`), CLI removal
+removes only that owned entry; an entry the owner already had is left in place, and no PowerShell
+profile or system PATH value is ever edited. A 1.1.0
 installation is never removed or edited by the current installer; it stays under its own installer.
 
 Uninstall refuses with an actionable error if the shared host could not drain cleanly; it does not
