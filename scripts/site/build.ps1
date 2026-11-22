@@ -46,10 +46,9 @@ if ($manifest.assets.Count -ne $expectedProducts.Count) { throw 'Candidate must 
 $assetRecords = @{}
 foreach ($asset in $manifest.assets) {
     if ($asset.product -notin $expectedProducts -or $assetRecords.ContainsKey($asset.product)) { throw "Unexpected or duplicate product asset: $($asset.product)" }
-    # exact candidate filename; short public names require separate owner approval
-    $publicName = $asset.name
-    if ([string]::IsNullOrWhiteSpace($publicName)) { throw "No public filename is defined for $($asset.product)." }
     $extension = if ($asset.product -eq 'MCP') { 'zip' } else { 'exe' }
+    # CR03: the download name is independent of the verified candidate filename.
+    $publicName = "MetaBrain-$($asset.product)-$($manifest.productVersion).$extension"
     $expectedName = "MetaBrain-$($asset.product)-2.0.0-win-x64-a5e13717a31e-tree7eb452354d39-bc8ebc909aa8.$extension"
     $hashMatches = $asset.sha256 -match '^[a-fA-F0-9]{64}$'
     $licenseEntries = @()

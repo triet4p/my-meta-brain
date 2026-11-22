@@ -4,6 +4,10 @@ All notable changes to Meta Brain are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Restored version-only GitHub download filenames for the 1.8.0 and 2.0.0 CLI setup and MCP ZIP. Asset bytes, SHA-256 digests and release tags are unchanged.
+
 ## [2.0.0] - 2026-11-22
 
 ### Added
