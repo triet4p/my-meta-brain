@@ -26,6 +26,7 @@ python -m http.server --bind 127.0.0.1 --directory dist/site 8000
 Open `http://127.0.0.1:8000/`. The ignored `dist/site/` output is a local preview with verified,
 byte-identical candidate copies under the short public filenames. It does not publish or deploy
 anything; the public Release and Pages site have separate owner-controlled publication flows.
+
 ---
 
 ## Overview
