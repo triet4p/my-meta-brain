@@ -7,14 +7,14 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
-if ([string]::IsNullOrWhiteSpace($CandidateDirectory)) { $CandidateDirectory = Join-Path $repoRoot 'runtime\release-candidates\1.7.0-win-x64-55d35ec31a8c-treec47629d2bcde-20af9d477aba' }
+if ([string]::IsNullOrWhiteSpace($CandidateDirectory)) { $CandidateDirectory = Join-Path $repoRoot 'runtime\release-candidates\2.0.0-win-x64-a5e13717a31e-tree7eb452354d39-bc8ebc909aa8' }
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) { $OutputDirectory = Join-Path $repoRoot 'dist\site' }
 $sourceDirectory = Join-Path $repoRoot 'website'
 $candidateRoot = [IO.Path]::GetFullPath($CandidateDirectory)
 $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
-$expectedCandidate = '20af9d477aba'
-$expectedHead = '55d35ec31a8c4e9c8df41bb98b4b96d68776d47a'
-$expectedTree = 'c47629d2bcdef045f9c189c12fc195248959521d607e532af98d7ba761608a89'
+$expectedCandidate = 'bc8ebc909aa8'
+$expectedHead = 'a5e13717a31ee2b817f1e2c0daa29f395a80f64a'
+$expectedTree = '7eb452354d391c5673465f15d7ec3be2d579bea604d407e4bee89441563c4fcd'
 $manifestPath = Join-Path $candidateRoot 'candidate-manifest.json'
 $templatePath = Join-Path $sourceDirectory 'index.template.html'
 $stylePath = Join-Path $sourceDirectory 'styles.css'
@@ -22,8 +22,8 @@ $guidePaths = @('scenarios.html', 'codex.html', 'omp.html')
 $published = -not [string]::IsNullOrWhiteSpace($ReleaseDownloadBaseUrl)
 if ($published) {
     $ReleaseDownloadBaseUrl = $ReleaseDownloadBaseUrl.TrimEnd('/')
-    if ($ReleaseDownloadBaseUrl -cne 'https://github.com/triet4p/my-meta-brain/releases/download/v1.7.0') {
-        throw 'ReleaseDownloadBaseUrl must be the exact owner-controlled 1.7.0 GitHub Releases download URL.'
+    if ($ReleaseDownloadBaseUrl -cne 'https://github.com/triet4p/my-meta-brain/releases/download/v2.0.0') {
+        throw 'ReleaseDownloadBaseUrl must be the exact owner-controlled 2.0.0 GitHub Releases download URL.'
     }
 }
 foreach ($guidePath in $guidePaths) {
@@ -37,8 +37,8 @@ if (-not (Test-Path -LiteralPath $templatePath -PathType Leaf)) { throw 'Website
 if (-not (Test-Path -LiteralPath $stylePath -PathType Leaf)) { throw 'Website stylesheet is missing.' }
 
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-if ($manifest.productVersion -ne '1.7.0' -or $manifest.runtimeIdentifier -ne 'win-x64' -or -not $manifest.selfContained) { throw 'Candidate product version, platform, or self-contained identity does not match this site.' }
-if ($manifest.candidateId -ne $expectedCandidate -or $manifest.source.head -ne $expectedHead -or $manifest.source.sourceTreeSha256 -ne $expectedTree -or $manifest.source.identity -ne ($expectedHead.Substring(0, 12) + '-tree' + $expectedTree.Substring(0, 12)) -or -not $manifest.source.workingTreeIncluded) { throw 'Candidate provenance does not match the accepted 1.7.0 candidate expected by this site.' }
+if ($manifest.productVersion -ne '2.0.0' -or $manifest.runtimeIdentifier -ne 'win-x64' -or -not $manifest.selfContained) { throw 'Candidate product version, platform, or self-contained identity does not match this site.' }
+if ($manifest.candidateId -ne $expectedCandidate -or $manifest.source.head -ne $expectedHead -or $manifest.source.sourceTreeSha256 -ne $expectedTree -or $manifest.source.identity -ne ($expectedHead.Substring(0, 12) + '-tree' + $expectedTree.Substring(0, 12)) -or -not $manifest.source.workingTreeIncluded) { throw 'Candidate provenance does not match the accepted 2.0.0 candidate expected by this site.' }
 if ($manifest.signing -notlike 'unsigned*') { throw 'Candidate signing state is not the disclosed unsigned state.' }
 
 $expectedProducts = @('CLI', 'MCP')
@@ -46,13 +46,11 @@ if ($manifest.assets.Count -ne $expectedProducts.Count) { throw 'Candidate must 
 $assetRecords = @{}
 foreach ($asset in $manifest.assets) {
     if ($asset.product -notin $expectedProducts -or $assetRecords.ContainsKey($asset.product)) { throw "Unexpected or duplicate product asset: $($asset.product)" }
-    $publicName = switch ($asset.product) {
-        'CLI' { 'MetaBrain-CLI-' + $manifest.productVersion + '.exe' }
-        'MCP' { 'MetaBrain-MCP-' + $manifest.productVersion + '.zip' }
-    }
+    # exact candidate filename; short public names require separate owner approval
+    $publicName = $asset.name
     if ([string]::IsNullOrWhiteSpace($publicName)) { throw "No public filename is defined for $($asset.product)." }
     $extension = if ($asset.product -eq 'MCP') { 'zip' } else { 'exe' }
-    $expectedName = "MetaBrain-$($asset.product)-1.7.0-win-x64-55d35ec31a8c-treec47629d2bcde-20af9d477aba.$extension"
+    $expectedName = "MetaBrain-$($asset.product)-2.0.0-win-x64-a5e13717a31e-tree7eb452354d39-bc8ebc909aa8.$extension"
     $hashMatches = $asset.sha256 -match '^[a-fA-F0-9]{64}$'
     $licenseEntries = @()
     if ($asset.product -eq 'MCP') { $licenseEntries = @($asset.files | Where-Object { $_.path -ceq 'LICENSE' }) } else { $licenseEntries = @($asset.payload.files | Where-Object { $_.path -ceq 'LICENSE' }) }
@@ -87,23 +85,23 @@ $downloadHrefs = @{}
 foreach ($product in $expectedProducts) {
     $downloadHrefs[$product] = if ($published) { $ReleaseDownloadBaseUrl + '/' + $assetRecords[$product].PublicName } else { 'downloads/' + $assetRecords[$product].PublicName }
 }
-$actionLabel = if ($published) { 'T&#7843;i b&#7843;n ph&#225;t h&#224;nh 1.7.0' } else { 'T&#7843;i b&#7843;n xem tr&#432;&#7899;c c&#7909;c b&#7897;' }
+$actionLabel = if ($published) { 'T&#7843;i b&#7843;n ph&#225;t h&#224;nh 2.0.0' } else { 'T&#7843;i b&#7843;n xem tr&#432;&#7899;c c&#7909;c b&#7897;' }
 $replacements = @{
     '{{CANDIDATE}}' = $manifest.candidateId
     '{{SOURCE_HEAD}}' = $manifest.source.head
     '{{SOURCE_TREE}}' = $manifest.source.sourceTreeSha256
     '{{VERSION}}' = $manifest.productVersion
-    '{{RELEASE_STATUS_TITLE}}' = if ($published) { '&#272;&#227; c&#244;ng b&#7889; 1.7.0' } else { 'Ch&#432;a ph&#225;t h&#224;nh c&#244;ng khai' }
-    '{{RELEASE_STATUS_TEXT}}' = if ($published) { 'Meta Brain 1.7.0 &#273;&#227; &#273;&#432;&#7907;c ph&#225;t h&#224;nh. C&#225;c li&#234;n k&#7871;t b&#234;n d&#432;&#7899;i tr&#7887; t&#7899;i GitHub Release v1.7.0.' } else { 'C&#225;c t&#7879;p d&#432;&#7899;i &#273;&#226;y ch&#7881; c&#243; trong b&#7843;n xem tr&#432;&#7899;c c&#7909;c b&#7897; &#273;&#227; d&#7921;ng.' }
-    '{{RELEASE_BANNER}}' = if ($published) { 'B&#7842;N PH&#193;T H&#192;NH 1.7.0 &#183; &#272;&#195; C&#212;NG B&#7888;' } else { 'B&#7842;N XEM TR&#431;&#7898;C C&#7908;C B&#7896; &#183; KH&#212;NG PH&#7842;I GITHUB RELEASE' }
+    '{{RELEASE_STATUS_TITLE}}' = if ($published) { 'B&#7843;n ph&#225;t h&#224;nh 2.0.0 (release-ready)' } else { 'Ch&#432;a ph&#225;t h&#224;nh c&#244;ng khai' }
+    '{{RELEASE_STATUS_TEXT}}' = if ($published) { 'Meta Brain 2.0.0 release-ready candidate. C&#225;c li&#234;n k&#7871;t b&#234;n d&#432;&#7899;i tr&#7887; t&#7899;i GitHub Release v2.0.0 (owner publication pending).' } else { 'C&#225;c t&#7879;p d&#432;&#7899;i &#273;&#226;y ch&#7881; c&#243; trong b&#7843;n xem tr&#432;&#7899;c c&#7909;c b&#7897; &#273;&#227; d&#7921;ng.' }
+    '{{RELEASE_BANNER}}' = if ($published) { 'B&#7842;N PH&#193;T H&#192;NH 2.0.0 &#183; RELEASE-READY' } else { 'B&#7842;N XEM TR&#431;&#7898;C C&#7908;C B&#7896; &#183; KH&#212;NG PH&#7842;I GITHUB RELEASE' }
     '{{RELEASE_FOOTER}}' = if ($published) { 'Published release' } else { 'B&#7843;n xem tr&#432;&#7899;c c&#7909;c b&#7897;' }
-    '{{RELEASE_NOTES_STATUS}}' = if ($published) { 'SHA-256 &#273;&#432;&#7907;c ghi nh&#7853;n cho t&#7915;ng t&#7879;p. T&#7843;i b&#7843;n ph&#225;t h&#224;nh t&#7915; GitHub Release v1.7.0.' } else { 'SHA-256 &#273;&#432;&#7907;c cung c&#7845;p cho t&#7915;ng t&#7879;p trong b&#7843;n xem tr&#432;&#7899;c c&#7909;c b&#7897;. G&#243;i t&#7843;i c&#244;ng khai v&#224; ph&#225;t h&#224;nh GitHub ch&#432;a &#273;&#432;&#7907;c x&#225;c nh&#7853;n.' }
+    '{{RELEASE_NOTES_STATUS}}' = if ($published) { 'SHA-256 &#273;&#432;&#7907;c ghi nh&#7853;n cho t&#7915;ng t&#7879;p. T&#7843;i b&#7843;n ph&#225;t h&#224;nh t&#7915; GitHub Release v2.0.0 (owner publication pending).' } else { 'SHA-256 &#273;&#432;&#7907;c cung c&#7845;p cho t&#7915;ng t&#7879;p trong b&#7843;n xem tr&#432;&#7899;c c&#7909;c b&#7897;. G&#243;i t&#7843;i c&#244;ng khai v&#224; ph&#225;t h&#224;nh GitHub ch&#432;a &#273;&#432;&#7907;c x&#225;c nh&#7853;n.' }
     '{{RELEASE_HEADING}}' = if ($published) { 'B&#7843;n ph&#225;t h&#224;nh' } else { 'B&#7843;n xem tr&#432;&#7899;c c&#7909;c b&#7897;' }
     '{{RELEASE_EYEBROW}}' = if ($published) { 'B&#7842;N PH&#193;T H&#192;NH' } else { 'B&#7842;N XEM TR&#431;&#7898;C' }
-    '{{DOWNLOAD_STATUS_CLAIM}}' = if ($published) { 'B&#7843;n ph&#225;t h&#224;nh 1.7.0 &#273;&#227; v&#432;&#7907;t evidence review PASS (<code>S17-T6-C1-R1</code>), &#273;&#432;&#7907;c checkpoint t&#7841;i <code>fd8ad2f7</code> v&#224; c&#244;ng b&#7889; c&#244;ng khai ng&#224;y 2026-11-18;' } else { 'B&#7843;n 1.7.0 c&#243; candidate c&#7909;c b&#7897; &#273;&#227; assemble v&#224; verify, nh&#432;ng ch&#432;a review, checkpoint hay ph&#225;t h&#224;nh c&#244;ng khai;' }
-    '{{DOWNLOAD_LATEST_CLAIM}}' = if ($published) { 'l&#224; b&#7843;n ph&#225;t h&#224;nh tr&#432;&#7899;c; 1.7.0 l&#224; b&#7843;n CLI + MCP m&#7899;i nh&#7845;t. C&#225;c li&#234;n k&#7871;t t&#7843;i xu&#7889;ng &#7903; tr&#234;n tr&#7887; t&#7899;i asset c&#244;ng khai ch&#237;nh x&#225;c c&#7911;a Release v1.7.0.' } else { 'l&#224; b&#7843;n CLI + MCP m&#7899;i nh&#7845;t &#273;&#227; ph&#225;t h&#224;nh. Kh&#244;ng d&#249;ng c&#225;c li&#234;n k&#7871;t n&#224;y &#273;&#7875; suy ra r&#7857;ng c&#243; b&#7843;n ph&#225;t h&#224;nh 1.7.0 c&#244;ng khai.' }
-    '{{RELEASE_NOTES_STATUS_DETAIL}}' = if ($published) { '&#272;&#227; c&#243; evidence review PASS (<code>S17-T6-C1-R1</code>), checkpoint <code>fd8ad2f7</code> v&#224; b&#7843;n t&#7843;i xu&#7889;ng c&#244;ng khai; 1.7.0 l&#224; b&#7843;n ph&#225;t h&#224;nh m&#7899;i nh&#7845;t. C&#243; th&#7875; c&#7845;u h&#236;nh client t&#7899;i asset c&#244;ng khai ch&#237;nh x&#225;c &#273;&#227; verify c&#7911;a Release v1.7.0.' } else { 'Ch&#432;a c&#243; evidence review PASS, checkpoint hay b&#7843;n t&#7843;i xu&#7889;ng c&#244;ng khai; 1.6.0 v&#7851;n l&#224; b&#7843;n ph&#225;t h&#224;nh m&#7899;i nh&#7845;t. Ch&#7881; c&#7845;u h&#236;nh client t&#7899;i asset ch&#237;nh x&#225;c &#273;&#227; verify sau khi owner c&#244;ng khai.' }
-    '{{RELEASE_RECORD_STATUS}}' = if ($published) { '; &#273;&#227; c&#244;ng b&#7889; c&#244;ng khai nh&#432; Release v1.7.0 ng&#224;y 2026-11-18.' } else { '; ch&#432;a c&#243; b&#7843;n ph&#225;t h&#224;nh c&#244;ng khai.' }
+    '{{DOWNLOAD_STATUS_CLAIM}}' = if ($published) { 'B&#7843;n ph&#225;t h&#224;nh 2.0.0 release-ready; evidence review PASS G2-T2-C1, checkpoint 54d6cd27, frozen assets e08c03e6... / cc733b1d...;' } else { 'B&#7843;n 2.0.0 c&#243; candidate c&#7909;c b&#7897; &#273;&#227; assemble v&#224; verify; trạng thái gate đã quan sát: evidence review PASS (G2-T2-C1), checkpoint 54d6cd27, frozen assets e08c03e6.../cc733b1d...; owner publication pending; bản xem trước cục bộ không phục vụ tải công khai;' }
+    '{{DOWNLOAD_LATEST_CLAIM}}' = if ($published) { 'l&#224; b&#7843;n CLI + MCP 2.0.0 release-ready. C&#225;c li&#234;n k&#7871;t t&#7843;i xu&#7889;ng &#7903; tr&#234;n tr&#7887; t&#7899;i asset c&#244;ng khai ch&#237;nh x&#225;c c&#7911;a Release v2.0.0.' } else { 'l&#224; b&#7843;n CLI + MCP m&#7899;i nh&#7845;t &#273;&#227; ph&#225;t h&#224;nh. Kh&#244;ng d&#249;ng c&#225;c li&#234;n k&#7871;t n&#224;y &#273;&#7875; suy ra r&#7857;ng...' }
+    '{{RELEASE_NOTES_STATUS_DETAIL}}' = if ($published) { 'Evidence review PASS (G2-T2-C1), checkpoint 54d6cd27 v&#224; b&#7843;n t&#7843;i xu&#7889;ng c&#244;ng khai; 2.0.0 release-ready candidate. C&#243; th&#7875; c&#7845;u h&#236;nh client t&#7899;i asset c&#244;ng khai ch&#237;nh x&#225;c &#273;&#227; verify c&#7911;a Release v2.0.0.' } else { 'Trạng thái gate đã quan sát: evidence review PASS (G2-T2-C1), checkpoint 54d6cd27, frozen assets; owner publication pending; bản xem trước cục bộ.' }
+    '{{RELEASE_RECORD_STATUS}}' = if ($published) { '; release-ready candidate, owner publication pending.' } else { '; ch&#432;a c&#243; b&#7843;n ph&#225;t h&#224;nh c&#244;ng khai.' }
     '{{CLI_NAME}}' = $assetRecords['CLI'].PublicName
     '{{CLI_BYTES}}' = $assetRecords['CLI'].Bytes.ToString([Globalization.CultureInfo]::InvariantCulture)
     '{{CLI_HASH}}' = $assetRecords['CLI'].Hash
@@ -115,7 +113,7 @@ $replacements = @{
     '{{OPS_URL}}' = 'https://github.com/triet4p/my-meta-brain/blob/main/docs/OPERATIONS.md'
     '{{SECURITY_URL}}' = 'https://github.com/triet4p/my-meta-brain/blob/main/README.md'
     '{{CHANGELOG_URL}}' = 'https://github.com/triet4p/my-meta-brain/blob/main/CHANGELOG.md'
-    '{{RELEASE_NOTES_URL}}' = 'https://github.com/triet4p/my-meta-brain/blob/main/docs/release-1.7.0.md'
+'{{RELEASE_NOTES_URL}}' = 'https://github.com/triet4p/my-meta-brain/blob/main/docs/release-2.0.0.md'
     '{{README_URL}}' = 'https://github.com/triet4p/my-meta-brain/blob/main/README.md'
 }
 $html = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8

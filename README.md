@@ -144,13 +144,13 @@ the owner approves or narrows requests in the CLI or the Owner console, never in
 ## Prerequisites
 
 - **Operating System:** 64-bit Windows releases that Microsoft lists as supported for .NET 10 at
-  release time. The 1.7.0 CLI and MCP server need no desktop/WPF capability. The product is not
+  release time. The CLI and MCP server need no desktop/WPF capability. The product is not
   verified on every supported Windows SKU; Linux, macOS, ARM, Server Core and Nano Server are out
   of scope for this release (uses Windows Named Pipes and DPAPI). The optional `open` document
   session needs an installed Chromium-based browser (Chrome or Edge); the rest of the CLI does not.
-- **Running the 1.7.0 release:** use the dedicated CLI setup executable and/or the standalone MCP
+- **Running a release:** use the dedicated CLI setup executable and/or the standalone MCP
   ZIP. They are self-contained `win-x64` distributions, so no .NET SDK, installed .NET runtime,
-  source checkout or PowerShell is required. The 1.7.0 release has no Owner UI installer; 1.1.0
+  source checkout or PowerShell is required. The current release has no Owner UI installer; 1.1.0
   keeps its own unchanged WPF downloads. The repository payload bundle described below is
   developer tooling, not the end-user installation path.
 - **Building from source:** [.NET 10 SDK](https://dotnet.microsoft.com/) (`net10.0` /
