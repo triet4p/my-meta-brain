@@ -22,3 +22,6 @@ out/
 *.p12
 *.key
 *.pem
+__pycache__/
+src/*/runtime/
+tests/*/runtime/
