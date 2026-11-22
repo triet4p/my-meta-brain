@@ -745,6 +745,12 @@ The unifying rule: **a legacy record moves only when the destination workspace e
 
 This approval authorizes only the document sync and the subsequent task evidence review and exact-snapshot checkpoint. It does not authorize T2–T6 implementation, migration execution, provider/network access, R37 real-file access, release, push/tag or any G2 action.
 
+### 13.7. Approved major-release default and removal boundary — G2-T1 / D114
+
+In 2.0, workspace is the default, not an automatic migration. [D114](REQUIREMENTS.md#owner-approved-g2-removal-scope--d114-2026-11-20) retains the legacy CLI workflows and structured export required for unmigrated records, the separate `owner migrate` plaintext-settings command, pinned authorization, backup/restore and protocol mismatch refusal. Only redundant active WPF packaging callers, if present, may be removed; detection/refusal/remediation for existing installations and historical source/assets/evidence remain. The CLI installer supplies `metabrain` for a fresh PowerShell session without profile edits. This approval makes no claim about an installed host, a verified 2.0 candidate or publication.
+
+With an explicit installer opt-in, the owner may register the CLI directory on the current user's PATH ([D115](REQUIREMENTS.md#owner-approved-cli-user-path-opt-in--d115-2026-11-20)). Preserve existing entries and remove only the entry owned by this installation; no system PATH or profile change. Agents do not perform the persistent registration.
+
 ## 14. Chất lượng production và nghiệm thu
 
 Sản phẩm hoàn chỉnh cần cài đặt, khởi động lại, nâng cấp/migrate schema, rollback/recovery phù hợp, backup/restore, export và gỡ ứng dụng không xóa nguồn trái ý. Không reset kho để né migration; lỗi/crash không mất memory đã báo lưu thành công.

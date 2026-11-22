@@ -348,3 +348,21 @@ This record is a clarification plus the S18-scoped quantitative envelope under [
 For 1.8.0 only, [D113](../.agents/memory/decisions.md#2026-11-20-d113--treat-worker-host-performance-comparisons-as-report-only-for-180) supersedes the blocking status of D112's R38 1k/10k handler p95 targets and its four 100k A18-2-relative targets (handler p95, rebuild wall time, locked and unlocked idle working set). Report exact available observations, methodology and comparability gaps under R40. A missing or incomparable value stays a gap in the measurement record; the owner accepts it for this release, not as a passing measurement. See the [normative exception](META-BRAIN.md#180-only-resource-exception--d113).
 
 The 256 MiB service-idle RAM ceiling, 1 MiB per-act content cap and all non-comparison requirements, including security, data handling, migration/rollback, held-out relevance and R37, remain unchanged. This decision neither passes T5/T6 nor authorizes a provider, publication or G2.
+
+## Owner-approved G2 removal scope — D114 (2026-11-20)
+
+[D114](../.agents/memory/decisions.md#2026-11-20-d114--limit-g2-removals-to-obsolete-wpf-packaging) authorizes the [G2-T1](ROADMAP-2.0.md#8-g2--final-release-200-không-phải-sprint-bổ-sung) workspace default, supported caller cutover, packaged `metabrain` entrypoint and removal of redundant active WPF packaging callers only, if present. It does not authorize publication.
+
+- **R30/R34:** Retain legacy memory/source/relation workflows and structured export for records that stay legacy. A workspace default is not a migration or a declassification.
+- **R35/R36:** Retain plaintext-settings `owner migrate`, fail-closed protocol mismatch, installed WPF detection/refusal/remediation, backup/restore and data-preserving upgrade. Leave existing components and history untouched.
+- **R33/R40:** Preserve the existing data/authority boundary, including pinned grants, and prove no two writers or loss of a retained workflow. This approval is not an evidence, checkpoint, or candidate PASS.
+
+## Owner-approved CLI user-PATH opt-in — D115 (2026-11-20)
+
+Under R35, [D115](../.agents/memory/decisions.md#2026-11-20-d115--register-metabrain-through-an-explicit-user-path-opt-in) permits the owner-run installer to add the installed CLI directory to the current user's PATH only with explicit consent. Preserve entries already present; upgrade/uninstall must not remove entries the install did not add. No system PATH, profile or WindowsApps writes. Agents may not execute persistent PATH or registry changes. G2-T2 needs owner-run proof from a fresh PowerShell outside the install directory after opted-in install/upgrade, as well as uninstall ownership proof.
+
+For G2-T2 candidate `bc8ebc909aa8` only, the owner approved [D116](../.agents/memory/decisions.md#2026-11-22-d116--accept-combined-owner-path-evidence-for-g2-t2): combine the owner-run clean-install PATH ownership lifecycle and pre-existing-entry preservation with owner-confirmed fresh PowerShell discovery after the opted-in upgrade from 1.8.0. A distinct fresh-shell observation after clean install is not required for this candidate and was not observed. D115 product and host-safety requirements are unchanged.
+
+## Owner-approved Codex MCP evidence adjustment — D117 (2026-11-22)
+
+For G2-T2 candidate `bc8ebc909aa8` only, [D117](../.agents/memory/decisions.md#2026-11-22-d117--accept-bounded-codex-mcp-evidence-for-g2-t2) accepts an actual OMP MCP tool call, Codex MCP server initialization, and direct stdio verification of the packaged server in place of successful Codex MCP tool execution. Record that neither authorized Codex run called a tool. This adjusts release evidence only, not MCP scope, authority, compatibility guarantees, or remaining acceptance and review gates.

@@ -1509,3 +1509,43 @@ The encrypted workspace-blob read bound covers the six-byte JSON-escape worst ca
 **Reason:** Other live sessions and browsers compete for CPU and RAM on the worker host, the original comparable runner is unavailable, and the observed rebuild time varied substantially even for the 1.7.0 control. Repeating these runs would not establish the old comparison.
 
 **Consequences:** Record owner acceptance of the exception, never a benchmark PASS or an equivalence claim. Preserve all historical numbers and instrument limits; no repeat of the old benchmark is required. The 256 MiB service-idle RAM ceiling, 1 MiB per-act cap, frozen corpus, migration/data/security and remaining T5/T6 criteria and reviews are unchanged. No release, provider or G2 authority follows; later releases need their own performance criterion decision.
+
+## [2026-11-20] D114 — Limit G2 removals to obsolete WPF packaging
+
+**Decision:** The owner approves making workspace the default in 2.0, moving supported callers to that default, providing the `metabrain` CLI entrypoint, and removing only redundant active WPF packaging callers if present.
+
+**Alternatives considered:** Also remove the inherited plaintext-settings migration and legacy record commands, or leave the 1.8 default in place pending a broader migration.
+
+**Reason:** The 1.8 vault migration does not convert inherited plaintext settings, and it deliberately leaves structured-only, oversized and non-equivalently protected records in legacy. Removing their workflows would strand data; the workspace default does not require that removal.
+
+**Consequences:** Retain `owner migrate`, legacy memory/source/relation workflows and structured export, unreadjusted legacy resources/history, pinned grants, backup/recovery and fail-closed protocol mismatch. Preserve WPF detection/refusal/remediation, installed components, historical source/assets/evidence. No auto-migration or second writer. G2-T1 needs actual evidence and an independently reviewed checkpoint; G2-T2 verifies the candidate. No publication or host mutation is authorized.
+
+## [2026-11-20] D115 — Register `metabrain` through an explicit user-PATH opt-in
+
+**Decision:** The owner selects an explicit option in the owner-run CLI installer to register the installed CLI directory on that user's PATH.
+
+**Alternatives considered:** Print a manual PATH step, or ship the executable with path-qualified invocation only.
+
+**Reason:** A fresh PowerShell must resolve the command from outside the install directory without a profile edit; an executable in the install directory alone does not meet that need.
+
+**Consequences:** Do not touch system PATH, PowerShell profiles or WindowsApps. Preserve entries already present; upgrade/uninstall may remove only an entry owned by that installation. Agents must not execute persistent PATH or registry changes. Exact installed behavior requires owner-run G2-T2 evidence; process-only PATH tests are not that evidence.
+
+## [2026-11-22] D116 — Accept combined owner PATH evidence for G2-T2
+
+**Decision:** For candidate `bc8ebc909aa8`, accept the owner-run clean-install PATH lifecycle log together with the owner's confirmation of fresh PowerShell command discovery after an opted-in 1.8.0 upgrade, instead of requiring a separate fresh-shell observation after clean install.
+
+**Alternatives considered:** Repeat the clean install and check command discovery again before uninstall.
+
+**Reason:** The clean install already demonstrated adding one user PATH entry, keeping it on reinstall, and removing only the owned entry on uninstall. The opted-in upgrade demonstrated discovery from a fresh PowerShell launched via Start. The demo was cleaned up before a separate clean-install discovery check.
+
+**Consequences:** Do not claim fresh-shell discovery was observed after clean install. D115 runtime behavior, protection of pre-existing entries, and the ban on agent-run persistent PATH changes remain unchanged. This approval does not cover MCP acceptance, provider calls, evidence review, checkpoint, or publication.
+
+## [2026-11-22] D117 — Accept bounded Codex MCP evidence for G2-T2
+
+**Decision:** For candidate `bc8ebc909aa8`, accept OMP end-to-end tool execution, Codex server initialization, and direct stdio verification of the packaged server in place of a successful Codex MCP tool call.
+
+**Alternatives considered:** Keep Codex end-to-end execution blocking and diagnose isolated client configuration before authorizing another provider-backed run.
+
+**Reason:** OMP executed the read-only catalog tool on the demo vault. Both authorized Codex runs initialized the packaged server without executing the tool; direct stdio confirmed that the same server advertised it. These observations distinguish working packaged MCP from unverified Codex tool execution.
+
+**Consequences:** Disclose the Codex end-to-end gap in 2.0.0 release evidence; do not claim a Codex tool call passed or generalize the exception to another candidate. The MCP scope/authority contract, owner final acceptance and independent gates are unchanged. No further provider call or publication is authorized.
