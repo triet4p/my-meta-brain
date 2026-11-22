@@ -1,6 +1,6 @@
 # Meta Brain — Roadmap tới 2.0.0
 
-- Ngày lập: 2026-10-29. Trạng thái: **Sprint 12 Complete, 1.2.0 published; Sprint 13–18/G2 planned, chưa authorize launch.**
+- Ngày lập: 2026-10-29. Sprint 11–18 đã phát hành; [2.0.0 đã phát hành](https://github.com/triet4p/my-meta-brain/releases/tag/v2.0.0) qua G2 ngày 2026-11-22. G2 task và evidence: §8.
 - Cơ sở: [định hướng hậu 1.0.0](POST-1.0-DIRECTION.md), phản hồi owner và yêu cầu mỗi sprint có một release 1.x.x.
 - [PLAN](PLAN.md) là overview/status; task atomic nằm ở từng sprint bên dưới. 1.0.0 và các gate lịch sử giữ nguyên.
 - Cập nhật owner-approved 2026-11-01: [CR03](REQUIREMENTS.md#approved-change-record--cr03-2026-11-01)/D089 chuyển Sprint 12+ sang CLI + MCP, browser chỉ document preview/edit. Approval này là planning/support contract, không authorize implementation/publication.
@@ -128,6 +128,7 @@ G2 là major-release milestone sau tám sprint, **không thay release 1.8.0 cu�
     - [Major differential D2 PASS](../artifacts/g2/reviews/G2-DEEP-D2.md), no actionable findings. Reviewed tag target `bdab94b377c0cebefbd1b9adebc50c8ac9c02bb0`; 309 build/package paths measured with no content delta against reviewed inputs. Frozen candidate retains its distinct assembly source identity `a5e13717a31e-tree7eb452354d39`.
 - [~] **G2-T3 — Public 2.0.0.** Entry: T2 checkpoint + major differential PASS; owner authorized push/publication of `v2.0.0` at the exact reviewed target above and the two frozen packages. Publish immutable source tag/assets/site, verify exact hashes/links/version và public docs; không provider/functional replay không liên quan. Sau public smoke và review PASS, Main ghi M18 complete. Nếu bytes thay đổi, review/refreeze delta và rerun affected checks trước phát hành, không sửa asset bất biến.
     - Full route: before any push or publication verify clean index/worktree, commit only owned and independently reviewed cleanup/status through a separate Bronze exact-snapshot checkpoint, and keep generated/private files ignored. Unknown ownership or unrelated drift blocks publication. Keep the reviewed tag target fixed; post-public smoke has a separate independent evidence review.
+    - [Published 2026-11-22](https://github.com/triet4p/my-meta-brain/releases/tag/v2.0.0), release `454321658`; [publication record](../artifacts/g2/publication/G2-T3-PUBLISH-A1.md) and [independent public R1 PASS](../artifacts/g2/reviews/G2-T3-PUBLIC-C1-R1.md). Two exact assets verified, tag target unchanged; final documentation and Pages wording synchronization tracked here.
 
 G2-T1 không được mở nếu 1.x buộc thay contract chưa được duyệt. G2 completion bao gồm toàn bộ P2-01–P2-12 và các R outcomes retained/changed được trace tới evidence thật, owner daily-use acceptance, lossless migration và restore, privacy/lock/scope/egress negatives, performance/quality budgets đã duyệt. Không giảm thành release branding-only hoặc tuyên bố 2.0 chỉ vì đủ version numbers.
 
@@ -135,4 +136,4 @@ G2-T1 không được mở nếu 1.x buộc thay contract chưa được duyệt
 
 Không mặc định thêm multi-device sync, SaaS/multi-user, Linux/macOS/ARM, autonomous researcher, crawler/PDF automation, graph database, provider mới, telemetry hoặc auto-update. Multi-platform/UI đổi stack chỉ qua quyết định có lý do, không phát sinh từ roadmap.
 
-Hiện tại: Sprint 11/M10 **Complete**, 1.1.0 published gồm CLI/UI/MCP. Sprint 12/M11 **Complete**, [1.2.0 published](https://github.com/triet4p/my-meta-brain/releases/tag/v1.2.0) gồm CLI installer + MCP ZIP, WPF 1.1 legacy frozen. D090 approved, T1–T6 evidence/checkpoints và [final differential D1 PASS](../artifacts/sprint-12/reviews/S12-DEEP-D1.md); owner-authorized publication và [independent public smoke PASS](../artifacts/sprint-12/reviews/S12-PUBLIC-C1-R1.md). Source/tag `82079457`, candidate `921141ec536c`, exact public asset hashes verified; [site](https://triet4p.github.io/my-meta-brain/) deployed. Sprint 13–18/G2 **Not started**, cần owner authorization riêng, không tự launch.
+Status hiện tại: Sprint 11–18 complete; các bản phát hành 1.x và evidence giữ nguyên trong [PLAN](PLAN.md). [2.0.0](https://github.com/triet4p/my-meta-brain/releases/tag/v2.0.0) là bản CLI + MCP hiện hành; WPF 1.1.0 vẫn là bản legacy frozen. Xem §8 cho trạng thái G2-T3.

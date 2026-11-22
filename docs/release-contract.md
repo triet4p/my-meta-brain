@@ -1,8 +1,8 @@
 # Meta Brain — release and compatibility contract
 
-## Product and support matrix for 2.0.0 (local candidate, not published)
+## Product and support matrix for 2.0.0 (published `v2.0.0`)
 
-2.0.0 is the approved G2 default/API cutover: the same two CR03 products — a dedicated CLI setup and a standalone MCP ZIP — with no WPF/UI installer or separate document product. The exact local candidate is `bc8ebc909aa8` from source `a5e13717a31e-tree7eb452354d39`; identity, hashes, inputs, licenses, verification and exclusions are in the [2.0.0 candidate record](release-2.0.0.md). **1.8.0 remains the latest published release**; 2.0.0 has no tag, upload or site deployment. Install/upgrade never migrates or resets the vault; the workspace default and optional user-PATH opt-in are described in [OPERATIONS §2](OPERATIONS.md#2-install) and the [migration guide](migration-2.0.0.md).
+2.0.0 is the approved G2 default/API cutover: the same two CR03 products — a dedicated CLI setup and a standalone MCP ZIP — with no WPF/UI installer or separate document product. The exact local candidate is `bc8ebc909aa8` from source `a5e13717a31e-tree7eb452354d39`; identity, hashes, inputs, licenses, verification and exclusions are in the [2.0.0 candidate record](release-2.0.0.md). **2.0.0 is published** as [`v2.0.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v2.0.0) on 2026-11-22 (release id `454321658`); 1.8.0 is a prior published release.. Install/upgrade never migrates or resets the vault; the workspace default and optional user-PATH opt-in are described in [OPERATIONS §2](OPERATIONS.md#2-install) and the [migration guide](migration-2.0.0.md).
 
 | Product | Candidate version / asset | Entry and lifecycle |
 | --- | --- | --- |

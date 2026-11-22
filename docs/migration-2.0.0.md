@@ -1,6 +1,6 @@
 # Meta Brain 2.0.0 — migration, compatibility and known limits
 
-**Status:** local 2.0.0 release candidate, **not published**. The latest published release is **1.8.0** (`v1.8.0`, 2026-11-20, release id `452370096`). This guide covers what changes in 2.0.0, what deliberately does not, how install/upgrade/uninstall and recovery behave, the D114 retention/removal boundary, the D115 user-PATH opt-in, and the evidence map. It is not a publication record or a task PASS.
+**Status:** published as [`v2.0.0`](https://github.com/triet4p/my-meta-brain/releases/tag/v2.0.0) on 2026-11-22 (release id `454321658`). 1.8.0 is a prior published release. This guide covers what changes in 2.0.0, what deliberately does not, how install/upgrade/uninstall and recovery behave, the D114 retention/removal boundary, the D115 user-PATH opt-in, and the evidence map. It is not a publication record or a task PASS.
 
 Normative sources: [roadmap §7/§8](ROADMAP-2.0.md#7-definition-of-release-mỗi-sprint), [D114](REQUIREMENTS.md#owner-approved-g2-removal-scope--d114-2026-11-20), [D115](REQUIREMENTS.md#owner-approved-cli-user-path-opt-in--d115-2026-11-20), [D116](REQUIREMENTS.md#owner-approved-cli-user-path-opt-in--d115-2026-11-20), [D117](REQUIREMENTS.md#owner-approved-codex-mcp-evidence-adjustment--d117-2026-11-22), [release contract](release-contract.md), [1.8.0 migration guide](migration-1.8.0.md) (still authoritative for the S18 opt-in migration itself), [2.0.0 candidate record](release-2.0.0.md).
 
