@@ -43,7 +43,7 @@ Mỗi chặng có một sprint plan chi tiết. Hoàn thành chặng không đ�
 | [x] M15 — Relational recall / 1.6.0 | File/folder typed relations, stale evidence, bounded explained traversal | M14 | [Sprint 16](sprint-plans/sprint-16.md) |
 | [x] M16 — Folder sharing/context / 1.7.0 | Owner scope preview và evidence context trên normal Codex/OMP | M15; D108 folder-scope contract approved | [Sprint 17](sprint-plans/sprint-17.md) |
 | [x] M17 — Migration/daily readiness / 1.8.0 | Opt-in migration, restore/purge, owner UX và performance acceptance | M16; migration approval | [Sprint 18](sprint-plans/sprint-18.md) |
-| [ ] M18 — Public 2.0.0 | Default/API clean cutover, exact candidate và public major release | M17 published; G2-T1–T3 gates + owner approval | [G2 release milestone](ROADMAP-2.0.md#8-g2--final-release-200-không-phải-sprint-bổ-sung) |
+| [x] M18 — Public 2.0.0 | Default/API clean cutover, exact candidate và public major release | G2-T1–T3 complete; public release and documentation verified | [G2 release milestone](ROADMAP-2.0.md#8-g2--final-release-200-không-phải-sprint-bổ-sung) |
 
 ## Active Sprints
 
